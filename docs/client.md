@@ -1,7 +1,7 @@
 # Client
 
 
-::: dt_ps_http.client
+::: dtps_http.client
     options:
       members:
         - DTPSClient

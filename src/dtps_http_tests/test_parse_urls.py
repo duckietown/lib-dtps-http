@@ -1,11 +1,14 @@
+from typing import cast
+
 from urllib3.util import parse_url
 
-from dt_ps_http import parse_url_unescape
+from dtps_http import parse_url_unescape, URLString
 
-url1 = "http+unix://%2Ftmp%2Fmine/topics/clock3/data/3"
+url1 = cast(URLString, "http+unix://%2Ftmp%2Fmine/topics/clock3/data/3")
 
 
 def test_parse_urls1() -> None:
+    """The standard library's urllib.parse.urlparse() does not unescape the host part of the URL."""
     parsed = parse_url(url1)
     print(repr(parsed))
     assert parsed.scheme == "http+unix"
@@ -16,6 +19,7 @@ def test_parse_urls1() -> None:
 
 
 def test_parse_url2() -> None:
+    """We have a custom function that does unescape the host part of the URL."""
     parsed = parse_url_unescape(url1)
     print(repr(parsed))
     assert parsed.scheme == "http+unix"

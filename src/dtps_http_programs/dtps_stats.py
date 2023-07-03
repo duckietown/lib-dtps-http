@@ -5,7 +5,7 @@ import json
 import sys
 from dataclasses import asdict
 
-from dt_ps_http import DTPSClient, RawData, URLString
+from dtps_http import DTPSClient, parse_url_unescape, RawData, URLString
 from . import logger
 
 __all__ = [
@@ -13,13 +13,15 @@ __all__ = [
 ]
 
 
-async def listen_to_all_topics(urlbase: str) -> None:
+async def listen_to_all_topics(urlbase0: URLString) -> None:
+    url = parse_url_unescape(urlbase0)
+
     def new_observation(topic_name: str, data: RawData) -> None:
         logger.info(f"new_observation {topic_name=} {data=}")
 
     never = asyncio.Event()
     async with DTPSClient.create() as dtpsclient:
-        available = await dtpsclient.ask_topics(URLString(urlbase))
+        available = await dtpsclient.ask_topics(url)
 
         for name, desc in available.items():
             # list_urls = "".join(f"\t{u} \n" for u in desc.urls)
@@ -51,7 +53,7 @@ def dtps_stats_main(args: list[str] = None) -> None:
         logger.error(msg)
         sys.exit(2)
 
-    urlbase = rest[0]
+    urlbase = URLString(rest[0])
 
     f = listen_to_all_topics(urlbase)
 

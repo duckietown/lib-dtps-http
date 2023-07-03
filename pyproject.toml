@@ -10,8 +10,8 @@ version = "0.0.0"
 description = ""
 authors = ["Andrea Censi <AndreaCensi@users.noreply.github.com>"]
 packages = [
-    { from = "src", include = "dt_ps_http" },
-    { from = "src", include = "dt_ps_http_standalone" },
+    { from = "src", include = "dtps_http" },
+    { from = "src", include = "dtps_http_programs" },
 ]
 [tool.poetry.dependencies]
 python = "^3.10"
@@ -24,9 +24,9 @@ cbor2 = "^5.4.1"
 
 
 [tool.poetry.scripts]
-dtps-server-example-clock = 'dt_ps_http_standalone:clock_main'
-dtps-client-stats = 'dt_ps_http_standalone:dtps_stats_main'
-dtps-proxy = 'dt_ps_http_standalone:dtps_proxy_main'
+dtps-server-example-clock = 'dtps_http_programs:clock_main'
+dtps-client-stats = 'dtps_http_programs:dtps_stats_main'
+dtps-proxy = 'dtps_http_programs:dtps_proxy_main'
 
 [tool.poetry-dynamic-versioning]
 enable = true

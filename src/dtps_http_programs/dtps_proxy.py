@@ -5,7 +5,7 @@ from dataclasses import asdict, replace
 
 from pydantic.dataclasses import dataclass
 
-from dt_ps_http import (
+from dtps_http import (
     async_error_catcher,
     DTPSClient,
     DTPSServer,
@@ -42,25 +42,14 @@ class ProxyConfig:
 async def go_proxy(args: list[str] = None) -> None:
     parser = argparse.ArgumentParser()
 
-    # default_hostname = socket.gethostname()
-
-    #
-    # print(f"addresses}")
-    # print(f"ipv6s={ipv6s!r}")
     parser.add_argument("--add-prefix", type=str, default="proxied", required=False)
     parser.add_argument("--url", required=True)
+    parser.add_argument("--mask-origin", default=False, action="store_true")
 
     parsed, args = parser.parse_known_args(args)
 
     urlbase = parsed.url
-    #
-    #
-    # proxied = {
-    #     "robot1.clock": ProxyNamed(URLString("http://localhost:8081/"), as_TopicName("timekeeper.clock11")),
-    #     "robot2.clock": ProxyNamed(URLString("http://localhost:8081/"), as_TopicName("timekeeper.clock5")),
-    #     "robot3.clock": ProxyNamed(URLString("http://localhost:8081/"), as_TopicName("timekeeper.clock7")),
-    # }
-
+    mask_origin = parsed.mask_origin
     dtps_server = DTPSServer(topics_prefix=(), on_startup=[])
 
     t = interpret_command_line_and_start(dtps_server, args)
@@ -69,16 +58,10 @@ async def go_proxy(args: list[str] = None) -> None:
     never = asyncio.Event()
     previously_seen: set[TopicName] = set()
     async with DTPSClient.create() as dtpsclient:
-
-        def new_observation(oq_, d: RawData) -> None:
-            oq_.publish(d)
-
         search_queue = asyncio.Queue()
 
         def topic_list_changed(d: RawData) -> None:
             search_queue.put_nowait(f"topic list changed: {d}")
-
-        publish_alternate: bool = False
 
         @async_error_catcher
         async def ask_for_topics() -> None:
@@ -135,10 +118,10 @@ async def go_proxy(args: list[str] = None) -> None:
                 possible.sort(key=lambda _: choose_key(_[1]))
                 url_to_use, r = possible[0]
 
-                if publish_alternate:
-                    tr2 = replace(tr, reachability=tr.reachability + [r])
-                else:
+                if mask_origin:
                     tr2 = replace(tr, reachability=[r])
+                else:
+                    tr2 = replace(tr, reachability=tr.reachability + [r])
 
                 logger.info(
                     f"Proxying {new_topic!r} as  {urlbase} {topic_name} ->  \n"
@@ -148,7 +131,7 @@ async def go_proxy(args: list[str] = None) -> None:
                 if topic_name == TOPIC_LIST:
                     await dtpsclient.listen_url(url_to_use, topic_list_changed)
                 else:
-                    oq = await dtps_server.get_oq(new_topic, tr2)
+                    await dtps_server.get_oq(new_topic, tr2)
                     logger.info(f"adding topic {new_topic} -> {url_to_use}")
                     dtps_server.forward_events[new_topic] = join(url_to_use, URLString("events/"))
                     dtps_server.forward_data[new_topic] = url_to_use
@@ -180,14 +163,8 @@ def dtps_proxy_main(args: list[str] = None) -> None:
     )
 
     args, rest = parser.parse_known_args(args)
-    # if len(rest) != 1:
-    #     msg = f"Expected exactly one argument.\nObtained: {args!r}\n"
-    #     logger.error(msg)
-    #     sys.exit(2)
 
-    # urlbase = rest[0]
-
-    f = go_proxy()
+    f = go_proxy(rest)
 
     loop = asyncio.get_event_loop()
     loop.run_until_complete(f)

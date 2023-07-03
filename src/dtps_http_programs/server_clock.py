@@ -4,7 +4,7 @@ from typing import Optional
 
 from aiohttp import web
 
-from dt_ps_http import async_error_catcher, DTPSServer, interpret_command_line_and_start, TopicName
+from dtps_http import async_error_catcher, DTPSServer, interpret_command_line_and_start, TopicName
 
 __all__ = [
     "clock_main",
