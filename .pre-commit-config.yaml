@@ -1,0 +1,25 @@
+exclude: .pre-commit-config.yaml
+files: (^src/.*py)|(.*yaml)
+repos:
+- hooks:
+  - {id: check-added-large-files}
+  - {id: check-case-conflict}
+  - {id: check-executables-have-shebangs}
+  - {id: check-merge-conflict}
+  - {id: check-symlinks}
+  repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v4.4.0
+- hooks:
+  - args: [-l, '110', -t, py311]
+    id: black
+  repo: https://github.com/psf/black
+  rev: 23.3.0
+- hooks:
+  - args: [--mapping, '2', --sequence, '2', --offset, '0', --width, '150', --preserve-quotes]
+    id: yamlfmt
+  repo: https://github.com/jumanjihouse/pre-commit-hook-yamlfmt
+  rev: 0.2.3
+- hooks:
+  - {id: sort-all}
+  repo: https://github.com/aio-libs/sort-all
+  rev: v1.2.0
