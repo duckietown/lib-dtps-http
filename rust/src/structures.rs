@@ -54,7 +54,7 @@ pub struct TopicReachability {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DataReady {
-    pub sequence: i32,
+    pub sequence: usize,
     pub digest: String,
     pub urls: Vec<String>,
 }
