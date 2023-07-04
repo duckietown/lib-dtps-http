@@ -1,3 +1,4 @@
+from . import logger
 import asyncio
 from datetime import datetime
 from typing import Optional
@@ -10,8 +11,6 @@ __all__ = [
     "clock_main",
     "get_clock_app",
 ]
-
-from . import logger
 
 
 @async_error_catcher

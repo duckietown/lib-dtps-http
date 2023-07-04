@@ -49,9 +49,9 @@ def url_to_string(url: URL) -> URLString:
     return cast(URLString, str(url2))
 
 
-def join(url: URL, path0: URLString) -> URL:
+def join(url: URL, path0: str) -> URL:
     if "://" in path0:
-        return parse_url_unescape(path0)
+        return parse_url_unescape(cast(URLString, path0))
     if url.path is None:
         path = path0
     else:

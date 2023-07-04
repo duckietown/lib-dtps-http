@@ -1,12 +1,14 @@
 import asyncio
 import os
+import sys
+import traceback
 from contextlib import asynccontextmanager, AsyncExitStack
 from dataclasses import dataclass, replace
 from typing import Any, AsyncContextManager, AsyncIterator, Callable, cast, Optional, TYPE_CHECKING
 
 import aiohttp
-import methodtools as methodtools
 from aiohttp import ClientConnectorError, TCPConnector, UnixConnector, WSMessage
+from tcp_latency import measure_latency
 
 from . import logger
 from .constants import HEADER_NODE_ID, HEADER_SEE_EVENTS
@@ -14,33 +16,19 @@ from .exceptions import EventListeningNotAvailable
 from .structures import (
     DataReady,
     ForwardingStep,
-    NodeID,
+    LinkBenchmark,
     RawData,
-    TopicName,
     TopicReachability,
     TopicRef,
     TopicsIndex,
 )
-from .types import URLString
+from .types import NodeID, TopicName, URLString
 from .urls import join, parse_url_unescape, URL, url_to_string
-from .utils import async_error_catcher
+from .utils import async_error_catcher, method_lru_cache
 
 __all__ = [
     "DTPSClient",
 ]
-
-
-# @dataclass
-# class AvailableTopic:
-#     urls: list[str | URL]
-#     description: Optional[str]
-
-
-@dataclass
-class LinkBenchmark:
-    complexity: int  # 0 for local, 1 for using named, +2 for each network hop
-    bandwidth: float  # B/s
-    latency: float  # seconds
 
 
 @dataclass
@@ -83,6 +71,7 @@ class DTPSClient:
         self.blacklist_protocol_host_port = set()
         self.obtained_answer = {}
 
+    tasks: "list[asyncio.Task[Any]]"
     blacklist_protocol_host_port: set[tuple[str, str, int]]
     obtained_answer: dict[tuple[str, str, int], Optional[NodeID]]
 
@@ -134,9 +123,9 @@ class DTPSClient:
             where_this_available = [url] + [parse_url_unescape(_) for _ in alternatives0]
 
             s = TopicsIndex.from_json(res)
-            available = {}
+            available: dict[TopicName, TopicRef] = {}
             for k, tr0 in s.topics.items():
-                reachability = []
+                reachability: list[TopicReachability] = []
                 for r in tr0.reachability:
                     if "://" in r.url:
                         reachability.append(r)
@@ -155,10 +144,6 @@ class DTPSClient:
                 available[k] = tr2
             return available
 
-    # def _get_topic_url(self, name: TopicName) -> URL:
-    #     url0 = self.available[name].urls[0]
-    #     return self._look_cache(url0)
-
     def _look_cache(self, url0: URL | URLString) -> URL:
         if not isinstance(url0, URL):
             url0 = parse_url_unescape(url0)
@@ -166,29 +151,14 @@ class DTPSClient:
 
     async def publish(self, url0: URL | URLString, rd: RawData) -> None:
         url = self._look_cache(url0)
-        #
-        # if name not in self.available:
-        #     raise NoSuchTopic(name)
-        # name = TopicName(name)
-        args = {}
-        content_type = rd.content_type  # XXX: how to use this?
-        # url = self.available[name].url
-        # url = self._get_topic_url(name)
+
+        headers = {"content-type": rd.content_type}
+
         async with self._session(url) as (session, use_url):
-            async with session.post(use_url, data=rd.content, **args) as resp:
+            async with session.post(use_url, data=rd.content, headers=headers) as resp:
                 resp.raise_for_status()
                 assert resp.status == 200, resp
                 await self.prefer_alternative(url, resp)  # just memorize
-
-                # logger.info(f"posted {content_type} to {url}")
-
-    #
-    # async def listen(self, url0:  URL | str, cb: Callable[[RawData], Any]) -> None:
-    #     if name not in self.available:
-    #         raise NoSuchTopic(name)
-    #     name = TopicName(name)
-    #     url = self._get_topic_url(name)
-    #     await self.listen_url(url, cb)
 
     async def prefer_alternative(self, current: URL, resp: aiohttp.ClientResponse) -> Optional[URL]:
         assert isinstance(current, URL), current
@@ -200,11 +170,12 @@ class DTPSClient:
         if not alternatives0:
             return None
         alternatives = [current] + [parse_url_unescape(a) for a in alternatives0]
-        answering = resp.headers.get(HEADER_NODE_ID)
+        answering = cast(NodeID, resp.headers.get(HEADER_NODE_ID))
 
         # noinspection PyTypeChecker
         best = await self.find_best_alternative([(_, answering) for _ in alternatives])
-
+        if best is None:
+            best = current
         if best != current:
             self.preferred_cache[current] = best
             return best
@@ -223,29 +194,22 @@ class DTPSClient:
 
         me = ForwardingStep(
             this_node_id,
-            complexity=benchmark.complexity,
-            estimated_latency=benchmark.latency,
-            estimated_bandwidth=benchmark.bandwidth,
+            # complexity=benchmark.complexity,
+            # estimated_latency=benchmark.latency,
+            # estimated_bandwidth=benchmark.bandwidth,
             forwarding_node_connects_to=url_to_string(connects_to),
+            performance=benchmark,
         )
-        tr2 = TopicReachability(this_url, this_node_id, forwarders=forwarders + [me])
+        total = LinkBenchmark.identity()
+        for f in forwarders:
+            total |= f.performance
+        total |= benchmark
+        tr2 = TopicReachability(this_url, this_node_id, forwarders=forwarders + [me], benchmark=total)
         return tr2
 
-    # async def score_alternatives(self, trs: list[TopicReachability]) -> list[TopicReachability]:
-    #     possible = []
-    #     for tr in trs:
-    #         if (benchmark := self.can_use_url(parse_url_unescape(tr.url))) is not None:
-    #
-    #
-    #             possible.append((benchmark, tr.get_total_latency() + benchmark., len(tr.forwarders), tr))
-    #
-    #     possible.sort(key=lambda x: (x[0], x[1], x[2]))
-    #
-    #     return [_[-1] for _ in possible]
-
     async def find_best_alternative(self, us: list[tuple[URL, NodeID]]) -> Optional[URL]:
-        results = []
-        possible = []
+        results: list[str] = []
+        possible: list[tuple[float, float, float, URL]] = []
         for a, expects_answer_from in us:
             if (score := await self.can_use_url(a, expects_answer_from)) is not None:
                 possible.append((score.complexity, score.latency, -score.bandwidth, a))
@@ -263,12 +227,10 @@ class DTPSClient:
 
         return best
 
-    @methodtools.lru_cache()
+    @method_lru_cache()
     def measure_latency(self, host: str, port: int) -> Optional[float]:
-        from tcp_latency import measure_latency
-
         logger.debug(f"computing latency to {host}:{port}...")
-        res = measure_latency(host, port, runs=5, wait=0.01, timeout=0.5)
+        res = cast(list[float], measure_latency(host, port, runs=5, wait=0.01, timeout=0.5))
 
         if not res:
             logger.debug(f"latency to {host}:{port} -> unreachable")
@@ -283,7 +245,7 @@ class DTPSClient:
         self,
         url: URL,
         expects_answer_from: NodeID,
-        measure_latency: bool = True,
+        do_measure_latency: bool = True,
         check_right_node: bool = True,
     ) -> Optional[LinkBenchmark]:
         """Returns None or a score for the url."""
@@ -292,15 +254,16 @@ class DTPSClient:
             return None
 
         if url.scheme in ("http", "https"):
+            hops = 1
             complexity = 2
             bandwidth = 100_000_000
-
+            reliability = 0.9
             if url.port is None:
                 port = 80 if url.scheme == "http" else 443
             else:
                 port = url.port
 
-            if measure_latency:
+            if do_measure_latency:
                 latency = self.measure_latency(url.host, port)
                 if latency is None:
                     self.blacklist_protocol_host_port.add(blacklist_key)
@@ -320,16 +283,18 @@ class DTPSClient:
                     # self.blacklist_protocol_host_port.add(blacklist_key)
                     return None
 
-            return LinkBenchmark(complexity, bandwidth, latency)
+            return LinkBenchmark(complexity, bandwidth, latency, reliability, hops)
         if url.scheme == "http+unix":
             complexity = 1
+            reliability = 1
+            hops = 1
             bandwidth = 100_000_000
             latency = 0.001
             path = url.host
             if path is None:
                 raise ValueError(f"no host in {repr(url)}")
             if os.path.exists(path):
-                return LinkBenchmark(complexity, bandwidth, latency)
+                return LinkBenchmark(complexity, bandwidth, latency, reliability, hops)
             else:
                 logger.warning(f"unix socket {path!r} does not exist")
                 self.blacklist_protocol_host_port.add(blacklist_key)
@@ -370,22 +335,31 @@ class DTPSClient:
 
         return res
 
-    @asynccontextmanager
-    async def _session(
-        self, url: URL, conn_timeout: Optional[float] = None
-    ) -> AsyncIterator[tuple[aiohttp.ClientSession, str]]:
-        assert isinstance(url, URL)
-        if url.scheme == "http+unix":
-            connector = UnixConnector(path=url.host)
-            use_url = str(url._replace(scheme="http", host="localhost"))
-        elif url.scheme in ("http", "https"):
-            connector = TCPConnector()
-            use_url = str(url)
-        else:
-            raise ValueError(f"unknown scheme {url.scheme!r}")
+    if TYPE_CHECKING:
 
-        async with aiohttp.ClientSession(connector=connector, conn_timeout=conn_timeout) as session:
-            yield session, use_url
+        def _session(
+            self, url: URL, /, *, conn_timeout: Optional[float] = None
+        ) -> AsyncContextManager[tuple[aiohttp.ClientSession, URLString]]:
+            ...
+
+    else:
+
+        @asynccontextmanager
+        async def _session(
+            self, url: URL, /, *, conn_timeout: Optional[float] = None
+        ) -> AsyncIterator[tuple[aiohttp.ClientSession, str]]:
+            assert isinstance(url, URL)
+            if url.scheme == "http+unix":
+                connector = UnixConnector(path=url.host)
+                use_url = str(url._replace(scheme="http", host="localhost"))
+            elif url.scheme in ("http", "https"):
+                connector = TCPConnector()
+                use_url = str(url)
+            else:
+                raise ValueError(f"unknown scheme {url.scheme!r}")
+
+            async with aiohttp.ClientSession(connector=connector, conn_timeout=conn_timeout) as session:
+                yield session, use_url
 
     async def get_alternates(self, url: URLString | URL) -> list[URL]:
         url = self._look_cache(url)
@@ -397,16 +371,13 @@ class DTPSClient:
                     resp.raise_for_status()
                     assert resp.status == 200, resp
                     # logger.info(f"headers : {resp.headers}")
-                    alternatives0 = resp.headers.getall("Content-Location", [])
+                    if "Content-Location" in resp.headers:
+                        alternatives0 = cast(list[URLString], resp.headers.getall("Content-Location"))
+                    else:
+                        alternatives0 = []
         except (TimeoutError, ClientConnectorError):
             return []
         return [parse_url_unescape(_) for _ in alternatives0]
-
-    # async def listen_url(
-    #     self, reachability: list[TopicReachability],
-    #     cb: Callable[[RawData], Any]
-    # ) -> "asyncio.Task[None]":
-    #
 
     async def choose_best(self, reachability: list[TopicReachability]) -> URL:
         res = await self.find_best_alternative(
@@ -429,9 +400,6 @@ class DTPSClient:
                     logger.info(f"Using preferred alternative to {url} -> {repr(preferred)}")
                     return await self.listen_url(preferred, cb)
 
-                # res = await resp.text()
-                # logger.info(f'got {res!r} {resp.headers}')
-
                 if HEADER_SEE_EVENTS in resp.headers:
                     events_purl = resp.headers[HEADER_SEE_EVENTS]
                     url_events = join(url, events_purl)
@@ -451,23 +419,20 @@ class DTPSClient:
                 msg: WSMessage
 
                 async for msg in ws:
+                    # TODO: check msg type
                     dr = DataReady.from_json_string(msg.data)
 
                     yield dr
 
     async def _listen_events(
         self,
-        # topic_name: TopicName,
         url: URL,
         cb: Callable[[RawData], Any],
         event_ready: asyncio.Event,
     ) -> None:
-        # wait = 0.6
-        # wait_exp = 1.5
-
         while True:
             try:
-                logger.error(f"trying to reconnect to {url}")
+                logger.debug(f"Connecting to {url}")
                 await self._listen_events_one(url, cb, event_ready)
             except asyncio.CancelledError:
                 raise
@@ -478,7 +443,6 @@ class DTPSClient:
     @async_error_catcher
     async def _listen_events_one(
         self,
-        # topic_name: TopicName,
         url: URL,
         cb: Callable[[RawData], Any],
         event_ready: asyncio.Event,
@@ -493,21 +457,39 @@ class DTPSClient:
                 async for msg in ws:
                     event_ready.set()
 
-                    dr = DataReady.from_json_string(msg.data)
-                    url_datas = [join(url, _) for _ in dr.urls]
-                    logger.info(f"got {url} \n -> {dr}")
+                    logger.debug(f"got msg {msg} ")
                     try:
-                        url_data = url_datas[0]  # XXX: try myltiple urls
+                        dr = DataReady.from_json_string(msg.data)
+                    except Exception as e:
+                        logger.error(f"error in parsing {msg.data!r}: {e.__class__.__name__} {e!r}")
+                        continue
+
+                    logger.info(f"got {url} \n -> {dr}")
+                    url_datas = [join(url, _) for _ in dr.urls]
+                    logger.info(f"url_datas {url_datas}")
+                    if not url_datas:
+                        logger.error(f"no url_datas in {dr}")
+                        continue
+
+                    try:
+                        url_data = url_datas[0]  # XXX: try multiple urls
+                        logger.info(f"downloading {url_data!r}")
                         async with self._session(url_data) as (session2, use_url2):
                             async with session.get(use_url2) as resp_data:
                                 resp_data.raise_for_status()
-                                # assert resp_data.status == 200
                                 data = await resp_data.read()
                                 content_type = resp_data.content_type
                                 data = RawData(content_type=content_type, content=data)
                                 cb(data)
 
-                    except Exception as e:
-                        logger.error(f"error in downloading {url_data!r}: {e!r}")
+                    except BaseException as e:
+                        sys.stderr.write("error!\n")
+                        tb = traceback.format_exc()
+                        print(tb)
+                        # sys.stderr.write(tb)
+                        # logger.debug(f"error in downloading {url_data!r}: {str(e)!r}")
 
                     counter += 1
+
+                    await asyncio.sleep(0.1)
+                    logger.debug(f"looking for next")

@@ -1,6 +1,6 @@
 from typing import cast
 
-from .structures import TopicName
+from .types import TopicName
 
 __all__ = [
     "components_from_topicpart",
@@ -21,6 +21,6 @@ def topicpart_from_components(components: tuple[str, ...]) -> TopicName:
     return cast(TopicName, ".".join(components))
 
 
-def join_topic_names(prefix: str | tuple[str, ...], name: str | tuple[str, ...]) -> TopicName:
+def join_topic_names(prefix: TopicName | tuple[str, ...], name: TopicName | tuple[str, ...]) -> TopicName:
     parts = components_from_topicpart(prefix) + components_from_topicpart(name)
     return topicpart_from_components(parts)

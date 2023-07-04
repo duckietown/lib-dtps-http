@@ -1,40 +1,64 @@
 import json
-from typing import NewType, Optional
+from dataclasses import asdict
+from typing import Literal, Optional
 
+from multidict import CIMultiDict
 from pydantic import parse_obj_as
 from pydantic.dataclasses import dataclass
 
-from .types import URLString
+from .constants import HEADER_LINK_BENCHMARK
+from .types import NodeID, SourceID, TopicName, URLString
 
 __all__ = [
     "DataReady",
+    "ForwardingStep",
+    "LinkBenchmark",
     "RawData",
-    "TopicName",
     "TopicReachability",
     "TopicRef",
     "TopicsIndex",
-    "as_TopicName",
 ]
 
-TopicName = NewType("TopicName", str)
 
+@dataclass
+class LinkBenchmark:
+    complexity: int  # 0 for local, 1 for using named, +2 for each network hop
+    bandwidth: float  # B/s
+    latency: float  # seconds
+    reliability: float  # 0..1
+    hops: int
 
-def as_TopicName(s: str) -> TopicName:
-    # TODO: Check that s is a valid topic name
-    return TopicName(s)
+    @classmethod
+    def identity(cls) -> "LinkBenchmark":
+        return cls(complexity=0, bandwidth=float(1_000_000_000), latency=0.0, reliability=1.0, hops=0)
 
+    def __or__(self, other: "LinkBenchmark") -> "LinkBenchmark":
+        complexity = self.complexity + other.complexity
+        bandwidth = min(self.bandwidth, other.bandwidth)
+        latency = self.latency + other.latency
+        reliability = self.reliability * other.reliability
+        hops = self.hops + other.hops
+        return LinkBenchmark(complexity, bandwidth, latency, reliability, hops)
 
-NodeID = NewType("NodeID", str)
-SourceID = NewType("SourceID", str)
+    def fill_headers(self, headers: CIMultiDict[str]) -> None:
+        # RTT = 2 * latency - in mseconds
+        # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/RTT
+        rtt_ms = (self.latency * 2) * 1000
+        headers["RTT"] = f"{rtt_ms:.2f}"
+        # Downlink = bandwidth in Mbits/s
+        # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Downlink
+        mbs = self.bandwidth / (1024.0 * 1024.0)
+        headers["Downlink"] = f"{mbs:.3f}"
+        # everything as a json object
+        headers[HEADER_LINK_BENCHMARK] = json.dumps(asdict(self))
 
 
 @dataclass
 class ForwardingStep:
     forwarding_node: NodeID
     forwarding_node_connects_to: URLString
-    estimated_latency: float
-    estimated_bandwidth: float
-    complexity: int
+
+    performance: LinkBenchmark
 
 
 @dataclass
@@ -42,16 +66,10 @@ class TopicReachability:
     url: URLString
     answering: NodeID
 
+    # mostly for debugging
     forwarders: list[ForwardingStep]
 
-    def get_total_complexity(self) -> int:
-        return sum(_.complexity for _ in self.forwarders)
-
-    def get_total_latency(self) -> float:
-        return sum(fs.estimated_latency for fs in self.forwarders)
-
-    def get_bandwidth(self) -> float:
-        return min(fs.estimated_bandwidth for fs in self.forwarders)
+    benchmark: LinkBenchmark
 
 
 @dataclass
@@ -59,12 +77,9 @@ class TopicRef:
     unique_id: SourceID  # unique id for the stream
     origin_node: NodeID  # unique id of the node that created the stream
     app_static_data: Optional[dict[str, object]]
-
     reachability: list[TopicReachability]
-    #
-    # forwarders: list[str]
-    # urls: list[URLString]
-    #
+
+    debug_topic_type: str = Literal["local", "forwarded"]
 
 
 @dataclass

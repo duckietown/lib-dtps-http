@@ -20,6 +20,7 @@ from dtps_http import (
     URL,
     URLString,
 )
+from dtps_http.server import ForwardedTopic
 from . import logger
 
 __all__ = [
@@ -71,24 +72,23 @@ async def go_proxy(args: list[str] = None) -> None:
             removed = previously_seen - set(available)
             previously_seen = set(available)
             if added or removed:
-                logger.info(f"added={added!r} removed={removed!r}")
+                logger.debug(f"added={added!r} removed={removed!r}")
             else:
-                logger.info(f"no change")
+                logger.debug(f"no change in topics")
                 return
 
             for topic_name in removed:
                 new_topic = join_topic_names(parsed.add_prefix, topic_name)
                 if new_topic in dtps_server._oqs:
-                    logger.info("removing topic %s", new_topic)
-                    await dtps_server.remove_oq(new_topic)
-                    dtps_server.forward_events.pop(new_topic, None)
+                    logger.debug("removing topic %s", new_topic)
+                    await dtps_server.remove_forward(new_topic)
 
             for topic_name in added:
                 tr = available[topic_name]
                 new_topic = join_topic_names(parsed.add_prefix, topic_name)
 
-                if new_topic in dtps_server._oqs:
-                    logger.info("already have topic %s", new_topic)
+                if new_topic in dtps_server._forwarded:
+                    logger.debug("already have topic %s", new_topic)
                     continue
 
                 possible: list[tuple[URL, TopicReachability]] = []
@@ -113,7 +113,7 @@ async def go_proxy(args: list[str] = None) -> None:
                     raise ValueError(f"Topic {topic_name} not available at {urlbase}: {available}")
 
                 def choose_key(x: TopicReachability) -> tuple[int, float, float]:
-                    return (x.get_total_complexity(), x.get_total_latency(), -x.get_bandwidth())
+                    return (x.benchmark.complexity, x.benchmark.latency, -x.benchmark.bandwidth)
 
                 possible.sort(key=lambda _: choose_key(_[1]))
                 url_to_use, r = possible[0]
@@ -131,10 +131,19 @@ async def go_proxy(args: list[str] = None) -> None:
                 if topic_name == TOPIC_LIST:
                     await dtpsclient.listen_url(url_to_use, topic_list_changed)
                 else:
-                    await dtps_server.get_oq(new_topic, tr2)
+                    # await dtps_server.get_oq(new_topic, tr2)
                     logger.info(f"adding topic {new_topic} -> {url_to_use}")
-                    dtps_server.forward_events[new_topic] = join(url_to_use, URLString("events/"))
-                    dtps_server.forward_data[new_topic] = url_to_use
+
+                    fd = ForwardedTopic(
+                        unique_id=tr.unique_id,
+                        origin_node=tr.origin_node,
+                        app_static_data=tr.app_static_data,
+                        reachability=tr2.reachability,
+                        forward_url_data=url_to_use,
+                        forward_url_events=join(url_to_use, URLString("events/")),
+                    )
+
+                    await dtps_server.add_forwarded(new_topic, fd)
 
                     # await dtpsclient.listen_url(url_to_use, functools.partial(new_observation, oq))
 

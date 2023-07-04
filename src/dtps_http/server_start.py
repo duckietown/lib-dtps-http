@@ -4,7 +4,7 @@ import socket
 import sys
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Iterator, Optional
-
+from socket import AddressFamily
 import psutil
 from aiohttp import web
 
@@ -17,7 +17,7 @@ __all__ = [
 ]
 
 
-def get_ip_addresses() -> Iterator[tuple[str, str]]:
+def get_ip_addresses() -> Iterator[tuple[str, AddressFamily, str]]:
     for interface, snics in psutil.net_if_addrs().items():
         # print(f"interface={interface!r} snics={snics!r}")
         for snic in snics:
@@ -41,21 +41,21 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[list
     parser.add_argument("--tcp-host", required=False, default="0.0.0.0")
     parser.add_argument("--unix-path", required=False, default=None)
 
-    args = parser.parse_args(args)
+    parsed = parser.parse_args(args)
 
-    if args.tcp_port is None and args.unix_path is None:
+    if parsed.tcp_port is None and parsed.unix_path is None:
         msg = "Please specify at least one of --tcp-port or --unix-path"
         logger.error(msg)
         sys.exit(msg)
 
-    if args.tcp_port is not None:
-        tcp = (args.tcp_host, args.tcp_port)
+    if parsed.tcp_port is not None:
+        tcp = (parsed.tcp_host, parsed.tcp_port)
 
     else:
         tcp = None
 
-    if args.unix_path is not None:
-        unix_path = args.unix_path
+    if parsed.unix_path is not None:
+        unix_path = parsed.unix_path
     else:
         unix_path = None
 
@@ -73,7 +73,7 @@ async def app_start(
     runner = web.AppRunner(s.app)
     await runner.setup()
 
-    available_urls = []
+    available_urls: list[str] = []
     if tcp is not None:
         tcp_host, port = tcp
         the_url = f"http://{tcp_host}:{port}"

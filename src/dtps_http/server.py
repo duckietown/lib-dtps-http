@@ -3,19 +3,22 @@ import json
 import time
 import traceback
 import uuid
-from dataclasses import asdict, replace
-from typing import Awaitable, Callable, Optional, Sequence
+from dataclasses import asdict
+from typing import Any, Awaitable, Callable, Optional, Sequence
 
 import cbor2
+import yaml
 from aiohttp import web
 from aiopubsub import Hub, Key, Publisher, Subscriber
 from multidict import CIMultiDict
 from pydantic.dataclasses import dataclass
 
-from . import logger
+from . import __version__, logger
 from .components import join_topic_names
 from .constants import (
     CONTENT_TYPE_TOPIC_DIRECTORY,
+    HEADER_DATA_ORIGIN_NODE_ID,
+    HEADER_DATA_UNIQUE_ID,
     HEADER_NO_CACHE,
     HEADER_NODE_ID,
     HEADER_NODE_PASSED_THROUGH,
@@ -24,17 +27,15 @@ from .constants import (
 )
 from .structures import (
     DataReady,
-    NodeID,
+    LinkBenchmark,
     RawData,
-    SourceID,
-    TopicName,
     TopicReachability,
     TopicRef,
     TopicsIndex,
 )
-from .types import URLString
+from .types import NodeID, SourceID, TopicName, URLString
 from .urls import join, URL, url_to_string
-from .utils import async_error_catcher
+from .utils import async_error_catcher, multidict_update
 
 __all__ = [
     "DTPSServer",
@@ -58,6 +59,10 @@ class ObjectQueue:
     _data: dict[int, RawData]
     _seq: int
     _name: TopicName
+    _hub: Hub
+    _pub: Publisher
+    _sub: Subscriber
+    tr: TopicRef
 
     def __init__(self, hub: Hub, name: TopicName, tr: TopicRef):
         self._hub = hub
@@ -119,8 +124,24 @@ class ObjectQueue:
         pass  # TODO
 
 
+@dataclass
+class ForwardedTopic:
+    unique_id: SourceID  # unique id for the stream
+    origin_node: NodeID  # unique id of the node that created the stream
+    app_static_data: Optional[dict[str, object]]
+    forward_url_data: URL
+    forward_url_events: Optional[URL]
+    reachability: list[TopicReachability]
+
+
 class DTPSServer:
+    node_id: NodeID
+
     _oqs: dict[TopicName, ObjectQueue]
+    _forwarded: dict[TopicName, ForwardedTopic]
+
+    tasks: "list[asyncio.Task[Any]]"
+    digest_to_urls: dict[str, list[URL]]
 
     def __init__(
         self,
@@ -145,23 +166,15 @@ class DTPSServer:
 
         self.hub = Hub()
         self._oqs = {}  # 'clock': ObjectQueue(self.hub, 'clock')}
+        self._forwarded = {}
         self.tasks = []
         self.logger = logger
         self.available_urls = []
         self.node_id = NodeID(str(uuid.uuid4()))
 
-        # self.own_headers = CIMultiDict()
-        # self.own_headers[HEADER_NODE_ID] = self.node_id
-        self.forward_events = {}
-        self.forward_data = {}
         self.digest_to_urls = {}
 
-    digest_to_urls: dict[str, list[URL]]
-    forward_events: dict[TopicName, URL]
-    forward_data: dict[TopicName, URL]
-    node_id: NodeID
-
-    def get_headers_alternatives(self, request: web.Request) -> CIMultiDict:
+    def get_headers_alternatives(self, request: web.Request) -> CIMultiDict[str]:
         original_url = request.url
 
         sock = request.transport._sock  # type: ignore
@@ -174,12 +187,12 @@ class DTPSServer:
 
         HEADER_NO_AVAIL = "X-Content-Location-Not-Available"
 
-        res = CIMultiDict()
+        res: CIMultiDict[str] = CIMultiDict()
         if not self.available_urls:
             res[HEADER_NO_AVAIL] = "No alternative URLs available"
             return res
 
-        alternatives = []
+        alternatives: list[str] = []
         url = str(use_url)
 
         for a in self.available_urls + [
@@ -198,7 +211,7 @@ class DTPSServer:
         if not alternatives:
             res[HEADER_NO_AVAIL] = f"Nothing matched {url} of {self.available_urls}"
         else:
-            res.popall(HEADER_NO_AVAIL, [])
+            res.popall(HEADER_NO_AVAIL, None)
         # list_alternatives = "".join(f"\n  {_}" for _ in alternatives)
         # logger.debug(f"get_headers_alternatives: {request.url} -> \n effective: {use_url} \n {
         # list_alternatives}")
@@ -207,28 +220,48 @@ class DTPSServer:
     def set_available_urls(self, urls: list[str]) -> None:
         self.available_urls = urls
 
-    def remember_task(self, task: asyncio.Task) -> None:
+    def remember_task(self, task: "asyncio.Task[Any]") -> None:
         """Add a task to the list of tasks to be cancelled on shutdown"""
         self.tasks.append(task)
 
     async def remove_oq(self, name: TopicName) -> None:
         if name in self._oqs:
-            del self._oqs[name]
+            self._oqs.pop(name)
             if TOPIC_LIST in self._oqs:
                 self._oqs[TOPIC_LIST].publish_json(sorted(list(self._oqs)))
 
+    async def remove_forward(self, name: TopicName) -> None:
+        if name in self._forwarded:
+            self._forwarded.pop(name)
+            if TOPIC_LIST in self._oqs:
+                self._oqs[TOPIC_LIST].publish_json(sorted(list(self._oqs)))
+
+    async def add_forwarded(self, name: TopicName, forwarded: ForwardedTopic) -> None:
+        if name in self._forwarded or name in self._oqs:
+            raise ValueError(f"Topic {name} already exists")
+        self._forwarded[name] = forwarded
+
     async def get_oq(self, name: TopicName, tr: Optional[TopicRef] = None) -> ObjectQueue:
+        if name in self._forwarded:
+            raise ValueError(f"Topic {name} is a forwarded one")
+
         if name not in self._oqs:
             if tr is None:
                 unique_id = SourceID(f"{name}@{self.node_id}")
 
-                tr = TopicReachability(URLString(f"topics/{name}/"), self.node_id, forwarders=[])
+                tr = TopicReachability(
+                    URLString(f"topics/{name}/"),
+                    self.node_id,
+                    forwarders=[],
+                    benchmark=LinkBenchmark.identity(),
+                )
                 reachability: list[TopicReachability] = [tr]
                 tr = TopicRef(
                     unique_id=unique_id,
                     origin_node=self.node_id,
                     app_static_data=None,
                     reachability=reachability,
+                    debug_topic_type="local",
                 )
             self._oqs[name] = ObjectQueue(self.hub, name, tr)
 
@@ -237,7 +270,7 @@ class DTPSServer:
         return self._oqs[name]
 
     @async_error_catcher
-    async def on_startup(self, _) -> None:
+    async def on_startup(self, _: web.Application) -> None:
         self.logger.info("on_startup")
         for f in self._more_on_startup:
             await f(self)
@@ -245,65 +278,75 @@ class DTPSServer:
         await self.get_oq(TOPIC_LIST)
 
     @async_error_catcher
-    async def on_shutdown(self, _) -> None:
+    async def on_shutdown(self, _: web.Application) -> None:
         self.logger.info("on_shutdown")
         for t in self.tasks:
             t.cancel()
 
     @async_error_catcher
     async def serve_index(self, request: web.Request) -> web.Response:
-        topics = {}
+        topics: dict[TopicName, TopicRef] = {}
         for topic_name, oqs in self._oqs.items():
             qual_topic_name = join_topic_names(self.topics_prefix, topic_name)
 
             topic_ref: TopicRef = oqs.tr
-            print(json.dumps(asdict(topic_ref), indent=3))
-            current_reachability = topic_ref.reachability
-            all_reachability = []
-            all_reachability.extend(current_reachability)
+            topics[qual_topic_name] = topic_ref
+        for topic_name, fd in self._forwarded.items():
+            qual_topic_name = join_topic_names(self.topics_prefix, topic_name)
+            tr = TopicRef(
+                fd.unique_id,
+                fd.origin_node,
+                fd.app_static_data,
+                fd.reachability,
+                debug_topic_type="forward",
+            )
+            topics[qual_topic_name] = tr
 
-            # for reach in current_reachability:
-            #     if '://' not in reach.url and reach.answering == self.node_id:  # relative
+            # print(json.dumps(asdict(topic_ref), indent=3))
+            # current_reachability = topic_ref.reachability
+            # all_reachability = []
+            # all_reachability.extend(current_reachability)
             #
-            #         for a in self.available_urls:
-            #             new_url = a + reach.url
-            #
-            #             reach_new = TopicReachability(
-            #                 url=URLString(new_url),
-            #                 answering=self.node_id,
-            #                 forwarders=reach.forwarders
-            #             )
-            #             all_reachability.append(reach_new)
-            #
-            # reach2 = TopicReachability(
-            #     url=URLString(f"topics/{topic_name}/"),
-            #     forwarders=[]
-            # )
-            # reachability2 = oqs.tr.reachability + [reach2]
-            # urls = [f"topics/{topic_name}/"] + oqs.tr.urls
+            # # for reach in current_reachability:
+            # #     if '://' not in reach.url and reach.answering == self.node_id:  # relative
+            # #
+            # #         for a in self.available_urls:
+            # #             new_url = a + reach.url
+            # #
+            # #             reach_new = TopicReachability(
+            # #                 url=URLString(new_url),
+            # #                 answering=self.node_id,
+            # #                 forwarders=reach.forwarders
+            # #             )
+            # #             all_reachability.append(reach_new)
+            # #
+            # # reach2 = TopicReachability(
+            # #     url=URLString(f"topics/{topic_name}/"),
+            # #     forwarders=[]
+            # # )
+            # # reachability2 = oqs.tr.reachability + [reach2]
+            # # urls = [f"topics/{topic_name}/"] + oqs.tr.urls
 
-            topic_ref2 = replace(topic_ref, reachability=all_reachability)
-
-            topics[qual_topic_name] = topic_ref2
+            # topic_ref2 = replace(topic_ref, reachability=all_reachability)
 
         index = TopicsIndex(node_id=self.node_id, topics=topics)
 
-        print(json.dumps(asdict(index), indent=3))
+        print(yaml.dump(asdict(index), indent=3))
         headers = CIMultiDict()
         headers.update(HEADER_NO_CACHE)
-        headers.update(self.get_headers_alternatives(request))
+        multidict_update(headers, self.get_headers_alternatives(request))
         self._add_own_headers(headers)
         return web.json_response(asdict(index), content_type=CONTENT_TYPE_TOPIC_DIRECTORY, headers=headers)
 
     @async_error_catcher
-    async def serve_get(self, request: web.Request) -> web.Response:
+    async def serve_get(self, request: web.Request) -> web.StreamResponse:
         topic_name = request.match_info["topic"]
         headers = CIMultiDict()
         self._add_own_headers(headers)
         headers.update(HEADER_NO_CACHE)
 
-        if topic_name in self.forward_data:
-            return await self.serve_get_proxied(request, self.forward_data[topic_name])
+        if topic_name in self._forwarded:
+            return await self.serve_get_proxied(request, self._forwarded[topic_name])
 
         if topic_name not in self._oqs:
             raise web.HTTPNotFound(headers=headers)
@@ -311,15 +354,21 @@ class DTPSServer:
         oq = self._oqs[topic_name]
         data = oq.last_data()
         headers[HEADER_SEE_EVENTS] = f"events/"
-        headers.update(self.get_headers_alternatives(request))
+        multidict_update(headers, self.get_headers_alternatives(request))
+        headers[HEADER_DATA_UNIQUE_ID] = oq.tr.unique_id
+        headers[HEADER_DATA_ORIGIN_NODE_ID] = oq.tr.origin_node
+
+        lb = LinkBenchmark.identity()
+        lb.fill_headers(headers)
+
         return web.Response(body=data.content, headers=headers, content_type=data.content_type)
 
     @async_error_catcher
-    async def serve_get_proxied(self, request: web.Request, url: URL) -> web.StreamResponse:
+    async def serve_get_proxied(self, request: web.Request, fd: ForwardedTopic) -> web.StreamResponse:
         from .client import DTPSClient
 
         async with DTPSClient.create() as client:
-            async with client._session(url) as (session, use_url):
+            async with client._session(fd.forward_url_data) as (session, use_url):
                 # Create the proxied request using the original request's headers
                 async with session.get(use_url, headers=request.headers) as resp:
                     # Read the response's body
@@ -327,11 +376,16 @@ class DTPSServer:
                     # Create a response with the proxied request's status and body,
                     # forwarding all the headers
                     headers = CIMultiDict()
-                    headers.update(resp.headers)
+                    multidict_update(headers, resp.headers)
                     headers.popall("X-Content-Location-Not-Available", [])
                     headers.popall("Content-Location", [])
+
+                    for r in fd.reachability:
+                        if r.answering == self.node_id:
+                            r.benchmark.fill_headers(headers)
+
                     # headers.add('X-DTPS-Forwarded-node', resp.headers.get(HEADER_NODE_ID, '???'))
-                    headers.update(self.get_headers_alternatives(request))
+                    multidict_update(headers, self.get_headers_alternatives(request))
                     self._add_own_headers(headers)
                     headers.update(HEADER_NO_CACHE)
 
@@ -362,7 +416,14 @@ class DTPSServer:
         if prevnodeids:
             headers.add(HEADER_NODE_PASSED_THROUGH, prevnodeids[0])
 
-        # headers.add(HEADER_NODE_PASSED_THROUGH, self.node_id)
+        server_string = f"lib-dtps-http/{__version__}"
+        HEADER_SERVER = "Server"
+
+        current_server_strings = headers.getall(HEADER_SERVER, [])
+        # logger.info(f'current_server_strings: {current_server_strings} cur = {headers}')
+        if HEADER_SERVER not in current_server_strings:
+            headers.add(HEADER_SERVER, server_string)
+        # leave our own
         headers.popall(HEADER_NODE_ID, None)
         headers[HEADER_NODE_ID] = self.node_id
 
@@ -375,20 +436,18 @@ class DTPSServer:
         oq = await self.get_oq(topic_name)
         rd = RawData(data, content_type)
 
-        # logger.info(f"Received data for topic {topic_name!r}: {rd}")
         oq.publish(rd)
-        # logger.info(f"published data for topic {topic_name!r}: {rd}")
 
         headers = CIMultiDict()
         headers.update(HEADER_NO_CACHE)
         self._add_own_headers(headers)
-        headers.update(self.get_headers_alternatives(request))
+        multidict_update(headers, self.get_headers_alternatives(request))
         return web.Response(status=200, headers=headers)
 
     @async_error_catcher
     async def serve_data_get(self, request: web.Request) -> web.Response:
         headers = CIMultiDict()
-        headers.update(self.get_headers_alternatives(request))
+        multidict_update(headers, self.get_headers_alternatives(request))
         self._add_own_headers(headers)
 
         topic_name = request.match_info["topic"]
@@ -398,6 +457,8 @@ class DTPSServer:
         oq = self._oqs[topic_name]
         data = oq.get(index)
         headers[HEADER_SEE_EVENTS] = f"../events/"
+        headers[HEADER_DATA_UNIQUE_ID] = oq.tr.unique_id
+        headers[HEADER_DATA_ORIGIN_NODE_ID] = oq.tr.origin_node
 
         return web.Response(body=data.content, headers=headers, content_type=data.content_type)
 
@@ -426,23 +487,35 @@ class DTPSServer:
     @async_error_catcher
     async def serve_events(self, request: web.Request) -> web.WebSocketResponse:
         topic_name = request.match_info["topic"]
-        if topic_name not in self._oqs:
+        if topic_name not in self._oqs and topic_name not in self._forwarded:
             headers = CIMultiDict()
 
             self._add_own_headers(headers)
             raise web.HTTPNotFound(headers=headers)
 
-        tr = self._oqs[topic_name].tr
-
         ws = web.WebSocketResponse()
-        ws.headers.update(self.get_headers_alternatives(request))
+        multidict_update(ws.headers, self.get_headers_alternatives(request))
         self._add_own_headers(ws.headers)
-        await ws.prepare(request)
 
-        if topic_name in self.forward_events:
-            use_forward_url = self.forward_events[topic_name]
-            await self.serve_events_forwarder(ws, use_forward_url)
+        if topic_name in self._forwarded:
+            fd = self._forwarded[topic_name]
+
+            for r in fd.reachability:
+                if r.answering == self.node_id:
+                    r.benchmark.fill_headers(ws.headers)
+
+            if fd.forward_url_events is None:
+                msg = f"Forwarding for topic {topic_name!r} is not enabled"
+                raise web.HTTPBadRequest(reason=msg)
+
+            await ws.prepare(request)
+            await self.serve_events_forwarder(ws, fd)
             return ws
+
+        oq_ = self._oqs[topic_name]
+        ws.headers[HEADER_DATA_UNIQUE_ID] = oq_.tr.unique_id
+        ws.headers[HEADER_DATA_ORIGIN_NODE_ID] = oq_.tr.origin_node
+        await ws.prepare(request)
 
         exit_event = asyncio.Event()
 
@@ -458,7 +531,6 @@ class DTPSServer:
                 exit_event.set()
                 pass
 
-        oq_ = self._oqs[topic_name]
         s = oq_.subscribe(send_message)
         last = oq_.last()
         data_last = DataReady(last.index, digest=last.digest, urls=[URLString(f"../data/{last.index}")])
@@ -473,14 +545,14 @@ class DTPSServer:
         return ws
 
     @async_error_catcher
-    async def serve_events_forwarder(self, ws: web.WebSocketResponse, url: URL) -> None:
-        assert isinstance(url, URL)
+    async def serve_events_forwarder(self, ws: web.WebSocketResponse, fd: ForwardedTopic) -> None:
+        assert fd.forward_url_events is not None
         while True:
             if ws.closed:
                 break
 
             try:
-                await self.serve_events_forwarder_one(ws, url)
+                await self.serve_events_forwarder_one(ws, fd.forward_url_events)
             except Exception as e:
                 logger.error(f"Exception in serve_events_forwarder_one: {traceback.format_exc()}")
                 await asyncio.sleep(1)
