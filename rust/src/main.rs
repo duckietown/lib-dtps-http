@@ -4,167 +4,27 @@ use std::sync::Arc;
 use chrono::prelude::*;
 use futures::{SinkExt, StreamExt};
 use maplit::hashmap;
-use serde::{Deserialize, Serialize};
 use serde_json;
-use sha1::Sha1;
-use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
-use uuid::Uuid;
 use warp::Filter;
 use warp::http::header;
 use warp::hyper::Body;
 use warp::reply::Response;
 
-use structures::*;
-
 mod structures;
-
-static HEADER_SEE_EVENTS: &'static str = "X-dtps-events";
-
-static HEADER_NODE_ID: &'static str = "X-DTPS-Node-ID";
-static HEADER_NODE_PASSED_THROUGH: &'static str = "X-DTPS-Node-ID-Passed-Through";
-static HEADER_LINK_BENCHMARK: &'static str = "X-DTPS-link-benchmark";
-static HEADER_DATA_UNIQUE_ID: &'static str = "X-DTPS-data-unique-id";
-static HEADER_DATA_ORIGIN_NODE_ID: &'static str = "X-DTPS-data-origin-node";
-
-static TOPIC_LIST_NAME: &'static str = "__topic_list";
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct RawData {
-    pub content: Vec<u8>,
-    pub content_type: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct DataSaved {
-    pub index: usize,
-    pub time_inserted: i32,
-    pub digest: String,
-}
-
-type TopicName = String;
+mod constants;
+mod object_queues;
+mod server_state;
+mod types;
 
 
-#[derive(Debug)]
-struct ObjectQueue {
-    sequence: Vec<DataSaved>,
-    data: HashMap<usize, RawData>,
-
-    tx: broadcast::Sender<usize>,
-    // rx: broadcast::Receiver<usize>,
-    seq: usize,
-    // name: TopicName,
-    tr: TopicRef,
-}
-
-impl ObjectQueue {
-    fn new(tr: TopicRef) -> Self {
-        let (tx, _rx) = broadcast::channel(16);
-        ObjectQueue {
-            seq: 0,
-            sequence: Vec::new(),
-            data: HashMap::new(),
-            tx,
-            // rx,
-            // name,
-            tr,
-        }
-    }
-
-    fn push(&mut self, data: &RawData) -> DataSaved {
-        let this_seq = self.seq;
-        self.seq += 1;
-        // save the data in the hashmap
-        self.data.insert(this_seq, data.clone());
-        // save the index in the sequence
-
-        let mut hasher = Sha1::new();
-        // Update the hasher with the byte array
-        hasher.update(data.content.as_slice());
-        let hex_string = hasher.digest().to_string();
-
-        let saved_data = DataSaved {
-            index: this_seq,
-            time_inserted: 0, // FIXME
-            digest: hex_string,
-        };
-        self.sequence.push(saved_data.clone());
-        if self.tx.receiver_count() > 0 {
-            self.tx.send(this_seq).unwrap();
-        }
-        saved_data
-    }
-}
-
-#[derive(Debug)]
-pub struct ServerState {
-    node_id: String,
-    oqs: HashMap<TopicName, ObjectQueue>,
-}
-
-
-impl ServerState {
-    fn new() -> Self {
-        let uuid = Uuid::new_v4();
-
-        let mut ss = ServerState {
-            node_id: uuid.to_string(),
-            oqs: HashMap::new(),
-        };
-
-        ss.new_topic(TOPIC_LIST_NAME);
-        return ss;
-    }
-
-    fn new_topic(&mut self, topic_name: &str) -> () {
-        let uuid = Uuid::new_v4();
-
-        let link_benchmark = LinkBenchmark {
-            complexity: 0,
-            latency: 0.0,
-            bandwidth: 1_000_000_000.0,
-            reliability: 1.0,
-            hops: 0,
-        };
-
-        let tr = TopicRef {
-            unique_id: uuid.to_string(),
-            origin_node: self.node_id.clone(),
-            app_static_data: None,
-            reachability: vec![
-                TopicReachability {
-                    url: format!("topics/{}/", topic_name),
-                    answering: self.node_id.clone(),
-                    forwarders: vec![],
-                    benchmark: link_benchmark,
-                }
-            ],
-            debug_topic_type: "local".to_string(),
-        };
-        self.oqs.insert(topic_name.to_string(), ObjectQueue::new(tr));
-
-        // get a list of all the topics in the server in json
-        let topics = self.oqs.keys().collect::<Vec<&String>>();
-        let topics_json = serde_json::to_string(&topics).unwrap();
-
-        self.push(TOPIC_LIST_NAME, &RawData {
-            content: topics_json.as_bytes().to_vec(),
-            content_type: "application/json".to_string(),
-        });
-    }
-    fn make_sure_topic_exists(&mut self, topic_name: &str) -> () {
-        if !self.oqs.contains_key(topic_name) {
-            self.new_topic(topic_name);
-        }
-    }
-    fn push(&mut self, topic_name: &str, data: &RawData) -> DataSaved {
-        self.make_sure_topic_exists(topic_name);
-        let oq = self.oqs.get_mut(topic_name).unwrap();
-        oq.push(data)
-    }
-}
+use structures::*;
+use object_queues::*;
+use server_state::*;
+use types::*;
+use constants::*;
 
 #[tokio::main]
 async fn main() {
@@ -247,7 +107,7 @@ async fn root_handler(ss_mutex:
 
 async fn handle_connection_generic(ws: warp::ws::WebSocket, state: Arc<Mutex<ServerState>>,
                                    topic_name: String) {
-    let (mut ws_tx, mut _ws_rx) = ws.split();
+    let (mut ws_tx, _ws_rx) = ws.split();
 
 
     let mut rx2: Receiver<usize>;

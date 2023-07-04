@@ -1,13 +1,7 @@
 use std::collections::HashMap;
 
-use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json;
-use tokio::sync::mpsc;
-use warp::Filter;
-
-use maplit::hashmap;
-use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TopicsIndex {
@@ -49,7 +43,6 @@ pub struct TopicReachability {
     pub forwarders: Vec<ForwardingStep>,
     pub benchmark: LinkBenchmark,
 }
-
 
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
