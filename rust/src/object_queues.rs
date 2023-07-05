@@ -66,6 +66,6 @@ impl ObjectQueue {
         if self.tx.receiver_count() > 0 {
             self.tx.send(this_seq).unwrap();
         }
-        saved_data
+        return saved_data
     }
 }
