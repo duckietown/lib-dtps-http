@@ -94,9 +94,9 @@ async def go_proxy(args: list[str] = None) -> None:
                 possible: list[tuple[URL, TopicReachability]] = []
                 for reachability in tr.reachability:
                     urlhere = URLString(f"topics/{new_topic}/")
-
-                    more_urls = await dtpsclient.get_alternates(reachability.url)
-                    for m in more_urls:
+                    rurl = parse_url_unescape(reachability.url)
+                    more_urls = await dtpsclient.get_alternates(rurl)
+                    for m in more_urls + [rurl]:
                         reach_with_me = await dtpsclient.compute_with_hop(
                             dtps_server.node_id,
                             urlhere,
@@ -107,10 +107,12 @@ async def go_proxy(args: list[str] = None) -> None:
 
                         if reach_with_me is not None:
                             possible.append((parse_url_unescape(reachability.url), reach_with_me))
+                        else:
+                            logger.info(f"Could not proxy {new_topic!r} as {urlbase} {topic_name} -> {m}")
 
                 if not possible:
-                    logger.error(f"Topic {topic_name} not available at {urlbase}: {available}")
-                    raise ValueError(f"Topic {topic_name} not available at {urlbase}: {available}")
+                    logger.error(f"Topic {topic_name} cannot be reached")
+                    raise ValueError(f"Topic {topic_name} not available at {urlbase}")
 
                 def choose_key(x: TopicReachability) -> tuple[int, float, float]:
                     return (x.benchmark.complexity, x.benchmark.latency, -x.benchmark.bandwidth)

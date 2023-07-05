@@ -28,7 +28,6 @@ use constants::*;
 
 #[tokio::main]
 async fn main() {
-    // let uuid = Uuid::new_v4();
 
 
     let ss = ServerState::new();
@@ -38,8 +37,6 @@ async fn main() {
     let server_state_access: &Arc<Mutex<ServerState>> = &server_private;
 
 
-    // use function e() from src/lib-dt-dtps-http/rust/src/structures.rs
-    // to create a node with a topic list
 
 
     let server_state_access_ = server_state_access.clone();
@@ -133,7 +130,7 @@ async fn handle_connection_generic(ws: warp::ws::WebSocket, state: Arc<Mutex<Ser
         let r = rx2.recv().await;
         match r {
             Ok(message) => {
-                println!("Received message: {}", message);
+                println!("Received update for topic {}: available index {}", message, message);
                 let ss2 = state.lock().await;
                 let oq2 = ss2.oqs.get(&topic_name).unwrap();
                 let this_one: &DataSaved = oq2.sequence.get(message).unwrap();
@@ -204,18 +201,14 @@ async fn handler_topic_generic_data(ss_mutex:
     let ss = ss_mutex.lock().await;
 
     let x: &ObjectQueue = ss.oqs.get(topic_name.as_str()).unwrap();
-    // get the last element in the vector
-    // let last = x.sequence.last().unwrap();
-    // let seq = last.index;
 
-    // get the data
+
     let data = x.data.get(&index).unwrap();
     let data_bytes = data.content.clone();
     let content_type = data.content_type.clone();
 
     let mut reply = Response::new(Body::from(data_bytes));
 
-    // let header_value: Result<header::HeaderValue, _> = my_node_id.into();
 
     reply.headers_mut().insert(
         HEADER_NODE_ID,
