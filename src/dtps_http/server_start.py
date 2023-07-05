@@ -114,6 +114,8 @@ async def app_start(
             # add a wrong host
             the_url = f"http://google.com/"
             available_urls.append(the_url)
+            the_url = f"{the_url}/wrong/path/"
+            available_urls.append(the_url)
 
             for interface, family, address in get_ip_addresses():
                 if family != socket.AF_INET6:

@@ -13,9 +13,9 @@ warp = "0.3.5"
 tungstenite = "0.19"
 
 maplit = "1.0.2"
-uuid = { version = "0.8", features = ["v4"] } # // features v4 is for random (version 4) UUIDs
+uuid = { version = "1.4.0", features = ["v4"] } # // features v4 is for random (version 4) UUIDs
 
 broadcast = "0.1"
 chrono = "0.4"
-
-sha1 = "0.6"
+sha256 = "1.1.4"
+#opencv = "0.82.1"

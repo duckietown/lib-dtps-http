@@ -2,9 +2,9 @@ from typing import cast
 
 from urllib3.util import parse_url
 
-from dtps_http import parse_url_unescape, URLString
+from dtps_http import join, parse_url_unescape, URLString
 
-url1 = cast(URLString, "http+unix://%2Ftmp%2Fmine/topics/clock3/data/3")
+url1 = cast(URLString, "http+unix://%2Ftmp%2Fmine/topics/clock3/data/3?debug=1")
 
 
 def test_parse_urls1() -> None:
@@ -15,7 +15,7 @@ def test_parse_urls1() -> None:
     assert parsed.host == "%2Ftmp%2Fmine"
     assert parsed.port is None
     assert parsed.path == "/topics/clock3/data/3"
-    assert parsed.query is None
+    assert parsed.query == "debug=1"
 
 
 def test_parse_url2() -> None:
@@ -26,4 +26,17 @@ def test_parse_url2() -> None:
     assert parsed.host == "/tmp/mine"
     assert parsed.port is None
     assert parsed.path == "/topics/clock3/data/3"
-    assert parsed.query is None
+    assert parsed.query == "debug=1"
+
+
+def test_parse_url3() -> None:
+    """We have a custom function that does unescape the host part of the URL."""
+    url3 = URLString("http://localhost/")
+    parsed = parse_url_unescape(url3)
+    joined = join(parsed, "/topic?debug=1")
+    print(repr(joined))
+    assert joined.scheme == "http"
+    assert joined.host == "localhost"
+    assert joined.port is None
+    assert joined.path == "/topic"
+    assert joined.query == "debug=1"

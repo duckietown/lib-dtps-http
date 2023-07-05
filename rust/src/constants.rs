@@ -1,4 +1,5 @@
 pub static HEADER_SEE_EVENTS: &'static str = "X-dtps-events";
+pub static HEADER_SEE_EVENTS_INLINE_DATA: &'static str = "X-dtps-events-inline-data";
 
 pub static HEADER_NODE_ID: &'static str = "X-DTPS-Node-ID";
 pub static HEADER_NODE_PASSED_THROUGH: &'static str = "X-DTPS-Node-ID-Passed-Through";

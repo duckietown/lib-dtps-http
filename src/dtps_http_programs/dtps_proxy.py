@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 from dataclasses import asdict, replace
+from typing import Optional, cast
 
 from pydantic.dataclasses import dataclass
 
@@ -10,7 +11,6 @@ from dtps_http import (
     DTPSClient,
     DTPSServer,
     interpret_command_line_and_start,
-    join,
     join_topic_names,
     parse_url_unescape,
     RawData,
@@ -21,6 +21,8 @@ from dtps_http import (
     URLString,
 )
 from dtps_http.server import ForwardedTopic
+
+from dtps_http.urls import URLIndexer
 from . import logger
 
 __all__ = [
@@ -40,7 +42,7 @@ class ProxyConfig:
 
 
 @async_error_catcher
-async def go_proxy(args: list[str] = None) -> None:
+async def go_proxy(args: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--add-prefix", type=str, default="proxied", required=False)
@@ -56,19 +58,23 @@ async def go_proxy(args: list[str] = None) -> None:
     t = interpret_command_line_and_start(dtps_server, args)
     server_task = asyncio.create_task(t)
 
-    never = asyncio.Event()
+    url0 = cast(URLIndexer, parse_url_unescape(urlbase))
+    # never = asyncio.Event()
     previously_seen: set[TopicName] = set()
+    task_listen_to_all_topics = None
     async with DTPSClient.create() as dtpsclient:
-        search_queue = asyncio.Queue()
+        search_queue: "asyncio.Queue[str]" = asyncio.Queue()
 
         def topic_list_changed(d: RawData) -> None:
             search_queue.put_nowait(f"topic list changed: {d}")
 
         @async_error_catcher
         async def ask_for_topics() -> None:
-            available = await dtpsclient.ask_topics(parse_url_unescape(urlbase))
-            nonlocal previously_seen
+            available = await dtpsclient.ask_topics(url0)
+            available.pop(TOPIC_LIST, None)
+            nonlocal previously_seen, task_listen_to_all_topics
             added = set(available) - previously_seen
+
             removed = previously_seen - set(available)
             previously_seen = set(available)
             if added or removed:
@@ -95,8 +101,8 @@ async def go_proxy(args: list[str] = None) -> None:
                 for reachability in tr.reachability:
                     urlhere = URLString(f"topics/{new_topic}/")
                     rurl = parse_url_unescape(reachability.url)
-                    more_urls = await dtpsclient.get_alternates(rurl)
-                    for m in more_urls + [rurl]:
+                    metadata = await dtpsclient.get_metadata(rurl)
+                    for m in metadata.alternative_urls + [rurl]:
                         reach_with_me = await dtpsclient.compute_with_hop(
                             dtps_server.node_id,
                             urlhere,
@@ -108,14 +114,15 @@ async def go_proxy(args: list[str] = None) -> None:
                         if reach_with_me is not None:
                             possible.append((parse_url_unescape(reachability.url), reach_with_me))
                         else:
-                            logger.info(f"Could not proxy {new_topic!r} as {urlbase} {topic_name} -> {m}")
+                            pass
+                            # logger.info(f"Could not proxy {new_topic!r} as {urlbase} {topic_name} -> {m}")
 
                 if not possible:
                     logger.error(f"Topic {topic_name} cannot be reached")
                     raise ValueError(f"Topic {topic_name} not available at {urlbase}")
 
                 def choose_key(x: TopicReachability) -> tuple[int, float, float]:
-                    return (x.benchmark.complexity, x.benchmark.latency, -x.benchmark.bandwidth)
+                    return x.benchmark.complexity, x.benchmark.latency, -x.benchmark.bandwidth
 
                 possible.sort(key=lambda _: choose_key(_[1]))
                 url_to_use, r = possible[0]
@@ -125,29 +132,26 @@ async def go_proxy(args: list[str] = None) -> None:
                 else:
                     tr2 = replace(tr, reachability=tr.reachability + [r])
 
+                logger.info(f"adding topic {new_topic} -> {url_to_use}")
+
+                metadata_to_use = await dtpsclient.get_metadata(url_to_use)
+                fd = ForwardedTopic(
+                    unique_id=tr.unique_id,
+                    origin_node=tr.origin_node,
+                    app_static_data=tr.app_static_data,
+                    reachability=tr2.reachability,
+                    forward_url_data=url_to_use,
+                    forward_url_events=metadata_to_use.events_url,
+                    forward_url_events_inline_data=metadata_to_use.events_data_inline_url,
+                )
+
                 logger.info(
                     f"Proxying {new_topic!r} as  {urlbase} {topic_name} ->  \n"
                     f" available at\n: {json.dumps(asdict(tr), indent=2)} \n"
-                    f" proxied at\n: {json.dumps(asdict(tr2), indent=2)} \n"
+                    f" proxied at\n: {json.dumps(asdict(fd), indent=2)} \n"
                 )
-                if topic_name == TOPIC_LIST:
-                    await dtpsclient.listen_url(url_to_use, topic_list_changed)
-                else:
-                    # await dtps_server.get_oq(new_topic, tr2)
-                    logger.info(f"adding topic {new_topic} -> {url_to_use}")
 
-                    fd = ForwardedTopic(
-                        unique_id=tr.unique_id,
-                        origin_node=tr.origin_node,
-                        app_static_data=tr.app_static_data,
-                        reachability=tr2.reachability,
-                        forward_url_data=url_to_use,
-                        forward_url_events=join(url_to_use, URLString("events/")),
-                    )
-
-                    await dtps_server.add_forwarded(new_topic, fd)
-
-                    # await dtpsclient.listen_url(url_to_use, functools.partial(new_observation, oq))
+                await dtps_server.add_forwarded(new_topic, fd)
 
         @async_error_catcher
         async def ask_for_topics_continuous() -> None:
@@ -165,15 +169,21 @@ async def go_proxy(args: list[str] = None) -> None:
 
         t = asyncio.create_task(ask_for_topics_continuous())
         search_queue.put_nowait("initial")
-        await never.wait()
+
+        t2 = asyncio.create_task(
+            dtpsclient.listen_topic(url0, TOPIC_LIST, topic_list_changed, inline_data=True)
+        )
+        # task_listen_to_all_topics = asyncio.ensure_future(asyncio.create_task(xt))
+
+        await asyncio.gather(server_task, t, t2)
 
 
-def dtps_proxy_main(args: list[str] = None) -> None:
+def dtps_proxy_main(args: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         description="Connects to DTPS server and listens and subscribes to all topics"
     )
 
-    args, rest = parser.parse_known_args(args)
+    parsed, rest = parser.parse_known_args(args)
 
     f = go_proxy(rest)
 

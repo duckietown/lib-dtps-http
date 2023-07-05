@@ -14,6 +14,7 @@ __all__ = [
     "ForwardingStep",
     "LinkBenchmark",
     "RawData",
+    "ResourceAvailability",
     "TopicReachability",
     "TopicRef",
     "TopicsIndex",
@@ -94,12 +95,23 @@ class TopicsIndex:
 
 
 # used in websockets
+
+
+@dataclass
+class ResourceAvailability:
+    url: URLString
+    available_until: float  # timestamp
+
+
 @dataclass
 class DataReady:
     sequence: int
 
+    content_type: str
+    content_length: int
     digest: str
-    urls: list[URLString]
+    availability: list[ResourceAvailability]
+    chunks_arriving: int
 
     @classmethod
     def from_json_string(cls, s: str) -> "DataReady":
@@ -130,4 +142,5 @@ class RawData:
     def digest(self) -> str:
         import hashlib
 
-        return hashlib.sha256(self.content).hexdigest()
+        s = hashlib.sha256(self.content).hexdigest()
+        return f"sha256:{s}"

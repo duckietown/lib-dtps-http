@@ -12,10 +12,12 @@ __all__ = [
     "HEADER_NODE_PASSED_THROUGH",
     "HEADER_NO_CACHE",
     "HEADER_SEE_EVENTS",
+    "HEADER_SEE_EVENTS_INLINE_DATA",
     "TOPIC_LIST",
 ]
 CONTENT_TYPE_TOPIC_DIRECTORY = CONTENT_TYPE_TOPIC_DESC = "application/json"
 HEADER_SEE_EVENTS = "X-dtps-events"
+HEADER_SEE_EVENTS_INLINE_DATA = "X-dtps-events-inline-data"
 
 HEADER_NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate"}
 HEADER_NODE_ID = "X-DTPS-Node-ID"

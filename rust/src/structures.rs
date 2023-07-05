@@ -44,8 +44,17 @@ pub struct TopicReachability {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ResourceAvailability {
+    pub url: String,
+    pub available_until: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DataReady {
     pub sequence: usize,
     pub digest: String,
-    pub urls: Vec<String>,
+    pub content_type: String,
+    pub content_length: usize,
+    pub availability: Vec<ResourceAvailability>,
+    pub chunks_arriving: usize,
 }

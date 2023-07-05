@@ -1,5 +1,5 @@
 import os
-from typing import cast, NamedTuple, Optional, TYPE_CHECKING
+from typing import cast, NamedTuple, NewType, Optional, TYPE_CHECKING
 from urllib.parse import unquote
 
 from urllib3.util import parse_url, Url
@@ -8,6 +8,11 @@ from .types import URLString
 
 __all__ = [
     "URL",
+    "URLIndexer",
+    "URLTopic",
+    "URLWS",
+    "URLWSInline",
+    "URLWSOffline",
     "join",
     "parse_url_unescape",
     "url_to_string",
@@ -26,6 +31,12 @@ if TYPE_CHECKING:
 
 else:
     from urllib3.util import Url as URL
+
+URLIndexer = NewType("URLIndexer", URL)
+URLTopic = NewType("URLTopic", URL)
+URLWS = NewType("URL_WEBSOCKETS", URL)
+URLWSInline = NewType("URLWSInline", URLWS)
+URLWSOffline = NewType("URLWSOffline", URLWS)
 
 
 def quote(s: str) -> str:
@@ -50,6 +61,11 @@ def url_to_string(url: URL) -> URLString:
 
 
 def join(url: URL, path0: str) -> URL:
+    if "?" in path0:
+        path0, _, query = path0.partition("?")
+    else:
+        query = None
+
     if "://" in path0:
         return parse_url_unescape(cast(URLString, path0))
     if url.path is None:
@@ -58,6 +74,6 @@ def join(url: URL, path0: str) -> URL:
         path = os.path.normpath(os.path.join(url.path, path0))
     if path0.endswith("/"):
         path += "/"
-    res = url._replace(path=path)
+    res = url._replace(path=path, query=query)
     # print(f'join {url!r} {path0!r} -> {res!r}')
     return res
