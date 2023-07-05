@@ -18,7 +18,6 @@ pub struct TopicRef {
     pub debug_topic_type: String,
 }
 
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LinkBenchmark {
     pub complexity: i32,
@@ -43,7 +42,6 @@ pub struct TopicReachability {
     pub forwarders: Vec<ForwardingStep>,
     pub benchmark: LinkBenchmark,
 }
-
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DataReady {

@@ -1,4 +1,3 @@
-
 pub static HEADER_SEE_EVENTS: &'static str = "X-dtps-events";
 
 pub static HEADER_NODE_ID: &'static str = "X-DTPS-Node-ID";

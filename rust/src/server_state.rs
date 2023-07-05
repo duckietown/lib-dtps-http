@@ -15,7 +15,6 @@ pub struct ServerState {
     pub oqs: HashMap<TopicName, ObjectQueue>,
 }
 
-
 impl ServerState {
     pub fn new() -> Self {
         let uuid = Uuid::new_v4();
@@ -44,20 +43,18 @@ impl ServerState {
             unique_id: uuid.to_string(),
             origin_node: node_id.clone(),
             app_static_data: None,
-            reachability: vec![
-                TopicReachability {
-                    url: format!("topics/{}/", topic_name),
-                    answering: node_id.clone(),
-                    forwarders: vec![],
-                    benchmark: link_benchmark,
-                }
-            ],
+            reachability: vec![TopicReachability {
+                url: format!("topics/{}/", topic_name),
+                answering: node_id.clone(),
+                forwarders: vec![],
+                benchmark: link_benchmark,
+            }],
             debug_topic_type: "local".to_string(),
         };
         let oqs = &mut self.oqs;
 
         oqs.insert(topic_name.to_string(), ObjectQueue::new(tr));
-        let mut topics : Vec<String>= Vec::new();
+        let mut topics: Vec<String> = Vec::new();
 
         for topic_name in oqs.keys() {
             topics.push(topic_name.clone());
@@ -76,8 +73,12 @@ impl ServerState {
     //     return oq.push(data);
     // }
 
-    pub fn publish(&mut self, topic_name: &str, content: &Vec<u8>,
-                   content_type: &str, ) -> DataSaved {
+    pub fn publish(
+        &mut self,
+        topic_name: &str,
+        content: &Vec<u8>,
+        content_type: &str,
+    ) -> DataSaved {
         self.make_sure_topic_exists(topic_name);
         let data = RawData {
             content: content.clone(),
@@ -86,7 +87,11 @@ impl ServerState {
         let oq = self.oqs.get_mut(topic_name).unwrap();
         return oq.push(&data);
     }
-    pub fn publish_object_as_json<T: Serialize>(&mut self, topic_name: &str, object: &T) -> DataSaved {
+    pub fn publish_object_as_json<T: Serialize>(
+        &mut self,
+        topic_name: &str,
+        object: &T,
+    ) -> DataSaved {
         let data_json = serde_json::to_string(object).unwrap();
         return self.publish_json(topic_name, data_json.as_str());
     }
