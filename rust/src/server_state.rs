@@ -67,11 +67,6 @@ impl ServerState {
             self.new_topic(topic_name);
         }
     }
-    // pub fn push(&mut self, topic_name: &str, data: &RawData) -> DataSaved {
-    //     self.make_sure_topic_exists(topic_name);
-    //     let oq = self.oqs.get_mut(topic_name).unwrap();
-    //     return oq.push(data);
-    // }
 
     pub fn publish(
         &mut self,

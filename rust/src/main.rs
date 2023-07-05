@@ -124,6 +124,7 @@ async fn handle_websocket_generic(
     state: Arc<Mutex<ServerState>>,
     topic_name: String,
 ) -> () {
+    println!("handle_websocket_generic: {}", topic_name);
     let (mut ws_tx, _ws_rx) = ws.split();
 
     let mut rx2: Receiver<usize>;
