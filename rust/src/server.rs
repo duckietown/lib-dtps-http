@@ -1,8 +1,3 @@
-use clap::Parser;
-use futures::{SinkExt, StreamExt};
-use maplit::hashmap;
-use serde::{Deserialize, Serialize};
-use serde_json;
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::process::{Command, Stdio};
@@ -10,20 +5,24 @@ use std::string::ToString;
 use std::sync::Arc;
 use std::sync::mpsc::{channel, Sender};
 use std::time::SystemTime;
+
+use clap::Parser;
+use futures::{SinkExt, StreamExt};
+use maplit::hashmap;
+use serde::{Deserialize, Serialize};
+use serde_json;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, interval};
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
+use warp::{Filter, Rejection, Reply};
 use warp::http::header;
 use warp::hyper::Body;
 use warp::path::end as endbar;
 use warp::reply::Response;
 use warp::reply::with_status;
-use warp::{Filter, Rejection, Reply};
-
-
 
 use crate::constants::*;
 use crate::object_queues::*;
@@ -589,15 +588,17 @@ struct Args {
 
 }
 
-pub  fn create_server_from_command_line() -> DTPSServer {
+pub fn create_server_from_command_line() -> DTPSServer {
     let args = Args::parse();
 
     let hoststring = format!("{}:{}", args.tcp_host, args.tcp_port);
     let mut addrs_iter = hoststring.to_socket_addrs().unwrap();
     let one_addr = addrs_iter.next().unwrap();
-    println!("dtps-http/rust server listening on {one_addr}");
+    let version = env!("CARGO_PKG_VERSION");
 
-    let server = DTPSServer::new(one_addr, args.tunnel.clone(), args.cloudflare_executable.clone(),);
+    println!("dtps-http/rust {version} server listening on {one_addr}");
+
+    let server = DTPSServer::new(one_addr, args.tunnel.clone(), args.cloudflare_executable.clone());
 
     server
 }

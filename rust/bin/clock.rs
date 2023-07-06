@@ -5,15 +5,9 @@ use tokio::spawn;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, interval};
 
-use server::*;
-use server_state::*;
-
-mod constants;
-mod object_queues;
-mod server;
-mod server_state;
-mod structures;
-mod types;
+use dtps_http::server::*;
+use dtps_http::server_state::*;
+extern crate dtps_http;
 
 async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: f32) {
     let mut clock = interval(Duration::from_secs_f32(interval_s));
