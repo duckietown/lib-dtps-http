@@ -5,6 +5,7 @@ from urllib.parse import unquote
 from urllib3.util import parse_url, Url
 
 from .types import URLString
+from . import logger
 
 __all__ = [
     "URL",
@@ -45,13 +46,19 @@ def quote(s: str) -> str:
 
 def parse_url_unescape(s: URLString) -> URL:
     parsed = parse_url(s)
+    if parsed.path is None:
+        logger.warning(f"parse_url_unescape: path is None: {s!r}")
+        path = "/"
+    else:
+        path = parsed.path
     res = Url(
         scheme=parsed.scheme,
         host=unquote(parsed.host) if parsed.host is not None else None,
         port=parsed.port,
-        path=parsed.path,  # unquote(parsed.path) if parsed.path is not None else None,
+        path=path,  # unquote(parsed.path) if parsed.path is not None else None,
         query=parsed.query,
     )
+
     return res
 
 

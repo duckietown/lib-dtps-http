@@ -16,8 +16,10 @@ from . import __version__, logger
 from .components import join_topic_names
 from .constants import (
     CONTENT_TYPE_TOPIC_DIRECTORY,
+    HEADER_CONTENT_LOCATION,
     HEADER_DATA_ORIGIN_NODE_ID,
     HEADER_DATA_UNIQUE_ID,
+    HEADER_NO_AVAIL,
     HEADER_NO_CACHE,
     HEADER_NODE_ID,
     HEADER_NODE_PASSED_THROUGH,
@@ -35,7 +37,7 @@ from .structures import (
     TopicsIndex,
 )
 from .types import NodeID, SourceID, TopicName, URLString
-from .urls import join, URL, url_to_string
+from .urls import join, parse_url_unescape, URL, url_to_string
 from .utils import async_error_catcher, multidict_update
 
 SEND_DATA_ARGNAME = "send_data"
@@ -190,8 +192,6 @@ class DTPSServer:
         else:
             use_url = str(original_url)
 
-        HEADER_NO_AVAIL = "X-Content-Location-Not-Available"
-
         res: CIMultiDict[str] = CIMultiDict()
         if not self.available_urls:
             res[HEADER_NO_AVAIL] = "No alternative URLs available"
@@ -211,8 +211,13 @@ class DTPSServer:
                     alternative = b + url.removeprefix(a)
                     alternatives.append(alternative)
 
-        for a in sorted(alternatives):
-            res.add("Content-Location", a)
+        url_URL = parse_url_unescape(URLString(url))
+        if url_URL.path == "/":
+            for b in self.available_urls:
+                alternatives.append(b)
+
+        for a in sorted(set(alternatives)):
+            res.add(HEADER_CONTENT_LOCATION, a)
         if not alternatives:
             res[HEADER_NO_AVAIL] = f"Nothing matched {url} of {self.available_urls}"
         else:
@@ -291,6 +296,8 @@ class DTPSServer:
     @async_error_catcher
     async def serve_index(self, request: web.Request) -> web.Response:
         topics: dict[TopicName, TopicRef] = {}
+        headers_s = "".join(f"{k}: {v}\n" for k, v in request.headers.items())
+        self.logger.debug(f"serve_index: {request.url} \n {headers_s}")
         for topic_name, oqs in self._oqs.items():
             qual_topic_name = join_topic_names(self.topics_prefix, topic_name)
 
@@ -338,17 +345,21 @@ class DTPSServer:
 
         # print(yaml.dump(asdict(index), indent=3))
         headers: CIMultiDict[str] = CIMultiDict()
-        headers.update(HEADER_NO_CACHE)
+
+        add_nocache_headers(headers)
         multidict_update(headers, self.get_headers_alternatives(request))
         self._add_own_headers(headers)
-        return web.json_response(asdict(index), content_type=CONTENT_TYPE_TOPIC_DIRECTORY, headers=headers)
+        json_data = asdict(index)
+
+        json_data["debug-available"] = self.available_urls
+        return web.json_response(json_data, content_type=CONTENT_TYPE_TOPIC_DIRECTORY, headers=headers)
 
     @async_error_catcher
     async def serve_get(self, request: web.Request) -> web.StreamResponse:
         topic_name = request.match_info["topic"]
         headers: CIMultiDict[str] = CIMultiDict()
         self._add_own_headers(headers)
-        headers.update(HEADER_NO_CACHE)
+        add_nocache_headers(headers)
 
         if topic_name in self._forwarded:
             return await self.serve_get_proxied(request, self._forwarded[topic_name])
@@ -383,8 +394,8 @@ class DTPSServer:
                     # forwarding all the headers
                     headers: CIMultiDict[str] = CIMultiDict()
                     multidict_update(headers, resp.headers)
-                    headers.popall("X-Content-Location-Not-Available", [])
-                    headers.popall("Content-Location", [])
+                    headers.popall(HEADER_NO_AVAIL, [])
+                    headers.popall(HEADER_CONTENT_LOCATION, [])
 
                     for r in fd.reachability:
                         if r.answering == self.node_id:
@@ -436,7 +447,7 @@ class DTPSServer:
         oq.publish(rd)
 
         headers: CIMultiDict[str] = CIMultiDict()
-        headers.update(HEADER_NO_CACHE)
+        add_nocache_headers(headers)
         self._add_own_headers(headers)
         multidict_update(headers, self.get_headers_alternatives(request))
         return web.Response(status=200, headers=headers)
@@ -634,3 +645,8 @@ class DTPSServer:
 
                 if inline_data:
                     await ws.send_bytes(rd.content)
+
+
+def add_nocache_headers(h: CIMultiDict[str]) -> None:
+    h.update(HEADER_NO_CACHE)
+    h["Cookie"] = f"help-no-cache={time.monotonic_ns()}"

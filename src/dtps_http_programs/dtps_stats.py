@@ -1,7 +1,9 @@
 import argparse
 import asyncio
 import functools
+import json
 import sys
+from dataclasses import asdict
 from typing import cast, Optional
 
 from dtps_http import DTPSClient, parse_url_unescape, RawData, URLString
@@ -25,14 +27,14 @@ async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> Non
 
         for name, desc in available.items():
             # list_urls = "".join(f"\t{u} \n" for u in desc.urls)
-            # logger.info(
-            #     f"Found topic {name!r}:\n"
-            #     + json.dumps(asdict(desc), indent=2)
-            #     + "\n"
-            #     # + f"unique_id: {desc.unique_id}\n"
-            #     # + f"origin_node: {desc.origin_node}\n"
-            #     # + f"forwarders: {desc.forwarders}\n"
-            # )
+            logger.info(
+                f"Found topic {name!r}:\n"
+                + json.dumps(asdict(desc), indent=2)
+                + "\n"
+                # + f"unique_id: {desc.unique_id}\n"
+                # + f"origin_node: {desc.origin_node}\n"
+                # + f"forwarders: {desc.forwarders}\n"
+            )
 
             url = cast(URLTopic, await dtpsclient.choose_best(desc.reachability))
             t = await dtpsclient.listen_url(

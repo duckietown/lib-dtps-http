@@ -2,14 +2,19 @@ import asyncio
 import os
 from contextlib import asynccontextmanager, AsyncExitStack
 from dataclasses import dataclass, replace
-from typing import Any, AsyncContextManager, AsyncIterator, Callable, TypeVar, cast, Optional, TYPE_CHECKING
+from typing import Any, AsyncContextManager, AsyncIterator, Callable, cast, Optional, TYPE_CHECKING, TypeVar
 
 import aiohttp
 from aiohttp import ClientConnectorError, ClientWebSocketResponse, TCPConnector, UnixConnector, WSMessage
 from tcp_latency import measure_latency
 
 from . import logger
-from .constants import HEADER_NODE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA
+from .constants import (
+    HEADER_CONTENT_LOCATION,
+    HEADER_NODE_ID,
+    HEADER_SEE_EVENTS,
+    HEADER_SEE_EVENTS_INLINE_DATA,
+)
 from .exceptions import EventListeningNotAvailable
 from .structures import (
     DataReady,
@@ -77,12 +82,7 @@ class DTPSClient:
     # urlbase: URL
 
     def __init__(self) -> None:
-        # assert isinstance(urlbase, (str, URL)), urlbase
-        # if isinstance(urlbase, str):
-        #     urlbase = parse_url_unescape(urlbase)
-        # self.urlbase = urlbase
         self.S = AsyncExitStack()
-        # self.available = {}
         self.tasks = []
         self.sessions = {}
         self.preferred_cache = {}
@@ -94,13 +94,10 @@ class DTPSClient:
     obtained_answer: dict[tuple[str, str, int], Optional[NodeID]]
 
     preferred_cache: dict[URL, URL]
-    # available: dict[TopicName, AvailableTopic]
     sessions: dict[str, aiohttp.ClientSession]
 
     async def init(self) -> None:
         pass
-        # x = aiohttp.ClientSession()
-        # self.session = await self.S.enter_async_context(x)
 
     async def aclose(self) -> None:
         for t in self.tasks:
@@ -120,7 +117,7 @@ class DTPSClient:
                 assert resp.status == 200, resp.status
                 res = await resp.json()
 
-            alternatives0 = cast(list[URLString], resp.headers.getall("Content-Location", []))
+            alternatives0 = cast(list[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION, []))
             where_this_available = [url] + [parse_url_unescape(_) for _ in alternatives0]
 
             s = TopicsIndex.from_json(res)
@@ -138,7 +135,7 @@ class DTPSClient:
 
                             r2 = replace(r, url=url2)
                             reachability.append(r2)
-
+                # print(f"reachability {reachability}")
                 # urls: list[URLString] = [url_to_string(join(url, _)) for _ in tr0.urls]
 
                 tr2 = replace(tr0, reachability=reachability)
@@ -167,7 +164,7 @@ class DTPSClient:
             return cast(U, self.preferred_cache[current])
 
         nothing: list[URLString] = []
-        alternatives0 = cast(list[URLString], resp.headers.getall("Content-Location", nothing))
+        alternatives0 = cast(list[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION, nothing))
 
         if not alternatives0:
             return None
@@ -210,6 +207,9 @@ class DTPSClient:
         return tr2
 
     async def find_best_alternative(self, us: list[tuple[U, NodeID]]) -> Optional[U]:
+        if not us:
+            logger.warning("find_best_alternative: no alternatives")
+            return None
         results: list[str] = []
         possible: list[tuple[float, float, float, U]] = []
         for a, expects_answer_from in us:
@@ -221,6 +221,10 @@ class DTPSClient:
 
         possible.sort(key=lambda x: (x[0], x[1]))
         if not possible:
+            rs = "\n".join(results)
+            logger.warning(
+                f"find_best_alternative: no alternatives found:\n {rs}",
+            )
             return None
         best = possible[0][-1]
 
@@ -253,6 +257,7 @@ class DTPSClient:
         """Returns None or a score for the url."""
         blacklist_key = (url.scheme, url.host, url.port or 0)
         if blacklist_key in self.blacklist_protocol_host_port:
+            logger.debug(f"blacklisted {url}")
             return None
 
         if url.scheme in ("http", "https"):
@@ -277,8 +282,8 @@ class DTPSClient:
                 who_answers = await self.get_who_answers(url)
 
                 if who_answers != expects_answer_from:
-                    # msg = f"wrong {who_answers=} header in {url}, expected {expects_answer_from}"
-                    # logger.error(msg)
+                    msg = f"wrong {who_answers=} header in {url}, expected {expects_answer_from}"
+                    logger.error(msg)
                     #
                     # self.obtained_answer[blacklist_key] = resp.headers[HEADER_NODE_ID]
                     #
@@ -293,14 +298,30 @@ class DTPSClient:
             bandwidth = 100_000_000
             latency = 0.001
             path = url.host
-            if path is None:
-                raise ValueError(f"no host in {repr(url)}")
-            if os.path.exists(path):
-                return LinkBenchmark(complexity, bandwidth, latency, reliability, hops)
-            else:
-                logger.warning(f"unix socket {path!r} does not exist")
-                self.blacklist_protocol_host_port.add(blacklist_key)
+            logger.info(f"checking {url}...")
+            if not os.path.exists(path):
                 return None
+            who_answers = await self.get_who_answers(url)
+
+            if who_answers != expects_answer_from:
+                msg = f"wrong {who_answers=} header in {url}, expected {expects_answer_from}"
+                logger.error(msg)
+                #
+                # self.obtained_answer[blacklist_key] = resp.headers[HEADER_NODE_ID]
+                #
+                # self.blacklist_protocol_host_port.add(blacklist_key)
+                return None
+
+            return LinkBenchmark(complexity, bandwidth, latency, reliability, hops)
+            #
+            # if path is None:
+            #     raise ValueError(f"no host in {repr(url)}")
+            # if os.path.exists(path):
+            #
+            # else:
+            #     logger.warning(f"unix socket {path!r} does not exist")
+            #     self.blacklist_protocol_host_port.add(blacklist_key)
+            #     return None
         if url.scheme == "http+ether":
             # path = url.host
             # if os.path.exists(path):
@@ -372,13 +393,13 @@ class DTPSClient:
         try:
             async with self.my_session(url, conn_timeout=2) as (session, use_url):
                 async with session.head(use_url) as resp:
-                    if resp.status == 404:
-                        return FoundMetadata([], None, None, None)
+                    # if resp.status == 404:
+                    #     return FoundMetadata([], None, None, None)
                     resp.raise_for_status()
                     assert resp.status == 200, resp
                     # logger.info(f"headers : {resp.headers}")
-                    if "Content-Location" in resp.headers:
-                        alternatives0 = cast(list[URLString], resp.headers.getall("Content-Location"))
+                    if HEADER_CONTENT_LOCATION in resp.headers:
+                        alternatives0 = cast(list[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION))
                     else:
                         alternatives0 = []
 
@@ -416,13 +437,7 @@ class DTPSClient:
         available = await self.ask_topics(urlbase)
         topic = available[topic_name]
         url = cast(URLTopic, await self.choose_best(topic.reachability))
-        # metadata = await self.get_metadata(url)
-        #
-        # if inline_data:
-        #     url = metadata.events_data_inline_url
-        # else:
-        #     url = metadata.events_url
-        # assert url is not None, metadata
+
         return await self.listen_url(url, cb, inline_data)
 
     async def listen_url(
@@ -430,14 +445,6 @@ class DTPSClient:
     ) -> "asyncio.Task[None]":
         url_topic = self._look_cache(url_topic)
         metadata = await self.get_metadata(url_topic)
-        # async with self.my_session(url) as (session, use_url):
-        #     async with session.get(use_url) as resp:
-        #         resp.raise_for_status()
-        #         assert resp.status == 200, resp
-        #
-        #         if (preferred := await self.prefer_alternative(url, resp)) is not None:
-        #             logger.info(f"Using preferred alternative to {url} -> {repr(preferred)}")
-        #             return await self.listen_url(preferred, cb, inline_data)
 
         if inline_data:
             if metadata.events_data_inline_url is not None:
@@ -466,11 +473,6 @@ class DTPSClient:
     async def listen_url_events(
         self, url_events: URLWS, inline_data: bool
     ) -> "AsyncIterator[tuple[DataReady, RawData]]":
-        # async with self.my_session(url) as (session, use_url):
-        #     async with session.ws_connect(use_url) as ws:
-        #         logger.info(f"websocket to {url} ready")
-        #         async for msg in ws:
-        #             yield msg
         if inline_data:
             if "?" not in str(url_events):
                 raise ValueError(f"inline data requested but no ? in {url_events}")
@@ -490,7 +492,7 @@ class DTPSClient:
             ws: ClientWebSocketResponse
             async with session.ws_connect(use_url) as ws:
                 headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())
-                logger.info(f"websocket to {use_url} ready\n{headers}")
+                logger.info(f"websocket to {url_websockets} ready\n{headers}")
 
                 while True:
                     if ws.closed:
@@ -534,7 +536,7 @@ class DTPSClient:
             ws: ClientWebSocketResponse
             async with session.ws_connect(use_url) as ws:
                 headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())
-                logger.info(f"websocket to {use_url} ready\n{headers}")
+                logger.info(f"websocket to {url_websockets} ready\n{headers}")
 
                 while True:
                     if ws.closed:
@@ -569,74 +571,3 @@ class DTPSClient:
                         raise AssertionError(f"unexpected data length {len(data)} != {dr.content_length}")
 
                     yield dr, RawData(content_type=dr.content_type, content=data)
-
-    #
-    # async def _listen_events(
-    #     self,
-    #     url: URL,
-    #     cb: Callable[[RawData], Any],
-    #     event_ready: asyncio.Event,
-    # ) -> None:
-    #     while True:
-    #         try:
-    #             logger.debug(f"Connecting to {url}")
-    #             await self._listen_events_one(url, cb, event_ready)
-    #         except asyncio.CancelledError:
-    #             raise
-    #         except Exception as e:
-    #             logger.error(f"error in _listen_events_one: {e!r}")
-    #             await asyncio.sleep(1)
-    #
-    # @async_error_catcher
-    # async def _listen_events_one(
-    #     self,
-    #     url: URL,
-    #     cb: Callable[[RawData], Any],
-    #     event_ready: asyncio.Event,
-    # ) -> None:
-    #     async with self.my_session(url) as (session, use_url):
-    #         async with session.ws_connect(use_url) as ws:
-    #             logger.info(f"websocket to {url} ready")
-    #
-    #             msg: WSMessage
-    #
-    #             counter = 0
-    #             async for msg in ws:
-    #                 event_ready.set()
-    #
-    #                 logger.debug(f"got msg {msg} ")
-    #                 try:
-    #                     dr = DataReady.from_json_string(msg.data)
-    #                 except Exception as e:
-    #                     logger.error(f"error in parsing {msg.data!r}: {e.__class__.__name__} {e!r}")
-    #                     continue
-    #
-    #                 logger.info(f"got {url} \n -> {dr}")
-    #                 url_datas = [join(url, _.url) for _ in dr.availability]
-    #                 logger.info(f"url_datas {url_datas}")
-    #                 if not url_datas:
-    #                     logger.error(f"no url_datas in {dr}")
-    #                     continue
-    #
-    #                 try:
-    #                     url_data = url_datas[0]  # XXX: try multiple urls
-    #                     logger.info(f"downloading {url_data!r}")
-    #                     async with self.my_session(url_data) as (session2, use_url2):
-    #                         async with session.get(use_url2) as resp_data:
-    #                             resp_data.raise_for_status()
-    #                             data = await resp_data.read()
-    #                             content_type = resp_data.content_type
-    #                             data = RawData(content_type=content_type, content=data)
-    #                             cb(data)
-    #
-    #                 except BaseException as e:
-    #                     sys.stderr.write("error!\n")
-    #                     tb = traceback.format_exc()
-    #                     print(tb)
-    #                     # sys.stderr.write(tb)
-    #                     # logger.debug(f"error in downloading {url_data!r}: {str(e)!r}")
-    #
-    #                 counter += 1
-    #
-    #                 # await asyncio.sleep(0.1)
-    #                 # logger.debug(f"looking for next")

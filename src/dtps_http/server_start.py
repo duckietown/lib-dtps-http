@@ -1,10 +1,14 @@
 import argparse
 import asyncio
+import json
+import os
 import socket
 import sys
+import tempfile
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Iterator, Optional
 from socket import AddressFamily
+from typing import AsyncIterator, Iterator, Optional
+
 import psutil
 from aiohttp import web
 
@@ -32,14 +36,11 @@ def get_ip_addresses() -> Iterator[tuple[str, AddressFamily, str]]:
 async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser()
 
-    # default_hostname = socket.gethostname()
-
-    #
-    # print(f"addresses}")
-    # print(f"ipv6s={ipv6s!r}")
     parser.add_argument("--tcp-port", type=int, default=None, required=False)
     parser.add_argument("--tcp-host", required=False, default="0.0.0.0")
     parser.add_argument("--unix-path", required=False, default=None)
+    parser.add_argument("--no-alternatives", default=False, action="store_true")
+    parser.add_argument("--tunnel", required=False, default=None, help="cloudflare credentials")
 
     parsed = parser.parse_args(args)
 
@@ -60,7 +61,10 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[list
         unix_path = None
 
     never = asyncio.Event()
-    async with app_start(dtps, tcp=tcp, unix_path=unix_path):
+    no_alternatives = parsed.no_alternatives
+
+    tunnel = parsed.tunnel
+    async with app_start(dtps, tcp=tcp, unix_path=unix_path, tunnel=tunnel, no_alternatives=no_alternatives):
         await never.wait()
 
 
@@ -69,20 +73,27 @@ async def app_start(
     s: DTPSServer,
     tcp: Optional[tuple[str, int]] = None,
     unix_path: Optional[str] = None,
+    tunnel: Optional[str] = None,
+    no_alternatives: bool = False,
 ) -> AsyncIterator[None]:
     runner = web.AppRunner(s.app)
     await runner.setup()
 
+    tunnel_process = None
+
     available_urls: list[str] = []
     if tcp is not None:
         tcp_host, port = tcp
-        the_url = f"http://{tcp_host}:{port}"
-        logger.info(f"Starting TCP server - the URL is {the_url!r}")
+        the_url0 = f"http://{tcp_host}:{port}/"
+        logger.info(f"Starting TCP server - the URL is {the_url0!r}")
 
         tcp_site = web.TCPSite(runner, tcp_host, port)
         await tcp_site.start()
 
-        if tcp_host == "0.0.0.0":
+        if tcp_host != "0.0.0.0":
+            available_urls.append(the_url0)
+
+        else:
             # addresses = list(get_ip_addresses())
             # macs = {}
             # for interface, family, address in addresses:
@@ -102,20 +113,23 @@ async def app_start(
             the_url = f"http://{socket.gethostname()}:{port}/"
             available_urls.append(the_url)
 
+            add_weird_addresses = False
             # add a weird address
-            the_url = f"http://8.8.12.2:{port}/"
-            available_urls.append(the_url)
-            # add a non-existente hostname
-            the_url = f"http://dewde.invalid.com:{port}/"
-            available_urls.append(the_url)
-            # add a wrong port
-            the_url = f"http://localhost:12345/"
-            available_urls.append(the_url)
-            # add a wrong host
-            the_url = f"http://google.com/"
-            available_urls.append(the_url)
-            the_url = f"{the_url}/wrong/path/"
-            available_urls.append(the_url)
+            if add_weird_addresses:
+                # TODO: add a non-existent path
+                the_url = f"http://8.8.12.2:{port}/"
+                available_urls.append(the_url)
+                # add a non-existente hostname
+                the_url = f"http://dewde.invalid.com:{port}/"
+                available_urls.append(the_url)
+                # add a wrong port
+                the_url = f"http://localhost:12345/"
+                available_urls.append(the_url)
+                # add a wrong host
+                the_url = f"http://google.com/"
+                available_urls.append(the_url)
+                the_url = f"{the_url}/wrong/path/"
+                available_urls.append(the_url)
 
             for interface, family, address in get_ip_addresses():
                 if family != socket.AF_INET6:
@@ -137,31 +151,68 @@ async def app_start(
                     the_url = f"http+ether://{address}:{port}"
 
                     available_urls.append(the_url)
-        else:
-            available_urls.append(the_url)
+
+        if tunnel is not None:
+            # run the cloudflare tunnel
+            with open(tunnel) as f:
+                data = json.load(f)
+
+            tunnel_name = data["TunnelName"]
+            cmd = [
+                "cloudflared",
+                "tunnel",
+                "run",
+                "--cred-file",
+                tunnel,
+                "--url",
+                f"http://127.0.0.1:{port}/",
+                tunnel_name,
+            ]
+
+            # run this in a subprocess using asyncio
+            logger.info(f"starting cloudflared tunnel - {cmd!r}")
+            tunnel_process = await asyncio.create_subprocess_exec(*cmd)
+
+            #  cloudflared tunnel run --cred-file test-dtps1-tunnel.json --url 127.0.0.1:8000 test-dtps1
+            pass
 
     else:
         logger.info("not starting TCP server. Use --tcp-port to start one.")
 
+    unix_paths = []
+
+    tmpdir = tempfile.gettempdir()
+    unix_paths.append(os.path.join(tmpdir, f"dtps-{s.node_id}"))
     if unix_path is not None:
-        path = unix_path.replace("/", "%2F")
+        unix_paths.append(unix_path)
+
+    for up in unix_paths:
+        dn = os.path.dirname(up)
+        os.makedirs(dn, exist_ok=True)
+
+        path = up.replace("/", "%2F")
         the_url = f"http+unix://{path}/"
 
-        logger.info(f"starting Unix server on path {unix_path!r} - the URL is {the_url!r}")
-        unix_site = web.UnixSite(runner, unix_path)
+        logger.info(f"starting Unix server on path {up!r} - the URL is {the_url!r}")
+        unix_site = web.UnixSite(runner, up)
         await unix_site.start()
 
         available_urls.append(the_url)
-    else:
-        logger.info("not starting Unix server. Use --unix-path to start one.")
 
     if not available_urls:
         msg = "Please specify at least one of --tcp-port or --unix-path"
         logger.error(msg)
         sys.exit(msg)
 
-    s.set_available_urls(available_urls)
-    logger.info("available URLs\n" + "".join("* " + _ + "\n" for _ in available_urls))
+    if not no_alternatives:
+        s.set_available_urls(available_urls)
+        logger.info("available URLs\n" + "".join("* " + _ + "\n" for _ in available_urls))
     # wait for finish signal
-    yield
-    await runner.cleanup()
+    try:
+        yield
+    finally:
+        if tunnel_process is not None:
+            logger.info("terminating cloudflared tunnel")
+            tunnel_process.terminate()
+            await tunnel_process.wait()
+        await runner.cleanup()
