@@ -1,46 +1,64 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::SystemTime;
-
+use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use maplit::hashmap;
 use serde::{Deserialize, Serialize};
 use serde_json;
+use std::collections::HashMap;
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::process::{Command, Stdio};
+use std::string::ToString;
+use std::sync::Arc;
+use std::sync::mpsc::{channel, Sender};
+use std::time::SystemTime;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
+use tokio::time::{Duration, interval};
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
-use warp::{Filter, Rejection, Reply};
 use warp::http::header;
 use warp::hyper::Body;
 use warp::path::end as endbar;
 use warp::reply::Response;
 use warp::reply::with_status;
-use std::net::{SocketAddr, ToSocketAddrs};
+use warp::{Filter, Rejection, Reply};
+
+
 
 use crate::constants::*;
 use crate::object_queues::*;
-use crate::server_state::ServerState;
+use crate::server_state::*;
 use crate::structures::*;
 use crate::types::*;
 
 pub struct DTPSServer {
+    pub listen_address: SocketAddr,
     pub mutex: Arc<Mutex<ServerState>>,
+    pub cloudflare_tunnel_name: Option<String>,
+    pub cloudflare_executable: String,
 }
 
 impl DTPSServer {
-    pub fn new() -> Self {
+    pub fn new(listen_address: SocketAddr, cloudflare_tunnel_name: Option<String>, cloudflare_executable: String) -> Self {
         let ss = ServerState::new();
-        let server_private = Arc::new(Mutex::new(ss));
+        let mutex = Arc::new(Mutex::new(ss));
         DTPSServer {
-            mutex: server_private,
+            listen_address,
+            mutex,
+            cloudflare_tunnel_name,
+            cloudflare_executable,
         }
     }
-    pub async fn serve(&mut self,
-    one_addr: SocketAddr
-
+    pub async fn serve(&mut self
     ) {
+        // get current pid
+        let pid = std::process::id();
+        if pid == 1 {
+            println!("WARNING: Running as PID 1. This is not recommended because CTRL-C may not work.");
+            println!("If running through `docker run`, use `docker run --init` to avoid this.")
+        }
+
+
         let server_state_access: Arc<Mutex<ServerState>> = self.mutex.clone();
 
         let clone_access = warp::any().map(move || server_state_access.clone());
@@ -110,8 +128,7 @@ impl DTPSServer {
             .or(topic_post);
 
 
-
-        let tcp_server = warp::serve(the_routes).run(one_addr);
+        let tcp_server = warp::serve(the_routes).run(self.listen_address);
 
         // use getaddrs::InterfaceAddrs;
         //
@@ -121,6 +138,38 @@ impl DTPSServer {
         // for addr in addrs {
         //     println!("{}: {:?}", addr.name, addr.address);
         // }
+
+
+        // if tunnel is given ,start
+        if let Some(tunnel_name) = &self.cloudflare_tunnel_name {
+            let port = self.listen_address.port();
+            let hoststring_127 = format!("127.0.0.1:{}", port);
+            let cmdline = [
+                // "cloudflared",
+                "tunnel",
+                "run",
+                "--protocol", "http2",
+                "--cred-file",
+                &tunnel_name,
+                "--url",
+                &hoststring_127,
+                &tunnel_name,
+            ];
+            println!("starting tunnel: {:?}", cmdline);
+
+            let child = Command::new(&self.cloudflare_executable)
+                .args(cmdline)
+                // .stdout(Stdio::piped())
+                .spawn()
+                .expect("Failed to start ping process");
+
+            println!("Started process: {}", child.id());
+
+            // let tunnel_proc = server.start_tunnel(tunnel_name);
+            // let _ = tokio::join!(server_proc.await, tunnel_proc.await);
+            // return;
+        }
+
 
         tcp_server.await;
 
@@ -511,4 +560,44 @@ pub fn put_common_headers(ss: &ServerState, headers: &mut HeaderMap<HeaderValue>
 #[derive(Serialize, Deserialize)]
 struct EventsQuery {
     send_data: Option<u8>,
+}
+
+
+const DEFAULT_PORT: u16 = 8000;
+const DEFAULT_HOST: &str = "0.0.0.0";
+const DEFAULT_CLOUDFLARE_EXECUTABLE: &str = "cloudflared";
+
+/// DTPS HTTP server
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// TCP Port to bind to
+    #[arg(long, default_value_t = DEFAULT_PORT)]
+    tcp_port: u16,
+
+    /// Hostname to bind to
+    #[arg(long, default_value_t = DEFAULT_HOST.to_string())]
+    tcp_host: String,
+
+    /// Cloudflare tunnel to start
+    #[arg(long)]
+    tunnel: Option<String>,
+
+    /// Cloudflare executable filename
+    #[arg(long, default_value_t = DEFAULT_CLOUDFLARE_EXECUTABLE.to_string())]
+    cloudflare_executable: String,
+
+}
+
+pub  fn create_server_from_command_line() -> DTPSServer {
+    let args = Args::parse();
+
+    let hoststring = format!("{}:{}", args.tcp_host, args.tcp_port);
+    let mut addrs_iter = hoststring.to_socket_addrs().unwrap();
+    let one_addr = addrs_iter.next().unwrap();
+    println!("dtps-http/rust server listening on {one_addr}");
+
+    let server = DTPSServer::new(one_addr, args.tunnel.clone(), args.cloudflare_executable.clone(),);
+
+    server
 }
