@@ -21,10 +21,9 @@ async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: 
     loop {
         clock.tick().await;
         let mut ss = state.lock().await;
-        let current_datetime = Local::now();
-        let datetime_string = current_datetime.to_rfc3339();
+        let datetime_string = Local::now().to_rfc3339();
 
-        let inserted = ss.publish_plain(topic_name, datetime_string.as_str());
+        let inserted = ss.publish_plain(topic_name, &datetime_string);
 
         println!("inserted {}: {:?}", topic_name, inserted);
     }

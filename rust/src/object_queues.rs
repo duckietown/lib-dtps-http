@@ -50,6 +50,13 @@ impl ObjectQueue {
         }
     }
 
+    pub fn push_data(&mut self, content_type: &str, content: &Vec<u8>) -> DataSaved {
+        let data = RawData {
+            content: content.clone(),
+            content_type: content_type.to_string(),
+        };
+        self.push(&data)
+    }
     pub fn push(&mut self, data: &RawData) -> DataSaved {
         let this_seq = self.seq;
         self.seq += 1;
