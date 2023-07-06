@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use chrono::Local;
 
 use serde::{Deserialize, Serialize};
 use sha256::digest;
@@ -11,9 +12,16 @@ pub struct RawData {
     pub content: Vec<u8>,
     pub content_type: String,
 }
+use md5;
 
 impl RawData {
     pub fn digest(&self) -> String {
+        // if self.content.len() < 16 {
+        //     return self.content.clone();
+        // }
+        let md5s = md5::compute(&self.content);
+        return format!("md5:{:x}", md5s);
+
         let d = digest(self.content.as_slice());
         format!("sha256:{}", d)
     }
@@ -22,7 +30,7 @@ impl RawData {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DataSaved {
     pub index: usize,
-    pub time_inserted: i32,
+    pub time_inserted: i64,
     pub content_type: String,
     pub content_length: usize,
     pub digest: String,
@@ -62,10 +70,10 @@ impl ObjectQueue {
         self.seq += 1;
         let digest = data.digest();
         self.data.insert(digest.clone(), data.clone());
-
+        let now = Local::now().timestamp_nanos();
         let saved_data = DataSaved {
             index: this_seq,
-            time_inserted: 0, // FIXME
+            time_inserted: now,
             digest: digest.clone(),
             content_type: data.content_type.clone(),
             content_length: data.content.len(),

@@ -3,6 +3,7 @@ import asyncio
 import functools
 import json
 import sys
+import time
 from dataclasses import asdict
 from typing import cast, Optional
 
@@ -19,7 +20,15 @@ async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> Non
     url = cast(URLIndexer, parse_url_unescape(urlbase0))
 
     def new_observation(topic_name: str, data: RawData) -> None:
-        logger.info(f"new_observation {topic_name=} {data=}")
+        current = time.time_ns()
+        if "clock" not in topic_name:
+            return
+        j = json.loads(data.content.decode())
+
+        diff = current - j
+        # convert nanoseconds to milliseconds
+        diff_ms = diff / 1000000.0
+        logger.info(f"{topic_name=}: latency {diff_ms:.3f} ms")
 
     subcriptions: list[asyncio.Task[None]] = []
     async with DTPSClient.create() as dtpsclient:

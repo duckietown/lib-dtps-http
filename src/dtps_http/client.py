@@ -79,8 +79,6 @@ class DTPSClient:
             finally:
                 await ob.aclose()
 
-    # urlbase: URL
-
     def __init__(self) -> None:
         self.S = AsyncExitStack()
         self.tasks = []
@@ -491,6 +489,7 @@ class DTPSClient:
         async with self.my_session(url_websockets) as (session, use_url):
             ws: ClientWebSocketResponse
             async with session.ws_connect(use_url) as ws:
+                # noinspection PyProtectedMember
                 headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())
                 logger.info(f"websocket to {url_websockets} ready\n{headers}")
 
@@ -535,6 +534,7 @@ class DTPSClient:
         async with self.my_session(url_websockets) as (session, use_url):
             ws: ClientWebSocketResponse
             async with session.ws_connect(use_url) as ws:
+                # noinspection PyProtectedMember
                 headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())
                 logger.info(f"websocket to {url_websockets} ready\n{headers}")
 

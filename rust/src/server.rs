@@ -17,6 +17,7 @@ use warp::hyper::Body;
 use warp::path::end as endbar;
 use warp::reply::Response;
 use warp::reply::with_status;
+use std::net::{SocketAddr, ToSocketAddrs};
 
 use crate::constants::*;
 use crate::object_queues::*;
@@ -36,7 +37,10 @@ impl DTPSServer {
             mutex: server_private,
         }
     }
-    pub async fn serve(&mut self) {
+    pub async fn serve(&mut self,
+    one_addr: SocketAddr
+
+    ) {
         let server_state_access: Arc<Mutex<ServerState>> = self.mutex.clone();
 
         let clone_access = warp::any().map(move || server_state_access.clone());
@@ -84,18 +88,16 @@ impl DTPSServer {
             .and(clone_access.clone())
             // .and_then(handle_websocket_generic_pre);
             .map({
-                // let state1 = server_state_access.clone();
                 move |c: String,
                       q: EventsQuery,
                       ws: warp::ws::Ws,
                       state1: Arc<Mutex<ServerState>>| {
-                    let state2 = state1.clone();
                     let send_data = match q.send_data {
                         Some(x) => x != 0,
                         None => false,
                     };
                     ws.on_upgrade(move |socket| {
-                        handle_websocket_generic(socket, state2.clone(), c, send_data)
+                        handle_websocket_generic(socket, state1, c, send_data)
                     })
                 }
             });
@@ -106,7 +108,11 @@ impl DTPSServer {
             .or(root_route)
             .or(topic_generic_route_data)
             .or(topic_post);
-        let tcp_server = warp::serve(the_routes).run(([0, 0, 0, 0], 8000));
+
+
+
+        let tcp_server = warp::serve(the_routes).run(one_addr);
+
         // use getaddrs::InterfaceAddrs;
         //
         // let addrs = InterfaceAddrs::query_system()
@@ -273,10 +279,10 @@ async fn handle_websocket_generic(
                 continue;
             }
         }
-        println!(
-            "Received update for topic {}: index {}",
-            topic_name, message
-        );
+        // println!(
+        //     "Received update for topic {}: index {}",
+        //     topic_name, message
+        // );
         let ss2 = state.lock().await;
         let oq2 = ss2.oqs.get(&topic_name).unwrap();
         let this_one: &DataSaved = oq2.sequence.get(message).unwrap();
@@ -289,7 +295,7 @@ async fn handle_websocket_generic(
             sequence: this_one.index,
             digest: this_one.digest.clone(),
             content_type: this_one.content_type.clone(),
-            content_length: this_one.content_length.clone(),
+            content_length: this_one.content_length,
             availability: the_availability,
             chunks_arriving: nchunks,
         };
