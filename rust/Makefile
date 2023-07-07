@@ -21,4 +21,5 @@ build:
 creds=$(realpath $(PWD)/..)
 run-demo:
 	docker pull  $(tag)
-	docker run --init  -it -v $(creds):/creds:ro $(tag)  --tunnel /creds/test-dtps1-tunnel.json
+	docker run  -it -v $(creds):/creds:ro $(tag)  --tunnel /creds/test-dtps1-tunnel.json
+	#docker run --init  -it -v $(creds):/creds:ro $(tag)  --tunnel /creds/test-dtps1-tunnel.json

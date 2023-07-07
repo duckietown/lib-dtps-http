@@ -1,13 +1,17 @@
+extern crate dtps_http;
+
+use std::env;
 use std::sync::Arc;
 
 use chrono::prelude::*;
 use tokio::spawn;
 use tokio::sync::Mutex;
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
+use dtps_http::logs::init_logging;
 
 use dtps_http::server::*;
 use dtps_http::server_state::*;
-extern crate dtps_http;
+
 
 async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: f32) {
     let mut clock = interval(Duration::from_secs_f32(interval_s));
@@ -21,12 +25,13 @@ async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: 
         let s = format!("{}", now);
         let _inserted = ss.publish_json(topic_name, &s);
 
-        // println!("inserted {}: {:?}", topic_name, inserted);
+        // debug!("inserted {}: {:?}", topic_name, inserted);
     }
 }
 
 #[tokio::main]
 async fn main() {
+    init_logging();
     let mut server = create_server_from_command_line();
 
     spawn(clock_go(server.get_lock(), "clock", 1.0));

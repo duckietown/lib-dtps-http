@@ -8,7 +8,7 @@ COPY . .
 # --release
 RUN cargo build  --target-dir /wd/target
 RUN find /wd/target -type f
-RUN cp /wd/target/debug/dtps_server_demo /tmp/app
+RUN cp /wd/target/debug/dtps-http-rust-clock /tmp/app
 
 # get cloudflare executable
 
@@ -31,4 +31,5 @@ RUN arch
 RUN ["/app", "--version"]
 RUN ["/cloudflared", "--version"]
 ENV RUST_BACKTRACE=full
+ENV RUST_LOG=debug
 ENTRYPOINT ["/app", "--cloudflare-executable=/cloudflared"]

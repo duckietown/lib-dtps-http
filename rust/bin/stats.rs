@@ -1,6 +1,6 @@
 extern crate dtps_http;
 extern crate url;
-
+use log::{debug, error, info, trace, warn};
 use std::any::Any;
 use std::time::Duration;
 
@@ -20,6 +20,7 @@ use url::Url;
 use dtps_http::constants::{
     HEADER_CONTENT_LOCATION, HEADER_NODE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA,
 };
+use dtps_http::logs::init_logging;
 use dtps_http::object_queues::RawData;
 use dtps_http::structures::{DataReady, FoundMetadata, TopicsIndex};
 
@@ -70,7 +71,7 @@ async fn listen_events(md: FoundMetadata, topic_name: String) {
                 let latencies_mean_ns = (latencies_sum_ns) / (latencies_ns.len() as u128);
                 let latencies_min_ns = *latencies_ns.iter().min().unwrap();
                 let latencies_max_ns = *latencies_ns.iter().max().unwrap();
-                println!("{:12} latency: {:.3}ms   (last {} : mean: {:.3}ms  min: {:.3}ms  max {:.3}ms )", topic_name, ms_from_ns(diff),
+                info!("{:12} latency: {:.3}ms   (last {} : mean: {:.3}ms  min: {:.3}ms  max {:.3}ms )", topic_name, ms_from_ns(diff),
                          latencies_ns.len(),
                          ms_from_ns(latencies_mean_ns),
                 ms_from_ns(latencies_min_ns), ms_from_ns(latencies_max_ns));
@@ -98,14 +99,14 @@ async fn listen_events_url(md: FoundMetadata, tx: UnboundedSender<RawData>) {
         panic!("unexpected scheme: {}", url.scheme());
     }
     let connection = connect_async(url.clone()).await;
-    // println!("connection: {:#?}", connection);
+    // debug!("connection: {:#?}", connection);
     let (ws_stream, response) = connection.expect("Failed to connect");
 
-    println!("Connected to the server");
-    println!("Response HTTP code: {}", response.status());
-    println!("Response contains the following headers:");
+    debug!("Connected to the server");
+    debug!("Response HTTP code: {}", response.status());
+    debug!("Response contains the following headers:");
     for (header, value) in response.headers().iter() {
-        println!("* {:?} {:?}", header, value);
+        debug!("* {:?} {:?}", header, value);
     }
 
     let (_write, mut read) = ws_stream.split();
@@ -116,7 +117,7 @@ async fn listen_events_url(md: FoundMetadata, tx: UnboundedSender<RawData>) {
     loop {
         let msg = read.next().await.unwrap().unwrap();
         if !msg.is_binary() {
-            println!("unexpected message #{}: {:#?}", index, msg);
+            debug!("unexpected message #{}: {:#?}", index, msg);
             continue;
         } else {
             let data = msg.clone().into_data();
@@ -124,11 +125,11 @@ async fn listen_events_url(md: FoundMetadata, tx: UnboundedSender<RawData>) {
             let dr: DataReady;
             match serde_cbor::from_slice::<DataReady>(&data) {
                 Ok(dr_) => {
-                    // println!("dr: {:#?}", dr_);
+                    // debug!("dr: {:#?}", dr_);
                     dr = dr_;
                 }
                 Err(e) => {
-                    println!(
+                    debug!(
                         "message #{}: cannot parse cbor as DataReady: {:#?}\n{:#?}",
                         index,
                         e,
@@ -145,7 +146,7 @@ async fn listen_events_url(md: FoundMetadata, tx: UnboundedSender<RawData>) {
                     let data = msg.into_data();
                     content.extend(data);
                 } else {
-                    println!("unexpected message #{}: {:#?}", index, msg);
+                    debug!("unexpected message #{}: {:#?}", index, msg);
                 }
                 index += 1;
             }
@@ -161,27 +162,28 @@ async fn listen_events_url(md: FoundMetadata, tx: UnboundedSender<RawData>) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("now waiting 5 seconds so that the server can start");
+    init_logging();
+    debug!("now waiting 1 seconds so that the server can start");
     sleep(Duration::from_secs(1)).await;
 
     let args = StatsArgs::parse();
     // print!("{} {}", args.url, args.inline_data);
 
     let urlbase = args.url.parse::<Url>().unwrap();
-    // println!("urlbase: {:#?}", urlbase);
+    // debug!("urlbase: {:#?}", urlbase);
     let x = get_index(urlbase.clone()).await.unwrap();
 
-    // println!("{:#?}", x);
+    // debug!("{:#?}", x);
     let mut handles: Vec<JoinHandle<_>> = Vec::new();
 
     for (topic_name, topic_info) in x.topics {
-        println!("{}", topic_name);
+        debug!("{}", topic_name);
         for r in topic_info.reachability {
             let real_uri = urlbase.join(&r.url).unwrap();
-            // println!("{}  {} -> {}", topic_name, r.url, real_uri);
+            // debug!("{}  {} -> {}", topic_name, r.url, real_uri);
 
             let md = get_metadata(real_uri).await;
-            // println!("md: {:#?}", md);
+            // debug!("md: {:#?}", md);
             let handle = spawn(listen_events(md, topic_name.clone()));
             handles.push(handle);
             // make a request to the real_uri
@@ -192,8 +194,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for result in results {
         match result {
-            Ok(val) => println!("Finished task with result: {:?}", val),
-            Err(err) => eprintln!("Task returned an error: {:?}", err),
+            Ok(val) => debug!("Finished task with result: {:?}", val),
+            Err(err) => debug!("Task returned an error: {:?}", err),
         }
     }
 
@@ -237,7 +239,7 @@ pub async fn get_metadata(url: Url) -> FoundMetadata {
     let headers = resp.headers();
     // get all the HEADER_CONTENT_LOCATION in the response
     let alternatives0 = headers.get_all(HEADER_CONTENT_LOCATION);
-    println!("alternatives0: {:#?}", alternatives0);
+    debug!("alternatives0: {:#?}", alternatives0);
     // convert into a vector of strings
     let alternative_urls: Vec<String> =
         alternatives0.iter().map(string_from_header_value).collect();

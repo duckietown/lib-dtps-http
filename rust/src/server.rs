@@ -1,3 +1,7 @@
+use log::debug;
+use log::error;
+use log::info;
+use log::warn;
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::process::Command;
@@ -56,10 +60,10 @@ impl DTPSServer {
         // get current pid
         let pid = std::process::id();
         if pid == 1 {
-            println!(
+            warn!(
                 "WARNING: Running as PID 1. This is not recommended because CTRL-C may not work."
             );
-            println!("If running through `docker run`, use `docker run --init` to avoid this.")
+            warn!("If running through `docker run`, use `docker run --init` to avoid this.")
         }
 
         let server_state_access: Arc<Mutex<ServerState>> = self.mutex.clone();
@@ -140,7 +144,7 @@ impl DTPSServer {
         //     .expect("System has no network interfaces.");
         //
         // for addr in addrs {
-        //     println!("{}: {:?}", addr.name, addr.address);
+        //     debug!("{}: {:?}", addr.name, addr.address);
         // }
 
         // if tunnel is given ,start
@@ -159,7 +163,7 @@ impl DTPSServer {
                 &hoststring_127,
                 &tunnel_name,
             ];
-            println!("starting tunnel: {:?}", cmdline);
+            debug!("starting tunnel: {:?}", cmdline);
 
             let child = Command::new(&self.cloudflare_executable)
                 .args(cmdline)
@@ -167,7 +171,7 @@ impl DTPSServer {
                 .spawn()
                 .expect("Failed to start ping process");
 
-            println!("Started process: {}", child.id());
+            debug!("Started process: {}", child.id());
 
             // let tunnel_proc = server.start_tunnel(tunnel_name);
             // let _ = tokio::join!(server_proc.await, tunnel_proc.await);
@@ -303,7 +307,7 @@ async fn root_handler(
     }
 }
 // fn print_type_of<T>(_: &T) {
-//     println!("{}", std::any::type_name::<T>())
+//     debug!("{}", std::any::type_name::<T>())
 // // }
 //
 // async fn handle_websocket_generic_pre(c: String, q: EventsQuery, ws: warp::ws::Ws, state1: Arc<Mutex<ServerState>>) {
@@ -324,7 +328,7 @@ async fn handle_websocket_generic(
     topic_name: String,
     send_data: bool,
 ) -> () {
-    println!("handle_websocket_generic: {}", topic_name);
+    debug!("handle_websocket_generic: {}", topic_name);
     let (mut ws_tx, mut ws_rx) = ws.split();
 
     let mut rx2: Receiver<usize>;
@@ -376,15 +380,15 @@ async fn handle_websocket_generic(
         loop {
             match ws_rx.next().await {
                 None => {
-                    println!("ws_rx.next() returned None");
+                    debug!("ws_rx.next() returned None");
                     // finished = true;
                     break;
                 }
                 Some(Ok(msg)) => {
-                    println!("ws_rx.next() returned {:#?}", msg);
+                    debug!("ws_rx.next() returned {:#?}", msg);
                 }
                 Some(Err(err)) => {
-                    println!("ws_rx.next() returned error {:#?}", err);
+                    debug!("ws_rx.next() returned error {:#?}", err);
                     // match err {
                     //     Error { .. } => {}
                     // }
@@ -402,11 +406,11 @@ async fn handle_websocket_generic(
             Ok(_message) => message = _message,
             Err(RecvError::Closed) => break,
             Err(RecvError::Lagged(_)) => {
-                println!("Lagged!");
+                debug!("Lagged!");
                 continue;
             }
         }
-        // println!(
+        // debug!(
         //     "Received update for topic {}: index {}",
         //     topic_name, message
         // );
@@ -431,7 +435,7 @@ async fn handle_websocket_generic(
         match ws_tx.send(message).await {
             Ok(_) => {}
             Err(e) => {
-                println!("Error sending message: {}", e);
+                debug!("Error sending message: {}", e);
                 break; // TODO: do better handling
             }
         }
@@ -441,13 +445,13 @@ async fn handle_websocket_generic(
             match ws_tx.send(message).await {
                 Ok(_) => {}
                 Err(e) => {
-                    println!("Error sending message: {}", e);
+                    debug!("Error sending message: {}", e);
                     break; // TODO: do better handling
                 }
             }
         }
     }
-    println!("handle_websocket_generic: {} - done", topic_name);
+    debug!("handle_websocket_generic: {} - done", topic_name);
 }
 
 pub fn epoch() -> f64 {
@@ -661,9 +665,9 @@ pub fn create_server_from_command_line() -> DTPSServer {
     let hoststring = format!("{}:{}", args.tcp_host, args.tcp_port);
     let mut addrs_iter = hoststring.to_socket_addrs().unwrap();
     let one_addr = addrs_iter.next().unwrap();
-    let version = env!("CARGO_PKG_VERSION");
+    // let version = env!("CARGO_PKG_VERSION");
 
-    println!("dtps-http/rust {version} server listening on {one_addr}");
+    info!("Server listening on {one_addr}");
 
     let server = DTPSServer::new(
         one_addr,

@@ -13,6 +13,7 @@ warp = "0.3.5"
 tungstenite = "0.19"
 tokio-tungstenite = "0.19.0"
 maplit = "1.0.2"
+log = "0.4.14"
 uuid = { version = "1.4.0", features = ["v4"] }
 # to enable v7 needs more flags: https://docs.rs/uuid/latest/uuid/
 
@@ -29,6 +30,7 @@ url = "2.4.0"
 serde_cbor = {version ="0.11.2", features = ["tags", "unsealed_read_write"] }
 maud = "0.25.0"
 serde_yaml = "0.9.22"
+env_logger = "0.10.0"
 
 
 
