@@ -8,10 +8,13 @@ COPY rust rust
 COPY Cargo.toml .
 # RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # --release
-RUN cargo build --target-dir /wd/target
+ARG CARGO_PROFILE=release
+ARG DEST=release
+
+RUN cargo build --profile $CARGO_PROFILE --target-dir /wd/target
 RUN find /wd/target -type f
-RUN ls -a -l /wd/target/debug
-RUN cp /wd/target/debug/dtps-http-rust-clock /tmp/app
+RUN ls -a -l /wd/target/$DEST
+RUN cp /wd/target/$DEST/dtps-http-rust-clock /tmp/app
 RUN chown root:root /tmp/app
 RUN ls -a -l /tmp/app
 RUN /tmp/app --version
@@ -39,8 +42,9 @@ COPY --from=builder1 /tmp/app /wd/app
 #RUN chown root:root /wd/app
 ##RUN ls -a -l /wd/app
 #RUN ls -a -l /
-RUN ./cloudflared --version
-RUN ./app --version
+
+#RUN ./cloudflared --version
+#RUN ./app --version
 ENV RUST_BACKTRACE=full
 ENV RUST_LOG=debug
 ENTRYPOINT ["/wd/app", "--cloudflare-executable=/wd/cloudflared"]

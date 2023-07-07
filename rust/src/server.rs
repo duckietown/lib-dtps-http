@@ -1,7 +1,3 @@
-use log::debug;
-
-use log::info;
-use log::warn;
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::process::Command;
@@ -11,6 +7,9 @@ use std::time::SystemTime;
 
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
+use log::debug;
+use log::info;
+use log::warn;
 use maplit::hashmap;
 use maud::html;
 use serde::{Deserialize, Serialize};
@@ -18,17 +17,16 @@ use serde_yaml;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
-
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
+use warp::{Filter, Rejection, Reply};
 use warp::http::header;
 use warp::hyper::Body;
 use warp::path::end as endbar;
-use warp::reply::with_status;
 use warp::reply::Response;
-
-use warp::{Filter, Rejection, Reply};
+use warp::reply::with_status;
 
 use crate::constants::*;
+use crate::logs::get_id_string;
 use crate::object_queues::*;
 use crate::server_state::*;
 use crate::structures::*;
@@ -160,6 +158,7 @@ impl DTPSServer {
                 "run",
                 "--protocol",
                 "http2",
+                "--no-autoupdate",
                 "--cred-file",
                 &tunnel_file,
                 "--url",
@@ -624,7 +623,7 @@ async fn handler_topic_generic_data(
 pub fn put_common_headers(ss: &ServerState, headers: &mut HeaderMap<HeaderValue>) {
     headers.insert(
         header::SERVER,
-        HeaderValue::from_static("lib-dtps/rust/0.0.0"),
+        HeaderValue::from_str(get_id_string().as_str()).unwrap(),
     );
     headers.insert(
         HEADER_NODE_ID,
@@ -681,14 +680,11 @@ pub fn create_server_from_command_line() -> DTPSServer {
     server
 }
 
+#[allow(non_snake_case)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CloudflareTunnel {
-    #[allow(non_snake_case)]
     pub AccountTag: String,
-    #[allow(non_snake_case)]
     pub TunnelSecret: String,
-    #[allow(non_snake_case)]
     pub TunnelID: String,
-    #[allow(non_snake_case)]
     pub TunnelName: String,
 }

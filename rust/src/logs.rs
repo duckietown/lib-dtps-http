@@ -13,7 +13,9 @@ fn get_exec_name() -> Option<String> {
 
 pub static DEFAULT_LOG_LEVEL: &'static str = "warn,dtps_http=info";
 
-pub fn init_logging() {
+
+pub fn get_id_string() -> String {
+    let exec_name = get_exec_name().unwrap_or("unknown".to_string());
     let git_version = built_info::GIT_VERSION.unwrap_or("unknown");
     let git_commit_hash = built_info::GIT_COMMIT_HASH.unwrap_or("unknown");
     let git_branch = built_info::GIT_HEAD_REF.unwrap_or("unknown");
@@ -21,11 +23,16 @@ pub fn init_logging() {
     let arch = built_info::CFG_TARGET_ARCH;
     let family = built_info::CFG_FAMILY;
     let os = built_info::CFG_OS;
-    let profile = built_info::PROFILE ;
-    // let s = get_exec_name().unwrap();
+    let profile = built_info::PROFILE;
+
     // let version = env!("CARGO_PKG_VERSION");
-    let pkg_name = env!("CARGO_PKG_NAME");
-    eprintln!("{pkg_name} {git_version}  {family}/{os} {arch} ({git_branch} {git_commit_hash} {profile})");
+    let pkg_name = built_info::PKG_NAME;
+    format!("{exec_name} ({pkg_name} {git_version})  {family}/{os} {arch} ({git_branch} {git_commit_hash} {profile})")
+}
+
+pub fn init_logging() {
+    eprintln!("{}", get_id_string());
+
     if env::var("RUST_LOG").is_err() {
         eprintln!("RUST_LOG not set: setting it to {DEFAULT_LOG_LEVEL}");
         env::set_var("RUST_LOG", DEFAULT_LOG_LEVEL)

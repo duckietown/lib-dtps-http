@@ -5,18 +5,20 @@ tag=andreacensi/dtps-rust-demo
 RELEASE='--release' # 0.5ms
 RELEASE='' # 2.5
 run-server-continuous:
-	cargo watch -c -w src -w bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8000'
+	cargo watch -c -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8000'
 
 run-client-continuous-to-rust-server:
-	cargo watch -c -w src -w bin -E RUST_BACKTRACE=full  -x 'run  $(RELEASE)  --bin dtps-http-rust-client-stats -- --url http://127.0.0.1:8000/ '
+	cargo watch -c -w rust/src -w rust/bin -E RUST_BACKTRACE=full  -x 'run  $(RELEASE)  --bin dtps-http-rust-client-stats -- --url http://127.0.0.1:8000/ '
 
 run-client-continuous-to-python-server:
-	cargo watch -c -w src -w bin -E RUST_BACKTRACE=full  -x 'run  $(RELEASE)  --bin dtps-http-rust-client-stats -- --url http://127.0.0.1:8081/ '
+	cargo watch -c -w rust/src -w rust/bin -E RUST_BACKTRACE=full  -x 'run  $(RELEASE)  --bin dtps-http-rust-client-stats -- --url http://127.0.0.1:8081/ '
 
 
-docker-build:
-	docker buildx build --progress plain --platform linux/arm64,linux/amd64 --push --tag $(tag) .
+docker-build-debug:
+	docker buildx build --build-arg CARGO_PROFILE=dev --build-arg DEST=debug --progress plain --platform linux/arm64,linux/amd64 --push --tag $(tag) .
 
+docker-build-release:
+	docker buildx build --build-arg CARGO_PROFILE=release --build-arg DEST=release --progress plain --platform linux/arm64,linux/amd64 --push --tag $(tag) .
 
 creds=$(realpath $(PWD))
 run-demo:
