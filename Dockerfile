@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1.4
 
-FROM rust as builder
+FROM rust as builder1
 ENV USER root
 WORKDIR /wd
+COPY .git .git
 COPY rust rust
 COPY Cargo.toml .
 # RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -10,6 +11,8 @@ COPY Cargo.toml .
 RUN cargo build  --target-dir /wd/target
 RUN find /wd/target -type f
 RUN cp /wd/target/debug/dtps-http-rust-clock /tmp/app
+RUN ls -a -l /tmp/app
+RUN /tmp/app --version
 
 # get cloudflare executable
 
@@ -24,13 +27,18 @@ RUN curl -L -o /tmp/cloudflared https://github.com/cloudflare/cloudflared/releas
 FROM ubuntu:22.04
 WORKDIR /wd
 
-COPY --from=builder2 /tmp/cloudflared /
-COPY --from=builder /tmp/app /
-
-RUN ls -a -l /
-RUN arch
-RUN ["/app", "--version"]
-RUN ["/cloudflared", "--version"]
+COPY --from=builder2 /tmp/cloudflared /wd/cloudflared
+RUN chmod +x /wd/cloudflared
+RUN chown root:root /wd/cloudflared
+RUN #ls -a -l /wd/cloudflared
+COPY --from=builder1 /tmp/app /wd/app
+RUN #ls -a -l /wd
+RUN chmod +x /wd/app
+RUN chown root:root /wd/app
+#RUN ls -a -l /wd/app
+#RUN ls -a -l /
+RUN ./cloudflared --version
+RUN ./app --version
 ENV RUST_BACKTRACE=full
 ENV RUST_LOG=debug
-ENTRYPOINT ["/app", "--cloudflare-executable=/cloudflared"]
+ENTRYPOINT ["/wd/app", "--cloudflare-executable=/cloudflared"]

@@ -1,0 +1,54 @@
+[package]
+name = "dtps-http"
+version = "0.0.0"
+authors = ["Your Name <your_email@example.com>"]
+edition = "2021"
+build = "rust/build.rs"
+[lib]
+path = "rust/src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures = "0.3"
+tokio = { version = "1", features = ["full"] }
+warp = "0.3.5"
+tungstenite = "0.19"
+tokio-tungstenite = "0.19.0"
+maplit = "1.0.2"
+log = "0.4.14"
+uuid = { version = "1.4.0", features = ["v4"] }
+# to enable v7 needs more flags: https://docs.rs/uuid/latest/uuid/
+
+broadcast = "0.1"
+chrono = "0.4"
+sha256 = "1.1.4"
+tokio-stream = "0.1.14"
+clap = { version = "4.3.11", features = ["derive"] }
+md5 = "0.7.0"
+derive_more = "0.99.17"
+hyper = "0.14.27"
+http = "0.2.9"
+url = "2.4.0"
+serde_cbor = {version ="0.11.2", features = ["tags", "unsealed_read_write"] }
+maud = "0.25.0"
+serde_yaml = "0.9.22"
+env_logger = "0.10.0"
+
+
+
+[[bin]]
+name = "dtps-http-rust-clock"
+path = "rust/bin/clock.rs"
+
+
+[[bin]]
+name = "dtps-http-rust-client-stats"
+path = "rust/bin/stats.rs"
+
+
+[build-dependencies]
+built = {version = "0.6", features = ["chrono", "git2", "semver"]}
+git2 = "0.17.2"
+semver = "1.0.5"
+chrono = "0.4"
