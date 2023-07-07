@@ -3,6 +3,8 @@ name = "dtps-http"
 version = "0.0.0"
 authors = ["Your Name <your_email@example.com>"]
 edition = "2021"
+build = "build.rs"
+
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -42,3 +44,7 @@ path = "bin/clock.rs"
 [[bin]]
 name = "dtps-http-rust-client-stats"
 path = "bin/stats.rs"
+
+
+[build-dependencies]
+built = "0.6"
