@@ -28,7 +28,7 @@ async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: 
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging();
     let mut server = create_server_from_command_line();
 
@@ -37,5 +37,5 @@ async fn main() {
     spawn(clock_go(server.get_lock(), "clock7", 7.0));
     spawn(clock_go(server.get_lock(), "clock11", 11.0));
 
-    server.serve().await;
+    server.serve().await
 }

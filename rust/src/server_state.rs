@@ -15,6 +15,7 @@ pub struct ServerState {
     pub node_app_data: HashMap<String, Vec<u8>>,
     pub node_id: String,
     pub oqs: HashMap<TopicName, ObjectQueue>,
+    pub advertise_urls: Vec<String>,
 }
 
 impl ServerState {
@@ -31,6 +32,7 @@ impl ServerState {
             node_started,
             node_app_data,
             oqs,
+            advertise_urls: vec![],
         };
 
         ss.new_topic(TOPIC_LIST_NAME, None);

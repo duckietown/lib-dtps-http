@@ -1,5 +1,6 @@
 import asyncio
 import os
+import traceback
 from contextlib import asynccontextmanager, AsyncExitStack
 from dataclasses import dataclass, replace
 from typing import Any, AsyncContextManager, AsyncIterator, Callable, cast, Optional, TYPE_CHECKING, TypeVar
@@ -300,6 +301,7 @@ class DTPSClient:
             path = url.host
             logger.info(f"checking {url}...")
             if not os.path.exists(path):
+                logger.info(f" {url}: {path=!r} does not exist")
                 return None
             who_answers = await self.get_who_answers(url)
 
@@ -415,6 +417,7 @@ class DTPSClient:
                     else:
                         answering = NodeID(resp.headers[HEADER_NODE_ID])
         except (TimeoutError, ClientConnectorError):
+            logger.error(f"cannot connect to {url=!r} {use_url=!r} \n{traceback.format_exc()}")
             return FoundMetadata([], None, None, None)
         urls = [cast(URLTopic, join(url, _)) for _ in alternatives0]
         return FoundMetadata(

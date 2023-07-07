@@ -1,5 +1,8 @@
 use std::collections::HashMap;
+use std::env;
+use std::future::Future;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::path::Path;
 use std::process::Command;
 use std::string::ToString;
 use std::sync::Arc;
@@ -12,15 +15,22 @@ use maplit::hashmap;
 use maud::html;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
+use tokio::{io, signal, spawn};
+use tokio::net::UnixListener;
+use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
+use tokio_stream::wrappers::UnixListenerStream;
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
+use warp::{Filter, Rejection, Reply};
 use warp::http::header;
 use warp::hyper::Body;
 use warp::path::end as endbar;
 use warp::reply::{Response, with_status};
-use warp::{Filter, Rejection, Reply};
+
+#[cfg(target_os = "linux")]
+use getaddrs::InterfaceAddrs;
 
 use crate::constants::*;
 use crate::logs::get_id_string;
@@ -34,6 +44,8 @@ pub struct DTPSServer {
     pub mutex: Arc<Mutex<ServerState>>,
     pub cloudflare_tunnel_name: Option<String>,
     pub cloudflare_executable: String,
+    pub unix_path: Option<String>,
+
 }
 
 impl DTPSServer {
@@ -41,6 +53,7 @@ impl DTPSServer {
         listen_address: SocketAddr,
         cloudflare_tunnel_name: Option<String>,
         cloudflare_executable: String,
+        unix_path: Option<String>,
     ) -> Self {
         let ss = ServerState::new(None);
         let mutex = Arc::new(Mutex::new(ss));
@@ -49,9 +62,10 @@ impl DTPSServer {
             mutex,
             cloudflare_tunnel_name,
             cloudflare_executable,
+            unix_path,
         }
     }
-    pub async fn serve(&mut self) {
+    pub async fn serve(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // get current pid
         let pid = std::process::id();
         if pid == 1 {
@@ -73,13 +87,13 @@ impl DTPSServer {
 
         let topic_address = warp::path!("topics" / String).and(endbar());
 
-        // HEAD request
+        // GEt request
         let topic_generic_route_get = topic_address
             .and(warp::get())
             .and(clone_access.clone())
             .and_then(handler_topic_generic);
 
-        // GET request
+        // HEAD request
         let topic_generic_route_head = topic_address
             .and(warp::head())
             .and(clone_access.clone())
@@ -131,16 +145,17 @@ impl DTPSServer {
             .or(topic_generic_route_data)
             .or(topic_post);
 
-        let tcp_server = warp::serve(the_routes).run(self.listen_address);
+        let tcp_server = warp::serve(the_routes.clone()).run(self.listen_address);
 
-        // use getaddrs::InterfaceAddrs;
-        //
-        // let addrs = InterfaceAddrs::query_system()
-        //     .expect("System has no network interfaces.");
-        //
-        // for addr in addrs {
-        //     debug!("{}: {:?}", addr.name, addr.address);
-        // }
+        {
+            let mut s = self.mutex.lock().await;
+            s.advertise_urls.push(self.listen_address.to_string());
+
+            get_other_addresses();
+        }
+
+        let mut handles = vec![];
+        handles.push(tokio::spawn(tcp_server));
 
         // if tunnel is given ,start
         if let Some(tunnel_file) = &self.cloudflare_tunnel_name {
@@ -156,7 +171,7 @@ impl DTPSServer {
                 "run",
                 "--protocol",
                 "http2",
-                "--no-autoupdate",
+                // "--no-autoupdate",
                 "--cred-file",
                 &tunnel_file,
                 "--url",
@@ -172,49 +187,97 @@ impl DTPSServer {
                 .expect("Failed to start ping process");
 
             debug!("Started process: {}", child.id());
-
-            // let tunnel_proc = server.start_tunnel(tunnel_name);
-            // let _ = tokio::join!(server_proc.await, tunnel_proc.await);
-            // return;
         }
 
-        tcp_server.await;
+        // let lock = self.mutex.clone();
+        let node_id = self.get_node_id().await;
+        let socketanme = format!("dtps-{}-rust.sock", node_id);
+        let unix_path = env::temp_dir().join(socketanme);
 
-        // let unix_socket = "/tmp/mine.sock";
-        // let unix_listener = UnixListener::bind(unix_socket).unwrap();
+
+        let mut unix_paths: Vec<String> = vec![unix_path.to_str().unwrap().to_string()];
+        match &self.unix_path {
+            Some(x) => {
+                unix_paths.push(x.clone());
+            }
+            None => {}
+        }
+
+        for unix_path in unix_paths {
+            let the_path = Path::new(&unix_path);
+            // remove the socket if it exists
+            if the_path.exists() {
+                warn!("removing existing socket: {:?}", unix_path);
+                std::fs::remove_file(&unix_path).unwrap();
+            }
+
+            let listener = UnixListener::bind(&unix_path).unwrap();
+
+            let stream = UnixListenerStream::new(listener);
+            let handle = spawn(warp::serve(the_routes.clone())
+                .run_incoming(stream))
+                ;
+            info!("Listening on {:?}", unix_path);
+            let unix_url = format!("http+unix://{}/", unix_path.replace("/", "%2F"));
+            {
+                let mut s = self.mutex.lock().await;
+                s.advertise_urls.push(unix_url.to_string());
+            }
+            handles.push(handle);
+        }
+        // let (shutdown_send, shutdown_recv) = mpsc::unbounded_channel();
+
+
+        let mut sig_hup = tokio::signal::unix::signal(SignalKind::hangup())?;
+        let mut sig_term = tokio::signal::unix::signal(SignalKind::terminate())?;
+        let mut sig_int = tokio::signal::unix::signal(SignalKind::interrupt())?;
+
+        let pid = std::process::id();
+        info!("PID: {}", pid);
+        let res: Result<(), Box<dyn std::error::Error>>;
+        tokio::select! {
+
+        _ = sig_int.recv() => {
+            info!("SIGINT received");
+                res = Err("SIGINT received".into());
+            },
+            _ = sig_hup.recv() => {
+                info!("SIGHUP received: gracefully shutting down");
+                res = Ok(());
+            },
+            _ = sig_term.recv() => {
+                info!("SIGTERM received: gracefully shutting down");
+                res = Ok(());
+
+            },
+            // _ = futures::future::join_all(&handles) => {
+            //     info!("shutdown received");
+            //     // return Err("shutdown received".into());
+            // },
+    }
+        // cancel all the handles
+        for handle in handles {
+            handle.abort();
+        }
+
+        // let results = futures::future::join_all(handles).await;
         //
-        // let unix_routes = warp::any().and(the_routes.clone());
-        //
-        // //
-        // // let unix_server = warp::serve(unix_routes)
-        // //     .run_incoming(unix_listener);
-        //
-        // loop {
-        //     let (stream, _) = unix_listener.accept().await.unwrap();
-        //     let unix_routes = unix_routes.clone();
-        //     tokio::spawn(async move {
-        //           let service = warp::service(unix_routes);
-        //     let request = warp::test::request().method(warp::http::Method::GET).path("/");
-        //     let response = service.call(request).await.unwrap();
-        //     });
-        // }
-
-        // use tokio_stream::wrappers::UnixListenerStream;
-        // let incoming = UnixListenerStream::new(unix_listener);
-
-        // let listener = UnixListener::bind("/tmp/warp.sock").unwrap();
-
-        // let listener = UnixListener::bind(sockpath).unwrap();
-        // let incoming = UnixStream::connect(listener).unwrap();
-        // let a = UnixListenerStream;
-        // warp::serve(the_routes).run_incoming(incoming).await;
-        // warp::serve(the_routes).run(incoming).await;
-
-        // futures::try_join!(tcp_server, unix_server).unwrap();
+        // for result in results {
+        //     match result {
+        //         Ok(value) => println!("Got: {:?}", value),
+        //         Err(e) => eprintln!("Error: {:?}", e),
+        //     }
+        // };
+        res
     }
 
     pub fn get_lock(&self) -> Arc<Mutex<ServerState>> {
         self.mutex.clone()
+    }
+    pub async fn get_node_id(&self) -> String {
+        let lock = self.get_lock();
+        let ss = lock.lock().await;
+        ss.node_id.clone()
     }
 }
 
@@ -289,6 +352,7 @@ async fn root_handler(
 
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
 
+        put_alternative_locations(&ss, headers, "");
         Ok(with_status(resp, StatusCode::OK))
     } else {
         let data_bytes = serde_cbor::to_vec(&index).unwrap();
@@ -302,11 +366,11 @@ async fn root_handler(
         );
 
         put_common_headers(&ss, headers);
+        put_alternative_locations(&ss, headers, "");
 
         Ok(with_status(resp, StatusCode::OK))
     }
 }
-
 
 
 async fn handle_websocket_generic(
@@ -537,6 +601,7 @@ async fn handler_topic_generic_head(
 
     let h = resp.headers_mut();
 
+
     h.insert(
         HEADER_DATA_ORIGIN_NODE_ID,
         HeaderValue::from_str(x.tr.origin_node.as_str()).unwrap(),
@@ -552,6 +617,8 @@ async fn handler_topic_generic_head(
         HeaderValue::from_static("events/?send_data=1"),
     );
 
+    let suffix = format!("topics/{}/", topic_name);
+    put_alternative_locations(&ss, h, &suffix);
     put_common_headers(&ss, h);
 
     Ok(resp.into())
@@ -575,24 +642,27 @@ async fn handler_topic_generic_data(
     let content_type = data.content_type.clone();
 
     let mut resp = Response::new(Body::from(data_bytes));
+    let h = resp.headers_mut();
+    let suffix = format!("topics/{}/", topic_name);
+    put_alternative_locations(&ss, h, &suffix);
 
-    resp.headers_mut().insert(
+    h.insert(
         HEADER_DATA_ORIGIN_NODE_ID,
         HeaderValue::from_str(x.tr.origin_node.as_str()).unwrap(),
     );
-    resp.headers_mut().insert(
+    h.insert(
         HEADER_DATA_UNIQUE_ID,
         HeaderValue::from_str(x.tr.unique_id.as_str()).unwrap(),
     );
 
-    resp.headers_mut().insert(
+    h.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_str(content_type.clone().as_str()).unwrap(),
     );
     // see events
-    resp.headers_mut()
+    h
         .insert(HEADER_SEE_EVENTS, HeaderValue::from_static("events/"));
-    resp.headers_mut().insert(
+    h.insert(
         HEADER_SEE_EVENTS_INLINE_DATA,
         HeaderValue::from_static("events/?send_data=1"),
     );
@@ -600,6 +670,18 @@ async fn handler_topic_generic_data(
     put_common_headers(&ss, resp.headers_mut());
 
     Ok(resp.into())
+}
+
+
+pub fn put_alternative_locations(ss: &ServerState, headers: &mut HeaderMap<HeaderValue>,
+                                 suffix: &str) {
+    for x in ss.advertise_urls.iter() {
+        let x_suff = format!("{}{}", x, suffix);
+        headers.insert(
+            "Content-Location",
+            HeaderValue::from_str(x_suff.as_str()).unwrap(),
+        );
+    }
 }
 
 pub fn put_common_headers(ss: &ServerState, headers: &mut HeaderMap<HeaderValue>) {
@@ -634,6 +716,10 @@ struct Args {
     #[arg(long, default_value_t = DEFAULT_HOST.to_string())]
     tcp_host: String,
 
+    /// Optional UNIX path to listen to
+    #[arg(long)]
+    unix_path: Option<String>,
+
     /// Cloudflare tunnel to start
     #[arg(long)]
     tunnel: Option<String>,
@@ -641,6 +727,7 @@ struct Args {
     /// Cloudflare executable filename
     #[arg(long, default_value_t = DEFAULT_CLOUDFLARE_EXECUTABLE.to_string())]
     cloudflare_executable: String,
+
 }
 
 pub fn create_server_from_command_line() -> DTPSServer {
@@ -657,6 +744,7 @@ pub fn create_server_from_command_line() -> DTPSServer {
         one_addr,
         args.tunnel.clone(),
         args.cloudflare_executable.clone(),
+        args.unix_path,
     );
 
     server
@@ -669,4 +757,24 @@ pub struct CloudflareTunnel {
     pub TunnelSecret: String,
     pub TunnelID: String,
     pub TunnelName: String,
+}
+
+#[cfg(target_os = "linux")]
+fn get_other_addresses() -> Vec<String> {
+    println!("You are running Linux!");
+
+    let addrs = InterfaceAddrs::query_system()
+        .expect("System has no network interfaces.");
+
+    for addr in addrs {
+        debug!("{}: {:?}", addr.name, addr.address);
+    }
+    debug!("You are running Linux - using other addresses");
+    return Vec::new();
+}
+
+#[cfg(not(target_os = "linux"))]
+fn get_other_addresses() -> Vec<String> {
+    debug!("You are not running Linux - ignoring other addresses");
+    return Vec::new();
 }

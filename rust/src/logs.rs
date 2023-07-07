@@ -9,7 +9,7 @@ fn get_exec_name() -> Option<String> {
         .and_then(|s| s.into_string().ok())
 }
 
-// use built_info::*;
+
 
 pub static DEFAULT_LOG_LEVEL: &'static str = "warn,dtps_http=info";
 

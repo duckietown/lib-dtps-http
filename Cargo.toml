@@ -20,20 +20,24 @@ log = "0.4.14"
 uuid = { version = "1.4.0", features = ["v4"] }
 # to enable v7 needs more flags: https://docs.rs/uuid/latest/uuid/
 
+libc = { version = "0.2.101", features = [] }
 broadcast = "0.1"
 chrono = "0.4"
 sha256 = "1.1.4"
-tokio-stream = "0.1.14"
+tokio-stream = {version = "0.1.14", features = ["full"] }
 clap = { version = "4.3.11", features = ["derive"] }
 md5 = "0.7.0"
 derive_more = "0.99.17"
 hyper = "0.14.27"
 http = "0.2.9"
 url = "2.4.0"
-serde_cbor = {version ="0.11.2", features = ["tags", "unsealed_read_write"] }
+serde_cbor = { version = "0.11.2", features = ["tags", "unsealed_read_write"] }
 maud = "0.25.0"
 serde_yaml = "0.9.22"
 env_logger = "0.10.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+getaddrs = "0.1.0"
 
 
 
@@ -47,8 +51,9 @@ name = "dtps-http-rust-client-stats"
 path = "rust/bin/stats.rs"
 
 
+
 [build-dependencies]
-built = {version = "0.6", features = ["chrono", "git2", "semver"]}
+built = { version = "0.6", features = ["chrono", "git2", "semver"] }
 git2 = "0.17.2"
 semver = "1.0.5"
 chrono = "0.4"
