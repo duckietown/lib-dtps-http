@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from typing import Any, AsyncContextManager, AsyncIterator, Callable, cast, Optional, TYPE_CHECKING, TypeVar
 
 import aiohttp
+import cbor2
 from aiohttp import ClientConnectorError, ClientWebSocketResponse, TCPConnector, UnixConnector, WSMessage
 from tcp_latency import measure_latency
 
@@ -113,7 +114,8 @@ class DTPSClient:
                     logger.info(f"Using preferred alternative to {url} -> {repr(preferred)}")
                     return await self.ask_topics(preferred)
                 assert resp.status == 200, resp.status
-                res = await resp.json()
+                res_bytes: bytes = await resp.read()
+                res = cbor2.loads(res_bytes)  # .decode("utf-8")
 
             alternatives0 = cast(list[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION, []))
             where_this_available = [url] + [parse_url_unescape(_) for _ in alternatives0]
@@ -497,9 +499,9 @@ class DTPSClient:
                     if ws.closed:
                         break
                     msg: WSMessage = await ws.receive()
-                    if msg.type == aiohttp.WSMsgType.TEXT:
+                    if msg.type == aiohttp.WSMsgType.BINARY:
                         try:
-                            dr = DataReady.from_json_string(msg.data)
+                            dr = DataReady.from_cbor(msg.data)
                         except Exception as e:
                             logger.error(f"error in parsing {msg.data!r}: {e.__class__.__name__} {e!r}")
                             continue
@@ -544,9 +546,9 @@ class DTPSClient:
                     msg = await ws.receive()
                     if msg.type == aiohttp.WSMsgType.CLOSE:
                         break
-                    if msg.type == aiohttp.WSMsgType.TEXT:
+                    if msg.type == aiohttp.WSMsgType.BINARY:
                         try:
-                            dr = DataReady.from_json_string(msg.data)
+                            dr = DataReady.from_cbor(msg.data)
                         except Exception as e:
                             logger.error(f"error in parsing {msg.data!r}: {e.__class__.__name__} {e!r}")
                             continue

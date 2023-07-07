@@ -63,6 +63,7 @@ def parse_url_unescape(s: URLString) -> URL:
 
 
 def url_to_string(url: URL) -> URLString:
+    # noinspection PyProtectedMember
     url2 = url._replace(host=quote(url.host) if url.host is not None else None)
     return cast(URLString, str(url2))
 
@@ -81,6 +82,7 @@ def join(url: URL, path0: str) -> URL:
         path = os.path.normpath(os.path.join(url.path, path0))
     if path0.endswith("/"):
         path += "/"
+    # noinspection PyProtectedMember
     res = url._replace(path=path, query=query)
     # print(f'join {url!r} {path0!r} -> {res!r}')
     return res

@@ -1,28 +1,28 @@
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::string::ToString;
 use std::sync::Arc;
-use std::sync::mpsc::{channel, Sender};
 use std::time::SystemTime;
 
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use maplit::hashmap;
+use maud::html;
 use serde::{Deserialize, Serialize};
-use serde_json;
-use tokio::net::{UnixListener, UnixStream};
+use serde_yaml;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
-use tokio::time::{Duration, interval};
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
-use warp::{Filter, Rejection, Reply};
 use warp::http::header;
 use warp::hyper::Body;
 use warp::path::end as endbar;
-use warp::reply::Response;
 use warp::reply::with_status;
+use warp::reply::Response;
+use warp::ws::Message;
+use warp::{Error, Filter, Rejection, Reply};
 
 use crate::constants::*;
 use crate::object_queues::*;
@@ -38,8 +38,12 @@ pub struct DTPSServer {
 }
 
 impl DTPSServer {
-    pub fn new(listen_address: SocketAddr, cloudflare_tunnel_name: Option<String>, cloudflare_executable: String) -> Self {
-        let ss = ServerState::new();
+    pub fn new(
+        listen_address: SocketAddr,
+        cloudflare_tunnel_name: Option<String>,
+        cloudflare_executable: String,
+    ) -> Self {
+        let ss = ServerState::new(None);
         let mutex = Arc::new(Mutex::new(ss));
         DTPSServer {
             listen_address,
@@ -48,23 +52,25 @@ impl DTPSServer {
             cloudflare_executable,
         }
     }
-    pub async fn serve(&mut self
-    ) {
+    pub async fn serve(&mut self) {
         // get current pid
         let pid = std::process::id();
         if pid == 1 {
-            println!("WARNING: Running as PID 1. This is not recommended because CTRL-C may not work.");
+            println!(
+                "WARNING: Running as PID 1. This is not recommended because CTRL-C may not work."
+            );
             println!("If running through `docker run`, use `docker run --init` to avoid this.")
         }
-
 
         let server_state_access: Arc<Mutex<ServerState>> = self.mutex.clone();
 
         let clone_access = warp::any().map(move || server_state_access.clone());
 
-
         // root GET /
-        let root_route = endbar().and(clone_access.clone()).and_then(root_handler);
+        let root_route = endbar()
+            .and(clone_access.clone())
+            .and(warp::header::headers_cloned())
+            .and_then(root_handler);
 
         let topic_address = warp::path!("topics" / String).and(endbar());
 
@@ -126,7 +132,6 @@ impl DTPSServer {
             .or(topic_generic_route_data)
             .or(topic_post);
 
-
         let tcp_server = warp::serve(the_routes).run(self.listen_address);
 
         // use getaddrs::InterfaceAddrs;
@@ -138,7 +143,6 @@ impl DTPSServer {
         //     println!("{}: {:?}", addr.name, addr.address);
         // }
 
-
         // if tunnel is given ,start
         if let Some(tunnel_name) = &self.cloudflare_tunnel_name {
             let port = self.listen_address.port();
@@ -147,7 +151,8 @@ impl DTPSServer {
                 // "cloudflared",
                 "tunnel",
                 "run",
-                "--protocol", "http2",
+                "--protocol",
+                "http2",
                 "--cred-file",
                 &tunnel_name,
                 "--url",
@@ -168,7 +173,6 @@ impl DTPSServer {
             // let _ = tokio::join!(server_proc.await, tunnel_proc.await);
             // return;
         }
-
 
         tcp_server.await;
 
@@ -223,23 +227,80 @@ async fn check_exists(
     }
 }
 
-async fn root_handler(ss_mutex: Arc<Mutex<ServerState>>) -> Result<impl Reply, Rejection> {
+fn get_accept_header(headers: &HeaderMap) -> Vec<String> {
+    let accept_header = headers.get("accept");
+    match accept_header {
+        Some(x) => {
+            let accept_header = x.to_str().unwrap();
+            let accept_header = accept_header
+                .split(",")
+                .map(|x| x.trim().to_string())
+                .collect();
+            accept_header
+        }
+        None => vec![],
+    }
+}
+
+async fn root_handler(
+    ss_mutex: Arc<Mutex<ServerState>>,
+    headers: HeaderMap,
+) -> Result<impl Reply, Rejection> {
     let ss = ss_mutex.lock().await;
     let index = topics_index(&ss);
 
-    let data_bytes = serde_json::to_string(&index).unwrap();
+    let accept_headers: Vec<String> = get_accept_header(&headers);
+    // check if 'text/html' in the accept header
+    if accept_headers.contains(&"text/html".to_string()) {
+        let x = html! {
+            h1 { "DTPS Server" }
+            p.intro {
+                "This response coming to you in HTML because you requested it like this."
+            }
+            p {
+                "Node ID: " code {(ss.node_id)}
+            }
+            p {
+                "Node app data:"
+            }
 
-    let mut resp = Response::new(Body::from(data_bytes));
-    let headers = resp.headers_mut();
+            h2 { "Topics" }
+            ul {
+                @for (topic_name, _topic) in index.topics.iter() {
+                    li { a href={"topics/"  (topic_name) "/"} { code {(topic_name)} }}
+                }
+            }
 
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
+            h2 { "Index answer presented in YAML" }
 
-    put_common_headers(&ss, headers);
+            pre {
+                code {
+                    (serde_yaml::to_string(&index).unwrap())
+                }
+            }
+        };
+        let markup = x.into_string();
+        let mut resp = Response::new(Body::from(markup));
+        let headers = resp.headers_mut();
 
-    Ok(with_status(resp, StatusCode::OK))
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
+
+        Ok(with_status(resp, StatusCode::OK))
+    } else {
+        let data_bytes = serde_cbor::to_vec(&index).unwrap();
+
+        let mut resp = Response::new(Body::from(data_bytes));
+        let headers = resp.headers_mut();
+
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/cbor"),
+        );
+
+        put_common_headers(&ss, headers);
+
+        Ok(with_status(resp, StatusCode::OK))
+    }
 }
 // fn print_type_of<T>(_: &T) {
 //     println!("{}", std::any::type_name::<T>())
@@ -264,7 +325,7 @@ async fn handle_websocket_generic(
     send_data: bool,
 ) -> () {
     println!("handle_websocket_generic: {}", topic_name);
-    let (mut ws_tx, _ws_rx) = ws.split();
+    let (mut ws_tx, mut ws_rx) = ws.split();
 
     let mut rx2: Receiver<usize>;
     {
@@ -297,7 +358,7 @@ async fn handle_websocket_generic(
                     chunks_arriving: nchunks,
                 };
 
-                let message = warp::ws::Message::text(serde_json::to_string(&dr).unwrap());
+                let message = warp::ws::Message::binary(serde_cbor::to_vec(&dr).unwrap());
                 ws_tx.send(message).await.unwrap();
 
                 if send_data {
@@ -310,18 +371,36 @@ async fn handle_websocket_generic(
 
         rx2 = oq.tx.subscribe();
     }
-
+    // let mut finished = false;
+    tokio::spawn(async move {
+        loop {
+            match ws_rx.next().await {
+                None => {
+                    println!("ws_rx.next() returned None");
+                    // finished = true;
+                    break;
+                }
+                Some(Ok(msg)) => {
+                    println!("ws_rx.next() returned {:#?}", msg);
+                }
+                Some(Err(err)) => {
+                    println!("ws_rx.next() returned error {:#?}", err);
+                    // match err {
+                    //     Error { .. } => {}
+                    // }
+                }
+            }
+        }
+    });
     loop {
+        // if finished {
+        //     break;
+        // }
         let r = rx2.recv().await;
         let message;
         match r {
-            Ok(_message) => {
-                message = _message;
-            }
-            Err(RecvError::Closed) => {
-                // The sender got dropped, we should exit
-                break;
-            }
+            Ok(_message) => message = _message,
+            Err(RecvError::Closed) => break,
             Err(RecvError::Lagged(_)) => {
                 println!("Lagged!");
                 continue;
@@ -348,12 +427,12 @@ async fn handle_websocket_generic(
             chunks_arriving: nchunks,
         };
 
-        let message = warp::ws::Message::text(serde_json::to_string(&dr2).unwrap());
+        let message = warp::ws::Message::binary(serde_cbor::to_vec(&dr2).unwrap());
         match ws_tx.send(message).await {
             Ok(_) => {}
             Err(e) => {
                 println!("Error sending message: {}", e);
-                continue;
+                break; // TODO: do better handling
             }
         }
         if send_data {
@@ -363,11 +442,12 @@ async fn handle_websocket_generic(
                 Ok(_) => {}
                 Err(e) => {
                     println!("Error sending message: {}", e);
-                    continue;
+                    break; // TODO: do better handling
                 }
             }
         }
     }
+    println!("handle_websocket_generic: {} - done", topic_name);
 }
 
 pub fn epoch() -> f64 {
@@ -386,6 +466,8 @@ pub fn topics_index(ss: &ServerState) -> TopicsIndex {
 
     let topics_index = TopicsIndex {
         node_id: ss.node_id.clone(),
+        node_started: ss.node_started,
+        node_app_data: ss.node_app_data.clone(),
         topics,
     };
 
@@ -399,7 +481,6 @@ pub fn get_header_with_default(headers: &HeaderMap, key: &str, default: &str) ->
     };
 }
 
-
 const CONTENT_TYPE: &str = "content-type";
 const OCTET_STREAM: &str = "application/octet-stream";
 
@@ -407,13 +488,11 @@ async fn handle_topic_post(
     topic_name: String,
     ss_mutex: Arc<Mutex<ServerState>>,
     headers: HeaderMap,
-    data: warp::hyper::body::Bytes,
+    data: hyper::body::Bytes,
 ) -> Result<impl Reply, Rejection> {
     let mut ss = ss_mutex.lock().await;
 
-
-    let content_type =
-        get_header_with_default(&headers, CONTENT_TYPE, OCTET_STREAM);
+    let content_type = get_header_with_default(&headers, CONTENT_TYPE, OCTET_STREAM);
 
     let x: &mut ObjectQueue;
     match ss.oqs.get_mut(topic_name.as_str()) {
@@ -441,11 +520,8 @@ async fn handler_topic_generic(
 
         let x: &ObjectQueue;
         match ss.oqs.get(topic_name.as_str()) {
-            None => {
-                return Err(warp::reject::not_found());
-                // panic!("Not found")
-                // return Err(Rejection{ reason: Reason::NotFound, Reason::NotFound});
-            }
+            None => return Err(warp::reject::not_found()),
+
             Some(y) => x = y,
         }
 
@@ -456,7 +532,6 @@ async fn handler_topic_generic(
     return handler_topic_generic_data(topic_name, digest, ss_mutex.clone()).await;
 }
 
-
 async fn handler_topic_generic_head(
     topic_name: String,
     ss_mutex: Arc<Mutex<ServerState>>,
@@ -465,11 +540,8 @@ async fn handler_topic_generic_head(
 
     let x: &ObjectQueue;
     match ss.oqs.get(topic_name.as_str()) {
-        None => {
-            return Err(warp::reject::not_found());
-            // panic!("Not found")
-            // return Err(Rejection{ reason: Reason::NotFound, Reason::NotFound});
-        }
+        None => return Err(warp::reject::not_found()),
+
         Some(y) => x = y,
     }
     let empty_vec: Vec<u8> = Vec::new();
@@ -485,7 +557,6 @@ async fn handler_topic_generic_head(
         HEADER_DATA_UNIQUE_ID,
         HeaderValue::from_str(x.tr.unique_id.as_str()).unwrap(),
     );
-
 
     h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static("events/"));
     h.insert(
@@ -507,9 +578,7 @@ async fn handler_topic_generic_data(
 
     let x: &ObjectQueue;
     match ss.oqs.get(topic_name.as_str()) {
-        None => {
-            return Err(warp::reject::not_found());
-        }
+        None => return Err(warp::reject::not_found()),
         Some(y) => x = y,
     }
 
@@ -561,7 +630,6 @@ struct EventsQuery {
     send_data: Option<u8>,
 }
 
-
 const DEFAULT_PORT: u16 = 8000;
 const DEFAULT_HOST: &str = "0.0.0.0";
 const DEFAULT_CLOUDFLARE_EXECUTABLE: &str = "cloudflared";
@@ -585,7 +653,6 @@ struct Args {
     /// Cloudflare executable filename
     #[arg(long, default_value_t = DEFAULT_CLOUDFLARE_EXECUTABLE.to_string())]
     cloudflare_executable: String,
-
 }
 
 pub fn create_server_from_command_line() -> DTPSServer {
@@ -598,7 +665,11 @@ pub fn create_server_from_command_line() -> DTPSServer {
 
     println!("dtps-http/rust {version} server listening on {one_addr}");
 
-    let server = DTPSServer::new(one_addr, args.tunnel.clone(), args.cloudflare_executable.clone());
+    let server = DTPSServer::new(
+        one_addr,
+        args.tunnel.clone(),
+        args.cloudflare_executable.clone(),
+    );
 
     server
 }

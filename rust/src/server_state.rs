@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
+use chrono::Local;
 use serde::Serialize;
-use serde_json;
 use uuid::Uuid;
 
 use crate::constants::*;
@@ -11,25 +11,39 @@ use crate::types::*;
 
 #[derive(Debug)]
 pub struct ServerState {
+    pub node_started: i64,
+    pub node_app_data: HashMap<String, Vec<u8>>,
     pub node_id: String,
     pub oqs: HashMap<TopicName, ObjectQueue>,
 }
 
 impl ServerState {
-    pub fn new() -> Self {
-        let uuid = Uuid::new_v4();
-
+    pub fn new(node_app_data: Option<HashMap<String, Vec<u8>>>) -> Self {
+        let node_app_data = match node_app_data {
+            Some(x) => x,
+            None => HashMap::new(),
+        };
+        let node_id = Uuid::new_v4().to_string();
+        let oqs = HashMap::new();
+        let node_started = Local::now().timestamp_nanos();
         let mut ss = ServerState {
-            node_id: uuid.to_string(),
-            oqs: HashMap::new(),
+            node_id,
+            node_started,
+            node_app_data,
+            oqs,
         };
 
-        ss.new_topic(TOPIC_LIST_NAME);
+        ss.new_topic(TOPIC_LIST_NAME, None);
         return ss;
     }
 
-    pub fn new_topic(&mut self, topic_name: &str) -> () {
+    pub fn new_topic(
+        &mut self,
+        topic_name: &str,
+        app_data: Option<HashMap<String, Vec<u8>>>,
+    ) -> () {
         let uuid = Uuid::new_v4();
+        let app_data = app_data.unwrap_or_else(HashMap::new);
 
         let link_benchmark = LinkBenchmark {
             complexity: 0,
@@ -38,18 +52,17 @@ impl ServerState {
             reliability: 1.0,
             hops: 0,
         };
-        let node_id = self.node_id.clone();
+        let origin_node = self.node_id.clone();
         let tr = TopicRef {
             unique_id: uuid.to_string(),
-            origin_node: node_id.clone(),
-            app_static_data: None,
+            origin_node,
+            app_data,
             reachability: vec![TopicReachability {
                 url: format!("topics/{}/", topic_name),
-                answering: node_id.clone(),
+                answering: self.node_id.clone(),
                 forwarders: vec![],
                 benchmark: link_benchmark,
             }],
-            debug_topic_type: "local".to_string(),
         };
         let oqs = &mut self.oqs;
 
@@ -64,7 +77,7 @@ impl ServerState {
     }
     fn make_sure_topic_exists(&mut self, topic_name: &str) -> () {
         if !self.oqs.contains_key(topic_name) {
-            self.new_topic(topic_name);
+            self.new_topic(topic_name, None);
         }
     }
 
@@ -93,10 +106,10 @@ impl ServerState {
 
     pub fn publish_json(&mut self, topic_name: &str, json_content: &str) -> DataSaved {
         let bytesdata = json_content.as_bytes().to_vec();
-        return self.publish(topic_name, &bytesdata, "application/json");
+        self.publish(topic_name, &bytesdata, "application/json")
     }
     pub fn publish_plain(&mut self, topic_name: &str, text_content: &str) -> DataSaved {
         let bytesdata = text_content.as_bytes().to_vec();
-        return self.publish(topic_name, &bytesdata, "text/plain");
+        self.publish(topic_name, &bytesdata, "text/plain")
     }
 }

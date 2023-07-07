@@ -3,7 +3,7 @@ use std::sync::Arc;
 use chrono::prelude::*;
 use tokio::spawn;
 use tokio::sync::Mutex;
-use tokio::time::{Duration, interval};
+use tokio::time::{interval, Duration};
 
 use dtps_http::server::*;
 use dtps_http::server_state::*;
@@ -25,11 +25,9 @@ async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: 
     }
 }
 
-
 #[tokio::main]
 async fn main() {
     let mut server = create_server_from_command_line();
-
 
     spawn(clock_go(server.get_lock(), "clock", 1.0));
     spawn(clock_go(server.get_lock(), "clock5", 5.0));

@@ -6,5 +6,6 @@ pub static HEADER_NODE_PASSED_THROUGH: &'static str = "X-DTPS-Node-ID-Passed-Thr
 pub static HEADER_LINK_BENCHMARK: &'static str = "X-DTPS-link-benchmark";
 pub static HEADER_DATA_UNIQUE_ID: &'static str = "X-DTPS-data-unique-id";
 pub static HEADER_DATA_ORIGIN_NODE_ID: &'static str = "X-DTPS-data-origin-node";
+pub static HEADER_CONTENT_LOCATION: &'static str = "Content-Location";
 
 pub static TOPIC_LIST_NAME: &'static str = "__topic_list";

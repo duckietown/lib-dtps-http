@@ -11,9 +11,10 @@ futures = "0.3"
 tokio = { version = "1", features = ["full"] }
 warp = "0.3.5"
 tungstenite = "0.19"
-
+tokio-tungstenite = "0.19.0"
 maplit = "1.0.2"
-uuid = { version = "1.4.0", features = ["v4"] } # // features v4 is for random (version 4) UUIDs
+uuid = { version = "1.4.0", features = ["v4"] }
+# to enable v7 needs more flags: https://docs.rs/uuid/latest/uuid/
 
 broadcast = "0.1"
 chrono = "0.4"
@@ -21,11 +22,21 @@ sha256 = "1.1.4"
 tokio-stream = "0.1.14"
 clap = { version = "4.3.11", features = ["derive"] }
 md5 = "0.7.0"
-#getaddrs = "0.1.0"
-#libc = "0.2.147"
-#opencv = "0.82.1"
+derive_more = "0.99.17"
+hyper = "0.14.27"
+http = "0.2.9"
+url = "2.4.0"
+serde_cbor = {version ="0.11.2", features = ["tags", "unsealed_read_write"] }
+maud = "0.25.0"
+serde_yaml = "0.9.22"
+
 
 
 [[bin]]
 name = "dtps-http-rust-clock"
 path = "bin/clock.rs"
+
+
+[[bin]]
+name = "dtps-http-rust-client-stats"
+path = "bin/stats.rs"

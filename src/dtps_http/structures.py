@@ -1,7 +1,8 @@
 import json
 from dataclasses import asdict
-from typing import Literal, Optional
+from typing import Literal
 
+import cbor2
 from multidict import CIMultiDict
 from pydantic import parse_obj_as
 from pydantic.dataclasses import dataclass
@@ -77,15 +78,15 @@ class TopicReachability:
 class TopicRef:
     unique_id: SourceID  # unique id for the stream
     origin_node: NodeID  # unique id of the node that created the stream
-    app_static_data: Optional[dict[str, object]]
+    app_data: dict[str, bytes]
     reachability: list[TopicReachability]
-
-    debug_topic_type: str = Literal["local", "forwarded"]
 
 
 @dataclass
 class TopicsIndex:
     node_id: NodeID
+    node_started: int
+    node_app_data: dict[str, bytes]
 
     topics: dict[TopicName, TopicRef]
 
@@ -116,6 +117,11 @@ class DataReady:
     @classmethod
     def from_json_string(cls, s: str) -> "DataReady":
         return parse_obj_as(DataReady, json.loads(s))
+
+    @classmethod
+    def from_cbor(cls, s: bytes) -> "DataReady":
+        struct = cbor2.loads(s)
+        return parse_obj_as(DataReady, struct)
 
 
 @dataclass

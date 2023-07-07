@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json;
+use url::Url;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TopicsIndex {
     pub node_id: String,
+    pub node_started: i64,
+    pub node_app_data: HashMap<String, Vec<u8>>,
     pub topics: HashMap<String, TopicRef>,
 }
 
@@ -13,9 +15,8 @@ pub struct TopicsIndex {
 pub struct TopicRef {
     pub unique_id: String,
     pub origin_node: String,
-    pub app_static_data: Option<serde_json::Value>,
+    pub app_data: HashMap<String, Vec<u8>>,
     pub reachability: Vec<TopicReachability>,
-    pub debug_topic_type: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -57,4 +58,12 @@ pub struct DataReady {
     pub content_length: usize,
     pub availability: Vec<ResourceAvailability>,
     pub chunks_arriving: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct FoundMetadata {
+    pub alternative_urls: Vec<Url>,
+    pub answering: Option<String>,
+    pub events_url: Option<Url>,
+    pub events_data_inline_url: Option<Url>,
 }

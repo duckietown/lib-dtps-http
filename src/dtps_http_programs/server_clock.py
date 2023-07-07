@@ -1,13 +1,11 @@
-import time
-
-from . import logger
 import asyncio
-from datetime import datetime
+import time
 from typing import Optional
 
 from aiohttp import web
 
 from dtps_http import async_error_catcher, DTPSServer, interpret_command_line_and_start, RawData, TopicName
+from . import logger
 
 __all__ = [
     "clock_main",

@@ -7,6 +7,7 @@ from dataclasses import asdict
 from typing import Any, Awaitable, Callable, Optional, Sequence
 
 import cbor2
+import yaml
 from aiohttp import web, WSMsgType
 from aiopubsub import Hub, Key, Publisher, Subscriber
 from multidict import CIMultiDict
@@ -134,7 +135,7 @@ class ObjectQueue:
 class ForwardedTopic:
     unique_id: SourceID  # unique id for the stream
     origin_node: NodeID  # unique id of the node that created the stream
-    app_static_data: Optional[dict[str, object]]
+    app_data: dict[str, bytes]
     forward_url_data: URL
     forward_url_events: Optional[URL]
     forward_url_events_inline_data: Optional[URL]
@@ -149,6 +150,7 @@ class DTPSServer:
 
     tasks: "list[asyncio.Task[Any]]"
     digest_to_urls: dict[str, list[URL]]
+    node_app_data: dict[str, bytes]
 
     def __init__(
         self,
@@ -157,6 +159,9 @@ class DTPSServer:
         on_startup: "Sequence[Callable[[DTPSServer], Awaitable[None]]]" = (),
     ) -> None:
         self.app = web.Application()
+
+        self.node_app_data = {}
+        self.node_started = time.time_ns()
 
         self.topics_prefix = topics_prefix
         routes = web.RouteTableDef()
@@ -179,6 +184,9 @@ class DTPSServer:
         self.node_id = NodeID(str(uuid.uuid4()))
 
         self.digest_to_urls = {}
+
+    def has_forwarded(self, topic_name: TopicName) -> bool:
+        return topic_name in self._forwarded
 
     def get_headers_alternatives(self, request: web.Request) -> CIMultiDict[str]:
         original_url = request.url
@@ -269,9 +277,8 @@ class DTPSServer:
                 tr = TopicRef(
                     unique_id=unique_id,
                     origin_node=self.node_id,
-                    app_static_data=None,
+                    app_data={},
                     reachability=reachability,
-                    debug_topic_type="local",
                 )
             self._oqs[name] = ObjectQueue(self.hub, name, tr)
 
@@ -310,7 +317,6 @@ class DTPSServer:
                 fd.origin_node,
                 fd.app_static_data,
                 fd.reachability,
-                debug_topic_type="forward",
             )
             topics[qual_topic_name] = tr
 
@@ -341,7 +347,12 @@ class DTPSServer:
 
             # topic_ref2 = replace(topic_ref, reachability=all_reachability)
 
-        index = TopicsIndex(node_id=self.node_id, topics=topics)
+        index = TopicsIndex(
+            node_id=self.node_id,
+            topics=topics,
+            node_app_data=self.node_app_data,
+            node_started=self.node_started,
+        )
 
         # print(yaml.dump(asdict(index), indent=3))
         headers: CIMultiDict[str] = CIMultiDict()
@@ -350,8 +361,57 @@ class DTPSServer:
         multidict_update(headers, self.get_headers_alternatives(request))
         self._add_own_headers(headers)
         json_data = asdict(index)
-
         json_data["debug-available"] = self.available_urls
+
+        # get all the accept headers
+        accept = []
+        for _ in request.headers.getall("accept", []):
+            accept.extend(_.split(","))
+
+        if "application/cbor" not in accept:
+            if "text/html" in accept:
+                topics_html = "<ul>"
+                for topic_name, topic_ref in topics.items():
+                    topics_html += f"<li><a href='topics/{topic_name}/'><code>{topic_name}</code></a></li>\n"
+                topics_html += "</ul>"
+
+                html_index = f"""
+                <html>
+                <head>
+                <style>
+                pre {{ 
+                    background-color: #eee;
+                    padding: 10px;
+                    border: 1px solid #999;
+                    border-radius: 5px; 
+                }}
+                </style>
+                <title>DTPS server</title>
+                </head>
+                <body>
+                <h1>DTPS server</h1>
+                
+                <p> This response coming to you in HTML format because you requested it in HTML format.</p>
+                
+                <p>Node ID: <code>{self.node_id}</code></p>
+                <p>Node App Data:</p>
+                <pre><code>{yaml.dump(self.node_app_data, indent=3)}</code></pre>
+                
+                <h2>Topics</h2>
+                {topics_html}
+                <h2>Index answer presented in YAML</h2>
+                <pre><code>{yaml.dump(asdict(index), indent=3)}</code></pre>
+                
+                
+                <h2>Your request headers</h2>
+                <pre><code>{headers_s}</code></pre>
+                </body>
+                </html>
+                """
+                return web.Response(body=html_index, content_type="text/html", headers=headers)
+
+        as_cbor = cbor2.dumps(json_data)
+        return web.Response(body=as_cbor, content_type="application/cbor", headers=headers)
         return web.json_response(json_data, content_type=CONTENT_TYPE_TOPIC_DIRECTORY, headers=headers)
 
     @async_error_catcher
@@ -538,7 +598,9 @@ class DTPSServer:
                 exit_event.set()
                 return
             try:
-                await ws.send_json(asdict(data))
+                as_struct = asdict(data)
+                as_cbor = cbor2.dumps(as_struct)
+                await ws.send_bytes(as_cbor)
             except ConnectionResetError:
                 exit_event.set()
                 pass

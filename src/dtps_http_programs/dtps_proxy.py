@@ -2,7 +2,7 @@ import argparse
 import asyncio
 import json
 from dataclasses import asdict, replace
-from typing import Optional, cast
+from typing import cast, Optional
 
 from pydantic.dataclasses import dataclass
 
@@ -10,6 +10,7 @@ from dtps_http import (
     async_error_catcher,
     DTPSClient,
     DTPSServer,
+    ForwardedTopic,
     interpret_command_line_and_start,
     join_topic_names,
     parse_url_unescape,
@@ -18,11 +19,9 @@ from dtps_http import (
     TopicName,
     TopicReachability,
     URL,
+    URLIndexer,
     URLString,
 )
-from dtps_http.server import ForwardedTopic
-
-from dtps_http.urls import URLIndexer
 from . import logger
 
 __all__ = [
@@ -85,7 +84,7 @@ async def go_proxy(args: Optional[list[str]] = None) -> None:
 
             for topic_name in removed:
                 new_topic = join_topic_names(parsed.add_prefix, topic_name)
-                if new_topic in dtps_server._oqs:
+                if dtps_server.has_forwarded(new_topic):
                     logger.debug("removing topic %s", new_topic)
                     await dtps_server.remove_forward(new_topic)
 
@@ -93,7 +92,7 @@ async def go_proxy(args: Optional[list[str]] = None) -> None:
                 tr = available[topic_name]
                 new_topic = join_topic_names(parsed.add_prefix, topic_name)
 
-                if new_topic in dtps_server._forwarded:
+                if dtps_server.has_forwarded(new_topic):
                     logger.debug("already have topic %s", new_topic)
                     continue
 
@@ -138,7 +137,7 @@ async def go_proxy(args: Optional[list[str]] = None) -> None:
                 fd = ForwardedTopic(
                     unique_id=tr.unique_id,
                     origin_node=tr.origin_node,
-                    app_static_data=tr.app_static_data,
+                    app_data=tr.app_data,
                     reachability=tr2.reachability,
                     forward_url_data=url_to_use,
                     forward_url_events=metadata_to_use.events_url,

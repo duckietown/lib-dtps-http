@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use chrono::Local;
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use sha256::digest;
@@ -12,15 +12,15 @@ pub struct RawData {
     pub content: Vec<u8>,
     pub content_type: String,
 }
-use md5;
+// use md5;
 
 impl RawData {
     pub fn digest(&self) -> String {
         // if self.content.len() < 16 {
         //     return self.content.clone();
         // }
-        let md5s = md5::compute(&self.content);
-        return format!("md5:{:x}", md5s);
+        // let md5s = md5::compute(&self.content);
+        // return format!("md5:{:x}", md5s);
 
         let d = digest(self.content.as_slice());
         format!("sha256:{}", d)
