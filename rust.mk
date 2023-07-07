@@ -14,12 +14,12 @@ run-client-continuous-to-python-server:
 	cargo watch -c -w src -w bin -E RUST_BACKTRACE=full  -x 'run  $(RELEASE)  --bin dtps-http-rust-client-stats -- --url http://127.0.0.1:8081/ '
 
 
-build:
+docker-build:
 	docker buildx build --progress plain --platform linux/arm64,linux/amd64 --push --tag $(tag) .
 
 
-creds=$(realpath $(PWD)/..)
+creds=$(realpath $(PWD))
 run-demo:
 	docker pull  $(tag)
-	docker run  -it -v $(creds):/creds:ro $(tag)  --tunnel /creds/test-dtps1-tunnel.json
-	#docker run --init  -it -v $(creds):/creds:ro $(tag)  --tunnel /creds/test-dtps1-tunnel.json
+	# --init: do not give pid 1 - which makes it hard to kill
+	docker run  --init -it -v $(creds):/creds:ro $(tag)  --tunnel /creds/test-dtps1-tunnel.json

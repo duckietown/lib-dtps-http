@@ -131,3 +131,5 @@ dmypy.json
 out
 .envrc
  simple.py
+
+Cargo.lock

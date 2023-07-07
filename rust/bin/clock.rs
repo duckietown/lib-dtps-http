@@ -1,6 +1,6 @@
 extern crate dtps_http;
 
-use std::env;
+
 use std::sync::Arc;
 
 use chrono::prelude::*;

@@ -3,7 +3,7 @@ use std::env;
 use crate::built_info;
 
 fn get_exec_name() -> Option<String> {
-    std::env::current_exe()
+    env::current_exe()
         .ok()
         .and_then(|pb| pb.file_name().map(|s| s.to_os_string()))
         .and_then(|s| s.into_string().ok())

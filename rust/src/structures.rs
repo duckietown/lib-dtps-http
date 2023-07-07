@@ -11,6 +11,7 @@ pub struct TopicsIndex {
     pub topics: HashMap<String, TopicRef>,
 }
 
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TopicRef {
     pub unique_id: String,

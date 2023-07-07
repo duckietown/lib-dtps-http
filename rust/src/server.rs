@@ -1,5 +1,5 @@
 use log::debug;
-use log::error;
+
 use log::info;
 use log::warn;
 use std::collections::HashMap;
@@ -148,22 +148,25 @@ impl DTPSServer {
         // }
 
         // if tunnel is given ,start
-        if let Some(tunnel_name) = &self.cloudflare_tunnel_name {
+        if let Some(tunnel_file) = &self.cloudflare_tunnel_name {
             let port = self.listen_address.port();
+
+            // open the file as json and get TunnelID
+            let contents = std::fs::File::open(tunnel_file).expect("file not found");
+            let tunnel_info: CloudflareTunnel = serde_json::from_reader(contents).expect("error while reading file");
             let hoststring_127 = format!("127.0.0.1:{}", port);
             let cmdline = [
-                // "cloudflared",
                 "tunnel",
                 "run",
                 "--protocol",
                 "http2",
                 "--cred-file",
-                &tunnel_name,
+                &tunnel_file,
                 "--url",
                 &hoststring_127,
-                &tunnel_name,
+                &tunnel_info.TunnelID,
             ];
-            debug!("starting tunnel: {:?}", cmdline);
+            info!("starting tunnel: {:?}", cmdline);
 
             let child = Command::new(&self.cloudflare_executable)
                 .args(cmdline)
@@ -676,4 +679,16 @@ pub fn create_server_from_command_line() -> DTPSServer {
     );
 
     server
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CloudflareTunnel {
+    #[allow(non_snake_case)]
+    pub AccountTag: String,
+    #[allow(non_snake_case)]
+    pub TunnelSecret: String,
+    #[allow(non_snake_case)]
+    pub TunnelID: String,
+    #[allow(non_snake_case)]
+    pub TunnelName: String,
 }

@@ -43,3 +43,5 @@ demo1-d:
 	dtps-proxy --tcp-port 8084  --mask-origin --url http://localhost:8083/
 demo1-e:
 	dtps-client-stats --inline-data http://localhost:8084/
+
+include rust.mk

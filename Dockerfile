@@ -3,7 +3,8 @@
 FROM rust as builder
 ENV USER root
 WORKDIR /wd
-COPY . .
+COPY rust rust
+COPY Cargo.toml .
 # RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # --release
 RUN cargo build  --target-dir /wd/target

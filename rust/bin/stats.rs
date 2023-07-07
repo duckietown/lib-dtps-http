@@ -1,7 +1,8 @@
 extern crate dtps_http;
 extern crate url;
-use log::{debug, error, info, trace, warn};
+use log::{debug, info};
 use std::any::Any;
+use std::error;
 use std::time::Duration;
 
 use clap::Parser;
@@ -161,7 +162,7 @@ async fn listen_events_url(md: FoundMetadata, tx: UnboundedSender<RawData>) {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn error::Error>> {
     init_logging();
     debug!("now waiting 1 seconds so that the server can start");
     sleep(Duration::from_secs(1)).await;
@@ -202,7 +203,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub async fn get_index(url: Url) -> Result<TopicsIndex, Box<dyn std::error::Error>> {
+pub async fn get_index(url: Url) -> Result<TopicsIndex, Box<dyn error::Error>> {
     let client = hyper::Client::new();
 
     let req = hyper::Request::builder()
