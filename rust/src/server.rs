@@ -7,9 +7,7 @@ use std::time::SystemTime;
 
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
-use log::debug;
-use log::info;
-use log::warn;
+use log::{debug, info, warn};
 use maplit::hashmap;
 use maud::html;
 use serde::{Deserialize, Serialize};
@@ -18,12 +16,11 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
-use warp::{Filter, Rejection, Reply};
 use warp::http::header;
 use warp::hyper::Body;
 use warp::path::end as endbar;
-use warp::reply::Response;
-use warp::reply::with_status;
+use warp::reply::{Response, with_status};
+use warp::{Filter, Rejection, Reply};
 
 use crate::constants::*;
 use crate::logs::get_id_string;
@@ -151,7 +148,8 @@ impl DTPSServer {
 
             // open the file as json and get TunnelID
             let contents = std::fs::File::open(tunnel_file).expect("file not found");
-            let tunnel_info: CloudflareTunnel = serde_json::from_reader(contents).expect("error while reading file");
+            let tunnel_info: CloudflareTunnel =
+                serde_json::from_reader(contents).expect("error while reading file");
             let hoststring_127 = format!("127.0.0.1:{}", port);
             let cmdline = [
                 "tunnel",
@@ -308,21 +306,8 @@ async fn root_handler(
         Ok(with_status(resp, StatusCode::OK))
     }
 }
-// fn print_type_of<T>(_: &T) {
-//     debug!("{}", std::any::type_name::<T>())
-// // }
-//
-// async fn handle_websocket_generic_pre(c: String, q: EventsQuery, ws: warp::ws::Ws, state1: Arc<Mutex<ServerState>>) {
-//     let state2 = state1.clone();
-//     let send_data = match q.send_data {
-//         Some(x) => x != 0,
-//         None => false,
-//     };
-//     ws.on_upgrade(move |socket| {
-//         handle_websocket_generic(socket, state2.clone(), c, send_data)
-//     });
-//     return
-// }
+
+
 
 async fn handle_websocket_generic(
     ws: warp::ws::WebSocket,
@@ -486,9 +471,6 @@ pub fn get_header_with_default(headers: &HeaderMap, key: &str, default: &str) ->
         Some(v) => v.to_str().unwrap().to_string(),
     };
 }
-
-const CONTENT_TYPE: &str = "content-type";
-const OCTET_STREAM: &str = "application/octet-stream";
 
 async fn handle_topic_post(
     topic_name: String,

@@ -1,17 +1,15 @@
 extern crate dtps_http;
 
-
 use std::sync::Arc;
 
 use chrono::prelude::*;
+use dtps_http::logs::init_logging;
 use tokio::spawn;
 use tokio::sync::Mutex;
-use tokio::time::{Duration, interval};
-use dtps_http::logs::init_logging;
+use tokio::time::{interval, Duration};
 
 use dtps_http::server::*;
 use dtps_http::server_state::*;
-
 
 async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: f32) {
     let mut clock = interval(Duration::from_secs_f32(interval_s));

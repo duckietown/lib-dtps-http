@@ -13,7 +13,6 @@ fn get_exec_name() -> Option<String> {
 
 pub static DEFAULT_LOG_LEVEL: &'static str = "warn,dtps_http=info";
 
-
 pub fn get_id_string() -> String {
     let exec_name = get_exec_name().unwrap_or("unknown".to_string());
     let git_version = built_info::GIT_VERSION.unwrap_or("unknown");
