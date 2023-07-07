@@ -10,5 +10,5 @@ pub static HEADER_CONTENT_LOCATION: &'static str = "Content-Location";
 
 pub static TOPIC_LIST_NAME: &'static str = "__topic_list";
 
-pub static CONTENT_TYPE : &'static str = "content-type";
+pub static CONTENT_TYPE: &'static str = "content-type";
 pub static OCTET_STREAM: &'static str = "application/octet-stream";

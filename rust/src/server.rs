@@ -15,19 +15,19 @@ use maplit::hashmap;
 use maud::html;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
-use tokio::{io, signal, spawn};
 use tokio::net::UnixListener;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
+use tokio::{io, signal, spawn};
 use tokio_stream::wrappers::UnixListenerStream;
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
-use warp::{Filter, Rejection, Reply};
 use warp::http::header;
 use warp::hyper::Body;
 use warp::path::end as endbar;
-use warp::reply::{Response, with_status};
+use warp::reply::{with_status, Response};
+use warp::{Filter, Rejection, Reply};
 
 #[cfg(target_os = "linux")]
 use getaddrs::InterfaceAddrs;
@@ -45,7 +45,6 @@ pub struct DTPSServer {
     pub cloudflare_tunnel_name: Option<String>,
     pub cloudflare_executable: String,
     pub unix_path: Option<String>,
-
 }
 
 impl DTPSServer {
@@ -194,7 +193,6 @@ impl DTPSServer {
         let socketanme = format!("dtps-{}-rust.sock", node_id);
         let unix_path = env::temp_dir().join(socketanme);
 
-
         let mut unix_paths: Vec<String> = vec![unix_path.to_str().unwrap().to_string()];
         match &self.unix_path {
             Some(x) => {
@@ -214,9 +212,7 @@ impl DTPSServer {
             let listener = UnixListener::bind(&unix_path).unwrap();
 
             let stream = UnixListenerStream::new(listener);
-            let handle = spawn(warp::serve(the_routes.clone())
-                .run_incoming(stream))
-                ;
+            let handle = spawn(warp::serve(the_routes.clone()).run_incoming(stream));
             info!("Listening on {:?}", unix_path);
             let unix_url = format!("http+unix://{}/", unix_path.replace("/", "%2F"));
             {
@@ -227,7 +223,6 @@ impl DTPSServer {
         }
         // let (shutdown_send, shutdown_recv) = mpsc::unbounded_channel();
 
-
         let mut sig_hup = tokio::signal::unix::signal(SignalKind::hangup())?;
         let mut sig_term = tokio::signal::unix::signal(SignalKind::terminate())?;
         let mut sig_int = tokio::signal::unix::signal(SignalKind::interrupt())?;
@@ -237,24 +232,24 @@ impl DTPSServer {
         let res: Result<(), Box<dyn std::error::Error>>;
         tokio::select! {
 
-        _ = sig_int.recv() => {
-            info!("SIGINT received");
-                res = Err("SIGINT received".into());
-            },
-            _ = sig_hup.recv() => {
-                info!("SIGHUP received: gracefully shutting down");
-                res = Ok(());
-            },
-            _ = sig_term.recv() => {
-                info!("SIGTERM received: gracefully shutting down");
-                res = Ok(());
+            _ = sig_int.recv() => {
+                info!("SIGINT received");
+                    res = Err("SIGINT received".into());
+                },
+                _ = sig_hup.recv() => {
+                    info!("SIGHUP received: gracefully shutting down");
+                    res = Ok(());
+                },
+                _ = sig_term.recv() => {
+                    info!("SIGTERM received: gracefully shutting down");
+                    res = Ok(());
 
-            },
-            // _ = futures::future::join_all(&handles) => {
-            //     info!("shutdown received");
-            //     // return Err("shutdown received".into());
-            // },
-    }
+                },
+                // _ = futures::future::join_all(&handles) => {
+                //     info!("shutdown received");
+                //     // return Err("shutdown received".into());
+                // },
+        }
         // cancel all the handles
         for handle in handles {
             handle.abort();
@@ -371,7 +366,6 @@ async fn root_handler(
         Ok(with_status(resp, StatusCode::OK))
     }
 }
-
 
 async fn handle_websocket_generic(
     ws: warp::ws::WebSocket,
@@ -601,7 +595,6 @@ async fn handler_topic_generic_head(
 
     let h = resp.headers_mut();
 
-
     h.insert(
         HEADER_DATA_ORIGIN_NODE_ID,
         HeaderValue::from_str(x.tr.origin_node.as_str()).unwrap(),
@@ -660,8 +653,7 @@ async fn handler_topic_generic_data(
         HeaderValue::from_str(content_type.clone().as_str()).unwrap(),
     );
     // see events
-    h
-        .insert(HEADER_SEE_EVENTS, HeaderValue::from_static("events/"));
+    h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static("events/"));
     h.insert(
         HEADER_SEE_EVENTS_INLINE_DATA,
         HeaderValue::from_static("events/?send_data=1"),
@@ -672,9 +664,11 @@ async fn handler_topic_generic_data(
     Ok(resp.into())
 }
 
-
-pub fn put_alternative_locations(ss: &ServerState, headers: &mut HeaderMap<HeaderValue>,
-                                 suffix: &str) {
+pub fn put_alternative_locations(
+    ss: &ServerState,
+    headers: &mut HeaderMap<HeaderValue>,
+    suffix: &str,
+) {
     for x in ss.advertise_urls.iter() {
         let x_suff = format!("{}{}", x, suffix);
         headers.insert(
@@ -727,7 +721,6 @@ struct Args {
     /// Cloudflare executable filename
     #[arg(long, default_value_t = DEFAULT_CLOUDFLARE_EXECUTABLE.to_string())]
     cloudflare_executable: String,
-
 }
 
 pub fn create_server_from_command_line() -> DTPSServer {
@@ -763,8 +756,7 @@ pub struct CloudflareTunnel {
 fn get_other_addresses() -> Vec<String> {
     println!("You are running Linux!");
 
-    let addrs = InterfaceAddrs::query_system()
-        .expect("System has no network interfaces.");
+    let addrs = InterfaceAddrs::query_system().expect("System has no network interfaces.");
 
     for addr in addrs {
         debug!("{}: {:?}", addr.name, addr.address);
