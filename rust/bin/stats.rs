@@ -3,7 +3,7 @@ extern crate url;
 
 use std::any::Any;
 use std::error::Error;
-use std::io::{Cursor, ErrorKind, Write};
+use std::io::ErrorKind;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{error, io};
 
@@ -17,8 +17,8 @@ use hyper::Client;
 use hyperlocal::UnixClientExt;
 use log::{debug, error, info, warn};
 use rand::Rng;
-use tokio::io::{AsyncReadExt, Interest};
-use tokio::net::{TcpStream, UnixStream};
+
+use tokio::net::UnixStream;
 use tokio::spawn;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
@@ -26,16 +26,12 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::{client_async, client_async_with_config, connect_async, MaybeTlsStream};
+
+use tokio_tungstenite::{client_async_with_config, connect_async};
 use tungstenite::handshake::client::Request;
-use url::Url;
+
 use warp::reply::Response;
 use websocket::futures::Future;
-use websocket::header::WebSocketProtocol;
-use websocket::sync::stream::ReadWritePair;
-use websocket::ClientBuilder;
 
 use dtps_http::constants::{
     HEADER_CONTENT_LOCATION, HEADER_NODE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA,
