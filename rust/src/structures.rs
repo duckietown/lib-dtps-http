@@ -1,10 +1,12 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::fmt;
+use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::urls::{join_ext, parse_url_ext};
+use crate::urls::join_ext;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TopicsIndexWire {
@@ -170,6 +172,7 @@ pub struct UnixCon {
     pub path: String,
     pub query: Option<String>,
 }
+
 impl Display for UnixCon {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "UnixCon(")?;
@@ -220,9 +223,6 @@ impl TypeOfConnection {
         }
     }
 }
-
-use std::fmt;
-use std::fmt::Display;
 
 impl fmt::Display for TypeOfConnection {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

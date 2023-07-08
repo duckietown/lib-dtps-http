@@ -9,7 +9,6 @@ use crate::object_queues::*;
 use crate::structures::TypeOfConnection::Relative;
 use crate::structures::*;
 use crate::types::*;
-use crate::urls::parse_url_ext;
 
 #[derive(Debug)]
 pub struct ServerState {

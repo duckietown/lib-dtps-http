@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::env;
-use std::future::Future;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::Path;
 use std::process::Command;
@@ -17,10 +16,10 @@ use serde::{Deserialize, Serialize};
 use serde_yaml;
 use tokio::net::UnixListener;
 use tokio::signal::unix::SignalKind;
+use tokio::spawn;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
-use tokio::{signal, spawn};
 use tokio_stream::wrappers::UnixListenerStream;
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use warp::http::header;

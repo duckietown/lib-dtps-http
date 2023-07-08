@@ -1,8 +1,6 @@
 use std::error;
 
-use log::{debug, warn};
-use url::{ParseError, Url};
-use warp::query;
+use url::Url;
 
 use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
 use crate::structures::{TypeOfConnection, UnixCon};
@@ -94,11 +92,8 @@ fn join_path(base: &str, s: &str) -> (String, Option<String>) {
 
 #[cfg(test)]
 mod tests {
-    use log::warn;
-    use url::Url;
 
     // Bring the function into scope
-    use super::parse_url_ext;
 
     #[test]
     fn test_add_two() {

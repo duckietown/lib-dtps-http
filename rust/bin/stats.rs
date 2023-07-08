@@ -11,17 +11,14 @@ use futures::future::join_all;
 use futures::StreamExt;
 use hyper;
 use log::{debug, error, info, warn};
-use tokio::net::TcpStream;
 use tokio::spawn;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
-use tokio::time::error::Elapsed;
 use tokio::time::{sleep, timeout};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
-use tungstenite::handshake::client::Response;
-use url::{ParseError, Url};
+use tokio_tungstenite::connect_async;
+use url::Url;
 
 use dtps_http::constants::{
     HEADER_CONTENT_LOCATION, HEADER_NODE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA,
@@ -142,7 +139,7 @@ async fn listen_events_url_inline(con: TypeOfConnection, tx: UnboundedSender<Not
             return;
         }
     }
-    let (ws_stream, response) = connection;
+    let (ws_stream, _response) = connection;
 
     // debug!("Connected to the server");
     // debug!("Response HTTP code: {}", response.status());
@@ -369,7 +366,7 @@ async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResult {
         }
     };
     match md {
-        Err(err) => {
+        Err(_err) => {
             // debug!("cannot get metadata for {:?}: {}", con, err);
             Inaccessible
         }
@@ -465,7 +462,7 @@ pub async fn compute_best_alternative(
 pub async fn get_metadata(tc: &TypeOfConnection) -> Result<FoundMetadata, Box<dyn error::Error>> {
     match tc {
         TypeOfConnection::TCP(url) => get_metadata_http(url).await,
-        TypeOfConnection::UNIX(path) => {
+        TypeOfConnection::UNIX(_path) => {
             Err("unix socket not supported yet for get_metadata()".into())
         }
         TypeOfConnection::Relative(_, _) => {

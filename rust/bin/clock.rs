@@ -3,11 +3,11 @@ extern crate dtps_http;
 use std::sync::Arc;
 
 use chrono::prelude::*;
-use dtps_http::logs::init_logging;
 use tokio::spawn;
 use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
 
+use dtps_http::logs::init_logging;
 use dtps_http::server::*;
 use dtps_http::server_state::*;
 
