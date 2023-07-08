@@ -340,6 +340,8 @@ class DTPSClient:
         if key not in self.obtained_answer:
             try:
                 md = await self.get_metadata(url)
+                logger.warn(f"checking {url} -> {md}")
+                return md.answering
                 self.obtained_answer[key] = md.answering
                 #
                 # async with self.my_session(url, conn_timeout=1) as (session, url_to_use):
@@ -353,6 +355,8 @@ class DTPSClient:
                 #             self.obtained_answer[key] = NodeID(resp.headers[HEADER_NODE_ID])
 
             except:
+                logger.exception(f"error checking {url} {traceback.format_exc()}")
+                return None
                 self.obtained_answer[key] = None
 
             res = self.obtained_answer[key]
@@ -390,13 +394,14 @@ class DTPSClient:
             async with aiohttp.ClientSession(connector=connector, conn_timeout=conn_timeout) as session:
                 yield session, use_url
 
-    async def get_metadata(self, url: URLTopic) -> FoundMetadata:
-        url = self._look_cache(url)
+    async def get_metadata(self, url0: URLTopic) -> FoundMetadata:
+        url = self._look_cache(url0)
         try:
             async with self.my_session(url, conn_timeout=2) as (session, use_url):
                 async with session.head(use_url) as resp:
                     # if resp.status == 404:
                     #     return FoundMetadata([], None, None, None)
+                    logger.info(f"headers {url0}: {resp.headers}")
                     resp.raise_for_status()
                     assert resp.status == 200, resp
                     # logger.info(f"headers : {resp.headers}")
@@ -413,12 +418,13 @@ class DTPSClient:
                         events_url_data = cast(URLWSInline, join(url, events_url_data))
 
                     if HEADER_NODE_ID not in resp.headers:
-                        answering = None
+                        answering = 'missing!'
                     else:
                         answering = NodeID(resp.headers[HEADER_NODE_ID])
-        except (TimeoutError, ClientConnectorError):
-            logger.error(f"cannot connect to {url=!r} {use_url=!r} \n{traceback.format_exc()}")
-            return FoundMetadata([], None, None, None)
+        except: # (TimeoutError, ClientConnectorError):
+            logger.error(f"cannot connect to {url0=!r} {use_url=!r} \n{traceback.format_exc()}")
+            # return FoundMetadata([], None, None, None)
+            raise
         urls = [cast(URLTopic, join(url, _)) for _ in alternatives0]
         return FoundMetadata(
             urls, answering=answering, events_url=events_url, events_data_inline_url=events_url_data

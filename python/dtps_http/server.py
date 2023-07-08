@@ -532,6 +532,7 @@ class DTPSServer:
 
     @async_error_catcher
     async def serve_events(self, request: web.Request) -> web.WebSocketResponse:
+        logger.info(f"serve_events: {request}")
         if SEND_DATA_ARGNAME in request.query:
             send_data = True
         else:
@@ -544,6 +545,7 @@ class DTPSServer:
             self._add_own_headers(headers)
             raise web.HTTPNotFound(headers=headers)
 
+        logger.info(f"serve_events: {topic_name} send_data={send_data} headers={request.headers}")
         ws = web.WebSocketResponse()
         multidict_update(ws.headers, self.get_headers_alternatives(request))
         self._add_own_headers(ws.headers)
@@ -607,7 +609,11 @@ class DTPSServer:
 
             if send_data:
                 the_bytes = oq_.get(digest).content
-                await ws.send_bytes(the_bytes)
+                try:
+                    await ws.send_bytes(the_bytes)
+                except ConnectionResetError:
+                    exit_event.set()
+                    pass
 
         if oq_.sequence:
             last = oq_.last()

@@ -2,10 +2,12 @@ extern crate dtps_http;
 extern crate url;
 
 use std::any::Any;
-use std::error;
 use std::error::Error;
+use std::io::{Cursor, ErrorKind, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{error, io};
 
+use base64;
 use clap::Parser;
 use futures::future::join_all;
 use futures::StreamExt;
@@ -14,15 +16,26 @@ use hyper;
 use hyper::Client;
 use hyperlocal::UnixClientExt;
 use log::{debug, error, info, warn};
+use rand::Rng;
+use tokio::io::{AsyncReadExt, Interest};
+use tokio::net::{TcpStream, UnixStream};
 use tokio::spawn;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::{client_async, client_async_with_config, connect_async, MaybeTlsStream};
+use tungstenite::handshake::client::Request;
 use url::Url;
 use warp::reply::Response;
+use websocket::futures::Future;
+use websocket::header::WebSocketProtocol;
+use websocket::sync::stream::ReadWritePair;
+use websocket::ClientBuilder;
 
 use dtps_http::constants::{
     HEADER_CONTENT_LOCATION, HEADER_NODE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA,
@@ -50,9 +63,8 @@ struct StatsArgs {
     inline_data: bool,
 }
 
-async fn listen_events(md: FoundMetadata, topic_name: String) {
+async fn listen_events(md: FoundMetadata) {
     let (tx, rx) = mpsc::unbounded_channel();
-    warn!("listening to events on {}", topic_name);
     let inline_url = md.events_data_inline_url.unwrap().clone();
     let handle = spawn(listen_events_url_inline(inline_url, tx));
     let mut stream = UnboundedReceiverStream::new(rx);
@@ -62,40 +74,50 @@ async fn listen_events(md: FoundMetadata, topic_name: String) {
     let mut latencies_ns = Vec::new();
     let mut index = 0;
     while let Some(notification) = stream.next().await {
-        // debug!("got event for {}: {:?} {:?}", topic_name, notification,
-        // notification.rd.content);
-        if topic_name == "clock" {
-            // parse the data as json
-            let nanos = serde_json::from_slice::<u128>(&notification.rd.content).unwrap();
-            let nanos_here = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let diff = nanos_here - nanos;
-            // let diff_ms = diff as f64 / 1_000_000.0;
-            if index > 0 {
-                // ignore the first one
-                latencies_ns.push(diff);
-            }
-            if latencies_ns.len() > 10 {
-                latencies_ns.remove(0);
-            }
-            if latencies_ns.len() > 0 {
-                let latencies_sum_ns: u128 = latencies_ns.iter().sum();
-                let latencies_mean_ns = (latencies_sum_ns) / (latencies_ns.len() as u128);
-                let latencies_min_ns = *latencies_ns.iter().min().unwrap();
-                let latencies_max_ns = *latencies_ns.iter().max().unwrap();
-                info!("{:12} latency: {:.3}ms   (last {} : mean: {:.3}ms  min: {:.3}ms  max {:.3}ms )", topic_name, ms_from_ns(diff),
-                         latencies_ns.len(),
-                         ms_from_ns(latencies_mean_ns),
-                ms_from_ns(latencies_min_ns), ms_from_ns(latencies_max_ns));
-            }
+        // convert a string to integer
+
+        let string = String::from_utf8(notification.rd.content).unwrap();
+
+        // let nanos = serde_json::from_slice::<u128>(&notification.rd.content).unwrap();
+        let nanos: u128 = string.parse().unwrap();
+        let nanos_here = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let diff = nanos_here - nanos;
+        if index > 0 {
+            // ignore the first one
+            latencies_ns.push(diff);
+        }
+        if latencies_ns.len() > 10 {
+            latencies_ns.remove(0);
+        }
+        if latencies_ns.len() > 0 {
+            let latencies_sum_ns: u128 = latencies_ns.iter().sum();
+            let latencies_mean_ns = (latencies_sum_ns) / (latencies_ns.len() as u128);
+            let latencies_min_ns = *latencies_ns.iter().min().unwrap();
+            let latencies_max_ns = *latencies_ns.iter().max().unwrap();
+            info!(
+                "clock latency: {:.3}ms   (last {} : mean: {:.3}ms  min: {:.3}ms  max {:.3}ms )",
+                ms_from_ns(diff),
+                latencies_ns.len(),
+                ms_from_ns(latencies_mean_ns),
+                ms_from_ns(latencies_min_ns),
+                ms_from_ns(latencies_max_ns)
+            );
         }
 
         index += 1;
     }
+    match handle.await {
+        Ok(_) => {}
+        Err(e) => {
+            error!("error in handle: {:?}", e);
+        }
+    };
 
-    handle.await.unwrap();
+    // }
+    // handle.await.unwrap().unwrap();
 }
 
 fn ms_from_ns(ns: u128) -> f64 {
@@ -108,42 +130,104 @@ pub struct Notification {
     pub rd: RawData,
 }
 
-async fn listen_events_url_inline(con: TypeOfConnection, tx: UnboundedSender<Notification>) {
-    let mut url = match con {
-        TCP(url_) => {
+// async fn establish_stream(con: &TypeOfConnection) -> WebSocketStream<> {}
+
+#[derive(Debug)]
+enum EitherStream<A, B> {
+    UnixStream(A),
+    TCPStream(B),
+}
+
+async fn listen_events_url_inline(
+    con: TypeOfConnection,
+    tx: UnboundedSender<Notification>,
+) -> Result<(), String> {
+    let use_stream: EitherStream<_, _>;
+    match con.clone() {
+        TCP(mut url) => {
             // debug!("connecting to {:?}", url_);
-            url_.clone()
+
+            // let mut url = md.events_data_inline_url.unwrap().clone();
+            // replace https with wss, and http with ws
+            if url.scheme() == "https" {
+                url.set_scheme("wss").unwrap();
+            } else if url.scheme() == "http" {
+                url.set_scheme("ws").unwrap();
+            } else {
+                panic!("unexpected scheme: {}", url.scheme());
+            }
+            let connection_res = connect_async(url.clone()).await;
+            // debug!("connection: {:#?}", connection);
+            let connection;
+            match connection_res {
+                Ok(c) => {
+                    connection = c;
+                }
+                Err(err) => {
+                    error!("could not connect to {}: {}", url, err);
+                    return Ok(());
+                }
+            }
+            let (ws_stream, response) = connection;
+            debug!("TCP response: {:#?}", response);
+
+            use_stream = EitherStream::TCPStream(ws_stream);
         }
 
         UNIX(uc) => {
-            panic!("not implemented unix connection: {:?}", uc);
+            let stream_res = UnixStream::connect(uc.socket_name.clone()).await;
+            let stream = match stream_res {
+                Ok(s) => s,
+                Err(err) => {
+                    return Err(format!("could not connect to {}: {}", uc.socket_name, err));
+                }
+            };
+            // let ready = stream.ready(Interest::WRITABLE).await.unwrap();
+
+            let mut path = uc.path.clone();
+            match uc.query {
+                None => {}
+                Some(q) => {
+                    path.push_str("?");
+                    path.push_str(&q);
+                }
+            }
+            let connection_id = generate_websocket_key();
+
+            let url = format!("ws://localhost{}", path);
+            let request = Request::builder()
+                .uri(url)
+                .header("Host", "localhost")
+                .header("Upgrade", "websocket")
+                .header("Connection", "Upgrade")
+                .header("Sec-WebSocket-Key", connection_id)
+                .header("Sec-WebSocket-Version", "13")
+                .header("Host", "localhost")
+                .body(())
+                .unwrap();
+            let (socket_stream, response) = {
+                let config = WebSocketConfig {
+                    max_send_queue: None,
+                    max_message_size: None,
+                    max_frame_size: None,
+                    accept_unmasked_frames: false,
+                };
+                match client_async_with_config(request, stream, Some(config)).await {
+                    Ok(s) => s,
+                    Err(err) => {
+                        error!("could not connect to {}: {}", uc.socket_name, err);
+                        return Err(format!("could not connect to {}: {}", uc.socket_name, err));
+                    }
+                }
+            };
+
+            debug!("WS response: {:#?}", response);
+            use_stream = EitherStream::UnixStream(socket_stream);
         }
         Relative(_, _) => {
             panic!("not expected here {}", con);
         }
     };
-    // let mut url = md.events_data_inline_url.unwrap().clone();
-    // replace https with wss, and http with ws
-    if url.scheme() == "https" {
-        url.set_scheme("wss").unwrap();
-    } else if url.scheme() == "http" {
-        url.set_scheme("ws").unwrap();
-    } else {
-        panic!("unexpected scheme: {}", url.scheme());
-    }
-    let connection_res = connect_async(url.clone()).await;
-    // debug!("connection: {:#?}", connection);
-    let connection;
-    match connection_res {
-        Ok(c) => {
-            connection = c;
-        }
-        Err(err) => {
-            error!("could not connect to {}: {}", url, err);
-            return;
-        }
-    }
-    let (ws_stream, _response) = connection;
 
     // debug!("Connected to the server");
     // debug!("Response HTTP code: {}", response.status());
@@ -152,13 +236,32 @@ async fn listen_events_url_inline(con: TypeOfConnection, tx: UnboundedSender<Not
     //     debug!("* {:?} {:?}", header, value);
     // }
 
-    let (_write, mut read) = ws_stream.split();
-    //
-    // let send_msg = write.send(Message::Text("Hello WebSocket".into()));
-    // tokio::task::spawn(send_msg);
+    let mut read = match use_stream {
+        EitherStream::UnixStream(s) => EitherStream::UnixStream(s.split().1),
+        EitherStream::TCPStream(s) => EitherStream::TCPStream(s.split().1),
+    };
+
+    debug!("starting to listen to events for {} on {:?}", con, read);
     let mut index: u32 = 0;
     loop {
-        let msg = read.next().await.unwrap().unwrap();
+        let msg_res = match read {
+            EitherStream::UnixStream(ref mut s) => s.next().await,
+            EitherStream::TCPStream(ref mut s) => s.next().await,
+        };
+        let msg = match msg_res {
+            None => {
+                error!("unexpected end of stream");
+                break;
+            }
+            Some(x) => match x {
+                Ok(m) => m,
+                Err(err) => {
+                    error!("unexpected error: {}", err);
+                    break;
+                }
+            },
+        };
+
         if !msg.is_binary() {
             debug!("unexpected message #{}: {:#?}", index, msg);
             continue;
@@ -184,7 +287,7 @@ async fn listen_events_url_inline(con: TypeOfConnection, tx: UnboundedSender<Not
             if dr.chunks_arriving == 0 {
                 error!(
                     "message #{}: no chunks arriving. listening to {}",
-                    index, url
+                    index, con
                 );
                 continue;
             }
@@ -192,7 +295,23 @@ async fn listen_events_url_inline(con: TypeOfConnection, tx: UnboundedSender<Not
             index += 1;
             let mut content: Vec<u8> = Vec::with_capacity(dr.content_length);
             for _ in 0..(dr.chunks_arriving) {
-                let msg = read.next().await.unwrap().unwrap();
+                let msg_res = match read {
+                    EitherStream::UnixStream(ref mut s) => s.next().await,
+                    EitherStream::TCPStream(ref mut s) => s.next().await,
+                };
+                let msg = match msg_res {
+                    None => {
+                        error!("unexpected end of stream");
+                        break;
+                    }
+                    Some(x) => match x {
+                        Ok(m) => m,
+                        Err(err) => {
+                            error!("unexpected error: {}", err);
+                            break;
+                        }
+                    },
+                };
                 if msg.is_binary() {
                     let data = msg.into_data();
                     content.extend(data);
@@ -209,10 +328,10 @@ async fn listen_events_url_inline(con: TypeOfConnection, tx: UnboundedSender<Not
                 );
                 continue;
             }
-
+            let content_type = dr.content_type.clone();
             let rd = RawData {
                 content,
-                content_type: dr.content_type.clone(),
+                content_type,
             };
             let notification = Notification { dr, rd };
             match tx.send(notification) {
@@ -224,8 +343,17 @@ async fn listen_events_url_inline(con: TypeOfConnection, tx: UnboundedSender<Not
             }
         }
     }
+    Ok(())
 }
 
+// async fn read_next_message<S, T>(read: EitherStream<S, T>) {
+//      let msg =
+//             match read {
+//                 EitherStream::UnixStream(ref mut s) => s.next().await,
+//                 EitherStream::TCPStream(ref mut s) => s.next().await,
+//             }.unwrap().unwrap();
+//     msg
+// }
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error>> {
     init_logging();
@@ -242,7 +370,9 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     match md.answering {
         None => {
             info!("no answering url found");
-            return Err("no answering url found".into());
+            return Err(anyhow::anyhow!("no alternative are accessible").into());
+
+            // return Err(Box::new(io::Error::new(ErrorKind::Other, "no answering url found")));
         }
         Some(_) => {}
     }
@@ -287,8 +417,10 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                 }
             }
 
-            let handle = spawn(listen_events(md, topic_name.clone()));
-            handles.push(handle);
+            if topic_name == "clock" {
+                let handle = spawn(listen_events(md));
+                handles.push(handle);
+            }
         }
     }
     // listen to all spawned tasks
@@ -375,19 +507,6 @@ async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResult {
     }
 }
 
-// async fn get_stats_unix_socket(url: Url) -> UrlResult {
-//     Inaccessible
-// }
-//
-// async fn get_stats_for_url(url: Url) -> UrlResult {
-//     match url.scheme() {
-//         "https" => get_stats_http(url).await,
-//         "http" => get_stats_http(url).await,
-//         "http+unix" => get_stats_unix_socket(url).await,
-//         &_ => { panic!("unexpected scheme: {}", url.scheme()); }
-//     }
-// }
-
 pub async fn compute_best_alternative(
     alternatives: &Vec<TypeOfConnection>,
     expect_node_id: &str,
@@ -425,7 +544,11 @@ pub async fn compute_best_alternative(
     }
     // if no alternative is accessible, return None
     if possible_urls.len() == 0 {
-        return Err("no alternative are accessible".into());
+        return Err(Box::new(io::Error::new(
+            ErrorKind::Other,
+            "no alternative are accessible",
+        )));
+        // return Err("no alternative are accessible".into());
     }
     // get the index of minimum possible_stats
     let min_index = possible_stats
@@ -473,7 +596,11 @@ pub async fn make_request(
         }
 
         Relative(_, _) => {
-            return Err("cannot handle a relative url get_metadata()".into());
+            return Err(Box::new(io::Error::new(
+                ErrorKind::Other,
+                "cannot handle a relative url get_metadata",
+            )));
+            // return Err("cannot handle a relative url get_metadata()".into());
         }
     };
 
@@ -494,7 +621,10 @@ pub async fn make_request(
         }
 
         TypeOfConnection::Relative(_, _) => {
-            return Err("cannot handle a relative url get_metadata()".into());
+            return Err(Box::new(io::Error::new(
+                ErrorKind::Other,
+                "cannot handle a relative url get_metadata",
+            )));
         }
     };
 
@@ -559,4 +689,10 @@ pub async fn get_metadata(
 
 fn string_from_header_value(header_value: &hyper::header::HeaderValue) -> String {
     header_value.to_str().unwrap().to_string()
+}
+
+fn generate_websocket_key() -> String {
+    let mut rng = rand::thread_rng();
+    let random_bytes: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
+    base64::encode(&random_bytes)
 }

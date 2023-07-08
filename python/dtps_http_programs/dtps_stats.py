@@ -18,17 +18,32 @@ __all__ = [
 
 async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> None:
     url = cast(URLIndexer, parse_url_unescape(urlbase0))
-
+    last = []
+    i = 0
     def new_observation(topic_name: str, data: RawData) -> None:
+        nonlocal i
+
         current = time.time_ns()
-        if "clock" not in topic_name:
+        if topic_name != "clock":
             return
-        j = json.loads(data.content.decode())
+        j = int(data.content.decode())
+        # j = json.loads(data.content.decode())
 
         diff = current - j
         # convert nanoseconds to milliseconds
-        diff_ms = diff / 1000000.0
-        logger.info(f"{topic_name=}: latency {diff_ms:.3f} ms")
+        diff_ms = diff / 1_000_000.0
+        if i > 0:
+            last.append(diff_ms)
+        i += 1
+        if len(last) > 10:
+            last.pop(0)
+        if last:
+            min_ = min(last)
+            max_ = max(last)
+            avg = sum(last) / len(last)
+
+            logger.info(f"{topic_name=}: latency {diff_ms:.3f}ms  [last {len(last)}  mean: {avg:.3f}ms"
+                        +f" min: {min_:.3f}ms max: {max_:.3f}ms]")
 
     subcriptions: list[asyncio.Task[None]] = []
     async with DTPSClient.create() as dtpsclient:
