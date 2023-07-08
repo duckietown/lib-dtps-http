@@ -2,7 +2,6 @@ extern crate dtps_http;
 extern crate url;
 
 use std::any::Any;
-use std::error::Error;
 use std::io::ErrorKind;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{error, io};
@@ -31,7 +30,6 @@ use tokio_tungstenite::{client_async_with_config, connect_async};
 use tungstenite::handshake::client::Request;
 
 use warp::reply::Response;
-use websocket::futures::Future;
 
 use dtps_http::constants::{
     HEADER_CONTENT_LOCATION, HEADER_NODE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA,
