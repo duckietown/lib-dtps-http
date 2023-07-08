@@ -16,11 +16,11 @@ use maud::html;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
 use tokio::net::UnixListener;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::SignalKind;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
-use tokio::{io, signal, spawn};
+use tokio::{signal, spawn};
 use tokio_stream::wrappers::UnixListenerStream;
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use warp::http::header;
@@ -393,7 +393,7 @@ async fn handle_websocket_generic(
         match oq.sequence.last() {
             None => {}
             Some(last) => {
-                let the_availability = vec![ResourceAvailability {
+                let the_availability = vec![ResourceAvailabilityWire {
                     url: format!("../data/{}/", last.digest),
                     available_until: epoch() + 60.0,
                 }];
@@ -462,7 +462,7 @@ async fn handle_websocket_generic(
         let ss2 = state.lock().await;
         let oq2 = ss2.oqs.get(&topic_name).unwrap();
         let this_one: &DataSaved = oq2.sequence.get(message).unwrap();
-        let the_availability = vec![ResourceAvailability {
+        let the_availability = vec![ResourceAvailabilityWire {
             url: format!("../data/{}/", this_one.digest),
             available_until: epoch() + 60.0,
         }];
@@ -506,14 +506,14 @@ pub fn epoch() -> f64 {
         .as_secs_f64()
 }
 
-pub fn topics_index(ss: &ServerState) -> TopicsIndex {
-    let mut topics: HashMap<TopicName, TopicRef> = hashmap! {};
+pub fn topics_index(ss: &ServerState) -> TopicsIndexWire {
+    let mut topics: HashMap<TopicName, TopicRefWire> = hashmap! {};
 
     for (topic_name, oq) in ss.oqs.iter() {
-        topics.insert(topic_name.clone(), oq.tr.clone());
+        topics.insert(topic_name.clone(), oq.tr.to_wire());
     }
 
-    let topics_index = TopicsIndex {
+    let topics_index = TopicsIndexWire {
         node_id: ss.node_id.clone(),
         node_started: ss.node_started,
         node_app_data: ss.node_app_data.clone(),

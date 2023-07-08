@@ -35,6 +35,8 @@ serde_cbor = { version = "0.11.2", features = ["tags", "unsealed_read_write"] }
 maud = "0.25.0"
 serde_yaml = "0.9.22"
 env_logger = "0.10.0"
+ordered-map = "0.4.2"
+sum_type = "0.2.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 getaddrs = "0.1.0"

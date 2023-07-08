@@ -6,8 +6,10 @@ use uuid::Uuid;
 
 use crate::constants::*;
 use crate::object_queues::*;
+use crate::structures::TypeOfConnection::Relative;
 use crate::structures::*;
 use crate::types::*;
+use crate::urls::parse_url_ext;
 
 #[derive(Debug)]
 pub struct ServerState {
@@ -55,12 +57,12 @@ impl ServerState {
             hops: 0,
         };
         let origin_node = self.node_id.clone();
-        let tr = TopicRef {
+        let tr = TopicRefInternal {
             unique_id: uuid.to_string(),
             origin_node,
             app_data,
-            reachability: vec![TopicReachability {
-                url: format!("topics/{}/", topic_name),
+            reachability: vec![TopicReachabilityInternal {
+                con: Relative(format!("topics/{}/", topic_name)),
                 answering: self.node_id.clone(),
                 forwarders: vec![],
                 benchmark: link_benchmark,

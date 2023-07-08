@@ -1,11 +1,10 @@
 use chrono::Local;
 use std::collections::HashMap;
 
+use crate::structures::TopicRefInternal;
 use serde::{Deserialize, Serialize};
 use sha256::digest;
 use tokio::sync::broadcast;
-
-use crate::structures::TopicRef;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RawData {
@@ -43,11 +42,11 @@ pub struct ObjectQueue {
 
     pub tx: broadcast::Sender<usize>,
     pub seq: usize,
-    pub tr: TopicRef,
+    pub tr: TopicRefInternal,
 }
 
 impl ObjectQueue {
-    pub fn new(tr: TopicRef) -> Self {
+    pub fn new(tr: TopicRefInternal) -> Self {
         let (tx, _rx) = broadcast::channel(1024);
         ObjectQueue {
             seq: 0,

@@ -23,3 +23,8 @@ repos:
   - {id: sort-all}
   repo: https://github.com/aio-libs/sort-all
   rev: v1.2.0
+- hooks:
+    -   id: fmt
+    -   id: cargo-check
+  repo: https://github.com/doublify/pre-commit-rust
+  rev: v1.0
