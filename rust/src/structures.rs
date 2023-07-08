@@ -197,17 +197,15 @@ impl TypeOfConnection {
     pub fn to_string(&self) -> String {
         match self {
             TypeOfConnection::TCP(url) => url.to_string(),
-            TypeOfConnection::Relative(s, q) => {
-                match q {
-                    Some(query) => {
-                        let mut s = s.clone();
-                        s.push_str("?");
-                        s.push_str(&query);
-                        s
-                    }
-                    None => s.clone(),
+            TypeOfConnection::Relative(s, q) => match q {
+                Some(query) => {
+                    let mut s = s.clone();
+                    s.push_str("?");
+                    s.push_str(&query);
+                    s
                 }
-            }
+                None => s.clone(),
+            },
             TypeOfConnection::UNIX(unixcon) => {
                 let mut s = unixcon.scheme.clone();
                 s.push_str("://");
@@ -231,7 +229,7 @@ impl fmt::Display for TypeOfConnection {
         match self {
             TypeOfConnection::TCP(url) => write!(f, "TCP({:?})", url.to_string()),
             TypeOfConnection::UNIX(unix_con) => write!(f, "UNIX({})", unix_con),
-            TypeOfConnection::Relative(s,q) => write!(f, "Relative({},{:?})", s, q),
+            TypeOfConnection::Relative(s, q) => write!(f, "Relative({},{:?})", s, q),
         }
     }
 }

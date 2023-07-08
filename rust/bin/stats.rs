@@ -16,8 +16,8 @@ use tokio::spawn;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, timeout};
 use tokio::time::error::Elapsed;
+use tokio::time::{sleep, timeout};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use tungstenite::handshake::client::Response;
@@ -28,10 +28,10 @@ use dtps_http::constants::{
 };
 use dtps_http::logs::init_logging;
 use dtps_http::object_queues::RawData;
+use dtps_http::structures::TypeOfConnection::{Relative, TCP, UNIX};
 use dtps_http::structures::{
     DataReady, FoundMetadata, LinkBenchmark, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection,
 };
-use dtps_http::structures::TypeOfConnection::{Relative, TCP, UNIX};
 use dtps_http::urls::{join_ext, parse_url_ext};
 
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
@@ -107,7 +107,6 @@ pub struct Notification {
     pub rd: RawData,
 }
 
-
 async fn listen_events_url_inline(con: TypeOfConnection, tx: UnboundedSender<Notification>) {
     let mut url = match con {
         TCP(url_) => {
@@ -182,8 +181,10 @@ async fn listen_events_url_inline(con: TypeOfConnection, tx: UnboundedSender<Not
                 }
             }
             if dr.chunks_arriving == 0 {
-                error!("message #{}: no chunks arriving. listening to {}", index,
-                url);
+                error!(
+                    "message #{}: no chunks arriving. listening to {}",
+                    index, url
+                );
                 continue;
             }
             // debug!("message #{}: {:#?}", index, dr);
@@ -245,8 +246,8 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
         Some(_) => {}
     }
 
-    let best = compute_best_alternative(&md.alternative_urls, md.answering.unwrap().as_str())
-        .await?;
+    let best =
+        compute_best_alternative(&md.alternative_urls, md.answering.unwrap().as_str()).await?;
     warn!("Best connection: {} ", best);
 
     let x = get_index(&best).await?;
@@ -436,7 +437,7 @@ pub async fn compute_best_alternative(
                 debug!("-> Wrong node answering");
             }
             Accessible(link_benchmark) => {
-                debug!("-> Accessible: {:?}",  link_benchmark);
+                debug!("-> Accessible: {:?}", link_benchmark);
                 possible_urls.push(alternative.clone());
                 possible_stats.push(link_benchmark.into());
             }
@@ -454,7 +455,10 @@ pub async fn compute_best_alternative(
         .unwrap()
         .0;
     let best_url = possible_urls[min_index].clone();
-    debug!("Best is {}: {} with {:?}", min_index, best_url, possible_stats[min_index]);
+    debug!(
+        "Best is {}: {} with {:?}",
+        min_index, best_url, possible_stats[min_index]
+    );
     return Ok(best_url);
 }
 
@@ -516,12 +520,14 @@ pub async fn get_metadata_http(url: &Url) -> Result<FoundMetadata, Box<dyn error
     let events_url = headers
         .get(HEADER_SEE_EVENTS)
         .map(string_from_header_value)
-        .map(|x| join_ext(&conbase, &x).ok()).flatten();
+        .map(|x| join_ext(&conbase, &x).ok())
+        .flatten();
 
     let events_data_inline_url = headers
         .get(HEADER_SEE_EVENTS_INLINE_DATA)
         .map(string_from_header_value)
-        .map(|x| join_ext(&conbase, &x).ok()).flatten();
+        .map(|x| join_ext(&conbase, &x).ok())
+        .flatten();
     let answering = headers.get(HEADER_NODE_ID).map(string_from_header_value);
     let md = FoundMetadata {
         alternative_urls,

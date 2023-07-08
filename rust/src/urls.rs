@@ -4,11 +4,10 @@ use log::{debug, warn};
 use url::{ParseError, Url};
 use warp::query;
 
-use crate::structures::{TypeOfConnection, UnixCon};
 use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
+use crate::structures::{TypeOfConnection, UnixCon};
 
 pub fn parse_url_ext(s0: &str) -> Result<TypeOfConnection, Box<dyn error::Error>> {
-
     if s0.starts_with("http+unix://") {
         // divide in host and path at the / after the http+unix://
         // let mut parts = s.splitn(2, '/');
@@ -37,7 +36,7 @@ pub fn parse_url_ext(s0: &str) -> Result<TypeOfConnection, Box<dyn error::Error>
     } else {
         match Url::parse(s0) {
             Ok(p) => Ok(TCP(p)),
-            Err(e) => Err(Box::new(e))
+            Err(e) => Err(Box::new(e)),
         }
     }
 }
@@ -48,7 +47,10 @@ impl TypeOfConnection {
     }
 }
 
-pub fn join_ext(conbase: &TypeOfConnection, s: &str) -> Result<TypeOfConnection, Box<dyn error::Error>> {
+pub fn join_ext(
+    conbase: &TypeOfConnection,
+    s: &str,
+) -> Result<TypeOfConnection, Box<dyn error::Error>> {
     if s.contains("://") {
         parse_url_ext(s)
     } else {
@@ -76,16 +78,16 @@ pub fn join_ext(conbase: &TypeOfConnection, s: &str) -> Result<TypeOfConnection,
 fn join_path(base: &str, s: &str) -> (String, Option<String>) {
     // split the query
     let (query, s) = match s.find("?") {
-        Some(i) => (Some(s[i+1..].to_string()), s[..i].to_string()),
+        Some(i) => (Some(s[i + 1..].to_string()), s[..i].to_string()),
         None => (None, s.to_string()),
     };
     if s.starts_with("/") {
         (s.to_string(), query)
     } else {
         if base.ends_with("/") {
-            (format!("{}{}", base, s),  query)
+            (format!("{}{}", base, s), query)
         } else {
-            (format!("{}/{}", base, s),  query)
+            (format!("{}/{}", base, s), query)
         }
     }
 }
