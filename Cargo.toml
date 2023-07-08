@@ -37,6 +37,8 @@ serde_yaml = "0.9.22"
 env_logger = "0.10.0"
 ordered-map = "0.4.2"
 sum_type = "0.2.0"
+hyperlocal = "0.8.0"
+hex = {version = "0.4.3", features = ["serde"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 getaddrs = "0.1.0"

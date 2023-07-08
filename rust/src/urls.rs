@@ -7,10 +7,6 @@ use crate::structures::{TypeOfConnection, UnixCon};
 
 pub fn parse_url_ext(s0: &str) -> Result<TypeOfConnection, Box<dyn error::Error>> {
     if s0.starts_with("http+unix://") {
-        // divide in host and path at the / after the http+unix://
-        // let mut parts = s.splitn(2, '/');
-        // let host = parts.next().unwrap();
-        // let path = parts.next().unwrap();
         let (query, s) = match s0.find("?") {
             Some(i) => (Some(s0[i..].to_string()), s0[..i].to_string()),
             None => (None, s0.to_string()),

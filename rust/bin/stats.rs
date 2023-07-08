@@ -4,12 +4,15 @@ extern crate url;
 use std::any::Any;
 use std::error;
 use std::error::Error;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use futures::future::join_all;
 use futures::StreamExt;
+use hex;
 use hyper;
+use hyper::Client;
+use hyperlocal::UnixClientExt;
 use log::{debug, error, info, warn};
 use tokio::spawn;
 use tokio::sync::mpsc;
@@ -19,6 +22,7 @@ use tokio::time::{sleep, timeout};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_tungstenite::connect_async;
 use url::Url;
+use warp::reply::Response;
 
 use dtps_http::constants::{
     HEADER_CONTENT_LOCATION, HEADER_NODE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA,
@@ -303,45 +307,15 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 pub async fn get_index(
     con: &TypeOfConnection,
 ) -> Result<TopicsIndexInternal, Box<dyn error::Error>> {
-    let url;
-    match con {
-        TCP(url_) => {
-            url = url_.clone();
-        }
-        _ => {
-            return Err("not implemented".into());
-        }
-    }
+    let resp = make_request(con, hyper::Method::GET).await?;
+    // TODO: send more headers
 
-    let client = hyper::Client::new();
-
-    let req = hyper::Request::builder()
-        .method(hyper::Method::GET)
-        .uri(url.as_str())
-        .header("Accept", "application/cbor")
-        // .header("user-agent", "the-awesome-agent/007")
-        .body(hyper::Body::from(""))?;
-
-    // Pass our request builder object to our client.
-    let resp = client.request(req).await?;
+    //  .header("Accept", "application/cbor")
 
     // Get the response body bytes.
     let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
     let x0: TopicsIndexWire = serde_cbor::from_slice(&body_bytes).unwrap();
-    // let x: TopicsIndex = serde_json::from_str(&body).unwrap();
     let ti = TopicsIndexInternal::from_wire(x0, con);
-    // Ok(ti)
-    //
-    // let mut x = x0.clone();
-    //
-    // for (topic_name, topic_info) in &x.topics {
-    //     debug!("{}", topic_name);
-    //     for r in &topic_info.reachability {
-    //         let real_uri = url.join(&r.url).unwrap();
-    //         debug!("{}  {} -> {}", topic_name, r.url, real_uri);
-    //         // make a request to the real_uri
-    //     }
-    // }
 
     Ok(ti)
 }
@@ -349,7 +323,7 @@ pub async fn get_index(
 #[derive(Debug, Clone)]
 pub enum UrlResult {
     /// a
-    Inaccessible,
+    Inaccessible(String),
     /// b
     WrongNodeAnswering,
     /// c
@@ -365,10 +339,18 @@ async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResult {
             panic!("unexpected relative url here: {}", con);
         }
     };
+    let reliability = match con {
+        TCP(_) => 0.9,
+        UNIX(_) => 1.0,
+        Relative(_, _) => {
+            panic!("unexpected relative url here: {}", con);
+        }
+    };
     match md {
-        Err(_err) => {
-            // debug!("cannot get metadata for {:?}: {}", con, err);
-            Inaccessible
+        Err(err) => {
+            let s = format!("cannot get metadata for {:?}: {}", con, err);
+
+            Inaccessible(s.to_string())
         }
         Ok(md_) => {
             return match md_.answering {
@@ -377,11 +359,12 @@ async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResult {
                     if answering != expect_node_id {
                         WrongNodeAnswering
                     } else {
+                        let latency = (md_.latency_ns as f32) / 1_000_000_000.0;
                         let lb = LinkBenchmark {
                             complexity,
                             bandwidth: 100_000_000.0,
-                            latency: 0.0,
-                            reliability: 0.9,
+                            latency,
+                            reliability,
                             hops: 0,
                         };
                         Accessible(lb)
@@ -427,8 +410,8 @@ pub async fn compute_best_alternative(
         };
 
         match result {
-            Inaccessible => {
-                debug!("-> Inaccessible");
+            Inaccessible(why) => {
+                debug!("-> Inaccessible: {}", why);
             }
             WrongNodeAnswering => {
                 debug!("-> Wrong node answering");
@@ -458,46 +441,82 @@ pub async fn compute_best_alternative(
     );
     return Ok(best_url);
 }
+//
+// pub async fn get_metadata(tc: &TypeOfConnection) -> Result<FoundMetadata, Box<dyn error::Error>> {
+//     match tc {
+//         TypeOfConnection::TCP(url) => get_metadata_http(url).await,
+//         TypeOfConnection::UNIX(_path) => {
+//             Err("unix socket not supported yet for get_metadata()".into())
+//         }
+//         TypeOfConnection::Relative(_, _) => {
+//             Err("cannot handle a relative url get_metadata()".into())
+//         }
+//     }
+// }
 
-pub async fn get_metadata(tc: &TypeOfConnection) -> Result<FoundMetadata, Box<dyn error::Error>> {
-    match tc {
-        TypeOfConnection::TCP(url) => get_metadata_http(url).await,
-        TypeOfConnection::UNIX(_path) => {
-            Err("unix socket not supported yet for get_metadata()".into())
+pub async fn make_request(
+    conbase: &TypeOfConnection,
+    method: hyper::Method,
+) -> Result<Response, Box<dyn error::Error>> {
+    let use_url = match conbase {
+        TCP(url) => url.clone().to_string(),
+        UNIX(uc) => {
+            let h = hex::encode(&uc.socket_name);
+            let p0 = format!("unix://{}{}", h, uc.path);
+            match uc.query {
+                None => p0,
+                Some(_) => {
+                    let p1 = format!("{}?{}", p0, uc.query.as_ref().unwrap());
+                    p1
+                }
+            }
         }
-        TypeOfConnection::Relative(_, _) => {
-            Err("cannot handle a relative url get_metadata()".into())
-        }
-    }
-}
 
-pub async fn get_metadata_http(url: &Url) -> Result<FoundMetadata, Box<dyn error::Error>> {
-    let conbase = TCP(url.clone());
-    let client = hyper::Client::new();
+        Relative(_, _) => {
+            return Err("cannot handle a relative url get_metadata()".into());
+        }
+    };
 
     let req0 = hyper::Request::builder()
-        .method(hyper::Method::HEAD)
-        .uri(url.as_str())
+        .method(method)
+        .uri(use_url.as_str())
         // .header("user-agent", "the-awesome-agent/007")
         .body(hyper::Body::from(""))?;
-    //
-    // let req = match req0 {
-    //     Ok(req) => req,
-    //     Err(err) => {
-    //         error!("error building request: {:?}: {}", url, err);
-    //         return None;
-    //     }
-    // };
 
-    // Pass our request builder object to our client.
-    let resp = client.request(req0).await?;
-    // let resp = match resp {
-    //     Ok(resp) => resp,
-    //     Err(err) => {
-    //         error!("error requesting: {:?}: {}", url, err);
-    //         return None;
-    //     }
-    // };
+    let resp = match conbase {
+        TypeOfConnection::TCP(_) => {
+            let client = hyper::Client::new();
+            client.request(req0).await?
+        }
+        TypeOfConnection::UNIX(_) => {
+            let client = Client::unix();
+            client.request(req0).await?
+        }
+
+        TypeOfConnection::Relative(_, _) => {
+            return Err("cannot handle a relative url get_metadata()".into());
+        }
+    };
+
+    Ok(resp)
+}
+
+pub async fn get_metadata(
+    conbase: &TypeOfConnection,
+) -> Result<FoundMetadata, Box<dyn error::Error>> {
+    // current time in nano seconds
+    let start = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+
+    let resp = make_request(conbase, hyper::Method::HEAD).await?;
+    let end = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+
+    let latency_ns = end - start;
 
     // get the headers from the response
     let headers = resp.headers();
@@ -513,7 +532,7 @@ pub async fn get_metadata_http(url: &Url) -> Result<FoundMetadata, Box<dyn error
         .iter()
         .map(|x| parse_url_ext(x).unwrap())
         .collect();
-    alternative_urls.push(TCP(url.clone()));
+    alternative_urls.push(conbase.clone());
     let events_url = headers
         .get(HEADER_SEE_EVENTS)
         .map(string_from_header_value)
@@ -531,6 +550,7 @@ pub async fn get_metadata_http(url: &Url) -> Result<FoundMetadata, Box<dyn error
         events_url,
         answering,
         events_data_inline_url,
+        latency_ns,
     };
     // debug!("headers for {} {:#?} {:#?}", url, headers, md);
 

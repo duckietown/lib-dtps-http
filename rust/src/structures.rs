@@ -291,4 +291,5 @@ pub struct FoundMetadata {
     pub answering: Option<String>,
     pub events_url: Option<TypeOfConnection>,
     pub events_data_inline_url: Option<TypeOfConnection>,
+    pub latency_ns: u128, // nanoseconds
 }
