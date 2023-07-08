@@ -170,6 +170,18 @@ pub struct UnixCon {
     pub path: String,
     pub query: Option<String>,
 }
+impl Display for UnixCon {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "UnixCon(")?;
+        write!(f, "{}", self.socket_name)?;
+        write!(f, "{}", self.path)?;
+        if let Some(query) = &self.query {
+            write!(f, "?{}", query)?;
+        }
+        write!(f, ")")?;
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum TypeOfConnection {
@@ -178,14 +190,24 @@ pub enum TypeOfConnection {
     /// b
     UNIX(UnixCon),
     /// c
-    Relative(String),
+    Relative(String, Option<String>), // path, query
 }
 
 impl TypeOfConnection {
     pub fn to_string(&self) -> String {
         match self {
             TypeOfConnection::TCP(url) => url.to_string(),
-            TypeOfConnection::Relative(s) => s.clone(),
+            TypeOfConnection::Relative(s, q) => {
+                match q {
+                    Some(query) => {
+                        let mut s = s.clone();
+                        s.push_str("?");
+                        s.push_str(&query);
+                        s
+                    }
+                    None => s.clone(),
+                }
+            }
             TypeOfConnection::UNIX(unixcon) => {
                 let mut s = unixcon.scheme.clone();
                 s.push_str("://");
@@ -197,6 +219,19 @@ impl TypeOfConnection {
                 }
                 s
             }
+        }
+    }
+}
+
+use std::fmt;
+use std::fmt::Display;
+
+impl fmt::Display for TypeOfConnection {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            TypeOfConnection::TCP(url) => write!(f, "TCP({:?})", url.to_string()),
+            TypeOfConnection::UNIX(unix_con) => write!(f, "UNIX({})", unix_con),
+            TypeOfConnection::Relative(s,q) => write!(f, "Relative({},{:?})", s, q),
         }
     }
 }

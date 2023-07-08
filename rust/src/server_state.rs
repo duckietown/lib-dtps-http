@@ -62,7 +62,7 @@ impl ServerState {
             origin_node,
             app_data,
             reachability: vec![TopicReachabilityInternal {
-                con: Relative(format!("topics/{}/", topic_name)),
+                con: Relative(format!("topics/{}/", topic_name), None),
                 answering: self.node_id.clone(),
                 forwarders: vec![],
                 benchmark: link_benchmark,

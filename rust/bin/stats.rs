@@ -3,6 +3,7 @@ extern crate url;
 
 use std::any::Any;
 use std::error;
+use std::error::Error;
 use std::time::Duration;
 
 use clap::Parser;
@@ -10,13 +11,16 @@ use futures::future::join_all;
 use futures::StreamExt;
 use hyper;
 use log::{debug, error, info, warn};
+use tokio::net::TcpStream;
 use tokio::spawn;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
+use tokio::time::error::Elapsed;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tokio_tungstenite::connect_async;
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tungstenite::handshake::client::Response;
 use url::{ParseError, Url};
 
 use dtps_http::constants::{
@@ -24,13 +28,13 @@ use dtps_http::constants::{
 };
 use dtps_http::logs::init_logging;
 use dtps_http::object_queues::RawData;
-use dtps_http::structures::TypeOfConnection::{Relative, TCP, UNIX};
 use dtps_http::structures::{
     DataReady, FoundMetadata, LinkBenchmark, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection,
 };
+use dtps_http::structures::TypeOfConnection::{Relative, TCP, UNIX};
 use dtps_http::urls::{join_ext, parse_url_ext};
 
-use crate::UrlResult::Inaccessible;
+use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
 
 /// Parameters for client
 #[derive(Parser, Debug)]
@@ -47,19 +51,21 @@ struct StatsArgs {
 
 async fn listen_events(md: FoundMetadata, topic_name: String) {
     let (tx, rx) = mpsc::unbounded_channel();
-    warn!("listening to events on {}: {:#?}", topic_name, md);
+    warn!("listening to events on {}", topic_name);
     let inline_url = md.events_data_inline_url.unwrap().clone();
-    let handle = spawn(listen_events_url_inline(inline_url.clone(), tx));
+    let handle = spawn(listen_events_url_inline(inline_url, tx));
     let mut stream = UnboundedReceiverStream::new(rx);
 
     // keep track of the latencies in a vector and compute the mean
 
     let mut latencies_ns = Vec::new();
     let mut index = 0;
-    while let Some(rd) = stream.next().await {
+    while let Some(notification) = stream.next().await {
+        // debug!("got event for {}: {:?} {:?}", topic_name, notification,
+        // notification.rd.content);
         if topic_name == "clock" {
             // parse the data as json
-            let nanos = serde_json::from_slice::<u128>(&rd.content).unwrap();
+            let nanos = serde_json::from_slice::<u128>(&notification.rd.content).unwrap();
             let nanos_here = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -95,15 +101,25 @@ fn ms_from_ns(ns: u128) -> f64 {
     (ns as f64) / 1_000_000.0
 }
 
-async fn listen_events_url_inline(con: TypeOfConnection, tx: UnboundedSender<RawData>) {
+#[derive(Debug)]
+pub struct Notification {
+    pub dr: DataReady,
+    pub rd: RawData,
+}
+
+
+async fn listen_events_url_inline(con: TypeOfConnection, tx: UnboundedSender<Notification>) {
     let mut url = match con {
-        TCP(url_) => url_.clone(),
+        TCP(url_) => {
+            // debug!("connecting to {:?}", url_);
+            url_.clone()
+        }
 
         UNIX(uc) => {
-            panic!("not implemented");
+            panic!("not implemented unix connection: {:?}", uc);
         }
-        Relative(_) => {
-            panic!("not expected");
+        Relative(_, _) => {
+            panic!("not expected here {}", con);
         }
     };
     // let mut url = md.events_data_inline_url.unwrap().clone();
@@ -115,16 +131,26 @@ async fn listen_events_url_inline(con: TypeOfConnection, tx: UnboundedSender<Raw
     } else {
         panic!("unexpected scheme: {}", url.scheme());
     }
-    let connection = connect_async(url.clone()).await;
+    let connection_res = connect_async(url.clone()).await;
     // debug!("connection: {:#?}", connection);
-    let (ws_stream, response) = connection.expect("Failed to connect");
-
-    debug!("Connected to the server");
-    debug!("Response HTTP code: {}", response.status());
-    debug!("Response contains the following headers:");
-    for (header, value) in response.headers().iter() {
-        debug!("* {:?} {:?}", header, value);
+    let connection;
+    match connection_res {
+        Ok(c) => {
+            connection = c;
+        }
+        Err(err) => {
+            error!("could not connect to {}: {}", url, err);
+            return;
+        }
     }
+    let (ws_stream, response) = connection;
+
+    // debug!("Connected to the server");
+    // debug!("Response HTTP code: {}", response.status());
+    // debug!("Response contains the following headers:");
+    // for (header, value) in response.headers().iter() {
+    //     debug!("* {:?} {:?}", header, value);
+    // }
 
     let (_write, mut read) = ws_stream.split();
     //
@@ -155,6 +181,12 @@ async fn listen_events_url_inline(con: TypeOfConnection, tx: UnboundedSender<Raw
                     continue;
                 }
             }
+            if dr.chunks_arriving == 0 {
+                error!("message #{}: no chunks arriving. listening to {}", index,
+                url);
+                continue;
+            }
+            // debug!("message #{}: {:#?}", index, dr);
             index += 1;
             let mut content: Vec<u8> = Vec::with_capacity(dr.content_length);
             for _ in 0..(dr.chunks_arriving) {
@@ -163,16 +195,31 @@ async fn listen_events_url_inline(con: TypeOfConnection, tx: UnboundedSender<Raw
                     let data = msg.into_data();
                     content.extend(data);
                 } else {
-                    debug!("unexpected message #{}: {:#?}", index, msg);
+                    error!("unexpected message #{}: {:#?}", index, msg);
                 }
                 index += 1;
+            }
+            if content.len() != dr.content_length {
+                error!(
+                    "unexpected content length: {} != {}",
+                    content.len(),
+                    dr.content_length
+                );
+                continue;
             }
 
             let rd = RawData {
                 content,
                 content_type: dr.content_type.clone(),
             };
-            tx.send(rd).unwrap();
+            let notification = Notification { dr, rd };
+            match tx.send(notification) {
+                Ok(_) => {}
+                Err(e) => {
+                    error!("cannot send data: {}", e);
+                    break;
+                }
+            }
         }
     }
 }
@@ -186,14 +233,23 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     let args = StatsArgs::parse();
     // print!("{} {}", args.url, args.inline_data);
 
-    let bc = parse_url_ext(args.url.as_str()).unwrap();
-    // debug!("urlbase: {:#?}", urlbase);
-    let md = get_metadata(&bc).await.unwrap();
-    let best = compute_best_alternative(&md.alternative_urls)
-        .await
-        .unwrap();
+    let bc = parse_url_ext(args.url.as_str())?;
+    // debug!("connection base: {:#?}", bc);
+    let md = get_metadata(&bc).await?;
+    // debug!("metadata:\n{:#?}", md);
+    match md.answering {
+        None => {
+            info!("no answering url found");
+            return Err("no answering url found".into());
+        }
+        Some(_) => {}
+    }
 
-    let x = get_index(&best).await.unwrap();
+    let best = compute_best_alternative(&md.alternative_urls, md.answering.unwrap().as_str())
+        .await?;
+    warn!("Best connection: {} ", best);
+
+    let x = get_index(&best).await?;
 
     warn!("Internal: {:#?} ", x);
     //
@@ -212,25 +268,25 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     let mut handles: Vec<JoinHandle<_>> = Vec::new();
 
     for (topic_name, topic_info) in &x.topics {
-        debug!("{}", topic_name);
+        // debug!("{}", topic_name);
         for r in &topic_info.reachability {
             // let real_uri = urlbase.join(&r.url).unwrap();
             // debug!("{}  {} -> {}", topic_name, r.url, real_uri);
             let md_res = get_metadata(&r.con).await;
-            // debug!("md: {:#?}", md);
+            // debug!("md for {}: {:#?}", topic_name, md_res);
             let md;
             match md_res {
-                None => {
-                    continue;
-                }
-                Some(md_) => {
+                Ok(md_) => {
                     md = md_;
+                }
+                Err(_) => {
+                    warn!("cannot get metadata for {:?}", r.con);
+                    continue;
                 }
             }
 
             let handle = spawn(listen_events(md, topic_name.clone()));
             handles.push(handle);
-            // make a request to the real_uri
         }
     }
     // listen to all spawned tasks
@@ -302,27 +358,39 @@ pub enum UrlResult {
     Accessible(LinkBenchmark),
 }
 
-async fn get_stats(con: &TypeOfConnection) -> UrlResult {
+async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResult {
     let md = get_metadata(con).await;
     let complexity = match con {
         TCP(_) => 1,
         UNIX(_) => 0,
-        Relative(_) => {
-            panic!("unexpected relative url");
+        Relative(_, _) => {
+            panic!("unexpected relative url here: {}", con);
         }
     };
     match md {
-        Some(_) => {
-            let lb = LinkBenchmark {
-                complexity,
-                bandwidth: 100_000_000.0,
-                latency: 0.0,
-                reliability: 0.9,
-                hops: 0,
-            };
-            UrlResult::Accessible(lb)
+        Err(err) => {
+            // debug!("cannot get metadata for {:?}: {}", con, err);
+            Inaccessible
         }
-        None => Inaccessible,
+        Ok(md_) => {
+            return match md_.answering {
+                None => WrongNodeAnswering,
+                Some(answering) => {
+                    if answering != expect_node_id {
+                        WrongNodeAnswering
+                    } else {
+                        let lb = LinkBenchmark {
+                            complexity,
+                            bandwidth: 100_000_000.0,
+                            latency: 0.0,
+                            reliability: 0.9,
+                            hops: 0,
+                        };
+                        Accessible(lb)
+                    }
+                }
+            };
+        }
     }
 }
 
@@ -341,21 +409,34 @@ async fn get_stats(con: &TypeOfConnection) -> UrlResult {
 
 pub async fn compute_best_alternative(
     alternatives: &Vec<TypeOfConnection>,
-) -> Option<TypeOfConnection> {
+    expect_node_id: &str,
+) -> Result<TypeOfConnection, Box<dyn error::Error>> {
     let mut possible_urls: Vec<TypeOfConnection> = Vec::new();
     let mut possible_stats: Vec<LinkBenchmark> = Vec::new();
-
+    let mut i = 0;
+    let n = alternatives.len();
     for alternative in alternatives.iter() {
-        let result = get_stats(alternative).await;
+        i += 1;
+        debug!("Trying {}/{}: {}", i, n, alternative);
+        let result_future = get_stats(alternative, expect_node_id);
+
+        let result = match timeout(Duration::from_millis(2000), result_future).await {
+            Ok(r) => r,
+            Err(_) => {
+                debug!("-> Timeout: {}", alternative);
+                continue;
+            }
+        };
+
         match result {
             Inaccessible => {
-                debug!("{:?} is inaccessible", alternative);
+                debug!("-> Inaccessible");
             }
-            UrlResult::WrongNodeAnswering => {
-                debug!("{:?} is answering but not the right node", alternative);
+            WrongNodeAnswering => {
+                debug!("-> Wrong node answering");
             }
-            UrlResult::Accessible(link_benchmark) => {
-                debug!("{:?} is accessible", alternative);
+            Accessible(link_benchmark) => {
+                debug!("-> Accessible: {:?}",  link_benchmark);
                 possible_urls.push(alternative.clone());
                 possible_stats.push(link_benchmark.into());
             }
@@ -363,7 +444,7 @@ pub async fn compute_best_alternative(
     }
     // if no alternative is accessible, return None
     if possible_urls.len() == 0 {
-        return None;
+        return Err("no alternative are accessible".into());
     }
     // get the index of minimum possible_stats
     let min_index = possible_stats
@@ -373,24 +454,23 @@ pub async fn compute_best_alternative(
         .unwrap()
         .0;
     let best_url = possible_urls[min_index].clone();
-    debug!("best url: {:?}", best_url);
-    return Some(best_url);
+    debug!("Best is {}: {} with {:?}", min_index, best_url, possible_stats[min_index]);
+    return Ok(best_url);
 }
 
-pub async fn get_metadata(tc: &TypeOfConnection) -> Option<FoundMetadata> {
+pub async fn get_metadata(tc: &TypeOfConnection) -> Result<FoundMetadata, Box<dyn error::Error>> {
     match tc {
         TypeOfConnection::TCP(url) => get_metadata_http(url).await,
         TypeOfConnection::UNIX(path) => {
-            warn!("unix socket not supported yet");
-            None
+            Err("unix socket not supported yet for get_metadata()".into())
         }
-        TypeOfConnection::Relative(_) => {
-            panic!("cannot use relative here");
+        TypeOfConnection::Relative(_, _) => {
+            Err("cannot handle a relative url get_metadata()".into())
         }
     }
 }
 
-pub async fn get_metadata_http(url: &Url) -> Option<FoundMetadata> {
+pub async fn get_metadata_http(url: &Url) -> Result<FoundMetadata, Box<dyn error::Error>> {
     let conbase = TCP(url.clone());
     let client = hyper::Client::new();
 
@@ -398,30 +478,32 @@ pub async fn get_metadata_http(url: &Url) -> Option<FoundMetadata> {
         .method(hyper::Method::HEAD)
         .uri(url.as_str())
         // .header("user-agent", "the-awesome-agent/007")
-        .body(hyper::Body::from(""));
-    let req = match req0 {
-        Ok(req) => req,
-        Err(err) => {
-            error!("error building request: {:?}: {}", url, err);
-            return None;
-        }
-    };
+        .body(hyper::Body::from(""))?;
+    //
+    // let req = match req0 {
+    //     Ok(req) => req,
+    //     Err(err) => {
+    //         error!("error building request: {:?}: {}", url, err);
+    //         return None;
+    //     }
+    // };
 
     // Pass our request builder object to our client.
-    let resp = client.request(req).await;
-    let resp = match resp {
-        Ok(resp) => resp,
-        Err(err) => {
-            error!("error requesting: {:?}: {}", url, err);
-            return None;
-        }
-    };
+    let resp = client.request(req0).await?;
+    // let resp = match resp {
+    //     Ok(resp) => resp,
+    //     Err(err) => {
+    //         error!("error requesting: {:?}: {}", url, err);
+    //         return None;
+    //     }
+    // };
 
     // get the headers from the response
     let headers = resp.headers();
+
     // get all the HEADER_CONTENT_LOCATION in the response
     let alternatives0 = headers.get_all(HEADER_CONTENT_LOCATION);
-    debug!("alternatives0: {:#?}", alternatives0);
+    // debug!("alternatives0: {:#?}", alternatives0);
     // convert into a vector of strings
     let alternative_urls: Vec<String> =
         alternatives0.iter().map(string_from_header_value).collect();
@@ -434,20 +516,22 @@ pub async fn get_metadata_http(url: &Url) -> Option<FoundMetadata> {
     let events_url = headers
         .get(HEADER_SEE_EVENTS)
         .map(string_from_header_value)
-        .map(|x| join_ext(&conbase, &x))
-        .flatten();
+        .map(|x| join_ext(&conbase, &x).ok()).flatten();
+
     let events_data_inline_url = headers
         .get(HEADER_SEE_EVENTS_INLINE_DATA)
         .map(string_from_header_value)
-        .map(|x| join_ext(&conbase, &x))
-        .flatten();
+        .map(|x| join_ext(&conbase, &x).ok()).flatten();
     let answering = headers.get(HEADER_NODE_ID).map(string_from_header_value);
-    Some(FoundMetadata {
+    let md = FoundMetadata {
         alternative_urls,
         events_url,
         answering,
         events_data_inline_url,
-    })
+    };
+    // debug!("headers for {} {:#?} {:#?}", url, headers, md);
+
+    Ok(md)
 }
 
 fn string_from_header_value(header_value: &hyper::header::HeaderValue) -> String {
