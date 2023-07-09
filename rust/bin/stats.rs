@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{error, io};
 
 use base64;
+use base64::{engine::general_purpose, Engine as _};
 use clap::Parser;
 use futures::future::join_all;
 use futures::StreamExt;
@@ -16,7 +17,6 @@ use hyper::Client;
 use hyperlocal::UnixClientExt;
 use log::{debug, error, info, warn};
 use rand::Rng;
-
 use tokio::net::UnixStream;
 use tokio::spawn;
 use tokio::sync::mpsc;
@@ -25,22 +25,20 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
-
 use tokio_tungstenite::{client_async_with_config, connect_async};
 use tungstenite::handshake::client::Request;
-
 use warp::reply::Response;
 
-use dtps_http::constants::{
-    HEADER_CONTENT_LOCATION, HEADER_NODE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA,
-};
-use dtps_http::logs::init_logging;
-use dtps_http::object_queues::RawData;
-use dtps_http::structures::TypeOfConnection::{Relative, TCP, UNIX};
-use dtps_http::structures::{
+use dtps_http::init_logging;
+use dtps_http::RawData;
+use dtps_http::TypeOfConnection::{Relative, TCP, UNIX};
+use dtps_http::{join_ext, parse_url_ext};
+use dtps_http::{
     DataReady, FoundMetadata, LinkBenchmark, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection,
 };
-use dtps_http::urls::{join_ext, parse_url_ext};
+use dtps_http::{
+    HEADER_CONTENT_LOCATION, HEADER_NODE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA,
+};
 
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
 
@@ -688,5 +686,5 @@ fn string_from_header_value(header_value: &hyper::header::HeaderValue) -> String
 fn generate_websocket_key() -> String {
     let mut rng = rand::thread_rng();
     let random_bytes: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
-    base64::encode(&random_bytes)
+    general_purpose::URL_SAFE_NO_PAD.encode(&random_bytes)
 }

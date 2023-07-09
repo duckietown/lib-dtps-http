@@ -5,6 +5,7 @@ ENV USER root
 WORKDIR /wd
 COPY .git .git
 COPY rust rust
+COPY static static
 COPY Cargo.toml .
 # RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # --release
@@ -43,8 +44,11 @@ COPY --from=builder1 /tmp/app /wd/app
 ##RUN ls -a -l /wd/app
 #RUN ls -a -l /
 
-#RUN ./cloudflared --version
-RUN ./app --version
+ENV RUST_LOG=warn,dtps_http=debug
+RUN <<EOF 
+    ./cloudflared --version
+    ./app --version
+EOF
 ENV RUST_BACKTRACE=full
-ENV RUST_LOG=debug
+
 ENTRYPOINT ["/wd/app", "--cloudflare-executable=/wd/cloudflared"]
