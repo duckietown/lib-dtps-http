@@ -3,6 +3,7 @@ pub mod logs;
 pub mod object_queues;
 pub mod server;
 pub mod server_state;
+pub mod static_files;
 pub mod structures;
 pub mod types;
 pub mod urls;

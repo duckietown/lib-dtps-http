@@ -7,11 +7,12 @@ use std::string::ToString;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use chrono::Local;
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use log::{debug, info, warn};
 use maplit::hashmap;
-use maud::html;
+use maud::{html, DOCTYPE};
 use serde::{Deserialize, Serialize};
 use serde_yaml;
 use tokio::net::UnixListener;
@@ -35,6 +36,7 @@ use crate::constants::*;
 use crate::logs::get_id_string;
 use crate::object_queues::*;
 use crate::server_state::*;
+use crate::static_files::{serve_static_file, STATIC_FILES};
 use crate::structures::*;
 use crate::types::*;
 
@@ -77,6 +79,13 @@ impl DTPSServer {
 
         let clone_access = warp::any().map(move || server_state_access.clone());
 
+        // let static_route = warp::path("static").and(warp::fs::dir(dir_to_pathbuf(STATIC_FILES)));
+        let static_route = warp::path("static")
+            .and(warp::path::tail())
+            .and_then(serve_static_file);
+
+        log::info!(" {:?}", STATIC_FILES);
+
         // root GET /
         let root_route = endbar()
             .and(clone_access.clone())
@@ -89,6 +98,7 @@ impl DTPSServer {
         let topic_generic_route_get = topic_address
             .and(warp::get())
             .and(clone_access.clone())
+            .and(warp::header::headers_cloned())
             .and_then(handler_topic_generic);
 
         // HEAD request
@@ -141,7 +151,8 @@ impl DTPSServer {
             .or(topic_generic_route_get)
             .or(root_route)
             .or(topic_generic_route_data)
-            .or(topic_post);
+            .or(topic_post)
+            .or(static_route);
 
         let mut handles = vec![];
 
@@ -319,6 +330,15 @@ async fn root_handler(
     // check if 'text/html' in the accept header
     if accept_headers.contains(&"text/html".to_string()) {
         let x = html! {
+            (DOCTYPE)
+
+            html {
+                head {
+                      link rel="icon" type="image/png" href="/static/favicon.png" ;
+                    link rel="stylesheet" href="/static/style.css" ;
+                    title { "DTPS Server" }
+                }
+                body {
             h1 { "DTPS Server" }
             p.intro {
                 "This response coming to you in HTML because you requested it like this."
@@ -343,7 +363,7 @@ async fn root_handler(
                 code {
                     (serde_yaml::to_string(&index).unwrap())
                 }
-            }
+            }}}
         };
         let markup = x.into_string();
         let mut resp = Response::new(Body::from(markup));
@@ -560,10 +580,127 @@ async fn handle_topic_post(
     Ok(warp::reply::json(&ok))
 }
 
+fn format_nanos(n: i64) -> String {
+    let ms = (n as f64) / 1_000_000.0;
+    format!("{:.3}ms", ms)
+}
+
+async fn handler_topic_html_summary(
+    topic_name: String,
+    ss_mutex: Arc<Mutex<ServerState>>,
+) -> Result<http::Response<Body>, Rejection> {
+    let ss = ss_mutex.lock().await;
+
+    let x: &ObjectQueue;
+    match ss.oqs.get(topic_name.as_str()) {
+        None => return Err(warp::reject::not_found()),
+
+        Some(y) => x = y,
+    }
+
+    let now = Local::now().timestamp_nanos();
+
+    let format_elapsed = |a| -> String { format_nanos(now - a) };
+
+    let data_or_digest = |data: &DataSaved| -> String {
+        let printable = data.content_type == "text/yaml" || data.content_type == "application/json";
+        if data.content_length <= data.digest.len() {
+            if printable {
+                let rd = x.data.get(&data.digest).unwrap();
+                String::from_utf8(rd.content.clone()).unwrap()
+            } else {
+                format!("{} bytes", data.content_length)
+            }
+        } else {
+            data.digest.clone()
+        }
+    };
+    let mut latencies: Vec<i64> = vec![];
+    for (i, data) in x.sequence.iter().enumerate() {
+        if i > 0 {
+            latencies.push(data.time_inserted - x.sequence[i - 1].time_inserted);
+        } else {
+            latencies.push(0);
+        }
+    }
+
+    let x = html! {
+    (DOCTYPE)
+        html {
+            head {
+                  link rel="icon" type="image/png" href="/static/favicon.png" ;
+                    link rel="stylesheet" href="/static/style.css" ;
+            }
+            body {
+        h1 {    code {(topic_name)} }
+        p.intro {
+            "This response coming to you in HTML because you requested it."
+        }
+        p {
+            "Origin ID: " code {(x.tr.origin_node)}
+        }
+        p {
+            "Topic ID: " code {(x.tr.unique_id)}
+        }
+
+        h2 { "Queue" }
+        table {
+            thead {
+                tr {
+                    th { "Sequence" }
+                    th { "Elapsed" }
+                th { "Delta" }
+                    th { "Content Type" }
+                    th { "Length" }
+                    th { "Digest or data" }
+
+                }
+            }
+        tbody {
+            @for (i, data) in x.sequence.iter().enumerate().rev() {
+                tr {
+                    td { (data.index) }
+                    td { (format_elapsed(data.time_inserted)) }
+                    td { (format_nanos(latencies[i]))}
+                    td { code {(data.content_type)} }
+                    td { (data.content_length) }
+
+                    td { code { (data_or_digest(data)) } }
+
+
+                }
+            }
+        }
+    }}}
+
+    };
+    let markup = x.into_string();
+    // let mut resp = Response::new(Body::from(markup));
+    // let headers = resp.headers_mut();
+
+    // headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
+
+    // put_alternative_locations(&ss, headers, "");
+    // Ok(with_status(resp, StatusCode::OK))
+    Ok(http::Response::builder()
+        .status(StatusCode::OK)
+        .body(Body::from(markup))
+        .unwrap())
+}
+
 async fn handler_topic_generic(
     topic_name: String,
     ss_mutex: Arc<Mutex<ServerState>>,
-) -> Result<impl Reply, Rejection> {
+    headers: HeaderMap,
+) -> Result<http::Response<Body>, Rejection> {
+    let accept_headers: Vec<String> = get_accept_header(&headers);
+
+    if accept_headers.contains(&"text/html".to_string()) {
+        return handler_topic_html_summary(topic_name, ss_mutex).await;
+    };
+
+    // check if the client is requesting an HTML page
+
     let digest: String;
     {
         let ss = ss_mutex.lock().await;
@@ -578,20 +715,27 @@ async fn handler_topic_generic(
         // get the last element in the vector
         match x.sequence.last() {
             None => {
-                let resp = Response::new(Body::from(""));
-
-                let (mut parts, body) = resp.into_parts();
-
-                parts.status = StatusCode::NO_CONTENT;
-                let mut resp = Response::from_parts(parts, body);
-
-                let h = resp.headers_mut();
+                let mut res = http::Response::builder()
+                    .status(StatusCode::NO_CONTENT)
+                    .body(Body::from(""))
+                    .unwrap();
+                let h = res.headers_mut();
+                // let resp = Response::new(Body::from(""));
+                //
+                // let (mut parts, body) = resp.into_parts();
+                //
+                // parts.status = StatusCode::NO_CONTENT;
+                // let mut resp = Response::from_parts(parts, body);
+                //
+                // let h = resp.headers_mut();
 
                 let suffix = format!("topics/{}/", topic_name);
                 put_alternative_locations(&ss, h, &suffix);
                 put_common_headers(&ss, h);
 
-                return Ok(resp.into());
+                return Ok(res);
+
+                // return Ok(warp::reply::with_status(warp::reply::html(Body::from("")), StatusCode::NO_CONTENT));
             }
 
             Some(y) => digest = y.digest.clone(),
