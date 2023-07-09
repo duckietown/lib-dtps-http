@@ -45,6 +45,7 @@ impl ServerState {
         topic_name: &str,
         app_data: Option<HashMap<String, Vec<u8>>>,
     ) -> () {
+        let topic_name = topic_name.to_string();
         let uuid = Uuid::new_v4();
         let app_data = app_data.unwrap_or_else(HashMap::new);
 
@@ -69,7 +70,7 @@ impl ServerState {
         };
         let oqs = &mut self.oqs;
 
-        oqs.insert(topic_name.to_string(), ObjectQueue::new(tr));
+        oqs.insert(topic_name.clone(), ObjectQueue::new(tr));
         let mut topics: Vec<String> = Vec::new();
 
         for topic_name in oqs.keys() {
@@ -78,7 +79,7 @@ impl ServerState {
 
         self.publish_object_as_json(TOPIC_LIST_NAME, &topics.clone());
     }
-    fn make_sure_topic_exists(&mut self, topic_name: &str) -> () {
+    pub fn make_sure_topic_exists(&mut self, topic_name: &str) -> () {
         if !self.oqs.contains_key(topic_name) {
             self.new_topic(topic_name, None);
         }
@@ -110,6 +111,10 @@ impl ServerState {
     pub fn publish_json(&mut self, topic_name: &str, json_content: &str) -> DataSaved {
         let bytesdata = json_content.as_bytes().to_vec();
         self.publish(topic_name, &bytesdata, "application/json")
+    }
+    pub fn publish_yaml(&mut self, topic_name: &str, yaml_content: &str) -> DataSaved {
+        let bytesdata = yaml_content.as_bytes().to_vec();
+        self.publish(topic_name, &bytesdata, "application/yaml")
     }
     pub fn publish_plain(&mut self, topic_name: &str, text_content: &str) -> DataSaved {
         let bytesdata = text_content.as_bytes().to_vec();

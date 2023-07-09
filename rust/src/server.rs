@@ -39,7 +39,7 @@ use crate::structures::*;
 use crate::types::*;
 
 pub struct DTPSServer {
-    pub listen_address: SocketAddr,
+    pub listen_address: Option<SocketAddr>,
     pub mutex: Arc<Mutex<ServerState>>,
     pub cloudflare_tunnel_name: Option<String>,
     pub cloudflare_executable: String,
@@ -48,7 +48,7 @@ pub struct DTPSServer {
 
 impl DTPSServer {
     pub fn new(
-        listen_address: SocketAddr,
+        listen_address: Option<SocketAddr>,
         cloudflare_tunnel_name: Option<String>,
         cloudflare_executable: String,
         unix_path: Option<String>,
@@ -143,22 +143,27 @@ impl DTPSServer {
             .or(topic_generic_route_data)
             .or(topic_post);
 
-        let tcp_server = warp::serve(the_routes.clone()).run(self.listen_address);
+        let mut handles = vec![];
 
-        {
-            let mut s = self.mutex.lock().await;
-            s.advertise_urls.push(self.listen_address.to_string());
+        if let Some(address) = self.listen_address {
+            let tcp_server = warp::serve(the_routes.clone()).run(address);
 
-            get_other_addresses();
+            {
+                let mut s = self.mutex.lock().await;
+
+                s.advertise_urls.push(address.to_string());
+
+                get_other_addresses();
+            }
+
+            handles.push(tokio::spawn(tcp_server));
         }
 
-        let mut handles = vec![];
-        handles.push(tokio::spawn(tcp_server));
-
         // if tunnel is given ,start
-        if let Some(tunnel_file) = &self.cloudflare_tunnel_name {
-            let port = self.listen_address.port();
-
+        if let (Some(tunnel_file), Some(address)) =
+            (&self.cloudflare_tunnel_name, self.listen_address)
+        {
+            let port = address.port();
             // open the file as json and get TunnelID
             let contents = std::fs::File::open(tunnel_file).expect("file not found");
             let tunnel_info: CloudflareTunnel =
@@ -571,8 +576,28 @@ async fn handler_topic_generic(
         }
 
         // get the last element in the vector
-        let last = x.sequence.last().unwrap();
-        digest = last.digest.clone();
+        match x.sequence.last() {
+            None => {
+                let resp = Response::new(Body::from(""));
+
+                let (mut parts, body) = resp.into_parts();
+
+                parts.status = StatusCode::NO_CONTENT;
+                let mut resp = Response::from_parts(parts, body);
+
+                let h = resp.headers_mut();
+
+                let suffix = format!("topics/{}/", topic_name);
+                put_alternative_locations(&ss, h, &suffix);
+                put_common_headers(&ss, h);
+
+                return Ok(resp.into());
+            }
+
+            Some(y) => digest = y.digest.clone(),
+        }
+        // let last = x.sequence.last().unwrap();
+        // digest = last.digest.clone();
     }
     return handler_topic_generic_data(topic_name, digest, ss_mutex.clone()).await;
 }
@@ -698,9 +723,9 @@ const DEFAULT_HOST: &str = "0.0.0.0";
 const DEFAULT_CLOUDFLARE_EXECUTABLE: &str = "cloudflared";
 
 /// DTPS HTTP server
-#[derive(Parser, Debug)]
+#[derive(Parser)]
 #[command(author, version, about, long_about = None)]
-struct Args {
+pub struct ServerArgs {
     /// TCP Port to bind to
     #[arg(long, default_value_t = DEFAULT_PORT)]
     tcp_port: u16,
@@ -722,18 +747,27 @@ struct Args {
     cloudflare_executable: String,
 }
 
-pub fn create_server_from_command_line() -> DTPSServer {
-    let args = Args::parse();
-
-    let hoststring = format!("{}:{}", args.tcp_host, args.tcp_port);
+pub fn address_from_host_port(host: &str, port: u16) -> SocketAddr {
+    let hoststring = format!("{}:{}", host, port);
     let mut addrs_iter = hoststring.to_socket_addrs().unwrap();
     let one_addr = addrs_iter.next().unwrap();
-    // let version = env!("CARGO_PKG_VERSION");
+    one_addr
+}
 
-    info!("Server listening on {one_addr}");
+pub fn create_server_from_command_line() -> DTPSServer {
+    let args = ServerArgs::parse();
+
+    let listen_address = if args.tcp_port > 0 {
+        Some(address_from_host_port(
+            args.tcp_host.as_str(),
+            args.tcp_port,
+        ))
+    } else {
+        None
+    };
 
     let server = DTPSServer::new(
-        one_addr,
+        listen_address,
         args.tunnel.clone(),
         args.cloudflare_executable.clone(),
         args.unix_path,

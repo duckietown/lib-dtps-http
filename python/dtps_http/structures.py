@@ -1,6 +1,5 @@
 import json
 from dataclasses import asdict
-from typing import Literal
 
 import cbor2
 from multidict import CIMultiDict
@@ -10,16 +9,8 @@ from pydantic.dataclasses import dataclass
 from .constants import HEADER_LINK_BENCHMARK
 from .types import NodeID, SourceID, TopicName, URLString
 
-__all__ = [
-    "DataReady",
-    "ForwardingStep",
-    "LinkBenchmark",
-    "RawData",
-    "ResourceAvailability",
-    "TopicReachability",
-    "TopicRef",
-    "TopicsIndex",
-]
+__all__ = ["DataReady", "ForwardingStep", "LinkBenchmark", "RawData", "ResourceAvailability",
+    "TopicReachability", "TopicRef", "TopicsIndex", ]
 
 
 @dataclass
