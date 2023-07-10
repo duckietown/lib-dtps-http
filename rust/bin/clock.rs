@@ -1,8 +1,10 @@
 extern crate dtps_http;
 
+use std::error::Error;
 use std::sync::Arc;
 
 use chrono::prelude::*;
+use log::error;
 use tokio::spawn;
 use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
@@ -26,7 +28,7 @@ async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: 
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> () {
     init_logging();
     let mut server = create_server_from_command_line();
 
@@ -35,5 +37,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     spawn(clock_go(server.get_lock(), "clock7", 7.0));
     spawn(clock_go(server.get_lock(), "clock11", 11.0));
 
-    server.serve().await
+    match server.serve().await {
+        Ok(_) => return,
+        Err(e) => {
+            error!("Error in serving:\n{}", e);
+
+            // exit with error code
+            std::process::exit(1);
+        }
+    }
 }

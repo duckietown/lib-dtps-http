@@ -10,8 +10,9 @@ use std::time::SystemTime;
 use chrono::Local;
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use maplit::hashmap;
+use maud::PreEscaped;
 use maud::{html, DOCTYPE};
 use serde::{Deserialize, Serialize};
 use serde_yaml;
@@ -216,7 +217,7 @@ impl DTPSServer {
             None => {}
         }
 
-        for unix_path in unix_paths {
+        for (i, unix_path) in unix_paths.iter().enumerate() {
             let the_path = Path::new(&unix_path);
             // remove the socket if it exists
             if the_path.exists() {
@@ -224,7 +225,21 @@ impl DTPSServer {
                 std::fs::remove_file(&unix_path).unwrap();
             }
 
-            let listener = UnixListener::bind(&unix_path).unwrap();
+            let listener = match UnixListener::bind(&unix_path) {
+                Ok(l) => l,
+
+                Err(e) => {
+                    error!("error binding to unix socket {}: {:?}", unix_path, e);
+                    error!("note that this is not supported on Docker+OS X");
+                    if i == 0 {
+                        // this is our default
+                        continue;
+                    } else {
+                        error!("Returning error because this was specified by user.");
+                        return Err(e.into());
+                    }
+                }
+            };
 
             let stream = UnixListenerStream::new(listener);
             let handle = spawn(warp::serve(the_routes.clone()).run_incoming(stream));
@@ -466,9 +481,6 @@ async fn handle_websocket_generic(
         }
     });
     loop {
-        // if finished {
-        //     break;
-        // }
         let r = rx2.recv().await;
         let message;
         match r {
@@ -479,10 +491,7 @@ async fn handle_websocket_generic(
                 continue;
             }
         }
-        // debug!(
-        //     "Received update for topic {}: index {}",
-        //     topic_name, message
-        // );
+
         let ss2 = state.lock().await;
         let oq2 = ss2.oqs.get(&topic_name).unwrap();
         let this_one: &DataSaved = oq2.sequence.get(message).unwrap();
@@ -603,7 +612,11 @@ async fn handler_topic_html_summary(
     let format_elapsed = |a| -> String { format_nanos(now - a) };
 
     let data_or_digest = |data: &DataSaved| -> String {
-        let printable = data.content_type == "text/yaml" || data.content_type == "application/json";
+        let printable = match data.content_type.as_str() {
+            "application/yaml" | "application/x-yaml" | "text/yaml" | "text/vnd.yaml"
+            | "application/json" => true,
+            _ => false,
+        };
         if data.content_length <= data.digest.len() {
             if printable {
                 let rd = x.data.get(&data.digest).unwrap();
@@ -625,68 +638,167 @@ async fn handler_topic_html_summary(
     }
 
     let x = html! {
-    (DOCTYPE)
+        (DOCTYPE)
         html {
             head {
-                  link rel="icon" type="image/png" href="/static/favicon.png" ;
-                    link rel="stylesheet" href="/static/style.css" ;
+                link rel="icon" type="image/png" href="/static/favicon.png" ;
+                link rel="stylesheet" href="/static/style.css" ;
+
+                script src="https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.min.js" {};
             }
             body {
-        h1 {    code {(topic_name)} }
-        p.intro {
-            "This response coming to you in HTML because you requested it."
-        }
-        p {
-            "Origin ID: " code {(x.tr.origin_node)}
-        }
-        p {
-            "Topic ID: " code {(x.tr.unique_id)}
-        }
+                h1 { code {(topic_name)} }
 
-        h2 { "Queue" }
-        table {
-            thead {
-                tr {
-                    th { "Sequence" }
-                    th { "Elapsed" }
-                th { "Delta" }
-                    th { "Content Type" }
-                    th { "Length" }
-                    th { "Digest or data" }
+                p { "This response coming to you in HTML because you requested it."}
+                p { "Origin ID: " code {(x.tr.origin_node)} }
+                p { "Topic ID: " code {(x.tr.unique_id)} }
 
+                div  {
+                    h3 { "notifications using websockets"}
+                    div {pre   id="result" { "result will appear here" }}
                 }
-            }
-        tbody {
-            @for (i, data) in x.sequence.iter().enumerate().rev() {
-                tr {
-                    td { (data.index) }
-                    td { (format_elapsed(data.time_inserted)) }
-                    td { (format_nanos(latencies[i]))}
-                    td { code {(data.content_type)} }
-                    td { (data.content_length) }
+                div {
+                    h3 {"push JSON to queue"}
 
-                    td { code { (data_or_digest(data)) } }
+                    textarea id="myTextAreaContentType" { "application/json" };
+                    textarea id="myTextArea" { "{}" };
+
+                    br;
+
+                    button id="myButton" { "push" };
+
+                    script type="text/javascript" { (PreEscaped(JAVASCRIPT_SEND)) };
+                } // div
+
+                h2 { "Queue" }
+
+                table {
+                    thead {
+                        tr {
+                            th { "Sequence" }
+                            th { "Elapsed" }
+                            th { "Delta" }
+                            th { "Content Type" }
+                            th { "Length" }
+                            th { "Digest or data" }
+                        }
+                    }
+                    tbody {
+                        @for (i, data) in x.sequence.iter().enumerate().rev() {
+                            tr {
+                                td { (data.index) }
+                                td { (format_elapsed(data.time_inserted)) }
+                                td { (format_nanos(latencies[i]))}
+                                td { code {(data.content_type)} }
+                                td { (data.content_length) }
+                                td { code { (data_or_digest(data)) } }
+                            }
+                        }
+                    }
+                } // table
 
 
-                }
-            }
-        }
-    }}}
 
-    };
+            } // body
+        } // html
+    }; // html!
     let markup = x.into_string();
-    // let mut resp = Response::new(Body::from(markup));
-    // let headers = resp.headers_mut();
 
-    // headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
-
-    // put_alternative_locations(&ss, headers, "");
-    // Ok(with_status(resp, StatusCode::OK))
     Ok(http::Response::builder()
         .status(StatusCode::OK)
         .body(Body::from(markup))
         .unwrap())
 }
+
+// language=javascript
+const JAVASCRIPT_SEND: &str = r##"// Select the button and textarea by their IDs
+const button = document.getElementById('myButton');
+const textarea = document.getElementById('myTextArea');
+const textarea_content_type = document.getElementById('myTextAreaContentType');
+button.addEventListener('click', () => {
+    const content = textarea.value;
+    const content_type = textarea_content_type.value;
+    fetch('.', {
+        method: 'POST',
+        headers: {'Content-Type': content_type},
+        body: content
+    })
+        .then(response => response.json())
+        .then(data => console.log(data))
+        .catch(error => console.error('Error:', error));
+});
+
+function subscribeWebSocket(url, fieldId) {
+    // Initialize a new WebSocket connection
+    var socket = new WebSocket(url);
+
+    // Connection opened
+    socket.addEventListener('open', function (event) {
+        console.log('WebSocket connection established');
+
+    });
+
+    // Listen for messages
+    socket.addEventListener('message', async function (event) {
+
+        let message = await convert(event);
+
+        // console.log('Message from server: ', message);
+
+        // Find the field by ID and update its content
+        var field = document.getElementById(fieldId);
+        if (field) {
+            field.textContent = JSON.stringify(message, null, 4);
+        }
+    });
+
+    // Connection closed
+    socket.addEventListener('close', function (event) {
+        console.log('WebSocket connection closed');
+    });
+
+    // Connection error
+    socket.addEventListener('error', function (event) {
+        console.error('WebSocket error: ', event);
+    });
+}
+
+async function convert(event) {
+    if (event.data instanceof ArrayBuffer) {
+        // The data is an ArrayBuffer - decode it as CBOR
+        return CBOR.decode(event.data);
+    } else if (event.data instanceof Blob) {
+        try {
+            const arrayBuffer = await readFileAsArrayBuffer(event.data);
+            return CBOR.decode(arrayBuffer);
+        } catch (error) {
+            console.error('Error reading blob: ', error);
+            return 42;
+        }
+    }
+
+}
+
+function readFileAsArrayBuffer(blob) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = reject;
+
+        reader.readAsArrayBuffer(blob);
+    });
+}
+
+
+document.addEventListener("DOMContentLoaded", function () {
+    var s = ((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + window.location.pathname + "events/";
+
+
+    subscribeWebSocket(s, 'result');
+});
+
+"##;
 
 async fn handler_topic_generic(
     topic_name: String,
