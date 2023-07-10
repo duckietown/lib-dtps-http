@@ -17,6 +17,7 @@ pub use static_files::*;
 pub use structures::*;
 pub use types::*;
 pub use urls::*;
+pub use DTPSServer;
 
 pub mod built_info {
     // The file has been placed there by the build script.
