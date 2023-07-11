@@ -409,7 +409,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                 }
             }
 
-            if topic_name == "clock" {
+            if topic_name == "dtps.clock" {
                 let handle = spawn(listen_events(md));
                 handles.push(handle);
             }

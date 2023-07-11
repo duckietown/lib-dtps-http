@@ -718,7 +718,7 @@ async fn handler_topic_html_summary(
                         }
                     }
                     tbody {
-                        @for (i, data) in x.sequence.iter().enumerate().rev() {
+                        @for (i, data) in x.sequence.iter().enumerate().rev().take(100) {
                             tr {
                                 td { (data.index) }
                                 td { (format_elapsed(data.time_inserted)) }
@@ -1014,10 +1014,9 @@ async fn handler_topic_generic_data(
                     title { (digest) }
                 }
                 body {
-            h1 { "DTPS Server" }
              p { "This data is presented as HTML because you requested it as such."}
-                     p { "Content-type: " (content_type) }
-                     p { "Content-length: " (data.content.len()) }
+                     p { "Content type: " code { (content_type) } }
+                     p { "Content length: " (data.content.len()) }
 
             pre {
                 code {

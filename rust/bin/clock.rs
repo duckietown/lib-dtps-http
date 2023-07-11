@@ -31,8 +31,8 @@ async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: 
 async fn main() -> () {
     init_logging();
     let mut server = create_server_from_command_line();
-
-    spawn(clock_go(server.get_lock(), "clock", 1.0));
+    //
+    // // spawn(clock_go(server.get_lock(), "clock", 1.0));
     spawn(clock_go(server.get_lock(), "clock5", 5.0));
     spawn(clock_go(server.get_lock(), "clock7", 7.0));
     spawn(clock_go(server.get_lock(), "clock11", 11.0));
