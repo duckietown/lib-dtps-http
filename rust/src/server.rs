@@ -121,6 +121,7 @@ impl DTPSServer {
             .and(warp::path!("topics" / String / "data" / String))
             .and(endbar())
             .and(clone_access.clone())
+            .and(warp::header::headers_cloned())
             .and_then(handler_topic_generic_data);
 
         // websockets for events
@@ -163,7 +164,7 @@ impl DTPSServer {
             {
                 let mut s = self.mutex.lock().await;
 
-                s.advertise_urls.push(address.to_string());
+                s.add_advertise_url(&address.to_string());
 
                 get_other_addresses();
             }
@@ -243,21 +244,25 @@ impl DTPSServer {
 
             let stream = UnixListenerStream::new(listener);
             let handle = spawn(warp::serve(the_routes.clone()).run_incoming(stream));
-            info!("Listening on {:?}", unix_path);
+            // info!("Listening on {:?}", unix_path);
             let unix_url = format!("http+unix://{}/", unix_path.replace("/", "%2F"));
             {
                 let mut s = self.mutex.lock().await;
-                s.advertise_urls.push(unix_url.to_string());
+                s.info(format!("Listening on {:?}", unix_path));
+                s.add_advertise_url(&unix_url.to_string());
             }
             handles.push(handle);
         }
         // let (shutdown_send, shutdown_recv) = mpsc::unbounded_channel();
+
+        spawn(clock_go(self.get_lock(), TOPIC_LIST_CLOCK, 1.0));
 
         let mut sig_hup = tokio::signal::unix::signal(SignalKind::hangup())?;
         let mut sig_term = tokio::signal::unix::signal(SignalKind::terminate())?;
         let mut sig_int = tokio::signal::unix::signal(SignalKind::interrupt())?;
 
         let pid = std::process::id();
+        // s.info(format!("PID: {}", pid));
         info!("PID: {}", pid);
         let res: Result<(), Box<dyn std::error::Error>>;
         tokio::select! {
@@ -342,8 +347,14 @@ async fn root_handler(
     let index = topics_index(&ss);
 
     let accept_headers: Vec<String> = get_accept_header(&headers);
+
     // check if 'text/html' in the accept header
+
     if accept_headers.contains(&"text/html".to_string()) {
+        let mut keys: Vec<&str> = index.topics.keys().map(|k| k.as_str()).collect();
+
+        keys.sort();
+
         let x = html! {
             (DOCTYPE)
 
@@ -367,7 +378,7 @@ async fn root_handler(
 
             h2 { "Topics" }
             ul {
-                @for (topic_name, _topic) in index.topics.iter() {
+                @for topic_name  in keys.iter() {
                     li { a href={"topics/"  (topic_name) "/"} { code {(topic_name)} }}
                 }
             }
@@ -412,7 +423,7 @@ async fn handle_websocket_generic(
     topic_name: String,
     send_data: bool,
 ) -> () {
-    debug!("handle_websocket_generic: {}", topic_name);
+    // debug!("handle_websocket_generic: {}", topic_name);
     let (mut ws_tx, mut ws_rx) = ws.split();
 
     let mut rx2: Receiver<usize>;
@@ -439,6 +450,7 @@ async fn handle_websocket_generic(
                 let nchunks = if send_data { 1 } else { 0 };
                 let dr = DataReady {
                     sequence: last.index,
+                    time_inserted: last.time_inserted,
                     digest: last.digest.clone(),
                     content_type: last.content_type.clone(),
                     content_length: last.content_length.clone(),
@@ -464,7 +476,7 @@ async fn handle_websocket_generic(
         loop {
             match ws_rx.next().await {
                 None => {
-                    debug!("ws_rx.next() returned None");
+                    // debug!("ws_rx.next() returned None");
                     // finished = true;
                     break;
                 }
@@ -502,6 +514,7 @@ async fn handle_websocket_generic(
         let nchunks = if send_data { 1 } else { 0 };
         let dr2 = DataReady {
             sequence: this_one.index,
+            time_inserted: this_one.time_inserted,
             digest: this_one.digest.clone(),
             content_type: this_one.content_type.clone(),
             content_length: this_one.content_length,
@@ -513,7 +526,7 @@ async fn handle_websocket_generic(
         match ws_tx.send(message).await {
             Ok(_) => {}
             Err(e) => {
-                debug!("Error sending message: {}", e);
+                debug!("Error sending DataReady message: {}", e);
                 break; // TODO: do better handling
             }
         }
@@ -523,13 +536,13 @@ async fn handle_websocket_generic(
             match ws_tx.send(message).await {
                 Ok(_) => {}
                 Err(e) => {
-                    debug!("Error sending message: {}", e);
+                    debug!("Error sending binary data message: {}", e);
                     break; // TODO: do better handling
                 }
             }
         }
     }
-    debug!("handle_websocket_generic: {} - done", topic_name);
+    // debug!("handle_websocket_generic: {} - done", topic_name);
 }
 
 pub fn epoch() -> f64 {
@@ -607,25 +620,45 @@ async fn handler_topic_html_summary(
         Some(y) => x = y,
     }
 
+    let (default_content_type, initial_value) = match x.sequence.last() {
+        None => ("application/yaml".to_string(), "".to_string()),
+        Some(l) => {
+            let digest = &l.digest;
+            let data = x.data.get(digest).unwrap();
+            let initial = match l.content_type.as_str() {
+                "application/yaml" | "application/json" => {
+                    String::from_utf8(data.content.clone()).unwrap()
+                }
+                _ => "{}".to_string(),
+            };
+            (data.content_type.clone(), initial)
+        }
+    };
     let now = Local::now().timestamp_nanos();
 
     let format_elapsed = |a| -> String { format_nanos(now - a) };
 
-    let data_or_digest = |data: &DataSaved| -> String {
+    let data_or_digest = |data: &DataSaved| -> PreEscaped<String> {
         let printable = match data.content_type.as_str() {
             "application/yaml" | "application/x-yaml" | "text/yaml" | "text/vnd.yaml"
             | "application/json" => true,
             _ => false,
         };
+        let url = format!("data/{}/", data.digest);
+
         if data.content_length <= data.digest.len() {
             if printable {
                 let rd = x.data.get(&data.digest).unwrap();
-                String::from_utf8(rd.content.clone()).unwrap()
+                let s = String::from_utf8(rd.content.clone()).unwrap();
+                html! {
+                  (s)
+                }
             } else {
-                format!("{} bytes", data.content_length)
+                let s = format!("{} bytes", data.content_length);
+                html! { a href=(url) { (s) } }
             }
         } else {
-            data.digest.clone()
+            html! { a href=(url) { (data.digest.clone()) } }
         }
     };
     let mut latencies: Vec<i64> = vec![];
@@ -645,6 +678,7 @@ async fn handler_topic_html_summary(
                 link rel="stylesheet" href="/static/style.css" ;
 
                 script src="https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.min.js" {};
+                script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js" {};
             }
             body {
                 h1 { code {(topic_name)} }
@@ -660,8 +694,8 @@ async fn handler_topic_html_summary(
                 div {
                     h3 {"push JSON to queue"}
 
-                    textarea id="myTextAreaContentType" { "application/json" };
-                    textarea id="myTextArea" { "{}" };
+                    textarea id="myTextAreaContentType" { (default_content_type) };
+                    textarea id="myTextArea" { (initial_value) };
 
                     br;
 
@@ -716,12 +750,26 @@ const button = document.getElementById('myButton');
 const textarea = document.getElementById('myTextArea');
 const textarea_content_type = document.getElementById('myTextAreaContentType');
 button.addEventListener('click', () => {
-    const content = textarea.value;
     const content_type = textarea_content_type.value;
+    const content_json = jsyaml.load(textarea.value);
+    let data;
+    if (content_type === "application/json") {
+        data = JSON.stringify(content_json);
+    } else if (content_type === "application/cbor") {
+        data = CBOR.encode(content_json);
+    } else if (content_type === "application/yaml") {
+        data = jsyaml.dump(content_json);
+
+    } else {
+        alert("Unknown content type: " + content_type);
+        return;
+    }
+    // const content_cbor = CBOR.encode(content_json);
+
     fetch('.', {
         method: 'POST',
         headers: {'Content-Type': content_type},
-        body: content
+        body: data
     })
         .then(response => response.json())
         .then(data => console.log(data))
@@ -735,7 +783,11 @@ function subscribeWebSocket(url, fieldId) {
     // Connection opened
     socket.addEventListener('open', function (event) {
         console.log('WebSocket connection established');
+       var field = document.getElementById(fieldId);
 
+        if (field) {
+            field.textContent = 'WebSocket connection established';
+        }
     });
 
     // Listen for messages
@@ -743,23 +795,38 @@ function subscribeWebSocket(url, fieldId) {
 
         let message = await convert(event);
 
+        let now = (performance.now() + performance.timeOrigin) * 1000.0* 1000.0;
+        let diff = now - message.time_inserted;
+
+        let diff_ms = diff / 1000.0 / 1000.0;
+        console.log("diff", now, message.time_inserted, diff);
+
+        let s = "Received this notification with " + diff_ms.toFixed(3) + " ms latency:\n";
         // console.log('Message from server: ', message);
 
         // Find the field by ID and update its content
         var field = document.getElementById(fieldId);
         if (field) {
-            field.textContent = JSON.stringify(message, null, 4);
+            field.textContent = s + JSON.stringify(message, null, 4);
         }
     });
 
     // Connection closed
     socket.addEventListener('close', function (event) {
         console.log('WebSocket connection closed');
+         var field = document.getElementById(fieldId);
+        if (field) {
+            field.textContent = 'WebSocket connection closed';
+        }
     });
 
     // Connection error
     socket.addEventListener('error', function (event) {
         console.error('WebSocket error: ', event);
+           var field = document.getElementById(fieldId);
+        if (field) {
+            field.textContent = 'WebSocket error';
+        }
     });
 }
 
@@ -855,7 +922,7 @@ async fn handler_topic_generic(
         // let last = x.sequence.last().unwrap();
         // digest = last.digest.clone();
     }
-    return handler_topic_generic_data(topic_name, digest, ss_mutex.clone()).await;
+    return handler_topic_generic_data(topic_name, digest, ss_mutex.clone(), headers).await;
 }
 
 async fn handler_topic_generic_head(
@@ -901,7 +968,10 @@ async fn handler_topic_generic_data(
     topic_name: String,
     digest: String,
     ss_mutex: Arc<Mutex<ServerState>>,
+    headers: HeaderMap,
 ) -> Result<Response, Rejection> {
+    let accept_headers: Vec<String> = get_accept_header(&headers);
+
     let ss = ss_mutex.lock().await;
 
     let x: &ObjectQueue;
@@ -910,9 +980,63 @@ async fn handler_topic_generic_data(
         Some(y) => x = y,
     }
 
-    let data = x.data.get(&digest).unwrap();
+    let data = match x.data.get(&digest) {
+        None => return Err(warp::reject::not_found()),
+        Some(y) => y,
+    };
     let data_bytes = data.content.clone();
     let content_type = data.content_type.clone();
+
+    if accept_headers.contains(&"text/html".to_string()) {
+        let display = match content_type.as_str() {
+            "application/yaml" => String::from_utf8(data_bytes).unwrap().to_string(),
+            "application/json" => {
+                let val: serde_json::Value = serde_json::from_slice(&data_bytes).unwrap();
+                let pretty = serde_json::to_string_pretty(&val).unwrap();
+                pretty
+            }
+            "application/cbor" => {
+                let val: serde_cbor::Value = serde_cbor::from_slice(&data_bytes).unwrap();
+                match serde_yaml::to_string(&val) {
+                    Ok(x) => format!("CBOR displayed as YAML:\n\n{}", x),
+                    Err(e) => format!("Cannot format CBOR as YAML: {}\nRaw CBOR:\n{:?}", e, val),
+                }
+            }
+            _ => format!("Cannot display content type {}", content_type).to_string(),
+        };
+        let x = html! {
+            (DOCTYPE)
+
+            html {
+                head {
+                      link rel="icon" type="image/png" href="/static/favicon.png" ;
+                    link rel="stylesheet" href="/static/style.css" ;
+                    title { (digest) }
+                }
+                body {
+            h1 { "DTPS Server" }
+             p { "This data is presented as HTML because you requested it as such."}
+                     p { "Content-type: " (content_type) }
+                     p { "Content-length: " (data.content.len()) }
+
+            pre {
+                code {
+                             (display)
+                    // (serde_yaml::to_string(&index).unwrap())
+                }
+            }}}
+        };
+
+        let markup = x.into_string();
+        let mut resp = Response::new(Body::from(markup));
+        let headers = resp.headers_mut();
+
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
+
+        put_alternative_locations(&ss, headers, "");
+        return Ok(resp);
+        // return Ok(with_status(resp, StatusCode::OK));
+    };
 
     let mut resp = Response::new(Body::from(data_bytes));
     let h = resp.headers_mut();
@@ -949,7 +1073,7 @@ pub fn put_alternative_locations(
     headers: &mut HeaderMap<HeaderValue>,
     suffix: &str,
 ) {
-    for x in ss.advertise_urls.iter() {
+    for x in ss.get_advertise_urls().iter() {
         let x_suff = format!("{}{}", x, suffix);
         headers.insert(
             "Content-Location",
@@ -1058,4 +1182,21 @@ fn get_other_addresses() -> Vec<String> {
 fn get_other_addresses() -> Vec<String> {
     debug!("You are not running Linux - ignoring other addresses");
     return Vec::new();
+}
+
+use tokio::time::{interval, Duration};
+async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: f32) {
+    let mut clock = interval(Duration::from_secs_f32(interval_s));
+    clock.tick().await;
+    loop {
+        clock.tick().await;
+        let mut ss = state.lock().await;
+        // let datetime_string = Local::now().to_rfc3339();
+        // get the current time in nanoseconds
+        let now = Local::now().timestamp_nanos();
+        let s = format!("{}", now);
+        let _inserted = ss.publish_json(topic_name, &s);
+
+        // debug!("inserted {}: {:?}", topic_name, inserted);
+    }
 }

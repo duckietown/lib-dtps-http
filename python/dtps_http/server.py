@@ -590,6 +590,7 @@ class DTPSServer:
 
             data = DataReady(
                 sequence=i,
+                time_inserted=mdata.time_inserted,
                 digest=mdata.digest,
                 content_type=mdata.content_type,
                 content_length=mdata.content_length,
@@ -702,6 +703,7 @@ class DTPSServer:
                     chunks_arriving = 0
                 dr2 = DataReady(
                     sequence=dr.sequence,
+                    time_inserted=dr.time_inserted,
                     digest=dr.digest,
                     content_type=dr.content_type,
                     content_length=dr.content_length,

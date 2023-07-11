@@ -98,7 +98,7 @@ class ResourceAvailability:
 @dataclass
 class DataReady:
     sequence: int
-
+    time_inserted: int
     content_type: str
     content_length: int
     digest: str

@@ -1,14 +1,13 @@
 use include_dir::{include_dir, Dir};
-use log::debug;
 use mime_guess::from_path;
 use warp::{Rejection, Reply};
 
 // Embed the static directory into the crate
-pub const STATIC_FILES: Dir = include_dir!("static");
+pub const STATIC_FILES: Dir = include_dir!("$CARGO_MANIFEST_DIR/static");
 
 pub async fn serve_static_file(path: warp::path::Tail) -> Result<impl Reply, Rejection> {
     let path = path.as_str();
-    debug!("serve_static_file: path={}", path);
+    // debug!("serve_static_file: path={}", path);
     let file = match STATIC_FILES.get_file(path) {
         Some(file) => file,
         None => return Err(warp::reject::not_found()),

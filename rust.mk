@@ -30,5 +30,5 @@ run-demo:
 run-demo-nosocket:
 	docker pull  $(tag)
 	# --init: do not give pid 1 - which makes it hard to kill
-	docker run  --init -it -v /tmp/run:/tmp/run -v $(creds):/creds:ro  -p 8000:8000 \
+	docker run  -d --init  -v /tmp/run:/tmp/run -v $(creds):/creds:ro  -p 8000:8000 \
  		$(tag) --tunnel /creds/test-dtps1-tunnel.json 

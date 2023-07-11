@@ -1,6 +1,6 @@
 [package]
 name = "dtps-http"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2021"
 build = "rust/build.rs"
 
@@ -8,6 +8,7 @@ build = "rust/build.rs"
 path = "rust/src/lib.rs"
 
 [dependencies]
+async-trait = "0.1.71"
 anyhow = "1.0.71"
 base64 = "0.21.2"
 broadcast = "0.1"

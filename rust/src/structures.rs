@@ -278,6 +278,7 @@ pub struct ResourceAvailabilityWire {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DataReady {
     pub sequence: usize,
+    pub time_inserted: i64,
     pub digest: String,
     pub content_type: String,
     pub content_length: usize,

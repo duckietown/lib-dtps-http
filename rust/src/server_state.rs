@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use chrono::Local;
-use serde::Serialize;
+use log::{debug, error, info, warn};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::constants::*;
@@ -10,13 +11,19 @@ use crate::structures::TypeOfConnection::Relative;
 use crate::structures::*;
 use crate::types::*;
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LogEntry {
+    pub level: String,
+    pub msg: String,
+}
+
 #[derive(Debug)]
 pub struct ServerState {
     pub node_started: i64,
     pub node_app_data: HashMap<String, Vec<u8>>,
     pub node_id: String,
     pub oqs: HashMap<TopicName, ObjectQueue>,
-    pub advertise_urls: Vec<String>,
+    advertise_urls: Vec<String>,
 }
 
 impl ServerState {
@@ -35,16 +42,46 @@ impl ServerState {
             oqs,
             advertise_urls: vec![],
         };
-
+        ss.new_topic(TOPIC_LIST_CLOCK, None);
+        ss.new_topic(TOPIC_LIST_AVAILABILITY, None);
         ss.new_topic(TOPIC_LIST_NAME, None);
+        ss.new_topic(TOPIC_LOGS, None);
         return ss;
     }
 
-    pub fn new_topic(
-        &mut self,
-        topic_name: &str,
-        app_data: Option<HashMap<String, Vec<u8>>>,
-    ) -> () {
+    pub fn add_advertise_url(&mut self, url: &str) {
+        self.advertise_urls.push(url.to_string());
+        self.publish_object_as_json(TOPIC_LIST_AVAILABILITY, &self.advertise_urls.clone());
+    }
+    pub fn get_advertise_urls(&self) -> Vec<String> {
+        self.advertise_urls.clone()
+    }
+    pub fn log_message(&mut self, msg: String, level: &str) {
+        let log_entry = LogEntry {
+            level: level.to_string(),
+            msg: msg,
+        };
+        self.publish_object_as_json(TOPIC_LOGS, &log_entry);
+    }
+    pub fn debug(&mut self, msg: String) {
+        debug!("{}", msg);
+        self.log_message(msg, "debug");
+    }
+    pub fn info(&mut self, msg: String) {
+        info!("{}", msg);
+        self.log_message(msg, "info");
+    }
+    pub fn error(&mut self, msg: String) {
+        error!("{}", msg);
+
+        self.log_message(msg, "error");
+    }
+    pub fn warn(&mut self, msg: String) {
+        warn!("{}", msg);
+        self.log_message(msg, "warn");
+    }
+
+    pub fn new_topic(&mut self, topic_name: &str, app_data: Option<HashMap<String, Vec<u8>>>) {
         let topic_name = topic_name.to_string();
         let uuid = Uuid::new_v4();
         let app_data = app_data.unwrap_or_else(HashMap::new);
@@ -79,9 +116,10 @@ impl ServerState {
 
         self.publish_object_as_json(TOPIC_LIST_NAME, &topics.clone());
     }
-    pub fn make_sure_topic_exists(&mut self, topic_name: &str) -> () {
+    pub fn make_sure_topic_exists(&mut self, topic_name: &str) {
         if !self.oqs.contains_key(topic_name) {
-            self.new_topic(topic_name, None);
+            info!("Queue {:?} does not exist, creating it.", topic_name);
+            return self.new_topic(topic_name, None);
         }
     }
 
