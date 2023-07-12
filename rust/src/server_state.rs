@@ -10,6 +10,7 @@ use crate::object_queues::*;
 use crate::structures::TypeOfConnection::Relative;
 use crate::structures::*;
 use crate::types::*;
+use crate::{get_queue_id, get_random_node_id};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LogEntry {
@@ -32,7 +33,8 @@ impl ServerState {
             Some(x) => x,
             None => HashMap::new(),
         };
-        let node_id = Uuid::new_v4().to_string();
+        // let node_id = Uuid::new_v4().to_string();
+        let node_id = get_random_node_id();
         let oqs = HashMap::new();
         let node_started = Local::now().timestamp_nanos();
         let mut ss = ServerState {
@@ -83,7 +85,8 @@ impl ServerState {
 
     pub fn new_topic(&mut self, topic_name: &str, app_data: Option<HashMap<String, Vec<u8>>>) {
         let topic_name = topic_name.to_string();
-        let uuid = Uuid::new_v4();
+        let uuid = get_queue_id(&self.node_id, &topic_name);
+        // let uuid = Uuid::new_v4();
         let app_data = app_data.unwrap_or_else(HashMap::new);
 
         let link_benchmark = LinkBenchmark {
