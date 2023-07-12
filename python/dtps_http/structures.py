@@ -10,7 +10,7 @@ from .constants import HEADER_LINK_BENCHMARK
 from .types import NodeID, SourceID, TopicName, URLString
 
 __all__ = ["DataReady", "ForwardingStep", "LinkBenchmark", "RawData", "ResourceAvailability",
-    "TopicReachability", "TopicRef", "TopicsIndex", ]
+    "TopicReachability", "channel_msgs_parse", "TopicRef", "TopicsIndex", ]
 
 
 @dataclass
@@ -96,6 +96,19 @@ class ResourceAvailability:
 
 
 @dataclass
+class ChannelInfo:
+    last_sequence: int
+    last_timestamp: int
+    oldest_available_sequence: int
+    newest_available_timestamp: int
+
+
+    @classmethod
+    def from_cbor(cls, s: bytes) -> "DataReady":
+        struct = cbor2.loads(s)
+        return parse_obj_as(DataReady, struct)
+
+@dataclass
 class DataReady:
     sequence: int
     time_inserted: int
@@ -113,6 +126,18 @@ class DataReady:
     def from_cbor(cls, s: bytes) -> "DataReady":
         struct = cbor2.loads(s)
         return parse_obj_as(DataReady, struct)
+
+def channel_msgs_parse(d: bytes) -> ChannelInfo | DataReady:
+    struct = cbor2.loads(d)
+    if 'DataReady' in struct:
+        dr = parse_obj_as(DataReady, struct['DataReady'])
+        return dr
+    elif 'ChannelInfo' in struct:
+        dr = parse_obj_as(ChannelInfo, struct['ChannelInfo'])
+        return dr
+    else:
+        raise ValueError(f"unexpected value {struct}")
+
 
 
 @dataclass

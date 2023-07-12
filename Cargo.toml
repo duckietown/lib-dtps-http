@@ -47,6 +47,7 @@ include_dir = "0.7.3"
 mime = "0.3.17"
 mime_guess = "2.0.4"
 bs58 = "0.5.0"
+serde_bytes = "0.11.11"
 [target.'cfg(target_os = "linux")'.dependencies]
 getaddrs = "0.1.0"
 

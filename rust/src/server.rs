@@ -22,12 +22,14 @@ use tokio::spawn;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
+use tokio::time::{interval, Duration};
 use tokio_stream::wrappers::UnixListenerStream;
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use warp::http::header;
 use warp::hyper::Body;
 use warp::path::end as endbar;
 use warp::reply::{with_status, Response};
+use warp::ws::Message;
 use warp::{Filter, Rejection, Reply};
 
 #[cfg(target_os = "linux")]
@@ -40,6 +42,7 @@ use crate::server_state::*;
 use crate::static_files::{serve_static_file, STATIC_FILES};
 use crate::structures::*;
 use crate::types::*;
+use crate::{serve_static_file2, serve_static_file_empty};
 
 pub struct DTPSServer {
     pub listen_address: Option<SocketAddr>,
@@ -84,6 +87,16 @@ impl DTPSServer {
         let static_route = warp::path("static")
             .and(warp::path::tail())
             .and_then(serve_static_file);
+
+        let static_route_empty = warp::path("static").and_then(serve_static_file_empty);
+
+        let static_route2 = warp::path!("topics" / String / "static")
+            .and(warp::path::tail())
+            // .map(|tn: String, path: warp::path::Tail| {
+            //     debug!("static_route2: tn = {} path={}",tn, path.as_str());
+            //     path
+            // })
+            .and_then(serve_static_file2);
 
         log::info!(" {:?}", STATIC_FILES);
 
@@ -148,13 +161,15 @@ impl DTPSServer {
                 }
             });
 
-        let the_routes = topic_generic_events_route
+        let the_routes = static_route
+            .or(static_route_empty)
+            .or(static_route2)
+            .or(topic_generic_events_route)
             .or(topic_generic_route_head)
             .or(topic_generic_route_get)
             .or(root_route)
             .or(topic_generic_route_data)
-            .or(topic_post)
-            .or(static_route);
+            .or(topic_post);
 
         let mut handles = vec![];
 
@@ -417,6 +432,25 @@ async fn root_handler(
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum MsgReceived {
+    RawData(RawData),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChannelInfo {
+    last_sequence: usize,
+    last_timestamp: i64,
+    oldest_available_sequence: usize,
+    newest_available_timestamp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum MsgServerToClient {
+    DataReady(DataReady),
+    ChannelInfo(ChannelInfo),
+}
+
 async fn handle_websocket_generic(
     ws: warp::ws::WebSocket,
     state: Arc<Mutex<ServerState>>,
@@ -425,14 +459,14 @@ async fn handle_websocket_generic(
 ) -> () {
     // debug!("handle_websocket_generic: {}", topic_name);
     let (mut ws_tx, mut ws_rx) = ws.split();
-
+    let channel_info_message;
     let mut rx2: Receiver<usize>;
     {
         // important: release the lock
         let ss0 = state.lock().await;
 
         let oq: &ObjectQueue;
-        match ss0.oqs.get(topic_name.as_str()) {
+        match ss0.oqs.get(&topic_name) {
             None => {
                 // TODO: we shouldn't be here
                 ws_tx.close().await.unwrap();
@@ -469,10 +503,20 @@ async fn handle_websocket_generic(
             }
         }
 
+        let c = ChannelInfo {
+            last_sequence: 0,
+            last_timestamp: 0,
+            oldest_available_sequence: 0,
+            newest_available_timestamp: 0,
+        };
+        channel_info_message = MsgServerToClient::ChannelInfo(c);
+
         rx2 = oq.tx.subscribe();
     }
-    // let mut finished = false;
+    let state2_for_receive = state.clone();
+    let topic_name2 = topic_name.clone();
     tokio::spawn(async move {
+        let topic_name = topic_name2.clone();
         loop {
             match ws_rx.next().await {
                 None => {
@@ -481,7 +525,30 @@ async fn handle_websocket_generic(
                     break;
                 }
                 Some(Ok(msg)) => {
-                    debug!("ws_rx.next() returned {:#?}", msg);
+                    if msg.is_binary() {
+                        let raw_data = msg.clone().into_bytes();
+                        // let v: serde_cbor::Value = serde_cbor::from_slice(&raw_data).unwrap();
+                        //
+                        // debug!("ws_rx.next() returned {:#?}", v);
+                        //
+                        let ms: MsgReceived = match serde_cbor::from_slice(&raw_data) {
+                            Ok(x) => x,
+                            Err(err) => {
+                                debug!("ws_rx.next() cannot nterpret error {:#?}", err);
+                                continue;
+                            }
+                        };
+                        debug!("ws_rx.next() returned {:#?}", ms);
+                        match ms {
+                            MsgReceived::RawData(rd) => {
+                                let mut ss0 = state2_for_receive.lock().await;
+
+                                // let oq: &ObjectQueue=  ss0.oqs.get(topic_name.as_str()).unwrap();
+
+                                let _ds = ss0.publish(&topic_name, &rd.content, &rd.content_type);
+                            }
+                        }
+                    }
                 }
                 Some(Err(err)) => {
                     debug!("ws_rx.next() returned error {:#?}", err);
@@ -492,6 +559,14 @@ async fn handle_websocket_generic(
             }
         }
     });
+    let message = warp::ws::Message::binary(serde_cbor::to_vec(&channel_info_message).unwrap());
+    match ws_tx.send(message).await {
+        Ok(_) => {}
+        Err(e) => {
+            debug!("Error sending ChannelInfo message: {}", e);
+        }
+    }
+
     loop {
         let r = rx2.recv().await;
         let message;
@@ -522,7 +597,9 @@ async fn handle_websocket_generic(
             chunks_arriving: nchunks,
         };
 
-        let message = warp::ws::Message::binary(serde_cbor::to_vec(&dr2).unwrap());
+        let out_message = MsgServerToClient::DataReady(dr2);
+
+        let message = warp::ws::Message::binary(serde_cbor::to_vec(&out_message).unwrap());
         match ws_tx.send(message).await {
             Ok(_) => {}
             Err(e) => {
@@ -701,6 +778,8 @@ async fn handler_topic_html_summary(
 
                     button id="myButton" { "push" };
 
+                    script src="../../static/send.js" {};
+
                     script type="text/javascript" { (PreEscaped(JAVASCRIPT_SEND)) };
                 } // div
 
@@ -745,125 +824,8 @@ async fn handler_topic_html_summary(
 }
 
 // language=javascript
-const JAVASCRIPT_SEND: &str = r##"// Select the button and textarea by their IDs
-const button = document.getElementById('myButton');
-const textarea = document.getElementById('myTextArea');
-const textarea_content_type = document.getElementById('myTextAreaContentType');
-button.addEventListener('click', () => {
-    const content_type = textarea_content_type.value;
-    const content_json = jsyaml.load(textarea.value);
-    let data;
-    if (content_type === "application/json") {
-        data = JSON.stringify(content_json);
-    } else if (content_type === "application/cbor") {
-        data = CBOR.encode(content_json);
-    } else if (content_type === "application/yaml") {
-        data = jsyaml.dump(content_json);
+const JAVASCRIPT_SEND: &str = r##"
 
-    } else {
-        alert("Unknown content type: " + content_type);
-        return;
-    }
-    // const content_cbor = CBOR.encode(content_json);
-
-    fetch('.', {
-        method: 'POST',
-        headers: {'Content-Type': content_type},
-        body: data
-    })
-        .then(response => response.json())
-        .then(data => console.log(data))
-        .catch(error => console.error('Error:', error));
-});
-
-function subscribeWebSocket(url, fieldId) {
-    // Initialize a new WebSocket connection
-    var socket = new WebSocket(url);
-
-    // Connection opened
-    socket.addEventListener('open', function (event) {
-        console.log('WebSocket connection established');
-       var field = document.getElementById(fieldId);
-
-        if (field) {
-            field.textContent = 'WebSocket connection established';
-        }
-    });
-
-    // Listen for messages
-    socket.addEventListener('message', async function (event) {
-
-        let message = await convert(event);
-
-        let now = (performance.now() + performance.timeOrigin) * 1000.0* 1000.0;
-        let diff = now - message.time_inserted;
-
-        let diff_ms = diff / 1000.0 / 1000.0;
-        console.log("diff", now, message.time_inserted, diff);
-
-        let s = "Received this notification with " + diff_ms.toFixed(3) + " ms latency:\n";
-        // console.log('Message from server: ', message);
-
-        // Find the field by ID and update its content
-        var field = document.getElementById(fieldId);
-        if (field) {
-            field.textContent = s + JSON.stringify(message, null, 4);
-        }
-    });
-
-    // Connection closed
-    socket.addEventListener('close', function (event) {
-        console.log('WebSocket connection closed');
-         var field = document.getElementById(fieldId);
-        if (field) {
-            field.textContent = 'WebSocket connection closed';
-        }
-    });
-
-    // Connection error
-    socket.addEventListener('error', function (event) {
-        console.error('WebSocket error: ', event);
-           var field = document.getElementById(fieldId);
-        if (field) {
-            field.textContent = 'WebSocket error';
-        }
-    });
-}
-
-async function convert(event) {
-    if (event.data instanceof ArrayBuffer) {
-        // The data is an ArrayBuffer - decode it as CBOR
-        return CBOR.decode(event.data);
-    } else if (event.data instanceof Blob) {
-        try {
-            const arrayBuffer = await readFileAsArrayBuffer(event.data);
-            return CBOR.decode(arrayBuffer);
-        } catch (error) {
-            console.error('Error reading blob: ', error);
-            return 42;
-        }
-    }
-
-}
-
-function readFileAsArrayBuffer(blob) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-
-        reader.onloadend = () => resolve(reader.result);
-        reader.onerror = reject;
-
-        reader.readAsArrayBuffer(blob);
-    });
-}
-
-
-document.addEventListener("DOMContentLoaded", function () {
-    var s = ((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + window.location.pathname + "events/";
-
-
-    subscribeWebSocket(s, 'result');
-});
 
 "##;
 
@@ -899,28 +861,16 @@ async fn handler_topic_generic(
                     .body(Body::from(""))
                     .unwrap();
                 let h = res.headers_mut();
-                // let resp = Response::new(Body::from(""));
-                //
-                // let (mut parts, body) = resp.into_parts();
-                //
-                // parts.status = StatusCode::NO_CONTENT;
-                // let mut resp = Response::from_parts(parts, body);
-                //
-                // let h = resp.headers_mut();
 
                 let suffix = format!("topics/{}/", topic_name);
                 put_alternative_locations(&ss, h, &suffix);
                 put_common_headers(&ss, h);
 
                 return Ok(res);
-
-                // return Ok(warp::reply::with_status(warp::reply::html(Body::from("")), StatusCode::NO_CONTENT));
             }
 
             Some(y) => digest = y.digest.clone(),
         }
-        // let last = x.sequence.last().unwrap();
-        // digest = last.digest.clone();
     }
     return handler_topic_generic_data(topic_name, digest, ss_mutex.clone(), headers).await;
 }
@@ -1183,7 +1133,6 @@ fn get_other_addresses() -> Vec<String> {
     return Vec::new();
 }
 
-use tokio::time::{interval, Duration};
 async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: f32) {
     let mut clock = interval(Duration::from_secs_f32(interval_s));
     clock.tick().await;

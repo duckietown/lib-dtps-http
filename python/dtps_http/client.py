@@ -1,13 +1,15 @@
 import asyncio
 import os
 import traceback
+from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager, AsyncExitStack
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from typing import Any, AsyncContextManager, AsyncIterator, Callable, cast, Optional, TYPE_CHECKING, TypeVar
 
 import aiohttp
 import cbor2
 from aiohttp import ClientWebSocketResponse, TCPConnector, UnixConnector, WSMessage
+from pydantic import parse_obj_as
 from tcp_latency import measure_latency
 
 from . import logger
@@ -16,7 +18,8 @@ from .constants import (
 )
 from .exceptions import EventListeningNotAvailable
 from .structures import (
-    DataReady, ForwardingStep, LinkBenchmark, RawData, TopicReachability, TopicRef, TopicsIndex,
+    channel_msgs_parse, ChannelInfo, DataReady, ForwardingStep, LinkBenchmark, RawData, TopicReachability,
+    TopicRef, TopicsIndex,
 )
 from .types import NodeID, TopicName, URLString
 from .urls import (
@@ -161,14 +164,15 @@ class DTPSClient:
         return None
 
     async def compute_with_hop(self, this_node_id: NodeID, this_url: URLString, connects_to: URL,
-        expects_answer_from: NodeID, forwarders: list[ForwardingStep], ) -> Optional[TopicReachability]:
+                               expects_answer_from: NodeID, forwarders: list[ForwardingStep], ) -> Optional[
+        TopicReachability]:
         if (benchmark := await self.can_use_url(connects_to, expects_answer_from)) is None:
             return None
 
-        me = ForwardingStep(this_node_id, # complexity=benchmark.complexity,
-            # estimated_latency=benchmark.latency,
-            # estimated_bandwidth=benchmark.bandwidth,
-            forwarding_node_connects_to=url_to_string(connects_to), performance=benchmark, )
+        me = ForwardingStep(this_node_id,  # complexity=benchmark.complexity,
+                            # estimated_latency=benchmark.latency,
+                            # estimated_bandwidth=benchmark.bandwidth,
+                            forwarding_node_connects_to=url_to_string(connects_to), performance=benchmark, )
         total = LinkBenchmark.identity()
         for f in forwarders:
             total |= f.performance
@@ -216,7 +220,7 @@ class DTPSClient:
         return latency_seconds
 
     async def can_use_url(self, url: URL, expects_answer_from: NodeID, do_measure_latency: bool = True,
-        check_right_node: bool = True, ) -> Optional[LinkBenchmark]:
+                          check_right_node: bool = True, ) -> Optional[LinkBenchmark]:
         """Returns None or a score for the url."""
         blacklist_key = (url.scheme, url.host, url.port or 0)
         if blacklist_key in self.blacklist_protocol_host_port:
@@ -277,7 +281,7 @@ class DTPSClient:
                 return None
 
             return LinkBenchmark(complexity, bandwidth, latency, reliability,
-                                 hops)  #  # if path is None:  #     raise ValueError(f"no host in {repr(url)}")  # if os.path.exists(path):  #  # else:  #     logger.warning(f"unix socket {path!r} does not exist")  #     self.blacklist_protocol_host_port.add(blacklist_key)  #     return None
+                                 hops)  # # if path is None:  #     raise ValueError(f"no host in {repr(url)}")  # if os.path.exists(path):  #  # else:  #     logger.warning(f"unix socket {path!r} does not exist")  #     self.blacklist_protocol_host_port.add(blacklist_key)  #     return None
         if url.scheme == "http+ether":
             # path = url.host
             # if os.path.exists(path):
@@ -297,7 +301,7 @@ class DTPSClient:
                 logger.warn(f"checking {url} -> {md}")
                 return md.answering
                 self.obtained_answer[
-                    key] = md.answering  #  # async with self.my_session(url, conn_timeout=1) as (session, url_to_use):  #     logger.debug(f"checking {url}...")  #     async with session.head(url_to_use) as resp:  #         if HEADER_NODE_ID not in resp.headers:  #             msg = f"no {HEADER_NODE_ID} header in {url}"  #             logger.error(msg)  #             self.obtained_answer[key] = None  #         else:  #             self.obtained_answer[key] = NodeID(resp.headers[HEADER_NODE_ID])
+                    key] = md.answering  # # async with self.my_session(url, conn_timeout=1) as (session, url_to_use):  #     logger.debug(f"checking {url}...")  #     async with session.head(url_to_use) as resp:  #         if HEADER_NODE_ID not in resp.headers:  #             msg = f"no {HEADER_NODE_ID} header in {url}"  #             logger.error(msg)  #             self.obtained_answer[key] = None  #         else:  #             self.obtained_answer[key] = NodeID(resp.headers[HEADER_NODE_ID])
 
             except:
                 logger.exception(f"error checking {url} {traceback.format_exc()}")
@@ -370,7 +374,7 @@ class DTPSClient:
             raise
         urls = [cast(URLTopic, join(url, _)) for _ in alternatives0]
         return FoundMetadata(urls, answering=answering, events_url=events_url,
-            events_data_inline_url=events_url_data)
+                             events_data_inline_url=events_url_data)
 
     async def choose_best(self, reachability: list[TopicReachability]) -> URL:
         res = await self.find_best_alternative(
@@ -382,7 +386,7 @@ class DTPSClient:
         return res
 
     async def listen_topic(self, urlbase: URLIndexer, topic_name: TopicName, cb: Callable[[RawData], Any],
-        inline_data: bool) -> "asyncio.Task[None]":
+                           inline_data: bool) -> "asyncio.Task[None]":
         available = await self.ask_topics(urlbase)
         topic = available[topic_name]
         url = cast(URLTopic, await self.choose_best(topic.reachability))
@@ -390,7 +394,7 @@ class DTPSClient:
         return await self.listen_url(url, cb, inline_data)
 
     async def listen_url(self, url_topic: URLTopic, cb: Callable[[RawData], Any],
-        inline_data: bool) -> "asyncio.Task[None]":
+                         inline_data: bool) -> "asyncio.Task[None]":
         url_topic = self._look_cache(url_topic)
         metadata = await self.get_metadata(url_topic)
 
@@ -413,12 +417,12 @@ class DTPSClient:
         return t
 
     async def _listen_and_callback(self, it: AsyncIterator[tuple[DataReady, RawData]],
-        cb: Callable[[RawData], Any]) -> None:
+                                   cb: Callable[[RawData], Any]) -> None:
         async for dr, rd in it:
             cb(rd)
 
     async def listen_url_events(self, url_events: URLWS,
-        inline_data: bool) -> "AsyncIterator[tuple[DataReady, RawData]]":
+                                inline_data: bool) -> "AsyncIterator[tuple[DataReady, RawData]]":
         if inline_data:
             if "?" not in str(url_events):
                 raise ValueError(f"inline data requested but no ? in {url_events}")
@@ -445,12 +449,20 @@ class DTPSClient:
                     msg: WSMessage = await ws.receive()
                     if msg.type == aiohttp.WSMsgType.BINARY:
                         try:
-                            dr = DataReady.from_cbor(msg.data)
+                            cm = channel_msgs_parse(msg.data)
                         except Exception as e:
                             logger.error(f"error in parsing {msg.data!r}: {e.__class__.__name__} {e!r}")
                             continue
-                        data = await self._download_from_urls(url_websockets, dr)
-                        yield dr, data
+
+                        match cm:
+                            case DataReady() as dr:
+
+                                data = await self._download_from_urls(url_websockets, dr)
+                                yield dr, data
+                            case ChannelInfo() as ci:
+                                logger.info(f"channel info {ci}")
+                            case _:
+                                logger.debug(f"cannot interpret {cm}")
                     else:
                         logger.error(f"unexpected message type {msg.type} {msg.data!r}")
 
@@ -473,7 +485,7 @@ class DTPSClient:
 
     @async_error_catcher_iterator
     async def listen_url_events_with_data_inline(self,
-        url_websockets: URLWS) -> "AsyncIterator[tuple[DataReady, RawData]]":
+                                                 url_websockets: URLWS) -> "AsyncIterator[tuple[DataReady, RawData]]":
         """Iterates using direct data in websocket."""
         logger.info(f"listen_url_events_with_data_inline {url_websockets}")
         async with self.my_session(url_websockets) as (session, use_url):
@@ -491,7 +503,8 @@ class DTPSClient:
                         break
                     if msg.type == aiohttp.WSMsgType.BINARY:
                         try:
-                            dr = DataReady.from_cbor(msg.data)
+                            cm =channel_msgs_parse(msg.data)
+
                         except Exception as e:
                             logger.error(f"error in parsing {msg.data!r}: {e.__class__.__name__} {e!r}")
                             continue
@@ -499,20 +512,55 @@ class DTPSClient:
                         logger.error(f"unexpected message type {msg.type} {msg.data!r}")
                         continue
 
-                    if dr.chunks_arriving == 0:
-                        logger.error(f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}")
-                        raise AssertionError(f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}")
+                    match cm:
+                        case DataReady() as dr:
 
-                    data = b""
-                    for _ in range(dr.chunks_arriving):
-                        msg = await ws.receive()
-                        if msg.type == aiohttp.WSMsgType.BINARY:
-                            data += cast(bytes, msg.data)
-                        else:
-                            logger.error(f"unexpected message {msg!r}")
+                            if dr.chunks_arriving == 0:
+                                logger.error(f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}")
+                                raise AssertionError(f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}")
 
-                    if len(data) != dr.content_length:
-                        logger.error(f"unexpected data length {len(data)} != {dr.content_length}\n{dr}")
-                        raise AssertionError(f"unexpected data length {len(data)} != {dr.content_length}")
+                            data = b""
+                            for _ in range(dr.chunks_arriving):
+                                msg = await ws.receive()
+                                if msg.type == aiohttp.WSMsgType.BINARY:
+                                    data += cast(bytes, msg.data)
+                                else:
+                                    logger.error(f"unexpected message {msg!r}")
 
-                    yield dr, RawData(content_type=dr.content_type, content=data)
+                            if len(data) != dr.content_length:
+                                logger.error(f"unexpected data length {len(data)} != {dr.content_length}\n{dr}")
+                                raise AssertionError(f"unexpected data length {len(data)} != {dr.content_length}")
+
+                            yield dr, RawData(content_type=dr.content_type, content=data)
+
+                        case ChannelInfo() as ci:
+                            logger.info(f"channel info {ci}")
+
+                        case _:
+                            logger.error(f"unexpected message {cm!r}")
+
+    @asynccontextmanager
+    async def push_through_websocket(self, url_websockets: URLWS, ) -> "AsyncIterator[PushInterface]":
+        """Iterates using direct data using side loading"""
+        use_url: URLString
+        async with self.my_session(url_websockets) as (session, use_url):
+            ws: ClientWebSocketResponse
+            async with session.ws_connect(use_url) as ws:
+                class PushInterfaceImpl(PushInterface):
+
+                    async def push_through(self, data: bytes, content_type: str) -> None:
+                        rd = RawData(content_type=content_type, content=data)
+                        as_struct = {RawData.__name__: asdict(rd)}
+                        cbor_data = cbor2.dumps(as_struct)
+
+                        await ws.send_bytes(cbor_data)
+
+                yield PushInterfaceImpl()
+
+                # # noinspection PyProtectedMember  # headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())  # logger.info(f"websocket to {url_websockets} ready\n{headers}")  #  # while True:  #     if ws.closed:  #         break  #     msg: WSMessage = await ws.receive()  #     if msg.type == aiohttp.WSMsgType.BINARY:  #         try:  #             dr = DataReady.from_cbor(msg.data)  #         except Exception as e:  #             logger.error(f"error in parsing {msg.data!r}: {e.__class__.__name__} {e!r}")  #             continue  #         data = await self._download_from_urls(url_websockets, dr)  #         yield dr, data  #     else:  #         logger.error(f"unexpected message type {msg.type} {msg.data!r}")
+
+
+class PushInterface(ABC):
+    @abstractmethod
+    async def push_through(self, data: bytes, content_type: str) -> None:
+        ...

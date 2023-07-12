@@ -9,6 +9,7 @@ use crate::structures::TopicRefInternal;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RawData {
+    #[serde(with = "serde_bytes")]
     pub content: Vec<u8>,
     pub content_type: String,
 }
