@@ -1,3 +1,4 @@
+use derive_more::Constructor;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
@@ -59,6 +60,7 @@ pub struct TopicRefWire {
     pub origin_node: String,
     pub app_data: HashMap<String, Vec<u8>>,
     pub reachability: Vec<TopicReachabilityWire>,
+    pub created: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +69,7 @@ pub struct TopicRefInternal {
     pub origin_node: String,
     pub app_data: HashMap<String, Vec<u8>>,
     pub reachability: Vec<TopicReachabilityInternal>,
+    pub created: i64,
 }
 
 impl TopicRefInternal {
@@ -80,6 +83,7 @@ impl TopicRefInternal {
             unique_id: self.unique_id.clone(),
             origin_node: self.origin_node.clone(),
             app_data: self.app_data.clone(),
+            created: self.created,
             reachability,
         }
     }
@@ -94,6 +98,7 @@ impl TopicRefInternal {
             unique_id: wire.unique_id.clone(),
             origin_node: wire.origin_node.clone(),
             app_data: wire.app_data.clone(),
+            created: wire.created,
             reachability,
         }
     }
@@ -107,14 +112,6 @@ pub struct LinkBenchmark {
     pub reliability: f32,
     pub hops: i32,
 }
-
-// implement a total order for LinkBenchmark
-//
-// impl PartialOrd for LinkBenchmark {
-//     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-//         Some(self.cmp(other))
-//     }
-// }
 
 impl Eq for LinkBenchmark {}
 
@@ -275,13 +272,65 @@ pub struct ResourceAvailabilityWire {
     pub available_until: f64,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Constructor)]
+pub struct MinMax<T: Ord + Clone> {
+    pub min: T,
+    pub max: T,
+}
+
+pub fn merge_minmax<T: Ord + Clone>(minmax1: &MinMax<T>, minmax2: &MinMax<T>) -> MinMax<T> {
+    let mut min = minmax1.min.clone();
+    let mut max = minmax1.max.clone();
+    if minmax2.min < min {
+        min = minmax2.min.clone();
+    }
+    if minmax2.max > max {
+        max = minmax2.max.clone();
+    }
+    MinMax::new(min, max)
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, Constructor)]
+pub struct Clocks {
+    pub logical: HashMap<String, MinMax<usize>>,
+    pub wall: HashMap<String, MinMax<i64>>,
+}
+
+pub fn merge_to<T: Ord + Clone>(
+    x: &mut HashMap<String, MinMax<T>>,
+    y: &HashMap<String, MinMax<T>>,
+) {
+    for (key, minmax) in y {
+        if let Some(minmax2) = x.get(key) {
+            x.insert(key.clone(), merge_minmax(minmax, minmax2));
+        } else {
+            x.insert(key.clone(), minmax.clone());
+        }
+    }
+}
+
+pub fn merge_clocks(clock1: &Clocks, clock2: &Clocks) -> Clocks {
+    let mut logical = HashMap::new();
+    let mut wall = HashMap::new();
+
+    merge_to(&mut logical, &clock1.logical);
+    merge_to(&mut logical, &clock2.logical);
+    merge_to(&mut wall, &clock1.wall);
+    merge_to(&mut wall, &clock2.wall);
+
+    Clocks::new(logical, wall)
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DataReady {
+    pub origin_node: String,
+    pub unique_id: String,
     pub sequence: usize,
     pub time_inserted: i64,
     pub digest: String,
     pub content_type: String,
     pub content_length: usize,
+    pub clocks: Clocks,
     pub availability: Vec<ResourceAvailabilityWire>,
     pub chunks_arriving: usize,
 }

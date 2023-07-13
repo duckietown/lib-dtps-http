@@ -35,7 +35,7 @@ function subscribeWebSocket(url, fieldId) {
     // Connection opened
     socket.addEventListener('open', function (event) {
         console.log('WebSocket connection established');
-       var field = document.getElementById(fieldId);
+       let field = document.getElementById(fieldId);
 
         if (field) {
             field.textContent = 'WebSocket connection established';
@@ -60,12 +60,18 @@ function subscribeWebSocket(url, fieldId) {
             // console.log('Message from server: ', message);
 
             // Find the field by ID and update its content
-            var field = document.getElementById(fieldId);
+            let field = document.getElementById(fieldId);
             if (field) {
-                field.textContent = s + JSON.stringify(message0, null, 4);
+                // field.textContent = s + JSON.stringify(message0, null, 4);
+                field.textContent = s + jsyaml.dump(message0);
             }
         } else if ('ChannelInfo' in message0) {
             console.log("ChannelInfo", message0);
+            let field = document.getElementById(fieldId);
+            if (field) {
+                field.textContent = jsyaml.dump(message0);
+            }
+
         } else {
             console.log("unknown message", message0);
         }
@@ -74,7 +80,7 @@ function subscribeWebSocket(url, fieldId) {
     // Connection closed
     socket.addEventListener('close', function (event) {
         console.log('WebSocket connection closed');
-         var field = document.getElementById(fieldId);
+         let field = document.getElementById(fieldId);
         if (field) {
             field.textContent = 'WebSocket connection closed';
         }
@@ -83,7 +89,7 @@ function subscribeWebSocket(url, fieldId) {
     // Connection error
     socket.addEventListener('error', function (event) {
         console.error('WebSocket error: ', event);
-           var field = document.getElementById(fieldId);
+           let field = document.getElementById(fieldId);
         if (field) {
             field.textContent = 'WebSocket error';
         }

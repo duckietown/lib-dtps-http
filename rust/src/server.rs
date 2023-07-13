@@ -433,16 +433,22 @@ async fn root_handler(
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-enum MsgReceived {
+enum MsgClientToServer {
     RawData(RawData),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChannelInfoDesc {
+    sequence: usize,
+    time_inserted: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ChannelInfo {
-    last_sequence: usize,
-    last_timestamp: i64,
-    oldest_available_sequence: usize,
-    newest_available_timestamp: i64,
+    queue_created: i64,
+    num_total: usize,
+    newest: Option<ChannelInfoDesc>,
+    oldest: Option<ChannelInfoDesc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -483,11 +489,14 @@ async fn handle_websocket_generic(
                 }];
                 let nchunks = if send_data { 1 } else { 0 };
                 let dr = DataReady {
+                    unique_id: oq.tr.unique_id.clone(),
+                    origin_node: oq.tr.origin_node.clone(),
                     sequence: last.index,
                     time_inserted: last.time_inserted,
                     digest: last.digest.clone(),
                     content_type: last.content_type.clone(),
                     content_length: last.content_length.clone(),
+                    clocks: last.clocks.clone(),
                     availability: the_availability,
                     chunks_arriving: nchunks,
                 };
@@ -504,10 +513,10 @@ async fn handle_websocket_generic(
         }
 
         let c = ChannelInfo {
-            last_sequence: 0,
-            last_timestamp: 0,
-            oldest_available_sequence: 0,
-            newest_available_timestamp: 0,
+            queue_created: 0,
+            num_total: 0,
+            newest: None,
+            oldest: None,
         };
         channel_info_message = MsgServerToClient::ChannelInfo(c);
 
@@ -515,6 +524,7 @@ async fn handle_websocket_generic(
     }
     let state2_for_receive = state.clone();
     let topic_name2 = topic_name.clone();
+
     tokio::spawn(async move {
         let topic_name = topic_name2.clone();
         loop {
@@ -531,7 +541,7 @@ async fn handle_websocket_generic(
                         //
                         // debug!("ws_rx.next() returned {:#?}", v);
                         //
-                        let ms: MsgReceived = match serde_cbor::from_slice(&raw_data) {
+                        let ms: MsgClientToServer = match serde_cbor::from_slice(&raw_data) {
                             Ok(x) => x,
                             Err(err) => {
                                 debug!("ws_rx.next() cannot nterpret error {:#?}", err);
@@ -540,12 +550,13 @@ async fn handle_websocket_generic(
                         };
                         debug!("ws_rx.next() returned {:#?}", ms);
                         match ms {
-                            MsgReceived::RawData(rd) => {
+                            MsgClientToServer::RawData(rd) => {
                                 let mut ss0 = state2_for_receive.lock().await;
 
                                 // let oq: &ObjectQueue=  ss0.oqs.get(topic_name.as_str()).unwrap();
 
-                                let _ds = ss0.publish(&topic_name, &rd.content, &rd.content_type);
+                                let _ds =
+                                    ss0.publish(&topic_name, &rd.content, &rd.content_type, None);
                             }
                         }
                     }
@@ -566,6 +577,8 @@ async fn handle_websocket_generic(
             debug!("Error sending ChannelInfo message: {}", e);
         }
     }
+
+    // now wait for one message at least
 
     loop {
         let r = rx2.recv().await;
@@ -588,11 +601,14 @@ async fn handle_websocket_generic(
         }];
         let nchunks = if send_data { 1 } else { 0 };
         let dr2 = DataReady {
+            origin_node: oq2.tr.origin_node.clone(),
+            unique_id: oq2.tr.unique_id.clone(),
             sequence: this_one.index,
             time_inserted: this_one.time_inserted,
             digest: this_one.digest.clone(),
             content_type: this_one.content_type.clone(),
             content_length: this_one.content_length,
+            clocks: this_one.clocks.clone(),
             availability: the_availability,
             chunks_arriving: nchunks,
         };
@@ -673,7 +689,7 @@ async fn handle_topic_post(
 
     let byte_vector: Vec<u8> = data.to_vec().clone();
 
-    x.push_data(&content_type, &byte_vector);
+    x.push_data(&content_type, &byte_vector, None);
 
     let ok = "ok";
     Ok(warp::reply::json(&ok))
@@ -1143,7 +1159,7 @@ async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: 
         // get the current time in nanoseconds
         let now = Local::now().timestamp_nanos();
         let s = format!("{}", now);
-        let _inserted = ss.publish_json(topic_name, &s);
+        let _inserted = ss.publish_json(topic_name, &s, None);
 
         // debug!("inserted {}: {:?}", topic_name, inserted);
     }

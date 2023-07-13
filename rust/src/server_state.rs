@@ -53,7 +53,7 @@ impl ServerState {
 
     pub fn add_advertise_url(&mut self, url: &str) {
         self.advertise_urls.push(url.to_string());
-        self.publish_object_as_json(TOPIC_LIST_AVAILABILITY, &self.advertise_urls.clone());
+        self.publish_object_as_json(TOPIC_LIST_AVAILABILITY, &self.advertise_urls.clone(), None);
     }
     pub fn get_advertise_urls(&self) -> Vec<String> {
         self.advertise_urls.clone()
@@ -63,7 +63,7 @@ impl ServerState {
             level: level.to_string(),
             msg: msg,
         };
-        self.publish_object_as_json(TOPIC_LOGS, &log_entry);
+        self.publish_object_as_json(TOPIC_LOGS, &log_entry, None);
     }
     pub fn debug(&mut self, msg: String) {
         debug!("{}", msg);
@@ -97,10 +97,12 @@ impl ServerState {
             hops: 0,
         };
         let origin_node = self.node_id.clone();
+        let now = Local::now().timestamp_nanos();
         let tr = TopicRefInternal {
             unique_id: uuid.to_string(),
             origin_node,
             app_data,
+            created: now,
             reachability: vec![TopicReachabilityInternal {
                 con: Relative(format!("topics/{}/", topic_name), None),
                 answering: self.node_id.clone(),
@@ -117,7 +119,7 @@ impl ServerState {
             topics.push(topic_name.clone());
         }
 
-        self.publish_object_as_json(TOPIC_LIST_NAME, &topics.clone());
+        self.publish_object_as_json(TOPIC_LIST_NAME, &topics.clone(), None);
     }
     pub fn make_sure_topic_exists(&mut self, topic_name: &str) {
         if !self.oqs.contains_key(topic_name) {
@@ -131,6 +133,7 @@ impl ServerState {
         topic_name: &str,
         content: &Vec<u8>,
         content_type: &str,
+        clocks: Option<Clocks>,
     ) -> DataSaved {
         self.make_sure_topic_exists(topic_name);
         let data = RawData {
@@ -138,27 +141,43 @@ impl ServerState {
             content_type: content_type.to_string(),
         };
         let oq = self.oqs.get_mut(topic_name).unwrap();
-        return oq.push(&data);
+        return oq.push(&data, clocks);
     }
     pub fn publish_object_as_json<T: Serialize>(
         &mut self,
         topic_name: &str,
         object: &T,
+        clocks: Option<Clocks>,
     ) -> DataSaved {
         let data_json = serde_json::to_string(object).unwrap();
-        return self.publish_json(topic_name, data_json.as_str());
+        return self.publish_json(topic_name, data_json.as_str(), clocks);
     }
 
-    pub fn publish_json(&mut self, topic_name: &str, json_content: &str) -> DataSaved {
+    pub fn publish_json(
+        &mut self,
+        topic_name: &str,
+        json_content: &str,
+        clocks: Option<Clocks>,
+    ) -> DataSaved {
         let bytesdata = json_content.as_bytes().to_vec();
-        self.publish(topic_name, &bytesdata, "application/json")
+        self.publish(topic_name, &bytesdata, "application/json", clocks)
     }
-    pub fn publish_yaml(&mut self, topic_name: &str, yaml_content: &str) -> DataSaved {
+    pub fn publish_yaml(
+        &mut self,
+        topic_name: &str,
+        yaml_content: &str,
+        clocks: Option<Clocks>,
+    ) -> DataSaved {
         let bytesdata = yaml_content.as_bytes().to_vec();
-        self.publish(topic_name, &bytesdata, "application/yaml")
+        self.publish(topic_name, &bytesdata, "application/yaml", clocks)
     }
-    pub fn publish_plain(&mut self, topic_name: &str, text_content: &str) -> DataSaved {
+    pub fn publish_plain(
+        &mut self,
+        topic_name: &str,
+        text_content: &str,
+        clocks: Option<Clocks>,
+    ) -> DataSaved {
         let bytesdata = text_content.as_bytes().to_vec();
-        self.publish(topic_name, &bytesdata, "text/plain")
+        self.publish(topic_name, &bytesdata, "text/plain", clocks)
     }
 }

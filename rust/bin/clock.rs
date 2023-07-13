@@ -21,7 +21,7 @@ async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: 
         // get the current time in nanoseconds
         let now = Local::now().timestamp_nanos();
         let s = format!("{}", now);
-        let _inserted = ss.publish_json(topic_name, &s);
+        let _inserted = ss.publish_json(topic_name, &s, None);
 
         // debug!("inserted {}: {:?}", topic_name, inserted);
     }

@@ -6,6 +6,7 @@ use sha256::digest;
 use tokio::sync::broadcast;
 
 use crate::structures::TopicRefInternal;
+use crate::{merge_clocks, Clocks, MinMax};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RawData {
@@ -13,7 +14,6 @@ pub struct RawData {
     pub content: Vec<u8>,
     pub content_type: String,
 }
-// use md5;
 
 impl RawData {
     pub fn digest(&self) -> String {
@@ -32,6 +32,7 @@ impl RawData {
 pub struct DataSaved {
     pub index: usize,
     pub time_inserted: i64,
+    pub clocks: Clocks,
     pub content_type: String,
     pub content_length: usize,
     pub digest: String,
@@ -59,22 +60,36 @@ impl ObjectQueue {
         }
     }
 
-    pub fn push_data(&mut self, content_type: &str, content: &Vec<u8>) -> DataSaved {
+    pub fn push_data(
+        &mut self,
+        content_type: &str,
+        content: &Vec<u8>,
+        previous_clocks: Option<Clocks>,
+    ) -> DataSaved {
         let data = RawData {
             content: content.clone(),
             content_type: content_type.to_string(),
         };
-        self.push(&data)
+        self.push(&data, previous_clocks)
     }
-    pub fn push(&mut self, data: &RawData) -> DataSaved {
+    pub fn push(&mut self, data: &RawData, previous_clocks: Option<Clocks>) -> DataSaved {
+        let now = Local::now().timestamp_nanos();
+
+        let mut clocks = self.current_clocks(now);
+
+        if let Some(previous_clocks) = previous_clocks {
+            clocks = merge_clocks(&clocks, &previous_clocks);
+        }
+
         let this_seq = self.seq;
         self.seq += 1;
         let digest = data.digest();
         self.data.insert(digest.clone(), data.clone());
-        let now = Local::now().timestamp_nanos();
+
         let saved_data = DataSaved {
             index: this_seq,
             time_inserted: now,
+            clocks: clocks.clone(),
             digest: digest.clone(),
             content_type: data.content_type.clone(),
             content_length: data.content.len(),
@@ -84,5 +99,20 @@ impl ObjectQueue {
             self.tx.send(this_seq).unwrap();
         }
         return saved_data;
+    }
+
+    fn current_clocks(&self, now: i64) -> Clocks {
+        let mut clocks = Clocks::default();
+        let this_seq = self.seq;
+
+        let my_id = self.tr.unique_id.clone();
+        if this_seq > 0 {
+            let based_on = this_seq - 1;
+            clocks
+                .logical
+                .insert(my_id.clone(), MinMax::new(based_on, based_on));
+        }
+        clocks.wall.insert(my_id.clone(), MinMax::new(now, now));
+        clocks
     }
 }
