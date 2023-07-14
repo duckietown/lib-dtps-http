@@ -1,6 +1,5 @@
 extern crate dtps_http;
 
-use std::error::Error;
 use std::sync::Arc;
 
 use chrono::prelude::*;

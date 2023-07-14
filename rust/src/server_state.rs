@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use chrono::Local;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::constants::*;
 use crate::object_queues::*;

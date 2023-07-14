@@ -1,7 +1,7 @@
 use hyper::Body;
 use include_dir::{include_dir, Dir};
 use log::debug;
-use maud::PreEscaped;
+
 use maud::{html, DOCTYPE};
 use mime_guess::from_path;
 use warp::{Rejection, Reply};
@@ -12,7 +12,7 @@ use http::Response;
 pub const STATIC_FILES: Dir = include_dir!("$CARGO_MANIFEST_DIR/static");
 
 pub async fn serve_static_file2(
-    s: String,
+    _s: String,
     path: warp::path::Tail,
 ) -> Result<impl Reply, Rejection> {
     serve_static_file(path).await
@@ -68,8 +68,8 @@ pub async fn serve_static_file_path(path: &str) -> Result<Response<Body>, Reject
     // if path == "" {
     //     return Ok(warp::redirect::redirect("/index.html"));
     // }
-    let dir = match STATIC_FILES.get_dir(path) {
-        Some(dir) => {
+    let _dir = match STATIC_FILES.get_dir(path) {
+        Some(_dir) => {
             return reply_for_dir(path).await;
         }
         None => {}
