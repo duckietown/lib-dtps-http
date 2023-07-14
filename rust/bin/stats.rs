@@ -14,6 +14,7 @@ use futures::StreamExt;
 use hex;
 use hyper;
 use hyper::Client;
+use hyper_tls::HttpsConnector;
 use hyperlocal::UnixClientExt;
 use log::{debug, error, info, warn};
 use rand::Rng;
@@ -29,9 +30,9 @@ use tokio_tungstenite::{client_async_with_config, connect_async};
 use tungstenite::handshake::client::Request;
 use warp::reply::Response;
 
-use dtps_http::init_logging;
 use dtps_http::RawData;
 use dtps_http::TypeOfConnection::{Relative, TCP, UNIX};
+use dtps_http::{init_logging, MsgServerToClient};
 use dtps_http::{join_ext, parse_url_ext};
 use dtps_http::{
     DataReady, FoundMetadata, LinkBenchmark, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection,
@@ -260,22 +261,35 @@ async fn listen_events_url_inline(
         } else {
             let data = msg.clone().into_data();
             // parse as cbor
-            let dr: DataReady;
-            match serde_cbor::from_slice::<DataReady>(&data) {
+            // let dr: DataReady;
+            let msg_from_server: MsgServerToClient;
+            match serde_cbor::from_slice::<MsgServerToClient>(&data) {
                 Ok(dr_) => {
                     // debug!("dr: {:#?}", dr_);
-                    dr = dr_;
+                    msg_from_server = dr_;
                 }
                 Err(e) => {
+                    let rawvalue = serde_cbor::from_slice::<serde_cbor::Value>(&data);
                     debug!(
-                        "message #{}: cannot parse cbor as DataReady: {:#?}\n{:#?}",
+                        "message #{}: cannot parse cbor as MsgServerToClient: {:#?}\n{:#?}\n{:#?}",
                         index,
                         e,
-                        msg.type_id()
+                        msg.type_id(),
+                        rawvalue,
                     );
                     continue;
                 }
             }
+            let dr = match msg_from_server {
+                MsgServerToClient::DataReady(dr_) => dr_,
+                _ => {
+                    debug!(
+                        "message #{}: unexpected message: {:#?}",
+                        index, msg_from_server
+                    );
+                    continue;
+                }
+            };
             if dr.chunks_arriving == 0 {
                 error!(
                     "message #{}: no chunks arriving. listening to {}",
@@ -603,9 +617,15 @@ pub async fn make_request(
         .body(hyper::Body::from(""))?;
 
     let resp = match conbase {
-        TypeOfConnection::TCP(_) => {
-            let client = hyper::Client::new();
-            client.request(req0).await?
+        TypeOfConnection::TCP(url) => {
+            if url.scheme() == "https" {
+                let https = HttpsConnector::new();
+                let client = Client::builder().build::<_, hyper::Body>(https);
+                client.request(req0).await?
+            } else {
+                let client = hyper::Client::new();
+                client.request(req0).await?
+            }
         }
         TypeOfConnection::UNIX(_) => {
             let client = Client::unix();

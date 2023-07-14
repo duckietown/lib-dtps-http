@@ -433,18 +433,18 @@ async fn root_handler(
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-enum MsgClientToServer {
+pub enum MsgClientToServer {
     RawData(RawData),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ChannelInfoDesc {
+pub struct ChannelInfoDesc {
     sequence: usize,
     time_inserted: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ChannelInfo {
+pub struct ChannelInfo {
     queue_created: i64,
     num_total: usize,
     newest: Option<ChannelInfoDesc>,
@@ -452,7 +452,7 @@ struct ChannelInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-enum MsgServerToClient {
+pub enum MsgServerToClient {
     DataReady(DataReady),
     ChannelInfo(ChannelInfo),
 }
@@ -465,7 +465,7 @@ async fn handle_websocket_generic(
 ) -> () {
     // debug!("handle_websocket_generic: {}", topic_name);
     let (mut ws_tx, mut ws_rx) = ws.split();
-    let channel_info_message;
+    let channel_info_message: MsgServerToClient;
     let mut rx2: Receiver<usize>;
     {
         // important: release the lock
@@ -500,8 +500,8 @@ async fn handle_websocket_generic(
                     availability: the_availability,
                     chunks_arriving: nchunks,
                 };
-
-                let message = warp::ws::Message::binary(serde_cbor::to_vec(&dr).unwrap());
+                let m = MsgServerToClient::DataReady(dr);
+                let message = warp::ws::Message::binary(serde_cbor::to_vec(&m).unwrap());
                 ws_tx.send(message).await.unwrap();
 
                 if send_data {
@@ -613,7 +613,7 @@ async fn handle_websocket_generic(
             chunks_arriving: nchunks,
         };
 
-        let out_message = MsgServerToClient::DataReady(dr2);
+        let out_message: MsgServerToClient = MsgServerToClient::DataReady(dr2);
 
         let message = warp::ws::Message::binary(serde_cbor::to_vec(&out_message).unwrap());
         match ws_tx.send(message).await {
