@@ -1,9 +1,9 @@
-use derive_more::Constructor;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
 
+use derive_more::Constructor;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -26,10 +26,10 @@ pub struct TopicsIndexInternal {
 }
 
 impl TopicsIndexInternal {
-    pub fn to_wire(self) -> TopicsIndexWire {
+    pub fn to_wire(self, use_rel: Option<String>) -> TopicsIndexWire {
         let mut topics = HashMap::new();
         for (topic_name, topic_ref_internal) in self.topics {
-            let topic_ref_wire = topic_ref_internal.to_wire();
+            let topic_ref_wire = topic_ref_internal.to_wire(use_rel.clone());
             topics.insert(topic_name, topic_ref_wire);
         }
         TopicsIndexWire {
@@ -73,10 +73,10 @@ pub struct TopicRefInternal {
 }
 
 impl TopicRefInternal {
-    pub fn to_wire(&self) -> TopicRefWire {
+    pub fn to_wire(&self, use_rel: Option<String>) -> TopicRefWire {
         let mut reachability = Vec::new();
         for topic_reachability_internal in &self.reachability {
-            let topic_reachability_wire = topic_reachability_internal.to_wire();
+            let topic_reachability_wire = topic_reachability_internal.to_wire(use_rel.clone());
             reachability.push(topic_reachability_wire);
         }
         TopicRefWire {
@@ -248,9 +248,20 @@ pub struct TopicReachabilityWire {
 }
 
 impl TopicReachabilityInternal {
-    pub fn to_wire(&self) -> TopicReachabilityWire {
+    pub fn to_wire(&self, use_rel: Option<String>) -> TopicReachabilityWire {
+        let con = match use_rel {
+            None => self.con.clone(),
+            Some(use_patch) => match &self.con {
+                TypeOfConnection::TCP(_) => self.con.clone(),
+                TypeOfConnection::UNIX(_) => self.con.clone(),
+                TypeOfConnection::Relative(_, query) => {
+                    TypeOfConnection::Relative(use_patch.clone(), query.clone())
+                }
+            },
+        };
+
         TopicReachabilityWire {
-            url: self.con.to_string(),
+            url: con.to_string(),
             answering: self.answering.clone(),
             forwarders: self.forwarders.clone(),
             benchmark: self.benchmark.clone(),

@@ -28,8 +28,7 @@ use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use warp::http::header;
 use warp::hyper::Body;
 use warp::path::end as endbar;
-use warp::reply::{with_status, Response};
-
+use warp::reply::Response;
 use warp::{Filter, Rejection, Reply};
 
 #[cfg(target_os = "linux")]
@@ -37,12 +36,16 @@ use getaddrs::InterfaceAddrs;
 
 use crate::constants::*;
 use crate::logs::get_id_string;
+use crate::master::{handle_websocket_generic2, serve_master};
 use crate::object_queues::*;
 use crate::server_state::*;
 use crate::static_files::{serve_static_file, STATIC_FILES};
 use crate::structures::*;
 use crate::types::*;
+use crate::utils::divide_in_components;
 use crate::{serve_static_file2, serve_static_file_empty};
+
+pub type HandlersResponse = Result<http::Response<hyper::Body>, Rejection>;
 
 pub struct DTPSServer {
     pub listen_address: Option<SocketAddr>,
@@ -84,6 +87,12 @@ impl DTPSServer {
         let clone_access = warp::any().map(move || server_state_access.clone());
 
         // let static_route = warp::path("static").and(warp::fs::dir(dir_to_pathbuf(STATIC_FILES)));
+        let master_route = warp::path::full()
+            .and(warp::query::<HashMap<String, String>>())
+            .and(clone_access.clone())
+            .and(warp::header::headers_cloned())
+            .and_then(serve_master);
+
         let static_route = warp::path("static")
             .and(warp::path::tail())
             .and_then(serve_static_file);
@@ -161,7 +170,44 @@ impl DTPSServer {
                 }
             });
 
-        let the_routes = static_route
+        let topic_generic_events_route2 = warp::path::full()
+            .and_then(|path: warp::path::FullPath| async move {
+                let path1 = path.as_str();
+                let segments: Vec<String> = divide_in_components(path1, '/');
+                let last = segments.last();
+                if last == Some(&"events".to_string()) {
+                    debug!("topic_generic_events_route2: path={} OK ", path.as_str());
+                    Ok(path)
+                } else {
+                    debug!(
+                        "topic_generic_events_route2: path={} NOT MATCH {:?}",
+                        path.as_str(),
+                        last
+                    );
+                    Err(warp::reject::not_found())
+                }
+            })
+            .and(clone_access.clone())
+            .and(warp::query::<EventsQuery>())
+            .and(warp::ws())
+            .map({
+                move |path: warp::path::FullPath,
+                      state1: Arc<Mutex<ServerState>>,
+                      q: EventsQuery,
+                      ws: warp::ws::Ws| {
+                    let send_data = match q.send_data {
+                        Some(x) => x != 0,
+                        None => false,
+                    };
+                    ws.on_upgrade(move |socket| {
+                        handle_websocket_generic2(path, socket, state1, send_data)
+                    })
+                }
+            });
+
+        let the_routes = topic_generic_events_route2
+            .or(master_route)
+            .or(static_route)
             .or(static_route_empty)
             .or(static_route2)
             .or(topic_generic_events_route)
@@ -179,9 +225,24 @@ impl DTPSServer {
             {
                 let mut s = self.mutex.lock().await;
 
-                s.add_advertise_url(&address.to_string());
+                let s1 = format!("http://localhost:{}{}", address.port(), "/");
+                s.add_advertise_url(&s1);
 
-                get_other_addresses();
+                let s2 = address.to_string().clone();
+                if !s2.contains("0.0.0.0") {
+                    s.add_advertise_url(&s2);
+                }
+
+                for host in get_other_addresses() {
+                    let x = format!("http://{}:{}{}", host, address.port(), "/");
+                    s.add_advertise_url(&x);
+                }
+
+                use gethostname::gethostname;
+                let hostname = gethostname();
+                let hostname = hostname.to_string_lossy();
+                let x = format!("http://{}:{}{}", hostname, address.port(), "/");
+                s.add_advertise_url(&x);
             }
 
             handles.push(tokio::spawn(tcp_server));
@@ -339,7 +400,7 @@ async fn check_exists(
     }
 }
 
-fn get_accept_header(headers: &HeaderMap) -> Vec<String> {
+pub fn get_accept_header(headers: &HeaderMap) -> Vec<String> {
     let accept_header = headers.get("accept");
     match accept_header {
         Some(x) => {
@@ -354,10 +415,10 @@ fn get_accept_header(headers: &HeaderMap) -> Vec<String> {
     }
 }
 
-async fn root_handler(
+pub async fn root_handler(
     ss_mutex: Arc<Mutex<ServerState>>,
     headers: HeaderMap,
-) -> Result<impl Reply, Rejection> {
+) -> HandlersResponse {
     let ss = ss_mutex.lock().await;
     let index = topics_index(&ss);
 
@@ -407,13 +468,15 @@ async fn root_handler(
             }}}
         };
         let markup = x.into_string();
-        let mut resp = Response::new(Body::from(markup));
+        let body = Body::from(markup);
+        let mut resp = Response::new(body);
         let headers = resp.headers_mut();
 
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
 
         put_alternative_locations(&ss, headers, "");
-        Ok(with_status(resp, StatusCode::OK))
+
+        Ok(resp)
     } else {
         let data_bytes = serde_cbor::to_vec(&index).unwrap();
 
@@ -428,7 +491,7 @@ async fn root_handler(
         put_common_headers(&ss, headers);
         put_alternative_locations(&ss, headers, "");
 
-        Ok(with_status(resp, StatusCode::OK))
+        Ok(resp)
     }
 }
 
@@ -445,10 +508,10 @@ pub struct ChannelInfoDesc {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelInfo {
-    queue_created: i64,
-    num_total: usize,
-    newest: Option<ChannelInfoDesc>,
-    oldest: Option<ChannelInfoDesc>,
+    pub queue_created: i64,
+    pub num_total: usize,
+    pub newest: Option<ChannelInfoDesc>,
+    pub oldest: Option<ChannelInfoDesc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -457,7 +520,7 @@ pub enum MsgServerToClient {
     ChannelInfo(ChannelInfo),
 }
 
-async fn handle_websocket_generic(
+pub async fn handle_websocket_generic(
     ws: warp::ws::WebSocket,
     state: Arc<Mutex<ServerState>>,
     topic_name: String,
@@ -649,7 +712,7 @@ pub fn topics_index(ss: &ServerState) -> TopicsIndexWire {
     let mut topics: HashMap<TopicName, TopicRefWire> = hashmap! {};
 
     for (topic_name, oq) in ss.oqs.iter() {
-        topics.insert(topic_name.clone(), oq.tr.to_wire());
+        topics.insert(topic_name.clone(), oq.tr.to_wire(None));
     }
 
     let topics_index = TopicsIndexWire {
@@ -845,7 +908,7 @@ const JAVASCRIPT_SEND: &str = r##"
 
 "##;
 
-async fn handler_topic_generic(
+pub async fn handler_topic_generic(
     topic_name: String,
     ss_mutex: Arc<Mutex<ServerState>>,
     headers: HeaderMap,
@@ -1135,18 +1198,31 @@ fn get_other_addresses() -> Vec<String> {
     println!("You are running Linux!");
 
     let addrs = InterfaceAddrs::query_system().expect("System has no network interfaces.");
-
+    // debug!("Found {} network interfaces", addrs.len());
+    let mut ret = Vec::new();
+    ret.push("localhost".to_string());
     for addr in addrs {
+        if let Some(ipv4_addr) = addr.address {
+            debug!("{}: {:?}", addr.name, ipv4_addr);
+            ret.push(ipv4_addr.to_string());
+        }
+        // if let Some(addr2) = addr.ipv6() {
+        //     debug!("{}: {:?}", addr.name, addr2);
+        //     ret.push(addr2.to_string());
+        // }
+
         debug!("{}: {:?}", addr.name, addr.address);
     }
     debug!("You are running Linux - using other addresses");
-    return Vec::new();
+    ret
 }
 
 #[cfg(not(target_os = "linux"))]
 fn get_other_addresses() -> Vec<String> {
     debug!("You are not running Linux - ignoring other addresses");
-    return Vec::new();
+    let mut ret = Vec::new();
+    ret.push("localhost".to_string());
+    ret
 }
 
 async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: f32) {

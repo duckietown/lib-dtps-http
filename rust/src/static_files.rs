@@ -6,6 +6,7 @@ use maud::{html, DOCTYPE};
 use mime_guess::from_path;
 use warp::{Rejection, Reply};
 // use warp::reply::Response;
+use crate::HandlersResponse;
 use http::Response;
 
 // Embed the static directory into the crate
@@ -61,7 +62,7 @@ pub async fn reply_for_dir(path: &str) -> Result<Response<Body>, Rejection> {
     Ok(resp)
 }
 
-pub async fn serve_static_file_path(path: &str) -> Result<Response<Body>, Rejection> {
+pub async fn serve_static_file_path(path: &str) -> HandlersResponse {
     if path == "" {
         return reply_for_dir(path).await;
     }

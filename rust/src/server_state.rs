@@ -16,13 +16,17 @@ pub struct LogEntry {
     pub level: String,
     pub msg: String,
 }
-
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ForwardInfo {
+    url: String,
+}
 #[derive(Debug)]
 pub struct ServerState {
     pub node_started: i64,
     pub node_app_data: HashMap<String, Vec<u8>>,
     pub node_id: String,
     pub oqs: HashMap<TopicName, ObjectQueue>,
+    pub forwards: HashMap<TopicName, ForwardInfo>,
     advertise_urls: Vec<String>,
 }
 
@@ -41,6 +45,7 @@ impl ServerState {
             node_started,
             node_app_data,
             oqs,
+            forwards: HashMap::new(),
             advertise_urls: vec![],
         };
         ss.new_topic(TOPIC_LIST_CLOCK, None);
@@ -51,6 +56,9 @@ impl ServerState {
     }
 
     pub fn add_advertise_url(&mut self, url: &str) {
+        if self.advertise_urls.contains(&url.to_string()) {
+            return;
+        }
         self.advertise_urls.push(url.to_string());
         self.publish_object_as_json(TOPIC_LIST_AVAILABILITY, &self.advertise_urls.clone(), None);
     }
@@ -60,7 +68,7 @@ impl ServerState {
     pub fn log_message(&mut self, msg: String, level: &str) {
         let log_entry = LogEntry {
             level: level.to_string(),
-            msg: msg,
+            msg,
         };
         self.publish_object_as_json(TOPIC_LOGS, &log_entry, None);
     }
