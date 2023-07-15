@@ -41,6 +41,19 @@ impl TypeOfConnection {
     }
 }
 
+pub fn join_con(a: &str, b: &TypeOfConnection) -> Result<TypeOfConnection, Box<dyn error::Error>> {
+    match b {
+        TCP(_) => Ok(b.clone()),
+        UNIX(_) => Ok(b.clone()),
+        Relative(path2, query2) => {
+            let (path3, query3) = join_path(a, path2.as_str());
+            Ok(Relative(path3, query2.clone()))
+        }
+
+        TypeOfConnection::Same() => Ok(Relative(a.to_string(), None)),
+    }
+}
+
 pub fn join_ext(
     conbase: &TypeOfConnection,
     s: &str,

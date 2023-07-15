@@ -3,18 +3,23 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
 
-use crate::signals_logic::TopicProperties;
+use crate::join_con;
 use derive_more::Constructor;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::signals_logic::TopicProperties;
 use crate::urls::join_ext;
+use crate::utils::{divide_in_components, get_good_url_for_components};
+
+pub type NodeAppData = String;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TopicsIndexWire {
     pub node_id: String,
     pub node_started: i64,
-    pub node_app_data: HashMap<String, Vec<u8>>,
+
+    pub node_app_data: HashMap<String, NodeAppData>,
     pub topics: HashMap<String, TopicRefWire>,
 }
 
@@ -22,7 +27,7 @@ pub struct TopicsIndexWire {
 pub struct TopicsIndexInternal {
     pub node_id: String,
     pub node_started: i64,
-    pub node_app_data: HashMap<String, Vec<u8>>,
+    pub node_app_data: HashMap<String, NodeAppData>,
     pub topics: HashMap<String, TopicRefInternal>,
 }
 
@@ -53,13 +58,36 @@ impl TopicsIndexInternal {
             topics,
         }
     }
+
+    pub fn add_path(&self, rel: &str) -> Self {
+        let mut topics = HashMap::new();
+        for (topic_name, topic_ref_internal) in &self.topics {
+            let t = topic_ref_internal.add_path(rel);
+            topics.insert(topic_name, t);
+        }
+        return Self {
+            node_id: self.node_id.clone(),
+            node_started: self.node_started,
+            node_app_data: Default::default(),
+            topics: Default::default(),
+        };
+        // let mut topic_ref_internal = TopicRefInternal::new();
+        // topic_ref_internal.add_path(rel);
+        // topics.insert("path".to_string(), topic_ref_internal);
+        // TopicsIndexInternal {
+        //     node_id: "path".to_string(),
+        //     node_started: 0,
+        //     node_app_data: HashMap::new(),
+        //     topics,
+        // }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TopicRefWire {
     pub unique_id: String,
     pub origin_node: String,
-    pub app_data: HashMap<String, Vec<u8>>,
+    pub app_data: HashMap<String, NodeAppData>,
     pub reachability: Vec<TopicReachabilityWire>,
     pub created: i64,
     pub properties: TopicProperties,
@@ -69,7 +97,7 @@ pub struct TopicRefWire {
 pub struct TopicRefInternal {
     pub unique_id: String,
     pub origin_node: String,
-    pub app_data: HashMap<String, Vec<u8>>,
+    pub app_data: HashMap<String, NodeAppData>,
     pub reachability: Vec<TopicReachabilityInternal>,
     pub created: i64,
     pub properties: TopicProperties,
@@ -106,6 +134,21 @@ impl TopicRefInternal {
             reachability,
             properties: wire.properties.clone(),
         }
+    }
+    pub fn add_path(&self, rel: &str) -> Self {
+        let mut reachability = Vec::new();
+        for topic_reachability_internal in &self.reachability {
+            let t = topic_reachability_internal.add_path(rel);
+            reachability.push(t);
+        }
+        return Self {
+            unique_id: self.unique_id.clone(),
+            origin_node: self.origin_node.clone(),
+            app_data: Default::default(),
+            created: self.created,
+            reachability,
+            properties: self.properties.clone(),
+        };
     }
 }
 
@@ -195,7 +238,8 @@ pub enum TypeOfConnection {
     /// b
     UNIX(UnixCon),
     /// c
-    Relative(String, Option<String>), // path, query
+    Relative(String, Option<String>),
+    // path, query
     Same(), // path, query
 }
 
@@ -286,6 +330,14 @@ impl TopicReachabilityInternal {
             benchmark: wire.benchmark.clone(),
         }
     }
+    pub fn add_path(&self, rel: &str) -> Self {
+        TopicReachabilityInternal {
+            con: join_con(rel, &self.con).unwrap(),
+            answering: self.answering.clone(),
+            forwarders: self.forwarders.clone(),
+            benchmark: self.benchmark.clone(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -364,4 +416,23 @@ pub struct FoundMetadata {
     pub events_url: Option<TypeOfConnection>,
     pub events_data_inline_url: Option<TypeOfConnection>,
     pub latency_ns: u128, // nanoseconds
+}
+
+pub fn get_url_from_topic_name(topic_name: &str) -> String {
+    let components = divide_in_components(topic_name, '.');
+    make_rel_url(&components)
+
+    // let as_url = get_good_url_for_components(&components);
+    // as_url
+}
+// let components = divide_in_components(topic_name, '.');
+//                 let as_url = get_good_url_for_components(&components);
+
+pub fn make_rel_url(a: &Vec<String>) -> String {
+    let mut url = String::new();
+    for c in a {
+        url.push_str(&c);
+        url.push_str("/");
+    }
+    url
 }

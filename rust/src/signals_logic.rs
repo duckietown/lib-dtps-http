@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+use async_recursion::async_recursion;
 use async_trait::async_trait;
+use bytes::Bytes;
+use log::debug;
 use maplit::hashmap;
 use serde::{Deserialize, Serialize};
 use serde_cbor::Value as CBORValue;
@@ -12,8 +15,11 @@ use tokio::sync::Mutex;
 
 use crate::cbor_manipulation::{get_as_cbor, get_inside};
 use crate::signals_logic::ResolvedData::{NotAvailableYet, NotFound, Regular};
-use crate::utils::{divide_in_components, is_prefix_of};
-use crate::{RawData, ServerState};
+use crate::utils::{divide_in_components, is_prefix_of, vec_concat};
+use crate::{
+    make_rel_url, topics_index, RawData, ServerState, TopicName, TopicRefInternal,
+    TopicsIndexInternal, CONTENT_TYPE_DTPS_INDEX_CBOR,
+};
 
 #[derive(Debug, Clone)]
 pub enum Transforms {
@@ -55,10 +61,11 @@ impl DataProps for SourceComposition {
 #[derive(Debug, Clone)]
 pub enum TypeOFSource {
     ForwardedQueue(String),
-    OurQueue(String, TopicProperties),
+    OurQueue(String, Vec<String>, TopicProperties),
     Compose(SourceComposition),
     Transformed(Box<TypeOFSource>, Transforms),
     Digest(String, String),
+    Deref(SourceComposition),
 }
 
 // #[derive(Debug, Clone)]
@@ -90,6 +97,14 @@ pub trait ResolveDataSingle {
     ) -> Result<ResolvedData, String>;
 }
 
+#[async_trait]
+pub trait GetMeta {
+    async fn get_meta_index(
+        &self,
+        ss_mutex: Arc<Mutex<ServerState>>,
+    ) -> Result<TopicsIndexInternal, String>;
+}
+
 pub trait DataProps {
     fn get_properties(&self) -> TopicProperties;
 }
@@ -118,12 +133,40 @@ impl ResolveDataSingle for TypeOFSource {
             TypeOFSource::ForwardedQueue(q) => {
                 todo!()
             }
-            TypeOFSource::OurQueue(q, _) => our_queue(q, ss_mutex).await,
-            TypeOFSource::Compose(sc) => single_compose(sc, ss_mutex).await,
+            TypeOFSource::OurQueue(q, _, _) => {
+                if q == &"" {
+                    let ss = ss_mutex.lock().await;
+                    let index_internal = topics_index(&ss);
+                    let index = index_internal.to_wire(None);
+
+                    let cbor_bytes = serde_cbor::to_vec(&index).unwrap();
+                    let raw_data = RawData {
+                        content: Bytes::from(cbor_bytes),
+                        content_type: CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(),
+                    };
+                    Ok(ResolvedData::RawData(raw_data))
+                } else {
+                    our_queue(q, ss_mutex).await
+                }
+            }
+            TypeOFSource::Compose(sc) => {
+                let index = self.get_meta_index(ss_mutex).await?;
+                // debug!("Compose index intenral:\n {:#?}", index);
+                let to_wire = index.to_wire(None);
+
+                // convert to cbor
+                let cbor_bytes = serde_cbor::to_vec(&to_wire).unwrap();
+                let raw_data = RawData {
+                    content: Bytes::from(cbor_bytes),
+                    content_type: CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(),
+                };
+                Ok(ResolvedData::RawData(raw_data))
+            }
             TypeOFSource::Transformed(source, transforms) => {
                 let data = source.resolve_data_single(ss_mutex.clone()).await?;
                 transform(data, transforms).await
             }
+            TypeOFSource::Deref(sc) => single_compose(sc, ss_mutex).await,
         }
     }
 }
@@ -140,10 +183,11 @@ impl DataProps for TypeOFSource {
             TypeOFSource::ForwardedQueue(_) => {
                 todo!()
             }
-            TypeOFSource::OurQueue(_, props) => props.clone(),
+            TypeOFSource::OurQueue(_, _, props) => props.clone(),
 
             TypeOFSource::Compose(sc) => sc.get_properties(),
             TypeOFSource::Transformed(s, _) => s.get_properties(),
+            TypeOFSource::Deref(d) => d.get_properties(),
         }
     }
 }
@@ -196,6 +240,141 @@ async fn our_queue(
             Ok(ResolvedData::RawData(raw_data))
         }
     };
+}
+
+#[async_trait]
+impl GetMeta for TypeOFSource {
+    async fn get_meta_index(
+        &self,
+        ss_mutex: Arc<Mutex<ServerState>>,
+    ) -> Result<TopicsIndexInternal, String> {
+        debug!("get_meta_index: {:?}", self);
+        return match self {
+            TypeOFSource::ForwardedQueue(_) => {
+                todo!()
+            }
+            TypeOFSource::OurQueue(topic_name, _, _) => {
+                let ss = ss_mutex.lock().await;
+                let oq = ss.oqs.get(topic_name).unwrap();
+                let tr0 = &oq.tr; //.to_wire(Some("".to_string()));
+                                  // let components = divide_in_components(topic_name, '.');
+                                  // let as_url = make_rel_url(rel_index);
+                                  // let tr1 = tr0.add_path(&as_url);
+                                  // let tr1 = TopicRefInternal {
+                                  //     unique_id: tr0.unique_id.clone(),
+                                  //     origin_node: tr0.origin_node.clone(),
+                                  //     app_data: tr0.app_data.clone(),
+                                  //     reachability: vec![],
+                                  //     created: 0,
+                                  //     properties: tr0.properties.clone(),
+                                  // };
+
+                let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
+                topics.insert("".to_string(), tr0.clone());
+                let index = TopicsIndexInternal {
+                    node_id: "".to_string(),
+                    node_started: 0,
+                    node_app_data: Default::default(),
+                    topics,
+                };
+                Ok(index)
+            }
+            TypeOFSource::Compose(sc) => get_sc_meta(sc, ss_mutex).await,
+            TypeOFSource::Transformed(_, _) => {
+                todo!()
+            }
+            TypeOFSource::Digest(_, _) => {
+                todo!()
+            }
+            TypeOFSource::Deref(_) => {
+                todo!()
+            }
+        };
+    }
+}
+
+async fn get_sc_meta(
+    sc: &SourceComposition,
+    ss_mutex: Arc<Mutex<ServerState>>,
+) -> Result<TopicsIndexInternal, String> {
+    // debug!("get_sc_meta: START: {:?}", sc);
+    let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
+    let mut node_app_data = HashMap::new();
+
+    let mut debug_s = String::new();
+    for (prefix, inside) in sc.compose.iter() {
+        // let inside = inside.resolve_data_single(ss_mutex.clone()).await?;
+        // let inside = match inside {
+        //     ResolvedData::Regular(d) => d,
+        //     _ => return Err(format!("Error getting inside")),
+        // };
+        // let inside = match inside {
+        //     CBORValue::Map(m) => m,
+        //     _ => return Err(format!("Error getting inside")),
+        // };
+        // for (topic_name, p1, prefix) in inside {
+        //     let oq = ss.oqs.get(&topic_name).unwrap();
+        //     let rel = prefix.join("/");
+        //
+        //     let rurl = format!("{}/", rel);
+        //
+        //     let dotsep = prefix.join(".");
+        //     topics.insert(dotsep, oq.tr.to_wire(Some(rurl)));
+        // }
+        // let rel = prefix.join("/");
+
+        // let rurl = format!("{}/", rel);
+        // let s = format!("get_sc_meta: prefix: {:?}, rurl: {}\n inside {:#?}", prefix, rurl,
+        //                 inside);
+        // debug_s.push_str(&s);
+        let x = inside.get_meta_index(ss_mutex.clone()).await?;
+        // let inside = ts.get_meta_index(ss_mutex.clone()).await?;
+
+        // debug!("get_sc_meta: {:#?} inside: {:#?}", prefix, x);
+
+        // let dotsep = prefix.join(".");
+
+        for (a, b) in x.topics {
+            let its = divide_in_components(&a, '.');
+            let full: Vec<String> = vec_concat(&prefix, &its);
+
+            let rurl = make_rel_url(&prefix);
+            let b2 = b.add_path(&rurl);
+
+            let dotsep = full.join(".");
+            topics.insert(dotsep, b2);
+        }
+
+        // topics.insert(dotsep, oq.tr.to_wire(Some(rurl)));
+    }
+    // for (topic_name, p1, prefix) in subtopics {
+    //     let oq = ss.oqs.get(&topic_name).unwrap();
+    //     let rel = prefix.join("/");
+    //
+    //     let rurl = format!("{}/", rel);
+    //
+    //     let dotsep = prefix.join(".");
+    //     topics.insert(dotsep, oq.tr.to_wire(Some(rurl)));
+    // }
+
+    node_app_data.insert("debug".to_string(), debug_s);
+    let ss = ss_mutex.lock().await;
+
+    let index = TopicsIndexInternal {
+        node_id: ss.node_id.clone(),
+        node_started: ss.node_started,
+        node_app_data,
+        topics,
+    };
+    //
+    // return topics_index;
+    //
+    //     let index = topics_index(&ss);
+    //     let cbor_bytes = serde_cbor::to_vec(&index).unwrap();
+    //     cbor_bytes
+    //
+    //     debug!("get_sc_meta: END: {:#?}", index);
+    Ok(index)
 }
 
 async fn single_compose(
@@ -258,23 +437,58 @@ async fn single_compose(
     Ok(Regular(result_dict))
 }
 
+#[async_recursion]
 pub async fn interpret_path(
     path_components: &Vec<String>,
     ss_mutex: Arc<Mutex<ServerState>>,
 ) -> Result<TypeOFSource, String> {
     if path_components.contains(&"!".to_string()) {
-        return Err(format!(
+        let res = Err(format!(
             "interpret_path: Cannot have ! in path: {:?}",
             path_components
         ));
+        return res;
     }
+    let deref: String = ":deref".to_string();
+    if path_components.contains(&deref) {
+        let i = path_components.iter().position(|x| x == &deref).unwrap();
+        let before = path_components.get(0..i).unwrap().to_vec();
+        let after = path_components.get(i + 1..).unwrap().to_vec();
+        debug!("interpret_path: before: {:?} after: {:?}", before, after);
+        if after.len() > 0 {
+            todo!("interpret_path: after.len() > 0");
+        }
+        let interpret_before = interpret_path(&before, ss_mutex.clone()).await?;
+
+        return match interpret_before {
+            TypeOFSource::Compose(sc) => Ok(TypeOFSource::Deref(sc)),
+            _ => Err(format!(
+                "interpret_path: deref: before is not Compose: {:?}",
+                interpret_before
+            )),
+        };
+    }
+
     if path_components.len() == 0 {
         let ss = ss_mutex.lock().await;
-        let q = ss.oqs.get("").unwrap();
-        return Ok(TypeOFSource::OurQueue(
-            "".to_string(),
-            q.tr.properties.clone(),
-        ));
+        // let q = ss.oqs.get("").unwrap();
+        let mut topics = hashmap! {};
+        for (topic_name, oq) in &ss.oqs {
+            if topic_name == "" {
+                continue;
+            }
+            let prefix = divide_in_components(&topic_name, '.');
+            // let rurl = make_rel_url(&prefix.clone());
+            let val = TypeOFSource::OurQueue(
+                topic_name.clone(),
+                prefix.clone(),
+                oq.tr.properties.clone(),
+            );
+
+            topics.insert(prefix.clone(), Box::new(val));
+        }
+        let sc0 = TypeOFSource::Compose(SourceComposition { compose: topics });
+        return Ok(sc0);
     }
 
     if path_components.len() > 1 {
@@ -316,10 +530,10 @@ pub async fn interpret_path(
 
         match is_prefix_of(&topic_components, &path_components) {
             None => {}
-            Some((_, rest)) => {
+            Some((p1, rest)) => {
                 let ss = ss_mutex.lock().await;
                 let oq = ss.oqs.get(k).unwrap();
-                let source_type = TypeOFSource::OurQueue(k.clone(), oq.tr.properties.clone());
+                let source_type = TypeOFSource::OurQueue(k.clone(), p1, oq.tr.properties.clone());
                 return if rest.len() == 0 {
                     Ok(source_type)
                 } else {
@@ -355,9 +569,9 @@ pub async fn interpret_path(
         compose: hashmap! {},
     };
     let ss = ss_mutex.lock().await;
-    for (topic_name, _, rest) in subtopics {
+    for (topic_name, p1, rest) in subtopics {
         let oq = ss.oqs.get(&topic_name).unwrap();
-        let source_type = TypeOFSource::OurQueue(topic_name.clone(), oq.tr.properties.clone());
+        let source_type = TypeOFSource::OurQueue(topic_name.clone(), p1, oq.tr.properties.clone());
         sc.compose.insert(rest.clone(), Box::new(source_type));
     }
 

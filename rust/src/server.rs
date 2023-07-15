@@ -38,7 +38,7 @@ use crate::constants::*;
 use crate::html_utils::make_html;
 use crate::logs::get_id_string;
 use crate::master::{
-    handle_websocket_generic2, serve_master, serve_master_HEAD, serve_master_POST,
+    handle_websocket_generic2, serve_master_get, serve_master_head, serve_master_post,
 };
 use crate::object_queues::*;
 use crate::server_state::*;
@@ -96,21 +96,21 @@ impl DTPSServer {
             .and(warp::query::<HashMap<String, String>>())
             .and(clone_access.clone())
             .and(warp::header::headers_cloned())
-            .and_then(serve_master);
+            .and_then(serve_master_get);
 
         let master_route_post = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
             .and(warp::post())
             .and(clone_access.clone())
             .and(warp::header::headers_cloned())
-            .and_then(serve_master_POST);
+            .and_then(serve_master_post);
 
         let master_route_head = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
             .and(warp::head())
             .and(clone_access.clone())
             .and(warp::header::headers_cloned())
-            .and_then(serve_master_HEAD);
+            .and_then(serve_master_head);
 
         // let static_route = warp::path("static")
         //     .and(warp::path::tail())
@@ -129,33 +129,33 @@ impl DTPSServer {
         // log::info!(" {:?}", STATIC_FILES);
 
         // root GET /
-        let root_route = endbar()
-            .and(clone_access.clone())
-            .and(warp::header::headers_cloned())
-            .and_then(root_handler);
+        // let root_route = endbar()
+        //     .and(clone_access.clone())
+        //     .and(warp::header::headers_cloned())
+        //     .and_then(root_handler);
 
         let topic_address = warp::path!("topics" / String).and(endbar());
 
         // GEt request
-        let topic_generic_route_get = topic_address
-            .and(warp::get())
-            .and(clone_access.clone())
-            .and(warp::header::headers_cloned())
-            .and_then(handler_topic_generic);
+        // let topic_generic_route_get = topic_address
+        //     .and(warp::get())
+        //     .and(clone_access.clone())
+        //     .and(warp::header::headers_cloned())
+        //     .and_then(handler_topic_generic);
 
         // HEAD request
-        let topic_generic_route_head = topic_address
-            .and(warp::head())
-            .and(clone_access.clone())
-            .and_then(handler_topic_generic_head);
+        // let topic_generic_route_head = topic_address
+        //     .and(warp::head())
+        //     .and(clone_access.clone())
+        //     .and_then(handler_topic_generic_head);
 
         // POST request
-        let topic_post = topic_address
-            .and(warp::post())
-            .and(clone_access.clone())
-            .and(warp::header::headers_cloned())
-            .and(warp::body::bytes())
-            .and_then(handle_topic_post);
+        // let topic_post = topic_address
+        //     .and(warp::post())
+        //     .and(clone_access.clone())
+        //     .and(warp::header::headers_cloned())
+        //     .and(warp::body::bytes())
+        //     .and_then(handle_topic_post);
 
         // GET request for data
         // let topic_generic_route_data = warp::get()
@@ -166,28 +166,28 @@ impl DTPSServer {
         //     .and_then(handler_topic_generic_data);
 
         // websockets for events
-        let topic_generic_events_route = warp::path!("topics" / String / "events")
-            .and(endbar())
-            .and(clone_access.clone())
-            .and_then(check_exists)
-            .and(warp::query::<EventsQuery>())
-            .and(warp::ws())
-            .and(clone_access.clone())
-            // .and_then(handle_websocket_generic_pre);
-            .map({
-                move |c: String,
-                      q: EventsQuery,
-                      ws: warp::ws::Ws,
-                      state1: Arc<Mutex<ServerState>>| {
-                    let send_data = match q.send_data {
-                        Some(x) => x != 0,
-                        None => false,
-                    };
-                    ws.on_upgrade(move |socket| {
-                        handle_websocket_generic(socket, state1, c, send_data)
-                    })
-                }
-            });
+        // let topic_generic_events_route = warp::path!("topics" / String / "events")
+        //     .and(endbar())
+        //     .and(clone_access.clone())
+        //     .and_then(check_exists)
+        //     .and(warp::query::<EventsQuery>())
+        //     .and(warp::ws())
+        //     .and(clone_access.clone())
+        //     // .and_then(handle_websocket_generic_pre);
+        //     .map({
+        //         move |c: String,
+        //               q: EventsQuery,
+        //               ws: warp::ws::Ws,
+        //               state1: Arc<Mutex<ServerState>>| {
+        //             let send_data = match q.send_data {
+        //                 Some(x) => x != 0,
+        //                 None => false,
+        //             };
+        //             ws.on_upgrade(move |socket| {
+        //                 handle_websocket_generic(socket, state1, c, send_data)
+        //             })
+        //         }
+        //     });
 
         let topic_generic_events_route2 = warp::path::full()
             .and_then(|path: warp::path::FullPath| async move {
@@ -442,7 +442,8 @@ pub async fn root_handler(
     headers: HeaderMap,
 ) -> HandlersResponse {
     let ss = ss_mutex.lock().await;
-    let index = topics_index(&ss);
+    let index_internal = topics_index(&ss);
+    let index = index_internal.to_wire(None);
 
     let accept_headers: Vec<String> = get_accept_header(&headers);
 
@@ -617,7 +618,7 @@ pub async fn handle_websocket_generic(
     let state2_for_receive = state.clone();
     let topic_name2 = topic_name.clone();
 
-    tokio::spawn(async move {
+    spawn(async move {
         let topic_name = topic_name2.clone();
         loop {
             match ws_rx.next().await {
@@ -730,14 +731,16 @@ pub async fn handle_websocket_generic(
     // debug!("handle_websocket_generic: {} - done", topic_name);
 }
 
-pub fn topics_index(ss: &ServerState) -> TopicsIndexWire {
-    let mut topics: HashMap<TopicName, TopicRefWire> = hashmap! {};
+pub fn topics_index(ss: &ServerState) -> TopicsIndexInternal {
+    let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
 
     for (topic_name, oq) in ss.oqs.iter() {
-        topics.insert(topic_name.clone(), oq.tr.to_wire(None));
+        let url = get_url_from_topic_name(topic_name);
+        let tr = oq.tr.add_path(&url);
+        topics.insert(topic_name.clone(), tr);
     }
 
-    let topics_index = TopicsIndexWire {
+    let topics_index = TopicsIndexInternal {
         node_id: ss.node_id.clone(),
         node_started: ss.node_started,
         node_app_data: ss.node_app_data.clone(),

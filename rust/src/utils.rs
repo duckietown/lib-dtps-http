@@ -28,6 +28,11 @@ pub fn get_good_url_for_components(components: &Vec<String>) -> String {
     }
     url
 }
+pub fn vec_concat<T: Clone>(a: &Vec<T>, b: &Vec<T>) -> Vec<T> {
+    let mut c = a.clone();
+    c.extend(b.iter().cloned());
+    c
+}
 pub fn is_prefix_of<'a>(
     a: &'a Vec<String>,
     b: &'a Vec<String>,

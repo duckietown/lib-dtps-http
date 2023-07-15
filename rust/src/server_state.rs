@@ -28,7 +28,7 @@ pub struct ForwardInfo {
 #[derive(Debug)]
 pub struct ServerState {
     pub node_started: i64,
-    pub node_app_data: HashMap<String, Vec<u8>>,
+    pub node_app_data: HashMap<String, NodeAppData>,
     pub node_id: String,
     pub oqs: HashMap<TopicName, ObjectQueue>,
     pub forwards: HashMap<TopicName, ForwardInfo>,
@@ -37,7 +37,7 @@ pub struct ServerState {
 }
 
 impl ServerState {
-    pub fn new(node_app_data: Option<HashMap<String, Vec<u8>>>) -> Self {
+    pub fn new(node_app_data: Option<HashMap<String, NodeAppData>>) -> Self {
         let node_app_data = match node_app_data {
             Some(x) => x,
             None => HashMap::new(),
@@ -128,7 +128,7 @@ impl ServerState {
         self.log_message(msg, "warn");
     }
 
-    pub fn new_topic(&mut self, topic_name: &str, app_data: Option<HashMap<String, Vec<u8>>>) {
+    pub fn new_topic(&mut self, topic_name: &str, app_data: Option<HashMap<String, NodeAppData>>) {
         let topic_name = topic_name.to_string();
         let uuid = get_queue_id(&self.node_id, &topic_name);
         // let uuid = Uuid::new_v4();
@@ -149,7 +149,8 @@ impl ServerState {
             app_data,
             created: now,
             reachability: vec![TopicReachabilityInternal {
-                con: Relative(format!("{}/", topic_name), None),
+                con: Same(),
+                // con: Relative(format!("{}/", topic_name), None),
                 answering: self.node_id.clone(),
                 forwarders: vec![],
                 benchmark: link_benchmark,
@@ -170,7 +171,8 @@ impl ServerState {
             topics.push(topic_name.clone());
         }
 
-        let index = topics_index(self);
+        let index_internal = topics_index(self);
+        let index = index_internal.to_wire(None);
         self.publish_object_as_cbor("", &index, None);
 
         self.publish_object_as_json(TOPIC_LIST_NAME, &topics.clone(), None);

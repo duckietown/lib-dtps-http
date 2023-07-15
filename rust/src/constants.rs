@@ -15,3 +15,25 @@ pub static TOPIC_LIST_AVAILABILITY: &'static str = "dtps.availability";
 
 pub static CONTENT_TYPE: &'static str = "content-type";
 pub static OCTET_STREAM: &'static str = "application/octet-stream";
+
+pub static VENDOR_PREFIX: &'static str = "application/vnd.dt.";
+pub static CONTENT_TYPE_DTPS_INDEX: &'static str = "application/vnd.dt.dtps-index";
+pub static CONTENT_TYPE_DTPS_INDEX_CBOR: &'static str = "application/vnd.dt.dtps-index+cbor";
+
+#[cfg(test)]
+
+mod test {
+    use super::*;
+    use log::debug;
+    use mime::Mime;
+
+    #[test]
+    fn test_mime_parsing() {
+        let content_type: Mime = CONTENT_TYPE_DTPS_INDEX_CBOR.parse().unwrap();
+        eprintln!("content_type: {:#?}", content_type);
+        // eprintln!("source: {:#?}", content_type.source());
+        eprintln!("type_: {:#?}", content_type.type_());
+        eprintln!("subtype: {:#?}", content_type.subtype());
+        eprintln!("suffix: {:#?}", content_type.suffix());
+    }
+}

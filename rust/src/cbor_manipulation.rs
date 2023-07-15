@@ -92,8 +92,25 @@ pub fn get_inside(
     return get_inside(new_context, &inside, &path);
 }
 
+fn identify_content_presentation(content_type: &str) -> Option<&'static str> {
+    if content_type.ends_with("cbor") {
+        return Some("application/cbor");
+    } else if content_type.ends_with("json") {
+        return Some("application/json");
+    } else if content_type.ends_with("yaml") {
+        return Some("application/yaml");
+    } else {
+        None
+    }
+}
+
 pub fn display_printable(content_type: &str, content: &[u8]) -> String {
-    match content_type {
+    let identified = identify_content_presentation(content_type);
+    if identified.is_none() {
+        return format!("Cannot display content type {}", content_type).to_string();
+    }
+
+    match identified.unwrap() {
         "application/yaml" => {
             let bytes: Vec<u8> = content.to_vec();
             String::from_utf8(bytes).unwrap().to_string()

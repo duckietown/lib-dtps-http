@@ -24,7 +24,7 @@ use crate::{
     HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
 };
 
-pub async fn serve_master_POST(
+pub async fn serve_master_post(
     path: warp::path::FullPath,
     query: HashMap<String, String>,
     ss_mutex: Arc<Mutex<ServerState>>,
@@ -33,7 +33,7 @@ pub async fn serve_master_POST(
     todo!()
 }
 
-pub async fn serve_master_HEAD(
+pub async fn serve_master_head(
     path: warp::path::FullPath,
     query: HashMap<String, String>,
     ss_mutex: Arc<Mutex<ServerState>>,
@@ -42,13 +42,13 @@ pub async fn serve_master_HEAD(
     todo!()
 }
 
-pub async fn serve_master(
+pub async fn serve_master_get(
     path: warp::path::FullPath,
     query: HashMap<String, String>,
     ss_mutex: Arc<Mutex<ServerState>>,
     headers: HeaderMap,
 ) -> HandlersResponse {
-    let mut path_str = path.as_str();
+    let path_str = path.as_str();
     let pat = "/!/";
 
     // if path_str.starts_with(pat)  {
@@ -71,9 +71,9 @@ pub async fn serve_master(
         // only preserve the part after the !/
 
         let index = path_str.rfind(pat).unwrap();
-        path_str = &path_str[index + pat.len() - 1..];
+        let path_str2 = &path_str[index + pat.len() - 1..];
 
-        let res = path_str.to_string().replace("/!!", "/!");
+        let res = path_str2.to_string().replace("/!!", "/!");
 
         debug!(
             "serve_master: normalizing /!/:\n   {:?}\n-> {:?} ",
@@ -84,8 +84,9 @@ pub async fn serve_master(
         path_str.to_string()
     };
 
-    // debug!("serve_master: path={:?} => {:?} ", path, new_path);
-
+    if path_str != new_path {
+        debug!("serve_master: path={:?} => {:?} ", path, new_path);
+    }
     return serve_master0(&new_path, query, ss_mutex, headers).await;
 }
 
@@ -105,7 +106,7 @@ pub async fn serve_master0(
     // get the components of the path
 
     let path_components0 = divide_in_components(path_str, '/');
-    let mut path_components = path_components0.clone();
+    let path_components = path_components0.clone();
     // // if there is a ! in the path_components, ignore all the PREVIOUS items
     // let bang = "!".to_string();
     // if path_components.contains(&bang) {
@@ -168,7 +169,10 @@ pub async fn serve_master0(
     }
 
     let matched = interpret_path(&path_components, ss_mutex.clone()).await;
-    debug!("serve_master: matched: {:#?}", matched);
+    debug!(
+        "serve_master:\npaths: {:#?}\nmatched: {:#?}",
+        path_components, matched
+    );
     let ds = match matched {
         Ok(ds) => ds,
         Err(s) => {
@@ -184,7 +188,7 @@ pub async fn serve_master0(
     let ds_props = ds.get_properties();
 
     match ds {
-        TypeOFSource::OurQueue(topic_name, _) => {
+        TypeOFSource::OurQueue(topic_name, _, _) => {
             return if topic_name != "" {
                 handler_topic_generic(topic_name, ss_mutex.clone(), headers).await
             } else {
@@ -205,7 +209,7 @@ pub async fn serve_master0(
             return Ok(res);
         }
     };
-    debug!("serve_master: resolved: {:#?}", resd);
+    // debug!("serve_master: resolved: {:#?}", resd);
     let rd: object_queues::RawData = match resd {
         ResolvedData::RawData(rd) => rd,
         ResolvedData::Regular(reg) => {
@@ -591,7 +595,7 @@ pub async fn handle_websocket_generic2(
     };
 
     match ds {
-        TypeOFSource::OurQueue(topic_name, _) => {
+        TypeOFSource::OurQueue(topic_name, _, _) => {
             return handle_websocket_generic(ws, state, topic_name, send_data).await;
         }
         TypeOFSource::Compose(sc) => {
@@ -604,6 +608,9 @@ pub async fn handle_websocket_generic2(
             panic!("not implemented");
         }
         TypeOFSource::Transformed(_, _) => {
+            panic!("not implemented");
+        }
+        TypeOFSource::Deref(_) => {
             panic!("not implemented");
         }
     }

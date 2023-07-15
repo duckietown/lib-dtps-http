@@ -3,9 +3,13 @@ all:
 tag=andreacensi/dtps-rust-demo
 
 RELEASE='--release' # 0.5ms
-# RELEASE='' # 2.5
+RELEASE='' # 2.5
 run-server-continuous:
 	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8000'
+
+run-server-continuous:
+	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8000'
+
 
 run-client-continuous-to-rust-server:
 	cargo watch -c -w rust/src -w rust/bin -E RUST_BACKTRACE=full  -x 'run  $(RELEASE)  --bin dtps-http-rust-client-stats -- --url http://127.0.0.1:8000/ '
