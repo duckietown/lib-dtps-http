@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use std::collections::HashMap;
 
 use chrono::Local;
@@ -6,20 +7,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::constants::*;
 use crate::object_queues::*;
+use crate::signals_logic::TopicProperties;
 use crate::structures::TypeOfConnection::Relative;
 use crate::structures::*;
 use crate::types::*;
-use crate::{get_queue_id, get_random_node_id};
+use crate::TypeOfConnection::Same;
+use crate::{get_queue_id, get_random_node_id, topics_index};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LogEntry {
     pub level: String,
     pub msg: String,
 }
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ForwardInfo {
     url: String,
 }
+
 #[derive(Debug)]
 pub struct ServerState {
     pub node_started: i64,
@@ -27,6 +32,7 @@ pub struct ServerState {
     pub node_id: String,
     pub oqs: HashMap<TopicName, ObjectQueue>,
     pub forwards: HashMap<TopicName, ForwardInfo>,
+    pub blobs: HashMap<String, Vec<u8>>,
     advertise_urls: Vec<String>,
 }
 
@@ -38,13 +44,45 @@ impl ServerState {
         };
         // let node_id = Uuid::new_v4().to_string();
         let node_id = get_random_node_id();
-        let oqs = HashMap::new();
+
+        let mut oqs = HashMap::new();
+
+        let link_benchmark = LinkBenchmark {
+            complexity: 0,
+            latency: 0.0,
+            bandwidth: 1_000_000_000.0,
+            reliability: 1.0,
+            hops: 0,
+        };
+        let now = Local::now().timestamp_nanos();
+        let app_data = node_app_data.clone();
+        let tr = TopicRefInternal {
+            unique_id: node_id.clone(),
+            origin_node: node_id.clone(),
+            app_data,
+            created: now,
+            reachability: vec![TopicReachabilityInternal {
+                con: Same(),
+                answering: node_id.clone(),
+                forwarders: vec![],
+                benchmark: link_benchmark,
+            }],
+            properties: TopicProperties {
+                streamable: true,
+                pushable: true,
+                readable: true,
+                immutable: false,
+            },
+        };
+        oqs.insert("".to_string(), ObjectQueue::new(tr));
+
         let node_started = Local::now().timestamp_nanos();
         let mut ss = ServerState {
             node_id,
             node_started,
             node_app_data,
             oqs,
+            blobs: HashMap::new(),
             forwards: HashMap::new(),
             advertise_urls: vec![],
         };
@@ -111,11 +149,17 @@ impl ServerState {
             app_data,
             created: now,
             reachability: vec![TopicReachabilityInternal {
-                con: Relative(format!("topics/{}/", topic_name), None),
+                con: Relative(format!("{}/", topic_name), None),
                 answering: self.node_id.clone(),
                 forwarders: vec![],
                 benchmark: link_benchmark,
             }],
+            properties: TopicProperties {
+                streamable: true,
+                pushable: false,
+                readable: true,
+                immutable: false,
+            },
         };
         let oqs = &mut self.oqs;
 
@@ -125,6 +169,9 @@ impl ServerState {
         for topic_name in oqs.keys() {
             topics.push(topic_name.clone());
         }
+
+        let index = topics_index(self);
+        self.publish_object_as_cbor("", &index, None);
 
         self.publish_object_as_json(TOPIC_LIST_NAME, &topics.clone(), None);
     }
@@ -138,17 +185,29 @@ impl ServerState {
     pub fn publish(
         &mut self,
         topic_name: &str,
-        content: &Vec<u8>,
+        content: &[u8],
         content_type: &str,
         clocks: Option<Clocks>,
     ) -> DataSaved {
         self.make_sure_topic_exists(topic_name);
+        let v = content.to_vec();
         let data = RawData {
-            content: content.clone(),
+            content: Bytes::from(v),
             content_type: content_type.to_string(),
         };
+        self.save_blob(&data.digest(), &data.content);
         let oq = self.oqs.get_mut(topic_name).unwrap();
+
         return oq.push(&data, clocks);
+    }
+    pub fn save_blob(&mut self, digest: &str, content: &[u8]) {
+        self.blobs.insert(digest.to_string(), content.to_vec());
+    }
+    pub fn get_blob(&self, digest: &str) -> Option<&Vec<u8>> {
+        return self.blobs.get(digest);
+    }
+    pub fn get_blob_bytes(&self, digest: &str) -> Option<Bytes> {
+        self.blobs.get(digest).map(|v| Bytes::from(v.clone()))
     }
     pub fn publish_object_as_json<T: Serialize>(
         &mut self,
@@ -160,6 +219,23 @@ impl ServerState {
         return self.publish_json(topic_name, data_json.as_str(), clocks);
     }
 
+    pub fn publish_object_as_cbor<T: Serialize>(
+        &mut self,
+        topic_name: &str,
+        object: &T,
+        clocks: Option<Clocks>,
+    ) -> DataSaved {
+        let data_cbor = serde_cbor::to_vec(object).unwrap();
+        return self.publish_cbor(topic_name, &data_cbor, clocks);
+    }
+    pub fn publish_cbor(
+        &mut self,
+        topic_name: &str,
+        content: &[u8],
+        clocks: Option<Clocks>,
+    ) -> DataSaved {
+        self.publish(topic_name, content, "application/cbor", clocks)
+    }
     pub fn publish_json(
         &mut self,
         topic_name: &str,

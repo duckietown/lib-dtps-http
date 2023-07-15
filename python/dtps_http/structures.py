@@ -71,6 +71,7 @@ class TopicRef:
     origin_node: NodeID  # unique id of the node that created the stream
     app_data: dict[str, bytes]
     reachability: list[TopicReachability]
+    
 
 
 @dataclass

@@ -52,6 +52,7 @@ uuid = { version = "1.4.0", features = ["v4"] }
 warp = "0.3.5"
 websocket = "0.26.5"
 gethostname = "0.4.3"
+bytes = { version = "1.4.0", features = ["serde"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 getaddrs = "0.1.0"

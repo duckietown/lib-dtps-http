@@ -65,6 +65,8 @@ pub fn join_ext(
                 uc.query = query2;
                 Ok(UNIX(uc))
             }
+
+            TypeOfConnection::Same() => Ok(Relative(s.to_string(), None)),
         }
     }
 }
@@ -97,4 +99,8 @@ mod tests {
         // let x = parse_url_ext("/the/path?ade").unwrap();
         // warn!("test_add_two {:?}", x);
     }
+}
+
+pub fn format_digest_path(digest: &str, content_type: &str) -> String {
+    return format!("!/ipfs/{}/{}/", digest, content_type.replace("/", "_"));
 }

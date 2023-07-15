@@ -7,6 +7,7 @@ pub mod logs;
 mod master;
 pub mod misc;
 pub mod object_queues;
+mod platform;
 pub mod server;
 pub mod server_state;
 mod signals_logic;
@@ -15,6 +16,7 @@ pub mod structures;
 pub mod types;
 pub mod urls;
 mod utils;
+mod websocket_signals;
 
 pub use client::*;
 pub use constants::*;

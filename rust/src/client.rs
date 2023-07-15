@@ -5,6 +5,7 @@ use std::{error, io};
 
 use base64;
 use base64::{engine::general_purpose, Engine as _};
+use bytes::Bytes;
 use futures::StreamExt;
 use hex;
 use hyper;
@@ -27,12 +28,12 @@ use warp::reply::Response;
 use crate::constants::{
     HEADER_CONTENT_LOCATION, HEADER_NODE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA,
 };
-use crate::server::MsgServerToClient;
 use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
 use crate::structures::{
     DataReady, FoundMetadata, LinkBenchmark, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection,
 };
 use crate::urls::{join_ext, parse_url_ext};
+use crate::websocket_signals::MsgServerToClient;
 use crate::RawData;
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
 
@@ -49,7 +50,7 @@ pub async fn listen_events(md: FoundMetadata) {
     while let Some(notification) = stream.next().await {
         // convert a string to integer
 
-        let string = String::from_utf8(notification.rd.content).unwrap();
+        let string = String::from_utf8(notification.rd.content.to_vec()).unwrap();
 
         // let nanos = serde_json::from_slice::<u128>(&notification.rd.content).unwrap();
         let nanos: u128 = string.parse().unwrap();
@@ -200,6 +201,9 @@ async fn listen_events_url_inline(
         Relative(_, _) => {
             panic!("not expected here {}", con);
         }
+        Same => {
+            panic!("not expected here {}", con);
+        }
     };
 
     // debug!("Connected to the server");
@@ -316,7 +320,7 @@ async fn listen_events_url_inline(
             }
             let content_type = dr.content_type.clone();
             let rd = RawData {
-                content,
+                content: Bytes::from(content),
                 content_type,
             };
             let notification = Notification { dr, rd };
@@ -366,12 +370,18 @@ async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResult {
         Relative(_, _) => {
             panic!("unexpected relative url here: {}", con);
         }
+        Same => {
+            panic!("not expected here {}", con);
+        }
     };
     let reliability = match con {
         TCP(_) => 0.9,
         UNIX(_) => 1.0,
         Relative(_, _) => {
             panic!("unexpected relative url here: {}", con);
+        }
+        Same => {
+            panic!("not expected here {}", con);
         }
     };
     match md {
@@ -498,6 +508,9 @@ pub async fn make_request(
             )));
             // return Err("cannot handle a relative url get_metadata()".into());
         }
+        Same => {
+            panic!("not expected here {}", conbase);
+        }
     };
 
     let req0 = hyper::Request::builder()
@@ -526,6 +539,12 @@ pub async fn make_request(
             return Err(Box::new(io::Error::new(
                 ErrorKind::Other,
                 "cannot handle a relative url get_metadata",
+            )));
+        }
+        TypeOfConnection::Same() => {
+            return Err(Box::new(io::Error::new(
+                ErrorKind::Other,
+                "cannot handle a Same url to get_metadata",
             )));
         }
     };

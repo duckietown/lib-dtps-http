@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 pub fn divide_in_components(pstr: &str, sep: char) -> Vec<String> {
     let mut pstr = pstr.to_string().clone();
     pstr = pstr.trim_start_matches(sep).to_string();
@@ -41,4 +43,16 @@ pub fn is_prefix_of<'a>(
     let matched: Vec<String> = b[0..a.len()].to_vec();
     let extra_elements: Vec<String> = b[a.len()..].to_vec();
     Some((matched, extra_elements))
+}
+
+pub fn epoch() -> f64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64()
+}
+
+pub fn format_nanos(n: i64) -> String {
+    let ms = (n as f64) / 1_000_000.0;
+    format!("{:.3}ms", ms)
 }

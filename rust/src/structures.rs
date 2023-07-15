@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
 
+use crate::signals_logic::TopicProperties;
 use derive_more::Constructor;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -61,6 +62,7 @@ pub struct TopicRefWire {
     pub app_data: HashMap<String, Vec<u8>>,
     pub reachability: Vec<TopicReachabilityWire>,
     pub created: i64,
+    pub properties: TopicProperties,
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +72,7 @@ pub struct TopicRefInternal {
     pub app_data: HashMap<String, Vec<u8>>,
     pub reachability: Vec<TopicReachabilityInternal>,
     pub created: i64,
+    pub properties: TopicProperties,
 }
 
 impl TopicRefInternal {
@@ -85,6 +88,7 @@ impl TopicRefInternal {
             app_data: self.app_data.clone(),
             created: self.created,
             reachability,
+            properties: self.properties.clone(),
         }
     }
     pub fn from_wire(wire: &TopicRefWire, conbase: &TypeOfConnection) -> Self {
@@ -100,6 +104,7 @@ impl TopicRefInternal {
             app_data: wire.app_data.clone(),
             created: wire.created,
             reachability,
+            properties: wire.properties.clone(),
         }
     }
 }
@@ -191,6 +196,7 @@ pub enum TypeOfConnection {
     UNIX(UnixCon),
     /// c
     Relative(String, Option<String>), // path, query
+    Same(), // path, query
 }
 
 impl TypeOfConnection {
@@ -217,6 +223,7 @@ impl TypeOfConnection {
                 }
                 s
             }
+            TypeOfConnection::Same() => "".to_string(),
         }
     }
 }
@@ -227,6 +234,9 @@ impl fmt::Display for TypeOfConnection {
             TypeOfConnection::TCP(url) => write!(f, "TCP({:?})", url.to_string()),
             TypeOfConnection::UNIX(unix_con) => write!(f, "UNIX({})", unix_con),
             TypeOfConnection::Relative(s, q) => write!(f, "Relative({},{:?})", s, q),
+            TypeOfConnection::Same() => {
+                write!(f, "Same()")
+            }
         }
     }
 }
@@ -254,6 +264,7 @@ impl TopicReachabilityInternal {
             Some(use_patch) => match &self.con {
                 TypeOfConnection::TCP(_) => self.con.clone(),
                 TypeOfConnection::UNIX(_) => self.con.clone(),
+                TypeOfConnection::Same() => self.con.clone(),
                 TypeOfConnection::Relative(_, query) => {
                     TypeOfConnection::Relative(use_patch.clone(), query.clone())
                 }

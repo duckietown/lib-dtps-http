@@ -5,7 +5,6 @@ use std::path::Path;
 use std::process::Command;
 use std::string::ToString;
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use chrono::Local;
 use clap::Parser;
@@ -34,16 +33,22 @@ use warp::{Filter, Rejection, Reply};
 #[cfg(target_os = "linux")]
 use getaddrs::InterfaceAddrs;
 
+use crate::cloudflare::CloudflareTunnel;
 use crate::constants::*;
+use crate::html_utils::make_html;
 use crate::logs::get_id_string;
-use crate::master::{handle_websocket_generic2, serve_master};
+use crate::master::{
+    handle_websocket_generic2, serve_master, serve_master_HEAD, serve_master_POST,
+};
 use crate::object_queues::*;
 use crate::server_state::*;
-use crate::static_files::{serve_static_file, STATIC_FILES};
 use crate::structures::*;
 use crate::types::*;
 use crate::utils::divide_in_components;
-use crate::{serve_static_file2, serve_static_file_empty};
+use crate::websocket_signals::{
+    ChannelInfo, ChannelInfoDesc, MsgClientToServer, MsgServerToClient,
+};
+use crate::{format_digest_path, utils};
 
 pub type HandlersResponse = Result<http::Response<hyper::Body>, Rejection>;
 
@@ -87,27 +92,41 @@ impl DTPSServer {
         let clone_access = warp::any().map(move || server_state_access.clone());
 
         // let static_route = warp::path("static").and(warp::fs::dir(dir_to_pathbuf(STATIC_FILES)));
-        let master_route = warp::path::full()
+        let master_route_get = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
             .and(clone_access.clone())
             .and(warp::header::headers_cloned())
             .and_then(serve_master);
 
-        let static_route = warp::path("static")
-            .and(warp::path::tail())
-            .and_then(serve_static_file);
+        let master_route_post = warp::path::full()
+            .and(warp::query::<HashMap<String, String>>())
+            .and(warp::post())
+            .and(clone_access.clone())
+            .and(warp::header::headers_cloned())
+            .and_then(serve_master_POST);
 
-        let static_route_empty = warp::path("static").and_then(serve_static_file_empty);
+        let master_route_head = warp::path::full()
+            .and(warp::query::<HashMap<String, String>>())
+            .and(warp::head())
+            .and(clone_access.clone())
+            .and(warp::header::headers_cloned())
+            .and_then(serve_master_HEAD);
 
-        let static_route2 = warp::path!("topics" / String / "static")
-            .and(warp::path::tail())
-            // .map(|tn: String, path: warp::path::Tail| {
-            //     debug!("static_route2: tn = {} path={}",tn, path.as_str());
-            //     path
-            // })
-            .and_then(serve_static_file2);
+        // let static_route = warp::path("static")
+        //     .and(warp::path::tail())
+        //     .and_then(serve_static_file);
+        //
+        // let static_route_empty = warp::path("static").and_then(serve_static_file_empty);
+        //
+        // let static_route2 = warp::path!("topics" / String / "static")
+        //     .and(warp::path::tail())
+        //     // .map(|tn: String, path: warp::path::Tail| {
+        //     //     debug!("static_route2: tn = {} path={}",tn, path.as_str());
+        //     //     path
+        //     // })
+        //     .and_then(serve_static_file2);
 
-        log::info!(" {:?}", STATIC_FILES);
+        // log::info!(" {:?}", STATIC_FILES);
 
         // root GET /
         let root_route = endbar()
@@ -139,12 +158,12 @@ impl DTPSServer {
             .and_then(handle_topic_post);
 
         // GET request for data
-        let topic_generic_route_data = warp::get()
-            .and(warp::path!("topics" / String / "data" / String))
-            .and(endbar())
-            .and(clone_access.clone())
-            .and(warp::header::headers_cloned())
-            .and_then(handler_topic_generic_data);
+        // let topic_generic_route_data = warp::get()
+        //     .and(warp::path!("topics" / String / "data" / String))
+        //     .and(endbar())
+        //     .and(clone_access.clone())
+        //     .and(warp::header::headers_cloned())
+        //     .and_then(handler_topic_generic_data);
 
         // websockets for events
         let topic_generic_events_route = warp::path!("topics" / String / "events")
@@ -176,14 +195,14 @@ impl DTPSServer {
                 let segments: Vec<String> = divide_in_components(path1, '/');
                 let last = segments.last();
                 if last == Some(&"events".to_string()) {
-                    debug!("topic_generic_events_route2: path={} OK ", path.as_str());
+                    // debug!("topic_generic_events_route2: path={} OK ", path.as_str());
                     Ok(path)
                 } else {
-                    debug!(
-                        "topic_generic_events_route2: path={} NOT MATCH {:?}",
-                        path.as_str(),
-                        last
-                    );
+                    // debug!(
+                    //     "topic_generic_events_route2: path={} NOT MATCH {:?}",
+                    //     path.as_str(),
+                    //     last
+                    // );
                     Err(warp::reject::not_found())
                 }
             })
@@ -206,17 +225,19 @@ impl DTPSServer {
             });
 
         let the_routes = topic_generic_events_route2
-            .or(master_route)
-            .or(static_route)
-            .or(static_route_empty)
-            .or(static_route2)
-            .or(topic_generic_events_route)
-            .or(topic_generic_route_head)
-            .or(topic_generic_route_get)
-            .or(root_route)
-            .or(topic_generic_route_data)
-            .or(topic_post);
-
+            .or(master_route_head)
+            .or(master_route_get)
+            .or(master_route_post)
+            // .or(static_route)
+            // .or(static_route_empty)
+            // .or(static_route2)
+            // .or(topic_generic_events_route)
+            // .or(topic_generic_route_head)
+            // .or(topic_generic_route_get)
+            // .or(root_route)
+            // .or(topic_generic_route_data)
+            // .or(topic_post);
+            ;
         let mut handles = vec![];
 
         if let Some(address) = self.listen_address {
@@ -233,11 +254,12 @@ impl DTPSServer {
                     s.add_advertise_url(&s2);
                 }
 
-                for host in get_other_addresses() {
+                for host in platform::get_other_addresses() {
                     let x = format!("http://{}:{}{}", host, address.port(), "/");
                     s.add_advertise_url(&x);
                 }
 
+                use crate::platform;
                 use gethostname::gethostname;
                 let hostname = gethostname();
                 let hostname = hostname.to_string_lossy();
@@ -430,6 +452,20 @@ pub async fn root_handler(
         let mut keys: Vec<&str> = index.topics.keys().map(|k| k.as_str()).collect();
 
         keys.sort();
+        let mut topic2url = Vec::new();
+
+        for topic_name in keys.iter() {
+            if topic_name == &"" {
+                continue;
+            }
+            let mut url = String::new();
+            let components = divide_in_components(topic_name, '.');
+            for c in components {
+                url.push_str(&c);
+                url.push_str("/");
+            }
+            topic2url.push((topic_name, url));
+        }
 
         let x = html! {
             (DOCTYPE)
@@ -454,8 +490,9 @@ pub async fn root_handler(
 
             h2 { "Topics" }
             ul {
-                @for topic_name  in keys.iter() {
-                    li { a href={"topics/"  (topic_name) "/"} { code {(topic_name)} }}
+                @for (topic_name, url)  in topic2url.iter() {
+
+                    li { a href={(url)} { code {(topic_name)} }}
                 }
             }
 
@@ -495,31 +532,6 @@ pub async fn root_handler(
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum MsgClientToServer {
-    RawData(RawData),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChannelInfoDesc {
-    sequence: usize,
-    time_inserted: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChannelInfo {
-    pub queue_created: i64,
-    pub num_total: usize,
-    pub newest: Option<ChannelInfoDesc>,
-    pub oldest: Option<ChannelInfoDesc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum MsgServerToClient {
-    DataReady(DataReady),
-    ChannelInfo(ChannelInfo),
-}
-
 pub async fn handle_websocket_generic(
     ws: warp::ws::WebSocket,
     state: Arc<Mutex<ServerState>>,
@@ -543,12 +555,18 @@ pub async fn handle_websocket_generic(
             }
             Some(y) => oq = y,
         }
+        let num_total;
+        let newest;
+        let oldest;
         match oq.sequence.last() {
-            None => {}
+            None => {
+                num_total = 0;
+                newest = None;
+            }
             Some(last) => {
                 let the_availability = vec![ResourceAvailabilityWire {
-                    url: format!("../data/{}/", last.digest),
-                    available_until: epoch() + 60.0,
+                    url: format_digest_path(&last.digest, &last.content_type),
+                    available_until: utils::epoch() + 60.0,
                 }];
                 let nchunks = if send_data { 1 } else { 0 };
                 let dr = DataReady {
@@ -568,18 +586,29 @@ pub async fn handle_websocket_generic(
                 ws_tx.send(message).await.unwrap();
 
                 if send_data {
-                    let message_data = oq.data.get(&last.digest).unwrap();
-                    let message = warp::ws::Message::binary(message_data.content.clone());
+                    let message_data = ss0.get_blob(&last.digest).unwrap();
+                    let message = warp::ws::Message::binary(message_data.clone());
                     ws_tx.send(message).await.unwrap();
                 }
+                num_total = last.index + 1;
+                newest = Some(ChannelInfoDesc::new(last.index, last.time_inserted));
+            }
+        }
+
+        match oq.sequence.first() {
+            None => {
+                oldest = None;
+            }
+            Some(first) => {
+                oldest = Some(ChannelInfoDesc::new(first.index, first.time_inserted));
             }
         }
 
         let c = ChannelInfo {
-            queue_created: 0,
-            num_total: 0,
-            newest: None,
-            oldest: None,
+            queue_created: oq.tr.created,
+            num_total,
+            newest,
+            oldest,
         };
         channel_info_message = MsgServerToClient::ChannelInfo(c);
 
@@ -659,8 +688,8 @@ pub async fn handle_websocket_generic(
         let oq2 = ss2.oqs.get(&topic_name).unwrap();
         let this_one: &DataSaved = oq2.sequence.get(message).unwrap();
         let the_availability = vec![ResourceAvailabilityWire {
-            url: format!("../data/{}/", this_one.digest),
-            available_until: epoch() + 60.0,
+            url: format_digest_path(&this_one.digest, &this_one.content_type),
+            available_until: utils::epoch() + 60.0,
         }];
         let nchunks = if send_data { 1 } else { 0 };
         let dr2 = DataReady {
@@ -687,8 +716,8 @@ pub async fn handle_websocket_generic(
             }
         }
         if send_data {
-            let message_data = oq2.data.get(&this_one.digest).unwrap();
-            let message = warp::ws::Message::binary(message_data.content.clone());
+            let content = ss2.get_blob(&this_one.digest).unwrap();
+            let message = warp::ws::Message::binary(content.clone());
             match ws_tx.send(message).await {
                 Ok(_) => {}
                 Err(e) => {
@@ -699,13 +728,6 @@ pub async fn handle_websocket_generic(
         }
     }
     // debug!("handle_websocket_generic: {} - done", topic_name);
-}
-
-pub fn epoch() -> f64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64()
 }
 
 pub fn topics_index(ss: &ServerState) -> TopicsIndexWire {
@@ -758,11 +780,6 @@ async fn handle_topic_post(
     Ok(warp::reply::json(&ok))
 }
 
-fn format_nanos(n: i64) -> String {
-    let ms = (n as f64) / 1_000_000.0;
-    format!("{:.3}ms", ms)
-}
-
 async fn handler_topic_html_summary(
     topic_name: String,
     ss_mutex: Arc<Mutex<ServerState>>,
@@ -780,19 +797,19 @@ async fn handler_topic_html_summary(
         None => ("application/yaml".to_string(), "".to_string()),
         Some(l) => {
             let digest = &l.digest;
-            let data = x.data.get(digest).unwrap();
+            let content = ss.get_blob(digest).unwrap();
             let initial = match l.content_type.as_str() {
                 "application/yaml" | "application/json" => {
-                    String::from_utf8(data.content.clone()).unwrap()
+                    String::from_utf8(content.to_vec()).unwrap()
                 }
                 _ => "{}".to_string(),
             };
-            (data.content_type.clone(), initial)
+            (l.content_type.clone(), initial)
         }
     };
     let now = Local::now().timestamp_nanos();
 
-    let format_elapsed = |a| -> String { format_nanos(now - a) };
+    let format_elapsed = |a| -> String { utils::format_nanos(now - a) };
 
     let data_or_digest = |data: &DataSaved| -> PreEscaped<String> {
         let printable = match data.content_type.as_str() {
@@ -800,12 +817,12 @@ async fn handler_topic_html_summary(
             | "application/json" => true,
             _ => false,
         };
-        let url = format!("data/{}/", data.digest);
+        let url = format_digest_path(&data.digest, &data.content_type);
 
         if data.content_length <= data.digest.len() {
             if printable {
-                let rd = x.data.get(&data.digest).unwrap();
-                let s = String::from_utf8(rd.content.clone()).unwrap();
+                let rd = ss.get_blob(&data.digest).unwrap();
+                let s = String::from_utf8(rd.clone()).unwrap();
                 html! {
                   (s)
                 }
@@ -826,74 +843,64 @@ async fn handler_topic_html_summary(
         }
     }
 
-    let x = html! {
-        (DOCTYPE)
-        html {
-            head {
-                link rel="icon" type="image/png" href="/static/favicon.png" ;
-                link rel="stylesheet" href="/static/style.css" ;
+    let x = make_html(
+        &topic_name,
+        html! {
 
-                script src="https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.min.js" {};
-                script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js" {};
+
+            p { "This response coming to you in HTML because you requested it."}
+            p { "Origin ID: " code {(x.tr.origin_node)} }
+            p { "Topic ID: " code {(x.tr.unique_id)} }
+
+            div  {
+                h3 { "notifications using websockets"}
+                div {pre   id="result" { "result will appear here" }}
             }
-            body {
-                h1 { code {(topic_name)} }
+            div {
+                h3 {"push JSON to queue"}
 
-                p { "This response coming to you in HTML because you requested it."}
-                p { "Origin ID: " code {(x.tr.origin_node)} }
-                p { "Topic ID: " code {(x.tr.unique_id)} }
+                textarea id="myTextAreaContentType" { (default_content_type) };
+                textarea id="myTextArea" { (initial_value) };
 
-                div  {
-                    h3 { "notifications using websockets"}
-                    div {pre   id="result" { "result will appear here" }}
+                br;
+
+                button id="myButton" { "push" };
+
+                script src="../../static/send.js" {};
+
+                script type="text/javascript" { (PreEscaped(JAVASCRIPT_SEND)) };
+            } // div
+
+            h2 { "Queue" }
+
+            table {
+                thead {
+                    tr {
+                        th { "Sequence" }
+                        th { "Elapsed" }
+                        th { "Delta" }
+                        th { "Content Type" }
+                        th { "Length" }
+                        th { "Digest or data" }
+                    }
                 }
-                div {
-                    h3 {"push JSON to queue"}
-
-                    textarea id="myTextAreaContentType" { (default_content_type) };
-                    textarea id="myTextArea" { (initial_value) };
-
-                    br;
-
-                    button id="myButton" { "push" };
-
-                    script src="../../static/send.js" {};
-
-                    script type="text/javascript" { (PreEscaped(JAVASCRIPT_SEND)) };
-                } // div
-
-                h2 { "Queue" }
-
-                table {
-                    thead {
+                tbody {
+                    @for (i, data) in x.sequence.iter().enumerate().rev().take(100) {
                         tr {
-                            th { "Sequence" }
-                            th { "Elapsed" }
-                            th { "Delta" }
-                            th { "Content Type" }
-                            th { "Length" }
-                            th { "Digest or data" }
+                            td { (data.index) }
+                            td { (format_elapsed(data.time_inserted)) }
+                            td { (utils::format_nanos(latencies[i]))}
+                            td { code {(data.content_type)} }
+                            td { (data.content_length) }
+                            td { code { (data_or_digest(data)) } }
                         }
                     }
-                    tbody {
-                        @for (i, data) in x.sequence.iter().enumerate().rev().take(100) {
-                            tr {
-                                td { (data.index) }
-                                td { (format_elapsed(data.time_inserted)) }
-                                td { (format_nanos(latencies[i]))}
-                                td { code {(data.content_type)} }
-                                td { (data.content_length) }
-                                td { code { (data_or_digest(data)) } }
-                            }
-                        }
-                    }
-                } // table
+                }
+            } // table
 
 
-
-            } // body
-        } // html
-    }; // html!
+        },
+    );
     let markup = x.into_string();
 
     Ok(http::Response::builder()
@@ -903,7 +910,7 @@ async fn handler_topic_html_summary(
 }
 
 // language=javascript
-const JAVASCRIPT_SEND: &str = r##"
+pub const JAVASCRIPT_SEND: &str = r##"
 
 
 "##;
@@ -922,6 +929,7 @@ pub async fn handler_topic_generic(
     // check if the client is requesting an HTML page
 
     let digest: String;
+    let content_type: String;
     {
         let ss = ss_mutex.lock().await;
 
@@ -941,17 +949,21 @@ pub async fn handler_topic_generic(
                     .unwrap();
                 let h = res.headers_mut();
 
-                let suffix = format!("topics/{}/", topic_name);
+                let suffix = format!("{}/", topic_name);
                 put_alternative_locations(&ss, h, &suffix);
                 put_common_headers(&ss, h);
 
                 return Ok(res);
             }
 
-            Some(y) => digest = y.digest.clone(),
+            Some(y) => {
+                digest = y.digest.clone();
+                content_type = y.content_type.clone();
+            }
         }
     }
-    return handler_topic_generic_data(topic_name, digest, ss_mutex.clone(), headers).await;
+    return handler_topic_generic_data(topic_name, content_type, digest, ss_mutex.clone(), headers)
+        .await;
 }
 
 async fn handler_topic_generic_head(
@@ -986,7 +998,7 @@ async fn handler_topic_generic_head(
         HeaderValue::from_static("events/?send_data=1"),
     );
 
-    let suffix = format!("topics/{}/", topic_name);
+    let suffix = format!("{}/", topic_name);
     put_alternative_locations(&ss, h, &suffix);
     put_common_headers(&ss, h);
 
@@ -995,6 +1007,7 @@ async fn handler_topic_generic_head(
 
 async fn handler_topic_generic_data(
     topic_name: String,
+    content_type: String,
     digest: String,
     ss_mutex: Arc<Mutex<ServerState>>,
     headers: HeaderMap,
@@ -1009,12 +1022,11 @@ async fn handler_topic_generic_data(
         Some(y) => x = y,
     }
 
-    let data = match x.data.get(&digest) {
+    let content = match ss.get_blob(&digest) {
         None => return Err(warp::reject::not_found()),
         Some(y) => y,
     };
-    let data_bytes = data.content.clone();
-    let content_type = data.content_type.clone();
+    let data_bytes = content.clone();
 
     if accept_headers.contains(&"text/html".to_string()) {
         let display = match content_type.as_str() {
@@ -1045,7 +1057,7 @@ async fn handler_topic_generic_data(
                 body {
              p { "This data is presented as HTML because you requested it as such."}
                      p { "Content type: " code { (content_type) } }
-                     p { "Content length: " (data.content.len()) }
+                     p { "Content length: " (content.len()) }
 
             pre {
                 code {
@@ -1068,7 +1080,7 @@ async fn handler_topic_generic_data(
 
     let mut resp = Response::new(Body::from(data_bytes));
     let h = resp.headers_mut();
-    let suffix = format!("topics/{}/", topic_name);
+    let suffix = format!("{}/", topic_name);
     put_alternative_locations(&ss, h, &suffix);
 
     h.insert(
@@ -1182,47 +1194,6 @@ pub fn create_server_from_command_line() -> DTPSServer {
     );
 
     server
-}
-
-#[allow(non_snake_case)]
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct CloudflareTunnel {
-    pub AccountTag: String,
-    pub TunnelSecret: String,
-    pub TunnelID: String,
-    pub TunnelName: String,
-}
-
-#[cfg(target_os = "linux")]
-fn get_other_addresses() -> Vec<String> {
-    println!("You are running Linux!");
-
-    let addrs = InterfaceAddrs::query_system().expect("System has no network interfaces.");
-    // debug!("Found {} network interfaces", addrs.len());
-    let mut ret = Vec::new();
-    ret.push("localhost".to_string());
-    for addr in addrs {
-        if let Some(ipv4_addr) = addr.address {
-            debug!("{}: {:?}", addr.name, ipv4_addr);
-            ret.push(ipv4_addr.to_string());
-        }
-        // if let Some(addr2) = addr.ipv6() {
-        //     debug!("{}: {:?}", addr.name, addr2);
-        //     ret.push(addr2.to_string());
-        // }
-
-        debug!("{}: {:?}", addr.name, addr.address);
-    }
-    debug!("You are running Linux - using other addresses");
-    ret
-}
-
-#[cfg(not(target_os = "linux"))]
-fn get_other_addresses() -> Vec<String> {
-    debug!("You are not running Linux - ignoring other addresses");
-    let mut ret = Vec::new();
-    ret.push("localhost".to_string());
-    ret
 }
 
 async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: f32) {

@@ -4,7 +4,10 @@ pub fn get_random_node_id() -> String {
 }
 
 pub fn get_queue_id(node_id: &str, queue_name: &str) -> String {
-    let queue_id = format!("{}-{}", node_id, queue_name);
+    if queue_name == "" {
+        return node_id.to_string();
+    }
+    let queue_id = format!("{}.{}", node_id, queue_name);
     return queue_id;
 }
 

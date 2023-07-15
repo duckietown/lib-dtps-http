@@ -1,17 +1,20 @@
+use bytes::Bytes;
 use std::collections::HashMap;
 
 use chrono::Local;
+use derive_more::Constructor;
 use serde::{Deserialize, Serialize};
 use sha256::digest;
 use tokio::sync::broadcast;
 
 use crate::structures::TopicRefInternal;
 use crate::{merge_clocks, Clocks, MinMax};
+use serde_bytes::*;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Constructor)]
 pub struct RawData {
-    #[serde(with = "serde_bytes")]
-    pub content: Vec<u8>,
+    // #[serde(with = "serde_bytes")]
+    pub content: Bytes,
     pub content_type: String,
 }
 
@@ -23,7 +26,7 @@ impl RawData {
         // let md5s = md5::compute(&self.content);
         // return format!("md5:{:x}", md5s);
 
-        let d = digest(self.content.as_slice());
+        let d = digest(self.content.as_ref());
         format!("sha256:{}", d)
     }
 }
@@ -41,8 +44,7 @@ pub struct DataSaved {
 #[derive(Debug)]
 pub struct ObjectQueue {
     pub sequence: Vec<DataSaved>,
-    pub data: HashMap<String, RawData>,
-
+    // pub data: HashMap<String, RawData>,
     pub tx: broadcast::Sender<usize>,
     pub seq: usize,
     pub tr: TopicRefInternal,
@@ -54,7 +56,7 @@ impl ObjectQueue {
         ObjectQueue {
             seq: 0,
             sequence: Vec::new(),
-            data: HashMap::new(),
+            // data: HashMap::new(),
             tx,
             tr,
         }
@@ -67,7 +69,7 @@ impl ObjectQueue {
         previous_clocks: Option<Clocks>,
     ) -> DataSaved {
         let data = RawData {
-            content: content.clone(),
+            content: content.clone().into(),
             content_type: content_type.to_string(),
         };
         self.push(&data, previous_clocks)
@@ -84,7 +86,6 @@ impl ObjectQueue {
         let this_seq = self.seq;
         self.seq += 1;
         let digest = data.digest();
-        self.data.insert(digest.clone(), data.clone());
 
         let saved_data = DataSaved {
             index: this_seq,
