@@ -17,7 +17,9 @@ pub mod types;
 pub mod urls;
 mod utils;
 pub use utils::*;
+pub mod errors;
 mod websocket_signals;
+pub use errors::*;
 
 pub use client::*;
 pub use constants::*;

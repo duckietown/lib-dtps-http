@@ -8,10 +8,10 @@ use sha256::digest;
 use tokio::sync::broadcast;
 
 use crate::structures::TopicRefInternal;
-use crate::{merge_clocks, Clocks, MinMax};
+use crate::{merge_clocks, Clocks, MinMax, DTPSR};
 use serde_bytes::*;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Constructor)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RawData {
     // #[serde(with = "serde_bytes")]
     pub content: Bytes,
@@ -19,6 +19,12 @@ pub struct RawData {
 }
 
 impl RawData {
+    pub fn new<S: AsRef<[u8]>, T: AsRef<str>>(content: S, content_type: T) -> RawData {
+        RawData {
+            content: Bytes::from(content.as_ref().to_vec()),
+            content_type: content_type.as_ref().to_string(),
+        }
+    }
     pub fn digest(&self) -> String {
         // if self.content.len() < 16 {
         //     return self.content.clone();
@@ -74,11 +80,7 @@ impl ObjectQueue {
     //     };
     //     self.push(&data, previous_clocks)
     // }
-    pub fn push(
-        &mut self,
-        data: &RawData,
-        previous_clocks: Option<Clocks>,
-    ) -> Result<DataSaved, String> {
+    pub fn push(&mut self, data: &RawData, previous_clocks: Option<Clocks>) -> DTPSR<DataSaved> {
         let now = Local::now().timestamp_nanos();
 
         let mut clocks = self.current_clocks(now);

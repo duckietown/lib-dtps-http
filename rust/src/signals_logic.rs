@@ -11,15 +11,14 @@ use serde::{Deserialize, Serialize};
 use serde_cbor::Value as CBORValue;
 use serde_cbor::Value::Null as CBORNull;
 use serde_cbor::Value::Text as CBORText;
-use serde_yaml;
 use tokio::sync::Mutex;
 
 use crate::cbor_manipulation::{get_as_cbor, get_inside};
 use crate::signals_logic::ResolvedData::{NotAvailableYet, NotFound, Regular};
 use crate::utils::{divide_in_components, is_prefix_of, vec_concat};
 use crate::{
-    make_rel_url, topics_index, RawData, ServerState, TopicName, TopicRefInternal,
-    TopicsIndexInternal, CONTENT_TYPE_DTPS_INDEX_CBOR,
+    make_rel_url, DTPSError, NodeAppData, RawData, ServerState, TopicName, TopicRefInternal,
+    TopicsIndexInternal, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
 };
 
 #[derive(Debug, Clone)]
@@ -29,6 +28,7 @@ pub enum Transforms {
 
 #[derive(Debug, Clone)]
 pub struct SourceComposition {
+    is_root: bool,
     compose: HashMap<Vec<String>, Box<TypeOFSource>>,
 }
 
@@ -92,18 +92,13 @@ pub struct TopicProperties {
 
 #[async_trait]
 pub trait ResolveDataSingle {
-    async fn resolve_data_single(
-        &self,
-        ss_mutex: Arc<Mutex<ServerState>>,
-    ) -> Result<ResolvedData, String>;
+    async fn resolve_data_single(&self, ss_mutex: Arc<Mutex<ServerState>>) -> DTPSR<ResolvedData>;
 }
 
 #[async_trait]
 pub trait GetMeta {
-    async fn get_meta_index(
-        &self,
-        ss_mutex: Arc<Mutex<ServerState>>,
-    ) -> Result<TopicsIndexInternal, String>;
+    async fn get_meta_index(&self, ss_mutex: Arc<Mutex<ServerState>>)
+        -> DTPSR<TopicsIndexInternal>;
 }
 
 #[async_trait]
@@ -112,7 +107,7 @@ pub trait GetHTML {
         &self,
         ss_mutex: Arc<Mutex<ServerState>>,
         headers: HashMap<String, String>,
-    ) -> Result<PreEscaped<String>, String>;
+    ) -> DTPSR<PreEscaped<String>>;
 }
 
 pub trait DataProps {
@@ -121,32 +116,21 @@ pub trait DataProps {
 
 #[async_trait]
 impl ResolveDataSingle for TypeOFSource {
-    async fn resolve_data_single(
-        &self,
-        ss_mutex: Arc<Mutex<ServerState>>,
-    ) -> Result<ResolvedData, String> {
+    async fn resolve_data_single(&self, ss_mutex: Arc<Mutex<ServerState>>) -> DTPSR<ResolvedData> {
         match self {
             TypeOFSource::Digest(digest, content_type) => {
                 let ss = ss_mutex.lock().await;
-                let data = ss.get_blob_bytes(digest);
-                match data {
-                    Some(content) => {
-                        let rd = RawData {
-                            content,
-                            content_type: content_type.clone(),
-                        };
-                        Ok(ResolvedData::RawData(rd))
-                    }
-                    None => Err(format!("Error getting blob: {}", digest)),
-                }
+                let data = ss.get_blob_bytes(digest)?;
+                let rd = RawData::new(data, content_type);
+                Ok(ResolvedData::RawData(rd))
             }
-            TypeOFSource::ForwardedQueue(q) => {
-                Err(format!("not implemented TypeOFSource::ForwardedQueue"))
-            }
+            TypeOFSource::ForwardedQueue(q) => Err(DTPSError::NotImplemented(
+                "not implemented TypeOFSource::ForwardedQueue".to_string(),
+            )),
             TypeOFSource::OurQueue(q, _, _) => {
-                if q == &"" {
+                if false && q == &"" {
                     let ss = ss_mutex.lock().await;
-                    let index_internal = topics_index(&ss);
+                    let index_internal = ss.create_topic_index();
                     let index = index_internal.to_wire(None);
 
                     let cbor_bytes = serde_cbor::to_vec(&index).unwrap();
@@ -202,7 +186,7 @@ impl DataProps for TypeOFSource {
     }
 }
 
-async fn transform(data: ResolvedData, transform: &Transforms) -> Result<ResolvedData, String> {
+async fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<ResolvedData> {
     let d = match data {
         Regular(d) => d,
         NotAvailableYet(s) => return Ok(NotAvailableYet(s.clone())),
@@ -217,16 +201,13 @@ async fn transform(data: ResolvedData, transform: &Transforms) -> Result<Resolve
             let inside = get_inside(vec![], &d, path);
             match inside {
                 Ok(d) => Ok(ResolvedData::Regular(d)),
-                Err(e) => Err(format!("Error getting inside: {}", e)),
+                Err(e) => Err(DTPSError::Other(format!("Error getting inside: {}", e))),
             }
         }
     }
 }
 
-async fn our_queue(
-    topic_name: &str,
-    ss_mutex: Arc<Mutex<ServerState>>,
-) -> Result<ResolvedData, String> {
+async fn our_queue(topic_name: &str, ss_mutex: Arc<Mutex<ServerState>>) -> DTPSR<ResolvedData> {
     let ss = ss_mutex.lock().await;
     if !ss.oqs.contains_key(topic_name) {
         return Ok(NotFound(format!("No queue with name {}", topic_name)));
@@ -239,14 +220,8 @@ async fn our_queue(
             Ok(NotAvailableYet(s))
         }
         Some(v) => {
-            let content = match ss.get_blob_bytes(&v.digest) {
-                None => return Err(format!("Cannot get data from digest")),
-                Some(y) => y,
-            };
-            let raw_data = RawData {
-                content,
-                content_type: v.content_type.clone(),
-            };
+            let content = ss.get_blob_bytes(&v.digest)?;
+            let raw_data = RawData::new(content, &v.content_type);
             Ok(ResolvedData::RawData(raw_data))
         }
     };
@@ -257,13 +232,16 @@ impl GetMeta for TypeOFSource {
     async fn get_meta_index(
         &self,
         ss_mutex: Arc<Mutex<ServerState>>,
-    ) -> Result<TopicsIndexInternal, String> {
+    ) -> DTPSR<TopicsIndexInternal> {
         // debug!("get_meta_index: {:?}", self);
         return match self {
             TypeOFSource::ForwardedQueue(_) => {
                 todo!()
             }
             TypeOFSource::OurQueue(topic_name, _, _) => {
+                if topic_name == "" {
+                    panic!("get_meta_index for empty topic name");
+                }
                 let ss = ss_mutex.lock().await;
                 let oq = ss.oqs.get(topic_name).unwrap();
                 let tr0 = &oq.tr; //.to_wire(Some("".to_string()));
@@ -281,10 +259,11 @@ impl GetMeta for TypeOFSource {
 
                 let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
                 topics.insert("".to_string(), tr0.clone());
+                let n: NodeAppData = NodeAppData::from("dede");
                 let index = TopicsIndexInternal {
                     node_id: "".to_string(),
                     node_started: 0,
-                    node_app_data: Default::default(),
+                    node_app_data: hashmap! {"here".to_string() => n},
                     topics,
                 };
                 Ok(index)
@@ -306,7 +285,11 @@ impl GetMeta for TypeOFSource {
 async fn get_sc_meta(
     sc: &SourceComposition,
     ss_mutex: Arc<Mutex<ServerState>>,
-) -> Result<TopicsIndexInternal, String> {
+) -> DTPSR<TopicsIndexInternal> {
+    if sc.is_root {
+        let ss = ss_mutex.lock().await;
+        return Ok(ss.create_topic_index());
+    }
     // debug!("get_sc_meta: START: {:?}", sc);
     let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
     let mut node_app_data = HashMap::new();
@@ -367,7 +350,7 @@ async fn get_sc_meta(
     //     topics.insert(dotsep, oq.tr.to_wire(Some(rurl)));
     // }
 
-    node_app_data.insert("debug".to_string(), debug_s);
+    node_app_data.insert("get_sc_meta".to_string(), debug_s);
     let ss = ss_mutex.lock().await;
 
     let index = TopicsIndexInternal {
@@ -390,7 +373,7 @@ async fn get_sc_meta(
 async fn single_compose(
     sc: &SourceComposition,
     ss_mutex: Arc<Mutex<ServerState>>,
-) -> Result<ResolvedData, String> {
+) -> DTPSR<ResolvedData> {
     // let ss = ss_mutex.lock().await;
 
     // let mut result_dict = BTreeMap::new();
@@ -448,10 +431,7 @@ async fn single_compose(
 }
 
 #[async_recursion]
-pub async fn interpret_path(
-    path: &str,
-    ss_mutex: Arc<Mutex<ServerState>>,
-) -> Result<TypeOFSource, String> {
+pub async fn interpret_path(path: &str, ss_mutex: Arc<Mutex<ServerState>>) -> DTPSR<TypeOFSource> {
     let path_components0 = divide_in_components(&path, '/');
     let path_components = path_components0.clone();
     interpret_path_components(&path_components, ss_mutex.clone()).await
@@ -461,13 +441,12 @@ pub async fn interpret_path(
 pub async fn interpret_path_components(
     path_components: &Vec<String>,
     ss_mutex: Arc<Mutex<ServerState>>,
-) -> Result<TypeOFSource, String> {
+) -> DTPSR<TypeOFSource> {
     if path_components.contains(&"!".to_string()) {
-        let res = Err(format!(
+        return DTPSError::other(format!(
             "interpret_path: Cannot have ! in path: {:?}",
             path_components
         ));
-        return res;
     }
     let deref: String = ":deref".to_string();
     if path_components.contains(&deref) {
@@ -481,10 +460,10 @@ pub async fn interpret_path_components(
         let first_part = match interpret_before {
             TypeOFSource::Compose(sc) => TypeOFSource::Deref(sc),
             _ => {
-                return Err(format!(
+                return DTPSError::other(format!(
                     "interpret_path: deref: before is not Compose: {:?}",
                     interpret_before
-                ))
+                ));
             }
         };
         return if after.len() == 0 {
@@ -515,14 +494,17 @@ pub async fn interpret_path_components(
 
             topics.insert(prefix.clone(), Box::new(val));
         }
-        let sc0 = TypeOFSource::Compose(SourceComposition { compose: topics });
+        let sc0 = TypeOFSource::Compose(SourceComposition {
+            is_root: true,
+            compose: topics,
+        });
         return Ok(sc0);
     }
 
     if path_components.len() > 1 {
         if path_components.first().unwrap() == "ipfs" {
             if path_components.len() != 3 {
-                return Err(format!(
+                return DTPSError::other(format!(
                     "Wrong number of components: {:?}; expected 3",
                     path_components
                 ));
@@ -590,10 +572,11 @@ pub async fn interpret_path_components(
             "Cannot find a matching topic for {:?}.\nMy Topics: {:?}\n",
             path_components, subtopics_vec
         );
-        return Err(s);
+        return DTPSError::other(s);
     }
 
     let mut sc = SourceComposition {
+        is_root: false,
         compose: hashmap! {},
     };
     let ss = ss_mutex.lock().await;

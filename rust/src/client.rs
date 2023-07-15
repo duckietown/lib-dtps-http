@@ -35,8 +35,8 @@ use crate::structures::{
 use crate::urls::{join_ext, parse_url_ext};
 use crate::utils::time_nanos;
 use crate::websocket_signals::MsgServerToClient;
-use crate::RawData;
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
+use crate::{not_available, DTPSError, RawData, DTPSR};
 
 pub async fn listen_events(md: FoundMetadata) {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -113,7 +113,7 @@ enum EitherStream<A, B> {
 async fn listen_events_url_inline(
     con: TypeOfConnection,
     tx: UnboundedSender<Notification>,
-) -> Result<(), String> {
+) -> DTPSR<()> {
     let use_stream: EitherStream<_, _>;
     match con.clone() {
         TCP(mut url) => {
@@ -151,7 +151,10 @@ async fn listen_events_url_inline(
             let stream = match stream_res {
                 Ok(s) => s,
                 Err(err) => {
-                    return Err(format!("could not connect to {}: {}", uc.socket_name, err));
+                    return DTPSError::not_reachable(format!(
+                        "could not connect to {}: {}",
+                        uc.socket_name, err
+                    ));
                 }
             };
             // let ready = stream.ready(Interest::WRITABLE).await.unwrap();
@@ -188,7 +191,10 @@ async fn listen_events_url_inline(
                     Ok(s) => s,
                     Err(err) => {
                         error!("could not connect to {}: {}", uc.socket_name, err);
-                        return Err(format!("could not connect to {}: {}", uc.socket_name, err));
+                        return DTPSError::other(format!(
+                            "could not connect to {}: {}",
+                            uc.socket_name, err
+                        ));
                     }
                 }
             };
@@ -334,9 +340,7 @@ async fn listen_events_url_inline(
     Ok(())
 }
 
-pub async fn get_index(
-    con: &TypeOfConnection,
-) -> Result<TopicsIndexInternal, Box<dyn error::Error>> {
+pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
     let resp = make_request(con, hyper::Method::GET).await?;
     // TODO: send more headers
 
@@ -414,7 +418,7 @@ async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResult {
 pub async fn compute_best_alternative(
     alternatives: &Vec<TypeOfConnection>,
     expect_node_id: &str,
-) -> Result<TypeOfConnection, Box<dyn error::Error>> {
+) -> DTPSR<TypeOfConnection> {
     let mut possible_urls: Vec<TypeOfConnection> = Vec::new();
     let mut possible_stats: Vec<LinkBenchmark> = Vec::new();
     let mut i = 0;
@@ -448,10 +452,9 @@ pub async fn compute_best_alternative(
     }
     // if no alternative is accessible, return None
     if possible_urls.len() == 0 {
-        return Err(Box::new(io::Error::new(
-            ErrorKind::Other,
-            "no alternative are accessible",
-        )));
+        return Err(DTPSError::ResourceNotReachable(
+            "no alternative are accessible".to_string(),
+        ));
         // return Err("no alternative are accessible".into());
     }
     // get the index of minimum possible_stats
@@ -481,10 +484,7 @@ pub async fn compute_best_alternative(
 //     }
 // }
 
-pub async fn make_request(
-    conbase: &TypeOfConnection,
-    method: hyper::Method,
-) -> Result<Response, Box<dyn error::Error>> {
+pub async fn make_request(conbase: &TypeOfConnection, method: hyper::Method) -> DTPSR<Response> {
     let use_url = match conbase {
         TCP(url) => url.clone().to_string(),
         UNIX(uc) => {
@@ -500,11 +500,9 @@ pub async fn make_request(
         }
 
         Relative(_, _) => {
-            return Err(Box::new(io::Error::new(
-                ErrorKind::Other,
-                "cannot handle a relative url get_metadata",
-            )));
-            // return Err("cannot handle a relative url get_metadata()".into());
+            return Err(DTPSError::NotAvailable(
+                "cannot handle a relative url get_metadata".to_string(),
+            ));
         }
         Same => {
             panic!("not expected here {}", conbase);
@@ -534,25 +532,17 @@ pub async fn make_request(
         }
 
         TypeOfConnection::Relative(_, _) => {
-            return Err(Box::new(io::Error::new(
-                ErrorKind::Other,
-                "cannot handle a relative url get_metadata",
-            )));
+            return not_available("cannot handle a relative url get_metadata");
         }
         TypeOfConnection::Same() => {
-            return Err(Box::new(io::Error::new(
-                ErrorKind::Other,
-                "cannot handle a Same url to get_metadata",
-            )));
+            return not_available("cannot handle a Same url to get_metadata");
         }
     };
 
     Ok(resp)
 }
 
-pub async fn get_metadata(
-    conbase: &TypeOfConnection,
-) -> Result<FoundMetadata, Box<dyn error::Error>> {
+pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     // current time in nano seconds
     let start = time_nanos();
 

@@ -10,6 +10,10 @@ run-server-continuous:
 run-server-continuous:
 	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8000'
 
+run-proxy-continuous:
+	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8001    --proxy node1=http://localhost:8000'
+
+
 
 run-client-continuous-to-rust-server:
 	cargo watch -c -w rust/src -w rust/bin -E RUST_BACKTRACE=full  -x 'run  $(RELEASE)  --bin dtps-http-rust-client-stats -- --url http://127.0.0.1:8000/ '
@@ -35,4 +39,4 @@ run-demo-nosocket:
 	docker pull  $(tag)
 	# --init: do not give pid 1 - which makes it hard to kill
 	docker run  -d --init  -v /tmp/run:/tmp/run -v $(creds):/creds:ro  -p 8000:8000 \
- 		$(tag) --tunnel /creds/test-dtps1-tunnel.json 
+ 		$(tag) --tunnel /creds/test-dtps1-tunnel.json

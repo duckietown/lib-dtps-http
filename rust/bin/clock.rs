@@ -1,3 +1,4 @@
+use anyhow::Context;
 extern crate dtps_http;
 
 use std::sync::Arc;
@@ -8,7 +9,7 @@ use tokio::spawn;
 use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
 
-use dtps_http::{create_server_from_command_line, init_logging, ServerState};
+use dtps_http::{create_server_from_command_line, init_logging, ServerState, DTPSR};
 
 async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: f32) {
     let mut clock = interval(Duration::from_secs_f32(interval_s));
@@ -26,17 +27,21 @@ async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: 
     }
 }
 
-#[tokio::main]
-async fn main() -> () {
+async fn clock() -> DTPSR<()> {
     init_logging();
-    let mut server = create_server_from_command_line();
+    let mut server = create_server_from_command_line().await?;
+
     //
     // // spawn(clock_go(server.get_lock(), "clock", 1.0));
     spawn(clock_go(server.get_lock(), "clock5", 5.0));
     spawn(clock_go(server.get_lock(), "clock7", 7.0));
     spawn(clock_go(server.get_lock(), "clock11", 11.0));
 
-    match server.serve().await {
+    server.serve().await
+}
+#[tokio::main]
+async fn main() -> () {
+    match clock().await {
         Ok(_) => return,
         Err(e) => {
             error!("Error in serving:\n{}", e);

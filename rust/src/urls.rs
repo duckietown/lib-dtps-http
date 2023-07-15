@@ -1,11 +1,12 @@
 use std::error;
 
+use crate::{DTPSError, DTPSR};
 use url::Url;
 
 use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
 use crate::structures::{TypeOfConnection, UnixCon};
 
-pub fn parse_url_ext(s0: &str) -> Result<TypeOfConnection, Box<dyn error::Error>> {
+pub fn parse_url_ext(s0: &str) -> DTPSR<TypeOfConnection> {
     if s0.starts_with("http+unix://") {
         let (query, s) = match s0.find("?") {
             Some(i) => (Some(s0[i..].to_string()), s0[..i].to_string()),
@@ -30,18 +31,18 @@ pub fn parse_url_ext(s0: &str) -> Result<TypeOfConnection, Box<dyn error::Error>
     } else {
         match Url::parse(s0) {
             Ok(p) => Ok(TCP(p)),
-            Err(e) => Err(Box::new(e)),
+            Err(e) => DTPSR::Err(DTPSError::Other(format!("Could not parse url: {}", e))),
         }
     }
 }
 
 impl TypeOfConnection {
-    pub fn join(&self, s: &str) -> Result<TypeOfConnection, Box<dyn error::Error>> {
+    pub fn join(&self, s: &str) -> DTPSR<TypeOfConnection> {
         join_ext(&self, s)
     }
 }
 
-pub fn join_con(a: &str, b: &TypeOfConnection) -> Result<TypeOfConnection, Box<dyn error::Error>> {
+pub fn join_con(a: &str, b: &TypeOfConnection) -> DTPSR<TypeOfConnection> {
     match b {
         TCP(_) => Ok(b.clone()),
         UNIX(_) => Ok(b.clone()),
@@ -54,10 +55,7 @@ pub fn join_con(a: &str, b: &TypeOfConnection) -> Result<TypeOfConnection, Box<d
     }
 }
 
-pub fn join_ext(
-    conbase: &TypeOfConnection,
-    s: &str,
-) -> Result<TypeOfConnection, Box<dyn error::Error>> {
+pub fn join_ext(conbase: &TypeOfConnection, s: &str) -> DTPSR<TypeOfConnection> {
     if s.contains("://") {
         parse_url_ext(s)
     } else {

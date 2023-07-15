@@ -1,4 +1,4 @@
-use crate::RawData;
+use crate::{DTPSError, RawData, DTPSR};
 
 pub fn get_as_cbor(data: &RawData) -> serde_cbor::Value {
     let cbor_data = match data.content_type.as_str() {
@@ -29,7 +29,7 @@ pub fn get_inside(
     context: Vec<String>,
     data: &serde_cbor::Value,
     path: &Vec<String>,
-) -> Result<serde_cbor::Value, String> {
+) -> DTPSR<serde_cbor::Value> {
     let current = data;
     if path.len() == 0 {
         return Ok(current.clone());
@@ -42,9 +42,9 @@ pub fn get_inside(
         serde_cbor::value::Value::Array(a) => {
             let p: i64 = match first.parse() {
                 Ok(x) => x,
-                Err(_) => {
-                    let s = format!("{}Cannot parse {} as usize", context_s, first);
-                    return Err(s);
+                Err(e) => {
+                    let s = format!("{}Cannot parse {} as usize: {}", context_s, first, e);
+                    return DTPSError::other(s);
                 }
             };
 
@@ -55,7 +55,7 @@ pub fn get_inside(
                     first,
                     a.len()
                 );
-                return Err(s);
+                return DTPSError::other(s);
             } else {
                 let p = p as usize;
                 new_context.push(format!("[{}]", p));
@@ -76,7 +76,7 @@ pub fn get_inside(
                         context_s, first, available
                     );
 
-                    return Err(s);
+                    return DTPSError::other(s);
                 }
                 Some(v) => {
                     new_context.push(format!(".{}", first));
@@ -86,7 +86,7 @@ pub fn get_inside(
         }
         _ => {
             let s = format!("{}Cannot get inside this type", context_s);
-            return Err(s);
+            return DTPSError::other(s);
         }
     };
     return get_inside(new_context, &inside, &path);

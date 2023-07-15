@@ -59,17 +59,17 @@ impl TopicsIndexInternal {
         }
     }
 
-    pub fn add_path(&self, rel: &str) -> Self {
+    pub fn add_path<S: AsRef<str>>(&self, rel: S) -> Self {
         let mut topics = HashMap::new();
         for (topic_name, topic_ref_internal) in &self.topics {
-            let t = topic_ref_internal.add_path(rel);
-            topics.insert(topic_name, t);
+            let t = topic_ref_internal.add_path(rel.as_ref());
+            topics.insert(topic_name.clone(), t);
         }
         return Self {
             node_id: self.node_id.clone(),
             node_started: self.node_started,
-            node_app_data: Default::default(),
-            topics: Default::default(),
+            node_app_data: self.node_app_data.clone(),
+            topics,
         };
         // let mut topic_ref_internal = TopicRefInternal::new();
         // topic_ref_internal.add_path(rel);

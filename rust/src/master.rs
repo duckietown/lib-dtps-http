@@ -21,8 +21,10 @@ use crate::signals_logic::{
 use crate::utils::{divide_in_components, get_good_url_for_components};
 use crate::{
     get_accept_header, handle_topic_post, handle_websocket_generic, handler_topic_generic,
-    object_queues, root_handler, serve_static_file_path, HandlersResponse, RawData, ServerState,
-    TopicsIndexInternal, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
+    object_queues, put_alternative_locations, put_common_headers, root_handler,
+    serve_static_file_path, HandlersResponse, ObjectQueue, RawData, ServerState,
+    TopicsIndexInternal, HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID, HEADER_SEE_EVENTS,
+    HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
 };
 
 pub async fn serve_master_post(
@@ -38,10 +40,11 @@ pub async fn serve_master_post(
     let ds = match matched {
         Ok(ds) => ds,
         Err(s) => {
+            // return Err<s.into()>;
             // let s = format!("Cannot resolve the path {:?}:\n{}", path_components, s);
             let res = http::Response::builder()
                 .status(StatusCode::NOT_FOUND)
-                .body(Body::from(s))
+                .body(Body::from(s.to_string()))
                 .unwrap();
             return Ok(res);
         }
@@ -86,8 +89,9 @@ pub async fn serve_master_head(
     headers: HeaderMap,
 ) -> HandlersResponse {
     let path_str = path_normalize(path);
-
+    debug!("serve_master_head: path_str: {}", path_str);
     let matched = interpret_path(&path_str, ss_mutex.clone()).await;
+    let ss = ss_mutex.lock().await;
 
     // debug!(
     //     "serve_master:\npaths: {:#?}\nmatched: {:#?}",
@@ -97,15 +101,67 @@ pub async fn serve_master_head(
         Ok(ds) => ds,
         Err(s) => {
             // let s = format!("Cannot resolve the path {:?}:\n{}", path_components, s);
+            debug!("serve_master_head: path_str: {}\n{}", path_str, s);
+
             let res = http::Response::builder()
                 .status(StatusCode::NOT_FOUND)
-                .body(Body::from(s))
+                .body(Body::from(s.to_string()))
                 .unwrap();
             return Ok(res);
         }
     };
+    debug!("serve_master_head: ds: {:?}", ds);
+    let (topic_name, x) = {
+        match ds {
+            TypeOFSource::OurQueue(topic_name, _, _) => {
+                let x: &ObjectQueue;
+                match ss.oqs.get(topic_name.as_str()) {
+                    None => return Err(warp::reject::not_found()),
 
-    todo!()
+                    Some(y) => x = y,
+                }
+                (topic_name, x)
+            }
+            _ => {
+                if path_str == "/" {
+                    let x = ss.oqs.get("").unwrap();
+                    ("".to_string(), x)
+                } else {
+                    let res = http::Response::builder()
+                        .status(StatusCode::METHOD_NOT_ALLOWED)
+                        .body(Body::from("We dont support push to this"))
+                        .unwrap();
+                    return Ok(res);
+                }
+            }
+        }
+    };
+
+    let empty_vec: Vec<u8> = Vec::new();
+    let mut resp = Response::new(Body::from(empty_vec));
+
+    let h = resp.headers_mut();
+
+    h.insert(
+        HEADER_DATA_ORIGIN_NODE_ID,
+        HeaderValue::from_str(x.tr.origin_node.as_str()).unwrap(),
+    );
+    h.insert(
+        HEADER_DATA_UNIQUE_ID,
+        HeaderValue::from_str(x.tr.unique_id.as_str()).unwrap(),
+    );
+
+    h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static("events/"));
+    h.insert(
+        HEADER_SEE_EVENTS_INLINE_DATA,
+        HeaderValue::from_static("events/?send_data=1"),
+    );
+
+    let suffix = format!("{}/", topic_name); // FIXME
+
+    put_alternative_locations(&ss, h, &suffix);
+    put_common_headers(&ss, h);
+    Ok(resp.into())
 }
 
 fn path_normalize(path: warp::path::FullPath) -> String {
@@ -249,7 +305,7 @@ pub async fn serve_master_get(
 
     match ds {
         TypeOFSource::OurQueue(topic_name, _, _) => {
-            return if topic_name != "" {
+            return if true || topic_name != "" {
                 handler_topic_generic(topic_name, ss_mutex.clone(), headers).await
             } else {
                 root_handler(ss_mutex.clone(), headers).await
@@ -264,7 +320,7 @@ pub async fn serve_master_get(
         Err(s) => {
             let res = http::Response::builder()
                 .status(StatusCode::BAD_REQUEST)
-                .body(Body::from(s))
+                .body(Body::from(s.to_string()))
                 .unwrap();
             return Ok(res);
         }
@@ -346,8 +402,8 @@ pub async fn go_queue(
     };
 
     let content = match ss.get_blob_bytes(&digest) {
-        None => return Err(warp::reject::not_found()),
-        Some(x) => x,
+        Err(e) => return Err(warp::reject::not_found()),
+        Ok(x) => x,
     };
     let raw_data = RawData {
         content_type: content_type.clone(),

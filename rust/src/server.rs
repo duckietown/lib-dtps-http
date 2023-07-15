@@ -44,7 +44,7 @@ use crate::utils::divide_in_components;
 use crate::websocket_signals::{
     ChannelInfo, ChannelInfoDesc, MsgClientToServer, MsgServerToClient,
 };
-use crate::{format_digest_path, utils};
+use crate::{error_other, format_digest_path, parse_url_ext, utils, vec_concat, DTPSError, DTPSR};
 
 pub type HandlersResponse = Result<http::Response<hyper::Body>, Rejection>;
 
@@ -54,26 +54,34 @@ pub struct DTPSServer {
     pub cloudflare_tunnel_name: Option<String>,
     pub cloudflare_executable: String,
     pub unix_path: Option<String>,
+    // initial_proxy: HashMap<String, TypeOfConnection>,
 }
 
 impl DTPSServer {
-    pub fn new(
+    pub async fn new(
         listen_address: Option<SocketAddr>,
         cloudflare_tunnel_name: Option<String>,
         cloudflare_executable: String,
         unix_path: Option<String>,
-    ) -> Self {
-        let ss = ServerState::new(None);
+        initial_proxy: HashMap<String, TypeOfConnection>,
+    ) -> DTPSR<Self> {
+        let mut ss = ServerState::new(None)?;
+
+        for (k, v) in initial_proxy {
+            ss.add_proxied(k, v).await?;
+        }
+
         let mutex = Arc::new(Mutex::new(ss));
-        DTPSServer {
+
+        Ok(DTPSServer {
             listen_address,
             mutex,
             cloudflare_tunnel_name,
             cloudflare_executable,
             unix_path,
-        }
+        })
     }
-    pub async fn serve(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn serve(&mut self) -> DTPSR<()> {
         // get current pid
         let pid = std::process::id();
         if pid == 1 {
@@ -245,16 +253,16 @@ impl DTPSServer {
                 let mut s = self.mutex.lock().await;
 
                 let s1 = format!("http://localhost:{}{}", address.port(), "/");
-                s.add_advertise_url(&s1);
+                s.add_advertise_url(&s1)?;
 
                 let s2 = address.to_string().clone();
                 if !s2.contains("0.0.0.0") {
-                    s.add_advertise_url(&s2);
+                    s.add_advertise_url(&s2)?;
                 }
 
                 for host in platform::get_other_addresses() {
                     let x = format!("http://{}:{}{}", host, address.port(), "/");
-                    s.add_advertise_url(&x);
+                    s.add_advertise_url(&x)?;
                 }
 
                 use crate::platform;
@@ -262,7 +270,7 @@ impl DTPSServer {
                 let hostname = gethostname();
                 let hostname = hostname.to_string_lossy();
                 let x = format!("http://{}:{}{}", hostname, address.port(), "/");
-                s.add_advertise_url(&x);
+                s.add_advertise_url(&x)?;
             }
 
             handles.push(tokio::spawn(tcp_server));
@@ -345,7 +353,7 @@ impl DTPSServer {
             {
                 let mut s = self.mutex.lock().await;
                 s.info(format!("Listening on {:?}", unix_path));
-                s.add_advertise_url(&unix_url.to_string());
+                s.add_advertise_url(&unix_url.to_string())?;
             }
             handles.push(handle);
         }
@@ -360,12 +368,12 @@ impl DTPSServer {
         let pid = std::process::id();
         // s.info(format!("PID: {}", pid));
         info!("PID: {}", pid);
-        let res: Result<(), Box<dyn std::error::Error>>;
+        let res: DTPSR<()>;
         tokio::select! {
 
             _ = sig_int.recv() => {
                 info!("SIGINT received");
-                    res = Err("SIGINT received".into());
+                    res = Err(DTPSError::Interrupted);
                 },
                 _ = sig_hup.recv() => {
                     info!("SIGHUP received: gracefully shutting down");
@@ -440,7 +448,7 @@ pub async fn root_handler(
     headers: HeaderMap,
 ) -> HandlersResponse {
     let ss = ss_mutex.lock().await;
-    let index_internal = topics_index(&ss);
+    let index_internal = ss.create_topic_index();
     let index = index_internal.to_wire(None);
 
     let accept_headers: Vec<String> = get_accept_header(&headers);
@@ -729,25 +737,6 @@ pub async fn handle_websocket_generic(
     // debug!("handle_websocket_generic: {} - done", topic_name);
 }
 
-pub fn topics_index(ss: &ServerState) -> TopicsIndexInternal {
-    let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
-
-    for (topic_name, oq) in ss.oqs.iter() {
-        let url = get_url_from_topic_name(topic_name);
-        let tr = oq.tr.add_path(&url);
-        topics.insert(topic_name.clone(), tr);
-    }
-
-    let topics_index = TopicsIndexInternal {
-        node_id: ss.node_id.clone(),
-        node_started: ss.node_started,
-        node_app_data: ss.node_app_data.clone(),
-        topics,
-    };
-
-    return topics_index;
-}
-
 pub fn get_header_with_default(headers: &HeaderMap, key: &str, default: &str) -> String {
     return match headers.get(key) {
         None => default.to_string(),
@@ -775,7 +764,7 @@ pub async fn handle_topic_post(
 
     let byte_vector: Vec<u8> = data.to_vec().clone();
 
-    let ds = ss.publish(&topic_name, &byte_vector, &content_type, None);
+    let ds = ss.publish(&topic_name, &byte_vector, &content_type, None)?;
 
     // convert to cbor
     let ds_cbor = serde_cbor::to_vec(&ds).unwrap();
@@ -1177,6 +1166,9 @@ pub struct ServerArgs {
     /// Cloudflare executable filename
     #[arg(long, default_value_t = DEFAULT_CLOUDFLARE_EXECUTABLE.to_string())]
     cloudflare_executable: String,
+
+    #[arg(long)]
+    proxy: Vec<String>,
 }
 
 pub fn address_from_host_port(host: &str, port: u16) -> SocketAddr {
@@ -1186,7 +1178,7 @@ pub fn address_from_host_port(host: &str, port: u16) -> SocketAddr {
     one_addr
 }
 
-pub fn create_server_from_command_line() -> DTPSServer {
+pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {
     let args = ServerArgs::parse();
 
     let listen_address = if args.tcp_port > 0 {
@@ -1197,15 +1189,30 @@ pub fn create_server_from_command_line() -> DTPSServer {
     } else {
         None
     };
+    let mut proxy: HashMap<String, TypeOfConnection> = HashMap::new();
+    for p in args.proxy.iter() {
+        // parse name=value
+        let parts = p.splitn(2, '=').collect::<Vec<_>>();
 
-    let server = DTPSServer::new(
+        if parts.len() != 2 {
+            return error_other(format!("Invalid proxy specification: {}", p));
+        }
+        let name = parts.get(0).unwrap();
+        let value = parts.get(1).unwrap();
+        let url = parse_url_ext(value)?;
+        proxy.insert(name.to_string(), url);
+    }
+    if proxy.len() != 0 {
+        debug!("Proxy:\n{:#?}", proxy);
+    }
+    DTPSServer::new(
         listen_address,
         args.tunnel.clone(),
         args.cloudflare_executable.clone(),
         args.unix_path,
-    );
-
-    server
+        proxy,
+    )
+    .await
 }
 
 async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: f32) {

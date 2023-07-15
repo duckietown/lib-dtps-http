@@ -55,6 +55,7 @@ gethostname = "0.4.3"
 bytes = { version = "1.4.0", features = ["serde"] }
 serde-bytes-repr = "0.1.5"
 async-recursion = "1.0.4"
+thiserror = "1.0.43"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 getaddrs = "0.1.0"
