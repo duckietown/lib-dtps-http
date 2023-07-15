@@ -1,5 +1,6 @@
 mod cbor_manipulation;
 pub mod client;
+mod cloudflare;
 pub mod constants;
 mod html_utils;
 pub mod logs;
