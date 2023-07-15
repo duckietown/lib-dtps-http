@@ -26,12 +26,8 @@ use tokio_stream::wrappers::UnixListenerStream;
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use warp::http::header;
 use warp::hyper::Body;
-use warp::path::end as endbar;
 use warp::reply::Response;
-use warp::{Filter, Rejection, Reply};
-
-#[cfg(target_os = "linux")]
-use getaddrs::InterfaceAddrs;
+use warp::{Filter, Rejection};
 
 use crate::cloudflare::CloudflareTunnel;
 use crate::constants::*;
@@ -94,6 +90,7 @@ impl DTPSServer {
         // let static_route = warp::path("static").and(warp::fs::dir(dir_to_pathbuf(STATIC_FILES)));
         let master_route_get = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
+            .and(warp::get())
             .and(clone_access.clone())
             .and(warp::header::headers_cloned())
             .and_then(serve_master_get);
@@ -103,6 +100,7 @@ impl DTPSServer {
             .and(warp::post())
             .and(clone_access.clone())
             .and(warp::header::headers_cloned())
+            .and(warp::body::bytes())
             .and_then(serve_master_post);
 
         let master_route_head = warp::path::full()
@@ -133,8 +131,8 @@ impl DTPSServer {
         //     .and(clone_access.clone())
         //     .and(warp::header::headers_cloned())
         //     .and_then(root_handler);
-
-        let topic_address = warp::path!("topics" / String).and(endbar());
+        //
+        // let topic_address = warp::path!("topics" / String).and(endbar());
 
         // GEt request
         // let topic_generic_route_get = topic_address
@@ -757,12 +755,12 @@ pub fn get_header_with_default(headers: &HeaderMap, key: &str, default: &str) ->
     };
 }
 
-async fn handle_topic_post(
+pub async fn handle_topic_post(
     topic_name: String,
     ss_mutex: Arc<Mutex<ServerState>>,
     headers: HeaderMap,
     data: hyper::body::Bytes,
-) -> Result<impl Reply, Rejection> {
+) -> HandlersResponse {
     let mut ss = ss_mutex.lock().await;
 
     let content_type = get_header_with_default(&headers, CONTENT_TYPE, OCTET_STREAM);
@@ -777,10 +775,16 @@ async fn handle_topic_post(
 
     let byte_vector: Vec<u8> = data.to_vec().clone();
 
-    x.push_data(&content_type, &byte_vector, None);
+    let ds = ss.publish(&topic_name, &byte_vector, &content_type, None);
 
-    let ok = "ok";
-    Ok(warp::reply::json(&ok))
+    // convert to cbor
+    let ds_cbor = serde_cbor::to_vec(&ds).unwrap();
+    let res = http::Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/cbor")
+        .body(Body::from(ds_cbor))
+        .unwrap();
+    return Ok(res);
 }
 
 async fn handler_topic_html_summary(
@@ -797,10 +801,15 @@ async fn handler_topic_html_summary(
     }
 
     let (default_content_type, initial_value) = match x.sequence.last() {
-        None => ("application/yaml".to_string(), "".to_string()),
+        None => ("application/yaml".to_string(), "{}".to_string()),
         Some(l) => {
             let digest = &l.digest;
-            let content = ss.get_blob(digest).unwrap();
+            let content = match ss.get_blob(digest) {
+                None => {
+                    return Err(warp::reject::not_found());
+                }
+                Some(c) => c,
+            };
             let initial = match l.content_type.as_str() {
                 "application/yaml" | "application/json" => {
                     String::from_utf8(content.to_vec()).unwrap()
@@ -869,7 +878,7 @@ async fn handler_topic_html_summary(
 
                 button id="myButton" { "push" };
 
-                script src="../../static/send.js" {};
+                script src="!/static/send.js" {};
 
                 script type="text/javascript" { (PreEscaped(JAVASCRIPT_SEND)) };
             } // div

@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use log::debug;
 use maplit::hashmap;
+use maud::PreEscaped;
 use serde::{Deserialize, Serialize};
 use serde_cbor::Value as CBORValue;
 use serde_cbor::Value::Null as CBORNull;
@@ -105,6 +106,15 @@ pub trait GetMeta {
     ) -> Result<TopicsIndexInternal, String>;
 }
 
+#[async_trait]
+pub trait GetHTML {
+    async fn get_meta_index(
+        &self,
+        ss_mutex: Arc<Mutex<ServerState>>,
+        headers: HashMap<String, String>,
+    ) -> Result<PreEscaped<String>, String>;
+}
+
 pub trait DataProps {
     fn get_properties(&self) -> TopicProperties;
 }
@@ -131,7 +141,7 @@ impl ResolveDataSingle for TypeOFSource {
                 }
             }
             TypeOFSource::ForwardedQueue(q) => {
-                todo!()
+                Err(format!("not implemented TypeOFSource::ForwardedQueue"))
             }
             TypeOFSource::OurQueue(q, _, _) => {
                 if q == &"" {
@@ -248,7 +258,7 @@ impl GetMeta for TypeOFSource {
         &self,
         ss_mutex: Arc<Mutex<ServerState>>,
     ) -> Result<TopicsIndexInternal, String> {
-        debug!("get_meta_index: {:?}", self);
+        // debug!("get_meta_index: {:?}", self);
         return match self {
             TypeOFSource::ForwardedQueue(_) => {
                 todo!()
@@ -439,6 +449,16 @@ async fn single_compose(
 
 #[async_recursion]
 pub async fn interpret_path(
+    path: &str,
+    ss_mutex: Arc<Mutex<ServerState>>,
+) -> Result<TypeOFSource, String> {
+    let path_components0 = divide_in_components(&path, '/');
+    let path_components = path_components0.clone();
+    interpret_path_components(&path_components, ss_mutex.clone()).await
+}
+
+#[async_recursion]
+pub async fn interpret_path_components(
     path_components: &Vec<String>,
     ss_mutex: Arc<Mutex<ServerState>>,
 ) -> Result<TypeOFSource, String> {
@@ -455,17 +475,25 @@ pub async fn interpret_path(
         let before = path_components.get(0..i).unwrap().to_vec();
         let after = path_components.get(i + 1..).unwrap().to_vec();
         debug!("interpret_path: before: {:?} after: {:?}", before, after);
-        if after.len() > 0 {
-            todo!("interpret_path: after.len() > 0");
-        }
-        let interpret_before = interpret_path(&before, ss_mutex.clone()).await?;
 
-        return match interpret_before {
-            TypeOFSource::Compose(sc) => Ok(TypeOFSource::Deref(sc)),
-            _ => Err(format!(
-                "interpret_path: deref: before is not Compose: {:?}",
-                interpret_before
-            )),
+        let interpret_before = interpret_path_components(&before, ss_mutex.clone()).await?;
+
+        let first_part = match interpret_before {
+            TypeOFSource::Compose(sc) => TypeOFSource::Deref(sc),
+            _ => {
+                return Err(format!(
+                    "interpret_path: deref: before is not Compose: {:?}",
+                    interpret_before
+                ))
+            }
+        };
+        return if after.len() == 0 {
+            Ok(first_part)
+        } else {
+            Ok(TypeOFSource::Transformed(
+                Box::new(first_part),
+                Transforms::GetInside(after),
+            ))
         };
     }
 

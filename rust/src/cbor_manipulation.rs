@@ -99,6 +99,8 @@ fn identify_content_presentation(content_type: &str) -> Option<&'static str> {
         return Some("application/json");
     } else if content_type.ends_with("yaml") {
         return Some("application/yaml");
+    } else if content_type.starts_with("text/") {
+        return Some("text/plain");
     } else {
         None
     }
@@ -113,6 +115,11 @@ pub fn display_printable(content_type: &str, content: &[u8]) -> String {
     match identified.unwrap() {
         "application/yaml" => {
             let bytes: Vec<u8> = content.to_vec();
+            String::from_utf8(bytes).unwrap().to_string()
+        }
+        "text/plain" => {
+            let bytes: Vec<u8> = content.to_vec();
+
             String::from_utf8(bytes).unwrap().to_string()
         }
         "application/json" => {

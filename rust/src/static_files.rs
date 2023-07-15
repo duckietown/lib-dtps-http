@@ -76,7 +76,7 @@ pub async fn serve_static_file_path(path: &str) -> HandlersResponse {
         None => {}
     };
 
-    debug!("serve_static_file: path={}", path);
+    // debug!("serve_static_file: path={}", path);
     let file = match STATIC_FILES.get_file(path) {
         Some(file) => file,
         None => return Err(warp::reject::not_found()),

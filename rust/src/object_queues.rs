@@ -62,19 +62,23 @@ impl ObjectQueue {
         }
     }
 
-    pub fn push_data(
+    // pub fn push_data(
+    //     &mut self,
+    //     content_type: &str,
+    //     content: &Vec<u8>,
+    //     previous_clocks: Option<Clocks>,
+    // ) -> DataSaved {
+    //     let data = RawData {
+    //         content: content.clone().into(),
+    //         content_type: content_type.to_string(),
+    //     };
+    //     self.push(&data, previous_clocks)
+    // }
+    pub fn push(
         &mut self,
-        content_type: &str,
-        content: &Vec<u8>,
+        data: &RawData,
         previous_clocks: Option<Clocks>,
-    ) -> DataSaved {
-        let data = RawData {
-            content: content.clone().into(),
-            content_type: content_type.to_string(),
-        };
-        self.push(&data, previous_clocks)
-    }
-    pub fn push(&mut self, data: &RawData, previous_clocks: Option<Clocks>) -> DataSaved {
+    ) -> Result<DataSaved, String> {
         let now = Local::now().timestamp_nanos();
 
         let mut clocks = self.current_clocks(now);
@@ -99,7 +103,7 @@ impl ObjectQueue {
         if self.tx.receiver_count() > 0 {
             self.tx.send(this_seq).unwrap();
         }
-        return saved_data;
+        return Ok(saved_data);
     }
 
     fn current_clocks(&self, now: i64) -> Clocks {

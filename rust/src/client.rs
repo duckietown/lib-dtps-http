@@ -33,6 +33,7 @@ use crate::structures::{
     DataReady, FoundMetadata, LinkBenchmark, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection,
 };
 use crate::urls::{join_ext, parse_url_ext};
+use crate::utils::time_nanos;
 use crate::websocket_signals::MsgServerToClient;
 use crate::RawData;
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
@@ -54,10 +55,7 @@ pub async fn listen_events(md: FoundMetadata) {
 
         // let nanos = serde_json::from_slice::<u128>(&notification.rd.content).unwrap();
         let nanos: u128 = string.parse().unwrap();
-        let nanos_here = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        let nanos_here = time_nanos();
         let diff = nanos_here - nanos;
         if index > 0 {
             // ignore the first one
@@ -94,7 +92,7 @@ pub async fn listen_events(md: FoundMetadata) {
     // handle.await.unwrap().unwrap();
 }
 
-fn ms_from_ns(ns: u128) -> f64 {
+pub fn ms_from_ns(ns: u128) -> f64 {
     (ns as f64) / 1_000_000.0
 }
 
@@ -556,16 +554,10 @@ pub async fn get_metadata(
     conbase: &TypeOfConnection,
 ) -> Result<FoundMetadata, Box<dyn error::Error>> {
     // current time in nano seconds
-    let start = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let start = time_nanos();
 
     let resp = make_request(conbase, hyper::Method::HEAD).await?;
-    let end = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let end = time_nanos();
 
     let latency_ns = end - start;
 

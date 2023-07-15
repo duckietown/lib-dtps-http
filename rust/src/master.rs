@@ -15,13 +15,14 @@ use warp::reply::Response;
 use crate::cbor_manipulation::{display_printable, get_as_cbor, get_inside};
 use crate::html_utils::make_html;
 use crate::signals_logic::{
-    interpret_path, DataProps, ResolveDataSingle, ResolvedData, TopicProperties, TypeOFSource,
+    interpret_path, interpret_path_components, DataProps, GetMeta, ResolveDataSingle, ResolvedData,
+    TopicProperties, TypeOFSource,
 };
 use crate::utils::{divide_in_components, get_good_url_for_components};
 use crate::{
-    get_accept_header, handle_websocket_generic, handler_topic_generic, object_queues,
-    root_handler, serve_static_file_path, HandlersResponse, RawData, ServerState,
-    HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
+    get_accept_header, handle_topic_post, handle_websocket_generic, handler_topic_generic,
+    object_queues, root_handler, serve_static_file_path, HandlersResponse, RawData, ServerState,
+    TopicsIndexInternal, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
 };
 
 pub async fn serve_master_post(
@@ -29,8 +30,53 @@ pub async fn serve_master_post(
     query: HashMap<String, String>,
     ss_mutex: Arc<Mutex<ServerState>>,
     headers: HeaderMap,
+    data: hyper::body::Bytes,
 ) -> HandlersResponse {
-    todo!()
+    let path_str = path_normalize(path);
+    let matched = interpret_path(&path_str, ss_mutex.clone()).await;
+
+    let ds = match matched {
+        Ok(ds) => ds,
+        Err(s) => {
+            // let s = format!("Cannot resolve the path {:?}:\n{}", path_components, s);
+            let res = http::Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from(s))
+                .unwrap();
+            return Ok(res);
+        }
+    };
+
+    let p = ds.get_properties();
+    if !p.pushable {
+        let res = http::Response::builder()
+            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .body(Body::from("Cannot push to this topic"))
+            .unwrap();
+        return Ok(res);
+    }
+
+    match ds {
+        TypeOFSource::OurQueue(topic_name, _, _) => {
+            debug!("Pushing to topic {}", topic_name);
+            return handle_topic_post(topic_name, ss_mutex, headers, data).await;
+        }
+        _ => {
+            let res = http::Response::builder()
+                .status(StatusCode::METHOD_NOT_ALLOWED)
+                .body(Body::from("We dont support push to this"))
+                .unwrap();
+            return Ok(res);
+        }
+    }
+
+    // async fn handle_topic_post(
+    //     topic_name: String,
+    //     ss_mutex: Arc<Mutex<ServerState>>,
+    //     headers: HeaderMap,
+    //     data: hyper::body::Bytes,
+    // ) -> Result<impl Reply, Rejection> {}
+    // todo!()
 }
 
 pub async fn serve_master_head(
@@ -39,15 +85,30 @@ pub async fn serve_master_head(
     ss_mutex: Arc<Mutex<ServerState>>,
     headers: HeaderMap,
 ) -> HandlersResponse {
+    let path_str = path_normalize(path);
+
+    let matched = interpret_path(&path_str, ss_mutex.clone()).await;
+
+    // debug!(
+    //     "serve_master:\npaths: {:#?}\nmatched: {:#?}",
+    //     path_components, matched
+    // );
+    let ds = match matched {
+        Ok(ds) => ds,
+        Err(s) => {
+            // let s = format!("Cannot resolve the path {:?}:\n{}", path_components, s);
+            let res = http::Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from(s))
+                .unwrap();
+            return Ok(res);
+        }
+    };
+
     todo!()
 }
 
-pub async fn serve_master_get(
-    path: warp::path::FullPath,
-    query: HashMap<String, String>,
-    ss_mutex: Arc<Mutex<ServerState>>,
-    headers: HeaderMap,
-) -> HandlersResponse {
+fn path_normalize(path: warp::path::FullPath) -> String {
     let path_str = path.as_str();
     let pat = "/!/";
 
@@ -75,37 +136,50 @@ pub async fn serve_master_get(
 
         let res = path_str2.to_string().replace("/!!", "/!");
 
-        debug!(
-            "serve_master: normalizing /!/:\n   {:?}\n-> {:?} ",
-            path, res
-        );
+        // debug!(
+        //     "serve_master: normalizing /!/:\n   {:?}\n-> {:?} ",
+        //     path, res
+        // );
         res
     } else {
         path_str.to_string()
     };
 
     if path_str != new_path {
-        debug!("serve_master: path={:?} => {:?} ", path, new_path);
+        // debug!("serve_master: path={:?} => {:?} ", path, new_path);
     }
-    return serve_master0(&new_path, query, ss_mutex, headers).await;
+
+    new_path
 }
 
-pub async fn serve_master0(
-    path_str: &str,
+// pub async fn serve_master_get(
+//     path: warp::path::FullPath,
+//     query: HashMap<String, String>,
+//     ss_mutex: Arc<Mutex<ServerState>>,
+//     headers: HeaderMap,
+// ) -> HandlersResponse {
+//     let path_str = path.as_str();
+//
+//     return serve_master0(&new_path, query, ss_mutex, headers).await;
+// }
+
+pub async fn serve_master_get(
+    path: warp::path::FullPath,
     query: HashMap<String, String>,
     ss_mutex: Arc<Mutex<ServerState>>,
     headers: HeaderMap,
 ) -> HandlersResponse {
+    let path_str = path_normalize(path);
     if path_str.len() > 250 {
         panic!("Path too long: {:?}", path_str);
     }
 
     // log::debug!("serve_master: path={:?} ", path);
     // log::debug!("serve_master: query={:?} ", query);
-    let dereference = query.contains_key("dereference");
+    // let dereference = query.contains_key("dereference");
     // get the components of the path
 
-    let path_components0 = divide_in_components(path_str, '/');
+    let path_components0 = divide_in_components(&path_str, '/');
     let path_components = path_components0.clone();
     // // if there is a ! in the path_components, ignore all the PREVIOUS items
     // let bang = "!".to_string();
@@ -132,21 +206,6 @@ pub async fn serve_master0(
         }
     }
 
-    //     let path_components = path_components.iter().skip(1).cloned().collect::<Vec<String>>();
-    //     let path = path_components.join("/");
-    //     let path = format!("static/{}", path);
-    //     let res = warp::reply::with_header(
-    //         warp::reply::with_header(
-    //             warp::fs::file(path),
-    //             "Content-Type",
-    //             "text/html; charset=utf-8",
-    //         ),
-    //         "Cache-Control",
-    //         "no-cache",
-    //     );
-    //     return Ok(res);
-    // }
-
     if !path_components.contains(&STATIC_PREFIX) {
         let good_url = get_good_url_for_components(&path_components);
         if good_url != path_str {
@@ -164,19 +223,20 @@ pub async fn serve_master0(
                 .body(Body::from(text_response))
                 .unwrap();
 
-            // return Ok(res);
+            // TODO: renable
+            return Ok(res);
         }
     }
 
-    let matched = interpret_path(&path_components, ss_mutex.clone()).await;
-    debug!(
-        "serve_master:\npaths: {:#?}\nmatched: {:#?}",
-        path_components, matched
-    );
+    let matched = interpret_path(&path_str, ss_mutex.clone()).await;
+    // debug!(
+    //     "serve_master:\npaths: {:#?}\nmatched: {:#?}",
+    //     path_components, matched
+    // );
     let ds = match matched {
         Ok(ds) => ds,
         Err(s) => {
-            let s = format!("path_components: {:?}\n{}", path_components, s);
+            let s = format!("Cannot resolve the path {:?}:\n{}", path_components, s);
             let res = http::Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Body::from(s))
@@ -232,166 +292,24 @@ pub async fn serve_master0(
             return Ok(res);
         }
     };
+    let extra_html = match ds {
+        TypeOFSource::Compose(_) => {
+            let index = ds.get_meta_index(ss_mutex.clone()).await.unwrap();
+            make_index_html(&index)
+        }
+        _ => {
+            html! {}
+        }
+    };
     return visualize_data(
         &ds_props,
         path_str.to_string(),
+        extra_html,
         &rd.content_type,
         &rd.content,
         headers,
     )
     .await;
-
-    // let ss = ss_mutex.lock().await;
-    //         let mut topics: HashMap<TopicName, TopicRefWire> = hashmap! {};
-    //
-    //         for (topic_name, p1, prefix) in subtopics {
-    //             let oq = ss.oqs.get(&topic_name).unwrap();
-    //             let rel = prefix.join("/");
-    //
-    //             let rurl = format!("{}/", rel);
-    //
-    //             let dotsep = prefix.join(".");
-    //             topics.insert(dotsep, oq.tr.to_wire(Some(rurl)));
-    //         }
-    //
-    //         let index = TopicsIndexWire {
-    //             node_id: ss.node_id.clone(),
-    //             node_started: ss.node_started,
-    //             node_app_data: ss.node_app_data.clone(),
-    //             topics,
-    //         };
-    //         //
-    //         // return topics_index;
-    //         //
-    //         //     let index = topics_index(&ss);
-    //         let cbor_bytes = serde_cbor::to_vec(&index).unwrap();
-    //         cbor_bytes
-    //
-    //     log::debug!("serve_master: rd={:?} ", rd);
-    //
-    //     log::debug!("serve_master: path_components={:?} ", path_components);
-    //
-    //     // let first = path_components.remove(0);
-    //     let keys: Vec<String> = {
-    //         let ss = ss_mutex.lock().await;
-    //         ss.oqs.keys().cloned().collect()
-    //     };
-    //     log::debug!(" = path_components = {:?} ", path_components);
-    //     let mut subtopics: Vec<(String, Vec<String>, Vec<String>)> = vec![];
-    //     for k in keys {
-    //         let k2 = k.clone();
-    //         let components: Vec<String> = k2
-    //             .split('.')
-    //             .map(|x| x.to_string())
-    //             .collect::<Vec<String>>();
-    //         if components.len() == 0 {
-    //             continue;
-    //         }
-    //         match is_prefix_of(&components, &path_components) {
-    //             None => {}
-    //             Some((m1, m2)) => {
-    //                 return go_queue(k.clone(), m2, ss_mutex, headers).await;
-    //             }
-    //         };
-    //
-    //         log::debug!("k: {:?} = components = {:?} ", k, components);
-    //
-    //         let (matched, rest) = match is_prefix_of(&path_components, &components) {
-    //             None => continue,
-    //
-    //             Some(rest) => rest,
-    //         };
-    //
-    //         subtopics.push((k.clone(), matched, rest));
-    //     }
-    //
-    //     eprintln!("subtopics: {:?}", subtopics);
-    //     if subtopics.len() == 0 {
-    //         return Err(warp::reject::not_found());
-    //     }
-    //     let cbor_bytes = if !dereference {
-    //         let ss = ss_mutex.lock().await;
-    //         let mut topics: HashMap<TopicName, TopicRefWire> = hashmap! {};
-    //
-    //         for (topic_name, p1, prefix) in subtopics {
-    //             let oq = ss.oqs.get(&topic_name).unwrap();
-    //             let rel = prefix.join("/");
-    //
-    //             let rurl = format!("{}/", rel);
-    //
-    //             let dotsep = prefix.join(".");
-    //             topics.insert(dotsep, oq.tr.to_wire(Some(rurl)));
-    //         }
-    //
-    //         let index = TopicsIndexWire {
-    //             node_id: ss.node_id.clone(),
-    //             node_started: ss.node_started,
-    //             node_app_data: ss.node_app_data.clone(),
-    //             topics,
-    //         };
-    //         //
-    //         // return topics_index;
-    //         //
-    //         //     let index = topics_index(&ss);
-    //         let cbor_bytes = serde_cbor::to_vec(&index).unwrap();
-    //         cbor_bytes
-    //     } else {
-    //         let ss = ss_mutex.lock().await;
-    //
-    //         // let mut result_dict = BTreeMap::new();
-    //         let mut result_dict: serde_cbor::value::Value =
-    //             serde_cbor::value::Value::Map(BTreeMap::new());
-    //         for (k, p1, prefix) in subtopics {
-    //             let mut the_result_to_put: &mut serde_cbor::value::Value = {
-    //                 let mut current: &mut serde_cbor::value::Value = &mut result_dict;
-    //                 for component in &prefix[..prefix.len() - 1] {
-    //                     if let serde_cbor::value::Value::Map(inside) = current {
-    //                         let the_key = serde_cbor::value::Value::Text(component.clone().into());
-    //                         if !inside.contains_key(&the_key) {
-    //                             inside.insert(
-    //                                 the_key.clone(),
-    //                                 serde_cbor::value::Value::Map(BTreeMap::new()),
-    //                             );
-    //                         }
-    //                         current = inside.get_mut(&the_key).unwrap();
-    //                     } else {
-    //                         panic!("not a map");
-    //                     }
-    //                 }
-    //                 current
-    //             };
-    //
-    //             let where_to_put =
-    //                 if let serde_cbor::value::Value::Map(where_to_put) = &mut the_result_to_put {
-    //                     where_to_put
-    //                 } else {
-    //                     panic!("not a map");
-    //                 };
-    //             let key_to_put = serde_cbor::value::Value::Text(prefix.last().unwrap().clone().into());
-    //
-    //             let oq = ss.oqs.get(&k).unwrap();
-    //             match oq.sequence.last() {
-    //                 None => {
-    //                     where_to_put.insert(key_to_put, serde_cbor::value::Value::Null);
-    //                 }
-    //                 Some(v) => {
-    //                     let data = match oq.data.get(&v.digest) {
-    //                         None => return Err(warp::reject::not_found()),
-    //                         Some(y) => y,
-    //                     };
-    //                     let cbor_data = get_as_cbor(data);
-    //
-    //                     where_to_put.insert(key_to_put, cbor_data);
-    //                 }
-    //             }
-    //         }
-    //
-    //         // let cbor = serde_cbor::value::Value::Map(result_dict);
-    //
-    //         let cbor_bytes: Vec<u8> = serde_cbor::to_vec(&result_dict).unwrap();
-    //         // let as_yaml = serde_yaml::to_string(&cbor).unwrap();
-    //         cbor_bytes
-    //     };
 }
 
 pub async fn go_queue(
@@ -433,7 +351,7 @@ pub async fn go_queue(
     };
     let raw_data = RawData {
         content_type: content_type.clone(),
-        content: content,
+        content,
     };
     let c = get_as_cbor(&raw_data);
 
@@ -454,6 +372,7 @@ pub async fn go_queue(
             visualize_data(
                 &properties,
                 topic_name.to_string(),
+                html! {},
                 "application/cbor",
                 &cbor_bytes,
                 headers,
@@ -472,6 +391,7 @@ pub async fn go_queue(
 pub async fn visualize_data(
     properties: &TopicProperties,
     title: String,
+    extra_html: PreEscaped<String>,
     content_type: &str,
     content: &[u8],
     headers: HeaderMap,
@@ -490,7 +410,7 @@ pub async fn visualize_data(
                          p { "Content type: " code { (content_type) } }
                          p { "Content length: " (content.len()) }
 
-
+                            (extra_html)
 
                   div  {
 
@@ -516,7 +436,7 @@ pub async fn visualize_data(
             } // div
                 @if properties.pushable || properties.streamable {
 
-                 script src="../../static/send.js" {};
+                 script src="!/static/send.js" {};
 
                 script type="text/javascript" { (js) };
                 }
@@ -574,22 +494,25 @@ pub async fn handle_websocket_generic2(
     path: warp::path::FullPath,
     ws: warp::ws::WebSocket,
     state: Arc<Mutex<ServerState>>,
-    // topic_name: String,
     send_data: bool,
 ) -> () {
     // remove the last "events"
     let components = divide_in_components(path.as_str(), '/');
     // remove last onw
     let components = components[0..components.len() - 1].to_vec();
-    debug!("handle_websocket_generic2: {:?}", components);
-    let matched = interpret_path(&components, state.clone()).await;
-    debug!("handle_websocket_generic2: matched: {:?}", matched);
+
+    if components.len() == 0 {
+        return handle_websocket_generic(ws, state, "".to_string(), send_data).await;
+    }
+    // debug!("handle_websocket_generic2: {:?}", components);
+    let matched = interpret_path_components(&components, state.clone()).await;
+    debug!("events: matched: {:?}", matched);
 
     let ds = match matched {
         Ok(ds) => ds,
         Err(_) => {
             ws.close().await.unwrap();
-            /// how to send error?
+            // how to send error?
             return;
         }
     };
@@ -789,4 +712,99 @@ pub async fn handle_websocket_generic2(
     //     }
     // }
     // debug!("handle_websocket_generic: {} - done", topic_name);
+}
+
+pub fn make_index_html(index: &TopicsIndexInternal) -> PreEscaped<String> {
+    let mut keys: Vec<&str> = index.topics.keys().map(|k| k.as_str()).collect();
+
+    keys.sort();
+    let mut topic2url = Vec::new();
+    // first get all the versions of the components
+    let mut all_comps: Vec<Vec<String>> = vec![Vec::new()];
+
+    for topic_name in keys.iter() {
+        if topic_name == &"" {
+            continue;
+        }
+        let components = divide_in_components(topic_name, '.');
+
+        for i in 0..components.len() {
+            let mut v = Vec::new();
+            for j in 0..i + 1 {
+                v.push(components[j].clone());
+            }
+            if v.len() == 0 {
+                continue;
+            }
+            if !all_comps.contains(&v) {
+                all_comps.push(v);
+            }
+        }
+    }
+    for topic_vecs in all_comps.iter() {
+        if topic_vecs.len() == 0 {
+            continue;
+        }
+        let mut url = String::new();
+        for c in topic_vecs {
+            url.push_str(&c);
+            url.push_str("/");
+        }
+        let topic_name = topic_vecs.join(".");
+        topic2url.push((topic_name, url));
+    }
+
+    // for topic_name in keys.iter() {
+    //     if topic_name == &"" {
+    //         continue;
+    //     }
+    //     let mut url = String::new();
+    //     let components = divide_in_components(topic_name, '.');
+    //     for c in components {
+    //         url.push_str(&c);
+    //         url.push_str("/");
+    //     }
+    //     topic2url.push((topic_name, url));
+    // }
+
+    let x = make_html(
+        "index",
+        html! {
+
+
+                                  dl {
+                       dt {   a href ={("../")} { code {("up")}
+                                   }}
+                                      dd{
+                                      "One level up "
+                                      }
+
+                                  // h3 { "Dereference" }
+                     dt{   a href ={(":deref/")} { code {(":deref")} }
+        } dd {
+                                  "Dereference as a single topic"
+
+                                  }
+                                      }
+
+              h3 { "Topics" }
+
+                ul {
+                    @ for (topic_name,
+                    url) in topic2url.iter() {
+
+                    li { a href ={(url)} { code {(topic_name)} }}
+                    }
+                }
+
+                // h2 { "Index answer presented in YAML" }
+                //
+                // pre {
+                //     code {
+                //     (serde_yaml::to_string( & index).unwrap())
+                //     }
+                // }
+            },
+    );
+    x
 }

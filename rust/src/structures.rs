@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
 
-use crate::join_con;
+use crate::{join_con, RawData};
 use derive_more::Constructor;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -91,6 +91,9 @@ pub struct TopicRefWire {
     pub reachability: Vec<TopicReachabilityWire>,
     pub created: i64,
     pub properties: TopicProperties,
+    pub accept_content_type: Vec<String>,
+    pub produces_content_type: Vec<String>,
+    pub examples: Vec<RawData>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +104,9 @@ pub struct TopicRefInternal {
     pub reachability: Vec<TopicReachabilityInternal>,
     pub created: i64,
     pub properties: TopicProperties,
+    pub accept_content_type: Vec<String>,
+    pub produces_content_type: Vec<String>,
+    pub examples: Vec<RawData>,
 }
 
 impl TopicRefInternal {
@@ -117,6 +123,9 @@ impl TopicRefInternal {
             created: self.created,
             reachability,
             properties: self.properties.clone(),
+            accept_content_type: self.accept_content_type.clone(),
+            produces_content_type: self.produces_content_type.clone(),
+            examples: self.examples.clone(),
         }
     }
     pub fn from_wire(wire: &TopicRefWire, conbase: &TypeOfConnection) -> Self {
@@ -133,6 +142,9 @@ impl TopicRefInternal {
             created: wire.created,
             reachability,
             properties: wire.properties.clone(),
+            accept_content_type: wire.accept_content_type.clone(),
+            produces_content_type: wire.produces_content_type.clone(),
+            examples: wire.examples.clone(),
         }
     }
     pub fn add_path(&self, rel: &str) -> Self {
@@ -148,6 +160,9 @@ impl TopicRefInternal {
             created: self.created,
             reachability,
             properties: self.properties.clone(),
+            accept_content_type: self.accept_content_type.clone(),
+            produces_content_type: self.produces_content_type.clone(),
+            examples: self.examples.clone(),
         };
     }
 }

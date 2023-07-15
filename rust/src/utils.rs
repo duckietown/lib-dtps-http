@@ -28,11 +28,13 @@ pub fn get_good_url_for_components(components: &Vec<String>) -> String {
     }
     url
 }
+
 pub fn vec_concat<T: Clone>(a: &Vec<T>, b: &Vec<T>) -> Vec<T> {
     let mut c = a.clone();
     c.extend(b.iter().cloned());
     c
 }
+
 pub fn is_prefix_of<'a>(
     a: &'a Vec<String>,
     b: &'a Vec<String>,
@@ -60,4 +62,11 @@ pub fn epoch() -> f64 {
 pub fn format_nanos(n: i64) -> String {
     let ms = (n as f64) / 1_000_000.0;
     format!("{:.3}ms", ms)
+}
+
+pub fn time_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
 }

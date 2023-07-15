@@ -1,4 +1,5 @@
 use std::env;
+use std::io::Write;
 
 use crate::built_info;
 
@@ -37,4 +38,18 @@ pub fn init_logging() {
         eprintln!("RUST_LOG is set to {:?}", env::var("RUST_LOG"));
     }
     env_logger::init();
+
+    // env_logger::Builder::from_default_env()
+    //     .format(|buf, record| {
+    //         buf.write_fmt(format_args!(
+    //             "\n{}:{} {} [{}]\n {}\n",
+    //             record.file().unwrap_or("unknown"),
+    //             record.line().unwrap_or(0),
+    //             record.level(),
+    //             record.target(),
+    //             record.args()
+    //         ))
+    //     })
+    //     // .filter(Some("logger_example"), LevelFilter::Debug)
+    //     .init();
 }

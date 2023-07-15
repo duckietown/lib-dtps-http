@@ -1,36 +1,39 @@
 const button = document.getElementById('myButton');
 const textarea = document.getElementById('myTextArea');
 const textarea_content_type = document.getElementById('myTextAreaContentType');
-button.addEventListener('click', () => {
-    const content_type = textarea_content_type.value;
-    const content_json = jsyaml.load(textarea.value);
-    let data;
-    if (content_type === "application/json") {
-        data = JSON.stringify(content_json);
-    } else if (content_type === "application/cbor") {
-        data = CBOR.encode(content_json);
-    } else if (content_type === "application/yaml") {
-        data = jsyaml.dump(content_json);
 
-    } else {
-        alert("Unknown content type: " + content_type);
-        return;
-    }
-    // const content_cbor = CBOR.encode(content_json);
 
-    fetch('.', {
-        method: 'POST',
-        headers: {'Content-Type': content_type},
-        body: data
-    })
-        .then(response => response.json())
-        .then(data => console.log(data))
-        .catch(error => console.error('Error:', error));
-});
+if (button !== null) {
+    button.addEventListener('click', () => {
+        const content_type = textarea_content_type.value;
+        const content_json = jsyaml.load(textarea.value);
+        let data;
+        if (content_type === "application/json") {
+            data = JSON.stringify(content_json);
+        } else if (content_type === "application/cbor") {
+            data = CBOR.encode(content_json);
+        } else if (content_type === "application/yaml") {
+            data = jsyaml.dump(content_json);
 
+        } else {
+            alert("Unknown content type: " + content_type);
+            return;
+        }
+        // const content_cbor = CBOR.encode(content_json);
+
+        fetch('.', {
+            method: 'POST',
+            headers: {'Content-Type': content_type},
+            body: data
+        })
+            .then(response => response.json())
+            .then(data => console.log(data))
+            .catch(error => console.error('Error:', error));
+    });
+}
 function subscribeWebSocket(url, fieldId) {
     // Initialize a new WebSocket connection
-    var socket = new WebSocket(url);
+    let socket = new WebSocket(url);
 
     // Connection opened
     socket.addEventListener('open', function (event) {
@@ -54,7 +57,7 @@ function subscribeWebSocket(url, fieldId) {
             let diff = now - dr.time_inserted;
 
             let diff_ms = diff / 1000.0 / 1000.0;
-            console.log("diff", now, dr.time_inserted, diff);
+            // console.log("diff", now, dr.time_inserted, diff);
 
             let s = "Received this notification with " + diff_ms.toFixed(3) + " ms latency:\n";
             // console.log('Message from server: ', message);
@@ -125,8 +128,9 @@ function readFileAsArrayBuffer(blob) {
 
 
 document.addEventListener("DOMContentLoaded", function () {
-    var s = ((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + window.location.pathname + "events/";
+    let s = ((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + window.location.pathname + "events/";
 
+    console.log("subscribing to: ", s);
 
     subscribeWebSocket(s, 'result');
 });

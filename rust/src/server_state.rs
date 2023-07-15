@@ -1,6 +1,6 @@
-use bytes::Bytes;
 use std::collections::HashMap;
 
+use bytes::Bytes;
 use chrono::Local;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use crate::constants::*;
 use crate::object_queues::*;
 use crate::signals_logic::TopicProperties;
-use crate::structures::TypeOfConnection::Relative;
 use crate::structures::*;
 use crate::types::*;
 use crate::TypeOfConnection::Same;
@@ -69,10 +68,13 @@ impl ServerState {
             }],
             properties: TopicProperties {
                 streamable: true,
-                pushable: true,
+                pushable: false,
                 readable: true,
                 immutable: false,
             },
+            accept_content_type: vec![],
+            produces_content_type: vec![CONTENT_TYPE_DTPS_INDEX_CBOR.to_string()],
+            examples: vec![],
         };
         oqs.insert("".to_string(), ObjectQueue::new(tr));
 
@@ -86,10 +88,17 @@ impl ServerState {
             forwards: HashMap::new(),
             advertise_urls: vec![],
         };
-        ss.new_topic(TOPIC_LIST_CLOCK, None);
-        ss.new_topic(TOPIC_LIST_AVAILABILITY, None);
-        ss.new_topic(TOPIC_LIST_NAME, None);
-        ss.new_topic(TOPIC_LOGS, None);
+        let p = TopicProperties {
+            streamable: true,
+            pushable: false,
+            readable: true,
+            immutable: false,
+        };
+
+        ss.new_topic(TOPIC_LIST_CLOCK, None, "text/plain", &p);
+        ss.new_topic(TOPIC_LIST_AVAILABILITY, None, "application/json", &p);
+        ss.new_topic(TOPIC_LIST_NAME, None, "application/json", &p);
+        ss.new_topic(TOPIC_LOGS, None, "application/yaml", &p);
         return ss;
     }
 
@@ -103,12 +112,13 @@ impl ServerState {
     pub fn get_advertise_urls(&self) -> Vec<String> {
         self.advertise_urls.clone()
     }
-    pub fn log_message(&mut self, msg: String, level: &str) {
+    pub fn log_message(&mut self, msg: String, level: &str) -> Result<(), String> {
         let log_entry = LogEntry {
             level: level.to_string(),
             msg,
         };
-        self.publish_object_as_json(TOPIC_LOGS, &log_entry, None);
+        self.publish_object_as_json(TOPIC_LOGS, &log_entry, None)?;
+        Ok(())
     }
     pub fn debug(&mut self, msg: String) {
         debug!("{}", msg);
@@ -128,7 +138,13 @@ impl ServerState {
         self.log_message(msg, "warn");
     }
 
-    pub fn new_topic(&mut self, topic_name: &str, app_data: Option<HashMap<String, NodeAppData>>) {
+    pub fn new_topic(
+        &mut self,
+        topic_name: &str,
+        app_data: Option<HashMap<String, NodeAppData>>,
+        content_type: &str,
+        properties: &TopicProperties,
+    ) {
         let topic_name = topic_name.to_string();
         let uuid = get_queue_id(&self.node_id, &topic_name);
         // let uuid = Uuid::new_v4();
@@ -155,12 +171,10 @@ impl ServerState {
                 forwarders: vec![],
                 benchmark: link_benchmark,
             }],
-            properties: TopicProperties {
-                streamable: true,
-                pushable: false,
-                readable: true,
-                immutable: false,
-            },
+            properties: properties.clone(),
+            accept_content_type: vec![content_type.to_string()],
+            produces_content_type: vec![content_type.to_string()],
+            examples: vec![],
         };
         let oqs = &mut self.oqs;
 
@@ -177,12 +191,13 @@ impl ServerState {
 
         self.publish_object_as_json(TOPIC_LIST_NAME, &topics.clone(), None);
     }
-    pub fn make_sure_topic_exists(&mut self, topic_name: &str) {
-        if !self.oqs.contains_key(topic_name) {
-            info!("Queue {:?} does not exist, creating it.", topic_name);
-            return self.new_topic(topic_name, None);
-        }
-    }
+    // pub fn make_sure_topic_exists(&mut self, topic_name: &str,
+    // p: &TopicProperties) {
+    //     if !self.oqs.contains_key(topic_name) {
+    //         info!("Queue {:?} does not exist, creating it.", topic_name);
+    //         return self.new_topic(topic_name, None, p);
+    //     }
+    // }
 
     pub fn publish(
         &mut self,
@@ -190,14 +205,17 @@ impl ServerState {
         content: &[u8],
         content_type: &str,
         clocks: Option<Clocks>,
-    ) -> DataSaved {
-        self.make_sure_topic_exists(topic_name);
+    ) -> Result<DataSaved, String> {
+        // self.make_sure_topic_exists(topic_name, &p);
         let v = content.to_vec();
         let data = RawData {
             content: Bytes::from(v),
             content_type: content_type.to_string(),
         };
         self.save_blob(&data.digest(), &data.content);
+        if !self.oqs.contains_key(topic_name) {
+            return Err(format!("Topic {:?} does not exist", topic_name));
+        }
         let oq = self.oqs.get_mut(topic_name).unwrap();
 
         return oq.push(&data, clocks);
@@ -209,14 +227,21 @@ impl ServerState {
         return self.blobs.get(digest);
     }
     pub fn get_blob_bytes(&self, digest: &str) -> Option<Bytes> {
-        self.blobs.get(digest).map(|v| Bytes::from(v.clone()))
+        let x = self.blobs.get(digest).map(|v| Bytes::from(v.clone()));
+        match x {
+            Some(v) => Some(v),
+            None => {
+                error!("Blob {:#?} not found", digest);
+                None
+            }
+        }
     }
     pub fn publish_object_as_json<T: Serialize>(
         &mut self,
         topic_name: &str,
         object: &T,
         clocks: Option<Clocks>,
-    ) -> DataSaved {
+    ) -> Result<DataSaved, String> {
         let data_json = serde_json::to_string(object).unwrap();
         return self.publish_json(topic_name, data_json.as_str(), clocks);
     }
@@ -226,7 +251,7 @@ impl ServerState {
         topic_name: &str,
         object: &T,
         clocks: Option<Clocks>,
-    ) -> DataSaved {
+    ) -> Result<DataSaved, String> {
         let data_cbor = serde_cbor::to_vec(object).unwrap();
         return self.publish_cbor(topic_name, &data_cbor, clocks);
     }
@@ -235,7 +260,7 @@ impl ServerState {
         topic_name: &str,
         content: &[u8],
         clocks: Option<Clocks>,
-    ) -> DataSaved {
+    ) -> Result<DataSaved, String> {
         self.publish(topic_name, content, "application/cbor", clocks)
     }
     pub fn publish_json(
@@ -243,7 +268,7 @@ impl ServerState {
         topic_name: &str,
         json_content: &str,
         clocks: Option<Clocks>,
-    ) -> DataSaved {
+    ) -> Result<DataSaved, String> {
         let bytesdata = json_content.as_bytes().to_vec();
         self.publish(topic_name, &bytesdata, "application/json", clocks)
     }
@@ -252,7 +277,7 @@ impl ServerState {
         topic_name: &str,
         yaml_content: &str,
         clocks: Option<Clocks>,
-    ) -> DataSaved {
+    ) -> Result<DataSaved, String> {
         let bytesdata = yaml_content.as_bytes().to_vec();
         self.publish(topic_name, &bytesdata, "application/yaml", clocks)
     }
@@ -261,7 +286,7 @@ impl ServerState {
         topic_name: &str,
         text_content: &str,
         clocks: Option<Clocks>,
-    ) -> DataSaved {
+    ) -> Result<DataSaved, String> {
         let bytesdata = text_content.as_bytes().to_vec();
         self.publish(topic_name, &bytesdata, "text/plain", clocks)
     }

@@ -1,7 +1,9 @@
+#[cfg(target_os = "linux")]
+use getaddrs::InterfaceAddrs;
 use log::debug;
 
 #[cfg(target_os = "linux")]
-fn get_other_addresses() -> Vec<String> {
+pub fn get_other_addresses() -> Vec<String> {
     println!("You are running Linux!");
 
     let addrs = InterfaceAddrs::query_system().expect("System has no network interfaces.");
