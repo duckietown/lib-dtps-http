@@ -17,8 +17,8 @@ use crate::cbor_manipulation::{get_as_cbor, get_inside};
 use crate::signals_logic::ResolvedData::{NotAvailableYet, NotFound, Regular};
 use crate::utils::{divide_in_components, is_prefix_of, vec_concat};
 use crate::{
-    make_rel_url, DTPSError, NodeAppData, RawData, ServerState, TopicName, TopicRefInternal,
-    TopicsIndexInternal, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
+    make_rel_url, DTPSError, NodeAppData, RawData, ServerState, ServerStateAccess, TopicName,
+    TopicRefInternal, TopicsIndexInternal, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
 };
 
 #[derive(Debug, Clone)]
@@ -92,20 +92,19 @@ pub struct TopicProperties {
 
 #[async_trait]
 pub trait ResolveDataSingle {
-    async fn resolve_data_single(&self, ss_mutex: Arc<Mutex<ServerState>>) -> DTPSR<ResolvedData>;
+    async fn resolve_data_single(&self, ss_mutex: ServerStateAccess) -> DTPSR<ResolvedData>;
 }
 
 #[async_trait]
 pub trait GetMeta {
-    async fn get_meta_index(&self, ss_mutex: Arc<Mutex<ServerState>>)
-        -> DTPSR<TopicsIndexInternal>;
+    async fn get_meta_index(&self, ss_mutex: ServerStateAccess) -> DTPSR<TopicsIndexInternal>;
 }
 
 #[async_trait]
 pub trait GetHTML {
     async fn get_meta_index(
         &self,
-        ss_mutex: Arc<Mutex<ServerState>>,
+        ss_mutex: ServerStateAccess,
         headers: HashMap<String, String>,
     ) -> DTPSR<PreEscaped<String>>;
 }
@@ -116,7 +115,7 @@ pub trait DataProps {
 
 #[async_trait]
 impl ResolveDataSingle for TypeOFSource {
-    async fn resolve_data_single(&self, ss_mutex: Arc<Mutex<ServerState>>) -> DTPSR<ResolvedData> {
+    async fn resolve_data_single(&self, ss_mutex: ServerStateAccess) -> DTPSR<ResolvedData> {
         match self {
             TypeOFSource::Digest(digest, content_type) => {
                 let ss = ss_mutex.lock().await;
@@ -207,7 +206,7 @@ async fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<Resolved
     }
 }
 
-async fn our_queue(topic_name: &str, ss_mutex: Arc<Mutex<ServerState>>) -> DTPSR<ResolvedData> {
+async fn our_queue(topic_name: &str, ss_mutex: ServerStateAccess) -> DTPSR<ResolvedData> {
     let ss = ss_mutex.lock().await;
     if !ss.oqs.contains_key(topic_name) {
         return Ok(NotFound(format!("No queue with name {}", topic_name)));
@@ -229,10 +228,7 @@ async fn our_queue(topic_name: &str, ss_mutex: Arc<Mutex<ServerState>>) -> DTPSR
 
 #[async_trait]
 impl GetMeta for TypeOFSource {
-    async fn get_meta_index(
-        &self,
-        ss_mutex: Arc<Mutex<ServerState>>,
-    ) -> DTPSR<TopicsIndexInternal> {
+    async fn get_meta_index(&self, ss_mutex: ServerStateAccess) -> DTPSR<TopicsIndexInternal> {
         // debug!("get_meta_index: {:?}", self);
         return match self {
             TypeOFSource::ForwardedQueue(_) => {
@@ -284,7 +280,7 @@ impl GetMeta for TypeOFSource {
 
 async fn get_sc_meta(
     sc: &SourceComposition,
-    ss_mutex: Arc<Mutex<ServerState>>,
+    ss_mutex: ServerStateAccess,
 ) -> DTPSR<TopicsIndexInternal> {
     if sc.is_root {
         let ss = ss_mutex.lock().await;
@@ -372,7 +368,7 @@ async fn get_sc_meta(
 
 async fn single_compose(
     sc: &SourceComposition,
-    ss_mutex: Arc<Mutex<ServerState>>,
+    ss_mutex: ServerStateAccess,
 ) -> DTPSR<ResolvedData> {
     // let ss = ss_mutex.lock().await;
 
@@ -431,7 +427,7 @@ async fn single_compose(
 }
 
 #[async_recursion]
-pub async fn interpret_path(path: &str, ss_mutex: Arc<Mutex<ServerState>>) -> DTPSR<TypeOFSource> {
+pub async fn interpret_path(path: &str, ss_mutex: ServerStateAccess) -> DTPSR<TypeOFSource> {
     let path_components0 = divide_in_components(&path, '/');
     let path_components = path_components0.clone();
     interpret_path_components(&path_components, ss_mutex.clone()).await
@@ -440,7 +436,7 @@ pub async fn interpret_path(path: &str, ss_mutex: Arc<Mutex<ServerState>>) -> DT
 #[async_recursion]
 pub async fn interpret_path_components(
     path_components: &Vec<String>,
-    ss_mutex: Arc<Mutex<ServerState>>,
+    ss_mutex: ServerStateAccess,
 ) -> DTPSR<TypeOFSource> {
     if path_components.contains(&"!".to_string()) {
         return DTPSError::other(format!(

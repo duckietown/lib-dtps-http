@@ -4,7 +4,7 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::Path;
 use std::process::Command;
 use std::string::ToString;
-use std::sync::Arc;
+use std::sync::Arc as StdArc;
 
 use chrono::Local;
 use clap::Parser;
@@ -20,7 +20,7 @@ use tokio::signal::unix::SignalKind;
 use tokio::spawn;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
-use tokio::sync::Mutex;
+use tokio::sync::Mutex as TokioMutex;
 use tokio::time::{interval, Duration};
 use tokio_stream::wrappers::UnixListenerStream;
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
@@ -48,10 +48,11 @@ use crate::{
 };
 
 pub type HandlersResponse = Result<http::Response<hyper::Body>, Rejection>;
+pub type ServerStateAccess = StdArc<TokioMutex<ServerState>>;
 
 pub struct DTPSServer {
     pub listen_address: Option<SocketAddr>,
-    pub mutex: Arc<Mutex<ServerState>>,
+    pub mutex: ServerStateAccess,
     pub cloudflare_tunnel_name: Option<String>,
     pub cloudflare_executable: String,
     pub unix_path: Option<String>,
@@ -68,7 +69,7 @@ impl DTPSServer {
     ) -> DTPSR<Self> {
         let ss = ServerState::new(None)?;
 
-        let mutex = Arc::new(Mutex::new(ss));
+        let mutex: ServerStateAccess = StdArc::new(TokioMutex::new(ss));
 
         Ok(DTPSServer {
             listen_address,
@@ -89,7 +90,7 @@ impl DTPSServer {
             warn!("If running through `docker run`, use `docker run --init` to avoid this.")
         }
 
-        let server_state_access: Arc<Mutex<ServerState>> = self.mutex.clone();
+        let server_state_access: ServerStateAccess = self.mutex.clone();
 
         let clone_access = warp::any().map(move || server_state_access.clone());
 
@@ -185,7 +186,7 @@ impl DTPSServer {
         //         move |c: String,
         //               q: EventsQuery,
         //               ws: warp::ws::Ws,
-        //               state1: Arc<Mutex<ServerState>>| {
+        //               state1: ServerStateAccess| {
         //             let send_data = match q.send_data {
         //                 Some(x) => x != 0,
         //                 None => false,
@@ -218,7 +219,7 @@ impl DTPSServer {
             .and(warp::ws())
             .map({
                 move |path: warp::path::FullPath,
-                      state1: Arc<Mutex<ServerState>>,
+                      state1: ServerStateAccess,
                       q: EventsQuery,
                       ws: warp::ws::Ws| {
                     let send_data = match q.send_data {
@@ -312,7 +313,7 @@ impl DTPSServer {
             debug!("Started process: {}", child.id());
         }
 
-        // let lock = self.mutex.clone();
+        let ssa = self.mutex.clone();
         let node_id = self.get_node_id().await;
         let socketanme = format!("dtps-{}-rust.sock", node_id);
         let unix_path = env::temp_dir().join(socketanme);
@@ -354,7 +355,7 @@ impl DTPSServer {
             // info!("Listening on {:?}", unix_path);
             let unix_url = format!("http+unix://{}/", unix_path.replace("/", "%2F"));
             {
-                let mut s = self.mutex.lock().await;
+                let mut s = ssa.lock().await;
                 s.info(format!("Listening on {:?}", unix_path));
                 s.add_advertise_url(&unix_url.to_string())?;
             }
@@ -365,17 +366,17 @@ impl DTPSServer {
         spawn(clock_go(self.get_lock(), TOPIC_LIST_CLOCK, 1.0));
 
         if self.initial_proxy.len() > 0 {
-            let mut s = self.mutex.lock().await;
-            for (k, v) in &self.initial_proxy {
-                s.add_proxied(k.clone(), v.clone()).await?;
+            // let s = ssa.lock().await;
+            for (k, v) in self.initial_proxy.clone() {
+                self.add_proxied(k.clone(), v.clone()).await?;
             }
             info!("Proxies started");
         }
         {
-            let s = self.mutex.lock().await;
+            let ss = ssa.lock().await;
             info!(
                 "Server started. Advertised URLs: \n{}\n",
-                indent_all_with(" ", s.get_advertise_urls().join("\n"))
+                indent_all_with(" ", ss.get_advertise_urls().join("\n"))
             );
         }
 
@@ -423,7 +424,7 @@ impl DTPSServer {
         res
     }
 
-    pub fn get_lock(&self) -> Arc<Mutex<ServerState>> {
+    pub fn get_lock(&self) -> ServerStateAccess {
         self.mutex.clone()
     }
     pub async fn get_node_id(&self) -> String {
@@ -431,11 +432,86 @@ impl DTPSServer {
         let ss = lock.lock().await;
         ss.node_id.clone()
     }
+
+    pub async fn add_proxied(&mut self, proxied_name: String, url: TypeOfConnection) -> DTPSR<()> {
+        // let (md, index_internal) = loop {
+        //     match get_proxy_info(&url).await {
+        //         Ok(s) => break s,
+        //         Err(e) => {
+        //             error!(
+        //                 "add_proxied: error getting proxy info for proxied {:?} at {}: \n {}",
+        //                 proxied_name, url, e
+        //             );
+        //             info!("add_proxied: retrying in 2 seconds");
+        //             sleep(std::time::Duration::from_secs(2)).await;
+        //             continue;
+        //         }
+        //     }
+        // };
+        //
+        // let index_internal =
+        //     loop {
+        //         match (
+        //             md = get_metadata(&url).await
+        //                 .with_context(|| {
+        //                     format!(
+        //                         "Error getting metadata for proxied {:?} at {}",
+        //                         proxied_name, url
+        //                     )
+        //                 })?;
+        //
+        //             debug!("add_proxied: md:\n{:#?}", md);
+        //             get_index(&url).await
+        //         ) {}
+        //
+        //         //     .or_else(
+        //         //     |e| {
+        //         //         error!("add_proxied: error getting index for proxied {:?} at {}: \n {}", proxied_name, url, e);
+        //         //         Err(e)
+        //         //     }
+        //         // )?;
+        //
+        //         // sleep 5 seconds
+        //         tokio::time::sleep(Duration::from_secs(5)).await;
+        //     }
+        //     ;
+
+        // let md = match get_metadata(&url).await {
+        //     Ok(md) => md,
+        //     Err(e) => {
+        //         return DTPSError::not_reachable(format!(
+        //             "Error getting metadata for proxied {:?} at {}: \n {}",
+        //             proxied_name, url, e
+        //         ));
+        //     }
+        // };
+
+        let ssa = self.get_lock();
+
+        let handle = tokio::spawn(observe_proxy(proxied_name.clone(), url.clone(), ssa));
+
+        //
+        // self.proxied.insert(
+        //     proxied_name.clone(),
+        //     ForwardInfo {
+        //         url: url.clone(),
+        //         md,
+        //         index_internal,
+        //         handle,
+        //     },
+        // );
+        // debug!("add_proxied: done, now:\n{:#?}", self.proxied);
+        // self.update_my_topic()?;
+
+        // add_context!(std::fs::read_to_string("my_file.txt"), "Failed to read file");
+
+        Ok(())
+    }
 }
 
 async fn check_exists(
     topic_name: String,
-    ss_mutex: Arc<Mutex<ServerState>>,
+    ss_mutex: ServerStateAccess,
 ) -> Result<String, Rejection> {
     let ss = ss_mutex.lock().await;
 
@@ -461,10 +537,7 @@ pub fn get_accept_header(headers: &HeaderMap) -> Vec<String> {
     }
 }
 
-pub async fn root_handler(
-    ss_mutex: Arc<Mutex<ServerState>>,
-    headers: HeaderMap,
-) -> HandlersResponse {
+pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> HandlersResponse {
     let ss = ss_mutex.lock().await;
     let index_internal = ss.create_topic_index();
     let index = index_internal.to_wire(None);
@@ -559,7 +632,7 @@ pub async fn root_handler(
 
 pub async fn handle_websocket_generic(
     ws: warp::ws::WebSocket,
-    state: Arc<Mutex<ServerState>>,
+    state: ServerStateAccess,
     topic_name: String,
     send_data: bool,
 ) -> () {
@@ -764,7 +837,7 @@ pub fn get_header_with_default(headers: &HeaderMap, key: &str, default: &str) ->
 
 pub async fn handle_topic_post(
     topic_name: String,
-    ss_mutex: Arc<Mutex<ServerState>>,
+    ss_mutex: ServerStateAccess,
     headers: HeaderMap,
     data: hyper::body::Bytes,
 ) -> HandlersResponse {
@@ -796,7 +869,7 @@ pub async fn handle_topic_post(
 
 async fn handler_topic_html_summary(
     topic_name: String,
-    ss_mutex: Arc<Mutex<ServerState>>,
+    ss_mutex: ServerStateAccess,
 ) -> Result<http::Response<Body>, Rejection> {
     let ss = ss_mutex.lock().await;
 
@@ -936,7 +1009,7 @@ pub const JAVASCRIPT_SEND: &str = r##"
 
 pub async fn handler_topic_generic(
     topic_name: String,
-    ss_mutex: Arc<Mutex<ServerState>>,
+    ss_mutex: ServerStateAccess,
     headers: HeaderMap,
 ) -> Result<http::Response<Body>, Rejection> {
     let accept_headers: Vec<String> = get_accept_header(&headers);
@@ -987,7 +1060,7 @@ pub async fn handler_topic_generic(
 
 async fn handler_topic_generic_head(
     topic_name: String,
-    ss_mutex: Arc<Mutex<ServerState>>,
+    ss_mutex: ServerStateAccess,
 ) -> Result<Response, Rejection> {
     let ss = ss_mutex.lock().await;
 
@@ -1028,7 +1101,7 @@ async fn handler_topic_generic_data(
     topic_name: String,
     content_type: String,
     digest: String,
-    ss_mutex: Arc<Mutex<ServerState>>,
+    ss_mutex: ServerStateAccess,
     headers: HeaderMap,
 ) -> Result<Response, Rejection> {
     let accept_headers: Vec<String> = get_accept_header(&headers);
@@ -1233,7 +1306,7 @@ pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {
     .await
 }
 
-async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: f32) {
+async fn clock_go(state: ServerStateAccess, topic_name: &str, interval_s: f32) {
     let mut clock = interval(Duration::from_secs_f32(interval_s));
     clock.tick().await;
     loop {

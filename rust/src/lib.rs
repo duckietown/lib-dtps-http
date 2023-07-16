@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 mod cbor_manipulation;
 pub mod client;
 mod cloudflare;

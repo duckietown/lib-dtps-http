@@ -1,13 +1,11 @@
-use anyhow::Context;
 use std::collections::HashMap;
 use std::string::ToString;
-use std::sync::Arc;
 
+use anyhow::Context;
 use bytes::Bytes;
 use log::debug;
 use maud::{html, PreEscaped};
 use serde_yaml;
-use tokio::sync::Mutex;
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use warp::http::header;
 use warp::hyper::Body;
@@ -23,7 +21,7 @@ use crate::utils::{divide_in_components, get_good_url_for_components};
 use crate::{
     get_accept_header, handle_topic_post, handle_websocket_generic, handler_topic_generic,
     object_queues, put_alternative_locations, put_common_headers, root_handler,
-    serve_static_file_path, todtpserror, HandlersResponse, ObjectQueue, RawData, ServerState,
+    serve_static_file_path, todtpserror, HandlersResponse, ObjectQueue, RawData, ServerStateAccess,
     TopicsIndexInternal, HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID, HEADER_SEE_EVENTS,
     HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
 };
@@ -31,7 +29,7 @@ use crate::{
 pub async fn serve_master_post(
     path: warp::path::FullPath,
     query: HashMap<String, String>,
-    ss_mutex: Arc<Mutex<ServerState>>,
+    ss_mutex: ServerStateAccess,
     headers: HeaderMap,
     data: hyper::body::Bytes,
 ) -> HandlersResponse {
@@ -76,7 +74,7 @@ pub async fn serve_master_post(
 
     // async fn handle_topic_post(
     //     topic_name: String,
-    //     ss_mutex: Arc<Mutex<ServerState>>,
+    //     ss_mutex: ServerStateAccess,
     //     headers: HeaderMap,
     //     data: hyper::body::Bytes,
     // ) -> Result<impl Reply, Rejection> {}
@@ -86,7 +84,7 @@ pub async fn serve_master_post(
 pub async fn serve_master_head(
     path: warp::path::FullPath,
     query: HashMap<String, String>,
-    ss_mutex: Arc<Mutex<ServerState>>,
+    ss_mutex: ServerStateAccess,
     headers: HeaderMap,
 ) -> HandlersResponse {
     let path_str = path_normalize(path);
@@ -212,7 +210,7 @@ fn path_normalize(path: warp::path::FullPath) -> String {
 // pub async fn serve_master_get(
 //     path: warp::path::FullPath,
 //     query: HashMap<String, String>,
-//     ss_mutex: Arc<Mutex<ServerState>>,
+//     ss_mutex: ServerStateAccess,
 //     headers: HeaderMap,
 // ) -> HandlersResponse {
 //     let path_str = path.as_str();
@@ -223,7 +221,7 @@ fn path_normalize(path: warp::path::FullPath) -> String {
 pub async fn serve_master_get(
     path: warp::path::FullPath,
     query: HashMap<String, String>,
-    ss_mutex: Arc<Mutex<ServerState>>,
+    ss_mutex: ServerStateAccess,
     headers: HeaderMap,
 ) -> HandlersResponse {
     debug!("headers:\n{:?}", headers);
@@ -376,7 +374,7 @@ pub async fn serve_master_get(
 pub async fn go_queue(
     topic_name: String,
     components: Vec<String>,
-    ss_mutex: Arc<Mutex<ServerState>>,
+    ss_mutex: ServerStateAccess,
     headers: HeaderMap,
 ) -> HandlersResponse {
     if components.len() == 0 {
@@ -554,7 +552,7 @@ pub async fn visualize_data(
 pub async fn handle_websocket_generic2(
     path: warp::path::FullPath,
     ws: warp::ws::WebSocket,
-    state: Arc<Mutex<ServerState>>,
+    state: ServerStateAccess,
     send_data: bool,
 ) -> () {
     // remove the last "events"

@@ -9,9 +9,11 @@ use tokio::spawn;
 use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
 
-use dtps_http::{create_server_from_command_line, init_logging, ServerState, DTPSR};
+use dtps_http::{
+    create_server_from_command_line, init_logging, ServerState, ServerStateAccess, DTPSR,
+};
 
-async fn clock_go(state: Arc<Mutex<ServerState>>, topic_name: &str, interval_s: f32) {
+async fn clock_go(state: ServerStateAccess, topic_name: &str, interval_s: f32) {
     let mut clock = interval(Duration::from_secs_f32(interval_s));
     clock.tick().await;
     loop {

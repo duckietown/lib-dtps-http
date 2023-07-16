@@ -1,9 +1,7 @@
-use anyhow::Context;
 use std::any::Any;
-use std::io::ErrorKind;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::{error, io};
+use std::time::Duration;
 
+use anyhow::Context;
 use base64;
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
@@ -19,6 +17,7 @@ use tokio::net::UnixStream;
 use tokio::spawn;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
@@ -39,11 +38,24 @@ use crate::websocket_signals::MsgServerToClient;
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
 use crate::{not_available, DTPSError, RawData, DTPSR};
 
-pub async fn listen_events(md: FoundMetadata) {
+/// Note: need to have use futures::{StreamExt} in scope to use this
+pub async fn get_events_stream_inline(
+    url: TypeOfConnection,
+) -> (JoinHandle<DTPSR<()>>, UnboundedReceiverStream<Notification>) {
     let (tx, rx) = mpsc::unbounded_channel();
+    let inline_url = url.clone();
+    let handle = tokio::spawn(listen_events_url_inline(inline_url, tx));
+    let stream = UnboundedReceiverStream::new(rx);
+    (handle, stream)
+}
+
+pub async fn listen_events(md: FoundMetadata) {
+    // let (tx, rx) = mpsc::unbounded_channel();
     let inline_url = md.events_data_inline_url.unwrap().clone();
-    let handle = spawn(listen_events_url_inline(inline_url, tx));
-    let mut stream = UnboundedReceiverStream::new(rx);
+    // let handle = spawn(listen_events_url_inline(inline_url, tx));
+    // let mut stream = UnboundedReceiverStream::new(rx);
+
+    let (handle, mut stream) = get_events_stream_inline(inline_url).await;
 
     // keep track of the latencies in a vector and compute the mean
 
@@ -111,7 +123,7 @@ enum EitherStream<A, B> {
     TCPStream(B),
 }
 
-async fn listen_events_url_inline(
+pub async fn listen_events_url_inline(
     con: TypeOfConnection,
     tx: UnboundedSender<Notification>,
 ) -> DTPSR<()> {
