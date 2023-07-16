@@ -183,7 +183,7 @@ impl LinkBenchmark {
     pub fn identity() -> Self {
         Self {
             complexity: 0,
-            bandwidth: 1000_000_000,
+            bandwidth: 1_000_000_000,
             latency: 0.0,
             reliability: 1.0,
             hops: 0,

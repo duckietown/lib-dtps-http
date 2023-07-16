@@ -14,9 +14,9 @@ use crate::cbor_manipulation::{get_as_cbor, get_inside};
 use crate::signals_logic::ResolvedData::{NotAvailableYet, NotFound, Regular};
 use crate::utils::{divide_in_components, is_prefix_of};
 use crate::{
-    get_rawdata, DTPSError, LinkBenchmark, NodeAppData, RawData, ServerState, ServerStateAccess,
-    TopicName, TopicReachabilityInternal, TopicRefInternal, TopicsIndexInternal, TypeOfConnection,
-    CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
+    get_rawdata, DTPSError, ForwardingStep, LinkBenchmark, NodeAppData, RawData, ServerState,
+    ServerStateAccess, TopicName, TopicReachabilityInternal, TopicRefInternal, TopicsIndexInternal,
+    TypeOfConnection, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
 };
 
 #[derive(Debug, Clone)]
@@ -250,6 +250,8 @@ async fn our_queue(topic_name: &TopicName, ss_mutex: ServerStateAccess) -> DTPSR
     };
 }
 
+pub const MASK_ORIGIN: bool = true;
+
 #[async_trait]
 impl GetMeta for TypeOFSource {
     async fn get_meta_index(
@@ -265,18 +267,34 @@ impl GetMeta for TypeOFSource {
                 let the_data = ss.proxied_topics.get(&q.my_topic_name).unwrap();
                 let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
 
-                let mut tr = the_data.tr.clone();
+                let mut tr = the_data.tr_original.clone();
 
                 let np = presented_as.as_components().len();
                 let components = q.my_topic_name.as_components();
                 let rel_components = components[np..].to_vec();
                 let rel_topic_name = TopicName::from_components(&rel_components);
                 let rurl = rel_topic_name.as_relative_url();
+
+                let mut the_forwarders = the_data.reachability_we_used.forwarders.clone();
+
+                the_forwarders.push(ForwardingStep {
+                    forwarding_node: node_id.to_string(),
+                    forwarding_node_connects_to: "".to_string(),
+
+                    performance: the_data.link_benchmark_last.clone(),
+                });
+                let link_benchmark_total = the_data.reachability_we_used.benchmark.clone()
+                    + the_data.link_benchmark_last.clone();
+                let rurl = format!("HERE/{}", rurl);
+
+                if MASK_ORIGIN {
+                    tr.reachability.clear();
+                }
                 tr.reachability.push(TopicReachabilityInternal {
                     con: TypeOfConnection::Relative(rurl, None),
                     answering: node_id.clone(),
-                    forwarders: vec![],
-                    benchmark: LinkBenchmark::identity(),
+                    forwarders: the_forwarders,
+                    benchmark: link_benchmark_total.clone(),
                 });
 
                 topics.insert(TopicName::root(), tr);
@@ -311,7 +329,7 @@ impl GetMeta for TypeOFSource {
                     con: TypeOfConnection::Relative(rurl, None),
                     answering: node_id.clone(),
                     forwarders: vec![],
-                    benchmark: LinkBenchmark::identity(),
+                    benchmark: LinkBenchmark::identity(), //ok
                 });
 
                 let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
@@ -695,7 +713,7 @@ pub fn iterate_type_of_sources(s: &ServerState) -> HashMap<TopicName, TypeOFSour
             subscription: x.from_subscription.clone(),
             his_topic_name: x.its_topic_name.clone(),
             my_topic_name: topic_name.clone(),
-            properties: x.tr.properties.clone(),
+            properties: x.tr_original.properties.clone(),
         };
         res.insert(topic_name.clone(), TypeOFSource::ForwardedQueue(fq));
 

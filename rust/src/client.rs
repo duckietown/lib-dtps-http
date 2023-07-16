@@ -399,8 +399,8 @@ pub enum UrlResult {
 pub async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResult {
     let md = get_metadata(con).await;
     let complexity = match con {
-        TCP(_) => 1,
-        UNIX(_) => 0,
+        TCP(_) => 2,
+        UNIX(_) => 1,
         Relative(_, _) => {
             panic!("unexpected relative url here: {}", con);
         }
@@ -437,7 +437,7 @@ pub async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResul
                             bandwidth: 100_000_000,
                             latency,
                             reliability,
-                            hops: 0,
+                            hops: 1,
                         };
                         Accessible(lb)
                     }

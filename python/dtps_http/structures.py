@@ -23,7 +23,7 @@ class LinkBenchmark:
 
     @classmethod
     def identity(cls) -> "LinkBenchmark":
-        return cls(complexity=0, bandwidth=float(1_000_000_000), latency=0.0, reliability=1.0, hops=0)
+        return cls(complexity=0, bandwidth=float(1_000_000_000), latency=0.0, reliability=1.0, hops=1)
 
     def __or__(self, other: "LinkBenchmark") -> "LinkBenchmark":
         complexity = self.complexity + other.complexity
@@ -71,7 +71,7 @@ class TopicRef:
     origin_node: NodeID  # unique id of the node that created the stream
     app_data: dict[str, bytes]
     reachability: list[TopicReachability]
-    
+
 
 
 @dataclass

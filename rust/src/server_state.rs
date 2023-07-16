@@ -17,7 +17,7 @@ use crate::structures::*;
 use crate::types::*;
 use crate::{
     get_events_stream_inline, get_index, get_metadata, get_queue_id, get_random_node_id, get_stats,
-    DTPSError, ServerStateAccess, UrlResult, DTPSR,
+    DTPSError, ServerStateAccess, UrlResult, DTPSR, MASK_ORIGIN,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -39,14 +39,16 @@ pub struct ForwardInfo {
 #[derive(Debug)]
 pub struct ProxiedTopicInfo {
     pub tr_original: TopicRefInternal,
-    pub tr: TopicRefInternal,
+    // pub tr: TopicRefInternal,
     pub from_subscription: String,
     pub its_topic_name: TopicName,
     // pub handle: JoinHandle<DTPSR<()>>,
     pub data_url: TypeOfConnection,
 
-    pub forwarding_steps: Vec<ForwardingStep>,
-    pub link_benchmark: LinkBenchmark,
+    pub reachability_we_used: TopicReachabilityInternal,
+    // pub forwarding_steps: Vec<ForwardingStep>,
+    pub link_benchmark_last: LinkBenchmark,
+    // pub link_benchmark_total: LinkBenchmark,
 }
 
 #[derive(Debug)]
@@ -76,7 +78,7 @@ impl ServerState {
 
         let mut oqs: HashMap<TopicName, ObjectQueue> = HashMap::new();
 
-        let link_benchmark = LinkBenchmark::identity();
+        // let link_benchmark = LinkBenchmark::identity();
         let now = Local::now().timestamp_nanos();
         let app_data = node_app_data.clone();
         let tr = TopicRefInternal {
@@ -198,41 +200,44 @@ impl ServerState {
         its_topic_name: &TopicName,
         topic_name: &TopicName,
         tr_original: &TopicRefInternal,
-        forwarding_steps: Vec<ForwardingStep>,
-        link_benchmark: LinkBenchmark,
-        data_url: TypeOfConnection,
+        reachability_we_used: TopicReachabilityInternal,
+        // forwarding_steps: Vec<ForwardingStep>,
+        link_benchmark_last: LinkBenchmark,
+        // link_benchmark_total: LinkBenchmark,
+        // data_url: TypeOfConnection,
     ) -> DTPSR<()> {
         if self.proxied_topics.contains_key(topic_name) {
             return Err(DTPSError::TopicAlreadyExists(topic_name.to_dotted()));
         }
 
-        // TODO: need to add forwarders info
-        let mut reachability = vec![];
-        for r in &tr_original.reachability {
-            reachability.push(r.clone());
-        }
-        let tr = TopicRefInternal {
-            unique_id: tr_original.unique_id.clone(),
-            origin_node: tr_original.origin_node.clone(),
-            app_data: tr_original.app_data.clone(),
-            created: tr_original.created,
-            reachability: reachability,
-            properties: tr_original.properties.clone(),
-            accept_content_type: tr_original.accept_content_type.clone(),
-            produces_content_type: tr_original.produces_content_type.clone(),
-            examples: tr_original.examples.clone(),
-        };
-
+        // // TODO: need to add forwarders info
+        // let mut reachability = vec![];
+        // for r in &tr_original.reachability {
+        //     reachability.push(r.clone());
+        // }
+        // let tr = TopicRefInternal {
+        //     unique_id: tr_original.unique_id.clone(),
+        //     origin_node: tr_original.origin_node.clone(),
+        //     app_data: tr_original.app_data.clone(),
+        //     created: tr_original.created,
+        //     reachability: reachability,
+        //     properties: tr_original.properties.clone(),
+        //     accept_content_type: tr_original.accept_content_type.clone(),
+        //     produces_content_type: tr_original.produces_content_type.clone(),
+        //     examples: tr_original.examples.clone(),
+        // };
+        let data_url = reachability_we_used.con.clone();
         self.proxied_topics.insert(
             topic_name.clone(),
             ProxiedTopicInfo {
                 tr_original: tr_original.clone(),
-                tr,
+                // tr,
                 from_subscription: from_subscription.clone(),
                 its_topic_name: its_topic_name.clone(),
-                forwarding_steps,
-                link_benchmark,
+
+                link_benchmark_last,
                 data_url,
+                reachability_we_used,
             },
         );
         info!("New proxy topic {:?} -> {:?}", topic_name, its_topic_name);
@@ -412,7 +417,7 @@ impl ServerState {
 
         for (topic_name, oq) in self.oqs.iter() {
             // debug!("topics_index: topic_name: {:#?}", topic_name);
-            let url = topic_name.as_relative_url();
+            // let url = topic_name.as_relative_url();
             let mut tr = oq.tr.clone();
 
             tr.reachability.push(TopicReachabilityInternal {
@@ -427,16 +432,31 @@ impl ServerState {
         }
         for (topic_name, oq) in self.proxied_topics.iter() {
             // debug!("topics_index: topic_name: {:#?}", topic_name);
-            let url = topic_name.as_relative_url();
+            // let url = topic_name.as_relative_url();
             // let tr = oq.tr.add_path(&url);
 
-            let mut tr = oq.tr.clone();
+            let mut tr = oq.tr_original.clone();
+
+            let mut forwarders = oq.reachability_we_used.forwarders.clone();
+
+            forwarders.push(ForwardingStep {
+                forwarding_node: self.node_id.clone(),
+                forwarding_node_connects_to: oq.data_url.to_string(),
+
+                performance: oq.link_benchmark_last.clone(),
+            });
+
+            let total = oq.reachability_we_used.benchmark.clone() + oq.link_benchmark_last.clone();
+
+            if MASK_ORIGIN {
+                tr.reachability.clear();
+            }
 
             tr.reachability.push(TopicReachabilityInternal {
                 con: TypeOfConnection::Relative(topic_name.as_relative_url(), None),
                 answering: self.node_id.clone(),
-                forwarders: vec![],
-                benchmark: LinkBenchmark::identity(),
+                forwarders,
+                benchmark: total,
             });
 
             topics.insert(topic_name.clone(), tr);
@@ -450,10 +470,10 @@ impl ServerState {
         //                      NodeAppData::from(format!("{:#?}", self.proxied)));
 
         let mut node_app_data = self.node_app_data.clone();
-        node_app_data.insert(
-            "@ServerStatE::create_topic_index".to_string(),
-            NodeAppData::from(format!("{:#?}", self.proxied_topics)),
-        );
+        // node_app_data.insert(
+        //     "@ServerStatE::create_topic_index".to_string(),
+        //     NodeAppData::from(format!("{:#?}", self.proxied_topics)),
+        // );
         let topics_index = TopicsIndexInternal {
             node_id: self.node_id.clone(),
             node_started: self.node_started,
@@ -508,15 +528,17 @@ pub async fn observe_proxy(
         }
     };
 
+    let who_answers = md.clone().answering.unwrap().clone();
+
     let stats = get_stats(&url, md.clone().answering.unwrap().clone().as_ref()).await;
     let link1 = match stats {
         UrlResult::Inaccessible(_) => {
             /// TODO
-            LinkBenchmark::identity()
+            LinkBenchmark::identity() // ok
         }
         UrlResult::WrongNodeAnswering => {
             /// TODO
-            LinkBenchmark::identity()
+            LinkBenchmark::identity() // ok
         }
         UrlResult::Accessible(l) => l,
     };
@@ -543,6 +565,7 @@ pub async fn observe_proxy(
         let mut ss = ss_mutex.lock().await;
         add_from_response(
             &mut ss,
+            who_answers.clone(),
             &subcription_name,
             &mounted_at,
             &index_internal_at_t0,
@@ -562,6 +585,7 @@ pub async fn observe_proxy(
             let mut ss = ss_mutex.lock().await;
             add_from_response(
                 &mut ss,
+                who_answers.clone(),
                 &subcription_name,
                 &mounted_at,
                 &ti,
@@ -579,6 +603,7 @@ pub async fn observe_proxy(
 
 pub fn add_from_response(
     s: &mut ServerState,
+    who_answers: String,
     subscription: &String,
     mounted_at: &TopicName,
     tii: &TopicsIndexInternal,
@@ -586,7 +611,7 @@ pub fn add_from_response(
     connected_url: String,
 ) -> DTPSR<()> {
     // let mut l = hashmap! {};
-    // debug!("topics_index: proxied: {:#?}", self.proxied);
+    debug!("topics_index: tii: \n{:#?}", tii);
     for (its_topic_name, tr) in tii.topics.iter() {
         if its_topic_name.is_root() {
             continue; // TODO
@@ -604,16 +629,16 @@ pub fn add_from_response(
                 its_topic_name, subscription, tr
             ));
         }
-        let we_use = tr.reachability.get(0).unwrap();
-        let mut forwarders = we_use.forwarders.clone();
-
-        forwarders.push(ForwardingStep {
-            forwarding_node: s.node_id.clone(),
-            forwarding_node_connects_to: connected_url.clone(),
-
-            performance: link_benchmark1.clone(),
-        });
-        let link_benchmark_total = LinkBenchmark::identity();
+        let reachability_we_used = tr.reachability.get(0).unwrap();
+        // let mut forwarders = we_use.forwarders.clone();
+        //
+        // forwarders.push(ForwardingStep {
+        //     forwarding_node: s.node_id.clone(),
+        //     forwarding_node_connects_to: connected_url.clone(),
+        //
+        //     performance: link_benchmark1.clone(),
+        // });
+        // let link_benchmark_total = we_use.benchmark.clone() + link_benchmark1.clone();
 
         // let we_use_url = tr.reachability.get(0).unwrap().con.clone();
         s.new_proxy_topic(
@@ -621,9 +646,8 @@ pub fn add_from_response(
             &its_topic_name,
             &available_as,
             tr,
-            forwarders,
-            link_benchmark_total,
-            we_use.con.clone(),
+            reachability_we_used.clone(),
+            link_benchmark1.clone(),
         )?;
     }
     Ok(())
