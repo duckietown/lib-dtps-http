@@ -1,5 +1,3 @@
-use std::error;
-
 use crate::{DTPSError, DTPSR};
 use url::Url;
 

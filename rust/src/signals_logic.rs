@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use async_trait::async_trait;
@@ -11,14 +10,13 @@ use serde::{Deserialize, Serialize};
 use serde_cbor::Value as CBORValue;
 use serde_cbor::Value::Null as CBORNull;
 use serde_cbor::Value::Text as CBORText;
-use tokio::sync::Mutex;
 
 use crate::cbor_manipulation::{get_as_cbor, get_inside};
 use crate::signals_logic::ResolvedData::{NotAvailableYet, NotFound, Regular};
 use crate::utils::{divide_in_components, is_prefix_of, vec_concat};
 use crate::{
-    make_rel_url, DTPSError, NodeAppData, RawData, ServerState, ServerStateAccess, TopicName,
-    TopicRefInternal, TopicsIndexInternal, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
+    make_rel_url, DTPSError, NodeAppData, RawData, ServerStateAccess, TopicName, TopicRefInternal,
+    TopicsIndexInternal, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
 };
 
 #[derive(Debug, Clone)]
@@ -290,7 +288,7 @@ async fn get_sc_meta(
     let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
     let mut node_app_data = HashMap::new();
 
-    let mut debug_s = String::new();
+    let debug_s = String::new();
     for (prefix, inside) in sc.compose.iter() {
         // let inside = inside.resolve_data_single(ss_mutex.clone()).await?;
         // let inside = match inside {

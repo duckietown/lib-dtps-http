@@ -1,6 +1,5 @@
 use hyper::Body;
 use include_dir::{include_dir, Dir};
-use log::debug;
 
 use maud::{html, DOCTYPE};
 use mime_guess::from_path;

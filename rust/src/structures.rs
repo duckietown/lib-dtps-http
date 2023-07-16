@@ -10,7 +10,7 @@ use url::Url;
 
 use crate::signals_logic::TopicProperties;
 use crate::urls::join_ext;
-use crate::utils::{divide_in_components, get_good_url_for_components};
+use crate::utils::divide_in_components;
 
 pub type NodeAppData = String;
 

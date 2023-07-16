@@ -5,7 +5,7 @@ use anyhow::Context;
 use bytes::Bytes;
 use log::debug;
 use maud::{html, PreEscaped};
-use serde_yaml;
+
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use warp::http::header;
 use warp::hyper::Body;

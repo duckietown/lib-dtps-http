@@ -8,7 +8,6 @@ use log::{debug, error, info, warn};
 use maplit::hashmap;
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
-use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::constants::*;
 use crate::object_queues::*;
@@ -18,10 +17,8 @@ use crate::types::*;
 use crate::TypeOfConnection::Same;
 use crate::{
     divide_in_components, get_events_stream_inline, get_index, get_metadata, get_queue_id,
-    get_random_node_id, listen_events_url_inline, vec_concat, DTPSError, ServerStateAccess, DTPSR,
+    get_random_node_id, vec_concat, DTPSError, ServerStateAccess, DTPSR,
 };
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LogEntry {

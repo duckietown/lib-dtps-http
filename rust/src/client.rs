@@ -14,7 +14,7 @@ use hyperlocal::UnixClientExt;
 use log::{debug, error, info};
 use rand::Rng;
 use tokio::net::UnixStream;
-use tokio::spawn;
+
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;

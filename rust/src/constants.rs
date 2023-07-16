@@ -24,7 +24,7 @@ pub static CONTENT_TYPE_DTPS_INDEX_CBOR: &'static str = "application/vnd.dt.dtps
 
 mod test {
     use super::*;
-    use log::debug;
+
     use mime::Mime;
 
     #[test]

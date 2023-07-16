@@ -1,5 +1,4 @@
 use std::env;
-use std::io::Write;
 
 use crate::built_info;
 

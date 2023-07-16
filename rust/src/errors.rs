@@ -1,5 +1,3 @@
-use std::fmt::Display;
-
 use anyhow::Result;
 use http::StatusCode;
 use warp::{Rejection, Reply};
