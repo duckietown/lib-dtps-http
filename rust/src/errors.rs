@@ -3,6 +3,7 @@ use anyhow::Result;
 use http::StatusCode;
 use indent::indent_all_with;
 use std::fmt::Debug;
+use std::net::AddrParseError;
 use warp::{Rejection, Reply};
 
 #[derive(thiserror::Error, Debug)]
@@ -46,6 +47,9 @@ pub enum DTPSError {
 
     #[error(transparent)]
     FromHTTP(#[from] http::Error),
+
+    #[error(transparent)]
+    NetworkError(#[from] AddrParseError),
 }
 
 impl DTPSError {

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::env;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::path::Path;
 use std::process::Command;
 use std::string::ToString;
@@ -398,21 +398,23 @@ impl DTPSServer {
         // s.info(format!("PID: {}", pid));
         info!("PID: {}", pid);
         let res: DTPSR<()>;
+        // let first = handles.get_mut(0).unwrap();
+        // first.await;
         tokio::select! {
 
             _ = sig_int.recv() => {
                 info!("SIGINT received");
                     res = Err(DTPSError::Interrupted);
-                },
-                _ = sig_hup.recv() => {
-                    info!("SIGHUP received: gracefully shutting down");
-                    res = Ok(());
-                },
-                _ = sig_term.recv() => {
-                    info!("SIGTERM received: gracefully shutting down");
-                    res = Ok(());
+            },
+            _ = sig_hup.recv() => {
+                info!("SIGHUP received: gracefully shutting down");
+                res = Ok(());
+            },
+            _ = sig_term.recv() => {
+                info!("SIGTERM received: gracefully shutting down");
+                res = Ok(());
 
-                },
+            },
                 // _ = futures::future::join_all(&handles) => {
                 //     info!("shutdown received");
                 //     // return Err("shutdown received".into());
@@ -447,7 +449,6 @@ impl DTPSServer {
         &mut self,
         subcription_name: &String,
         mounted_at: &TopicName,
-
         url: TypeOfConnection,
     ) -> DTPSR<()> {
         // let (md, index_internal) = loop {
@@ -1287,11 +1288,26 @@ pub struct ServerArgs {
     proxy: Vec<String>,
 }
 
-pub fn address_from_host_port(host: &str, port: u16) -> SocketAddr {
+pub fn address_from_host_port(host: &str, port: u16) -> DTPSR<SocketAddr> {
     let hoststring = format!("{}:{}", host, port);
-    let mut addrs_iter = hoststring.to_socket_addrs().unwrap();
-    let one_addr = addrs_iter.next().unwrap();
-    one_addr
+
+    let s: Result<SocketAddr, _> = hoststring.parse();
+    match s {
+        Ok(x) => return Ok(x),
+        Err(e) => {
+            debug!("Cannot parse {}: {}", hoststring, e);
+            error_other(format!("Cannot parse {}: {}", hoststring, e))
+        }
+    }
+
+    // debug!("Hoststring: {}", hoststring);
+    // let mut addrs_iter = hoststring.to_socket_addrs()?;
+    // let one_addr = addrs_iter.next();
+    // return if one_addr.is_none() {
+    //     error_other(format!("Cannot resolve {}", hoststring))
+    // } else {
+    //     Ok(one_addr.unwrap())
+    // }
 }
 
 pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {
@@ -1301,7 +1317,7 @@ pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {
         Some(address_from_host_port(
             args.tcp_host.as_str(),
             args.tcp_port,
-        ))
+        )?)
     } else {
         None
     };

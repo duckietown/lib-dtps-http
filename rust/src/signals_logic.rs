@@ -250,7 +250,7 @@ async fn our_queue(topic_name: &TopicName, ss_mutex: ServerStateAccess) -> DTPSR
     };
 }
 
-pub const MASK_ORIGIN: bool = true;
+pub const MASK_ORIGIN: bool = false;
 
 #[async_trait]
 impl GetMeta for TypeOFSource {

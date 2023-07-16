@@ -16,6 +16,10 @@ run-proxy2-continuous:
 	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8002  --proxy proxy1=http://localhost:8001 '
 
 
+run-proxy2-continuous-b:
+	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8002  --proxy proxy1=https'
+
+
 run-proxy3-continuous:
 	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8003  --proxy proxy2=http://localhost:8002 '
 

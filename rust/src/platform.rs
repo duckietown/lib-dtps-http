@@ -7,7 +7,6 @@ pub fn get_other_addresses() -> Vec<String> {
     println!("You are running Linux!");
 
     let addrs = InterfaceAddrs::query_system().expect("System has no network interfaces.");
-    // debug!("Found {} network interfaces", addrs.len());
     let mut ret = Vec::new();
     ret.push("localhost".to_string());
     for addr in addrs {
