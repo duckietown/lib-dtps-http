@@ -44,7 +44,9 @@ async fn main() -> () {
     match clock().await {
         Ok(_) => return,
         Err(e) => {
-            error!("Error in serving:\n{}", e);
+            error!("Error in serving:\n{:?}", e);
+
+            // error!("Source: {}", e.source().unwrap());
 
             // exit with error code
             std::process::exit(1);

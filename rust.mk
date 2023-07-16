@@ -4,14 +4,12 @@ tag=andreacensi/dtps-rust-demo
 
 RELEASE='--release' # 0.5ms
 RELEASE='' # 2.5
-run-server-continuous:
-	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8000'
 
 run-server-continuous:
 	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8000'
 
 run-proxy-continuous:
-	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8001    --proxy node1=http://localhost:8000'
+	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8001  --proxy node1=http://localhost:8000 --tunnel  test-dtps1-tunnel.json' 
 
 
 

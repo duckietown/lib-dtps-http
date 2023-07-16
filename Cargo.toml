@@ -8,7 +8,7 @@ build = "rust/build.rs"
 path = "rust/src/lib.rs"
 
 [dependencies]
-anyhow = "1.0.71"
+anyhow = { version = "1.0.71", features = ["std", "backtrace"] }
 async-trait = "0.1.71"
 base64 = "0.21.2"
 broadcast = "0.1"
@@ -56,6 +56,7 @@ bytes = { version = "1.4.0", features = ["serde"] }
 serde-bytes-repr = "0.1.5"
 async-recursion = "1.0.4"
 thiserror = "1.0.43"
+indent = "0.1.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 getaddrs = "0.1.0"

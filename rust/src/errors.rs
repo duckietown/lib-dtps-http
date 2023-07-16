@@ -1,43 +1,48 @@
-use thiserror::Error;
-use warp::Rejection;
+use std::fmt::Display;
 
-#[derive(Error, Debug)]
+use anyhow::Result;
+use http::StatusCode;
+use warp::{Rejection, Reply};
+
+#[derive(thiserror::Error, Debug)]
 pub enum DTPSError {
-    #[error("Internal inconsistency:\n{0}")]
+    #[error("Internal inconsistency:\n{}", indent_inside(.0))]
     InternalInconsistency(String),
 
-    #[error("Not available:\n{0}")]
+    #[error("Not available:\n{}", indent_inside(.0))]
     NotAvailable(String),
 
-    #[error("Not implemented:\n{0}")]
+    #[error("DTPSError: Not implemented:\n{}", indent_inside(.0))]
     NotImplemented(String),
 
-    #[error("Topic not found:\n{0}")]
+    #[error("DTPSError: Topic not found:\n{}", indent_inside(.0))]
     TopicNotFound(String),
 
-    #[error("Unknown DTPS error")]
+    #[error("DTPSError: Unknown DTPS error")]
     Unknown,
 
-    #[error("Other: {0}")]
+    #[error("DTPSError: Other:\n{}", indent_inside(.0))]
     Other(String),
 
-    #[error("Interrupted")]
+    #[error("DTPSError: Interrupted")]
     Interrupted,
 
-    #[error("Not reachable:\n{0}")]
+    #[error("DTPSError: Not reachable:\n{}", indent_inside(.0))]
     ResourceNotReachable(String),
 
-    #[error("Recursive error:\n{0}")]
-    RecursiveError(Box<DTPSError>),
+    // #[error("Recursive error:\n{0}")]
+    // RecursiveError(Box<DTPSError>),
+    #[error(transparent)]
+    FromAnyhow(#[from] anyhow::Error),
 
-    #[error("std:\n{0}")]
-    FromStdError(String),
+    #[error(transparent)]
+    FromIO(#[from] std::io::Error),
 
-    #[error("http:\n{0}")]
-    FromHTTP(String),
+    #[error(transparent)]
+    FromHyper(#[from] hyper::Error),
 
-    #[error("hyper:\n{0}")]
-    FromHyper(String),
+    #[error(transparent)]
+    FromHTTP(#[from] http::Error),
 }
 
 impl DTPSError {
@@ -52,7 +57,7 @@ impl DTPSError {
     }
 }
 
-pub type DTPSR<T> = Result<T, DTPSError>;
+pub type DTPSR<T> = anyhow::Result<T, DTPSError>;
 
 pub fn not_available<T, S: AsRef<str>>(s: S) -> Result<T, DTPSError> {
     Err(DTPSError::NotAvailable(s.as_ref().to_string()))
@@ -62,23 +67,112 @@ pub fn error_other<T, S: AsRef<str>>(s: S) -> Result<T, DTPSError> {
     Err(DTPSError::Other(s.as_ref().to_string()))
 }
 
-impl From<std::io::Error> for DTPSError {
-    fn from(err: std::io::Error) -> DTPSError {
-        DTPSError::FromStdError(format!("{}", err))
-    }
+pub fn todtpserror(t: anyhow::Error) -> DTPSError {
+    DTPSError::from(t)
 }
 
-impl From<hyper::Error> for DTPSError {
-    fn from(err: hyper::Error) -> DTPSError {
-        DTPSError::FromHyper(format!("{}", err))
-    }
-}
+use indent::indent_all_with;
 
-impl From<http::Error> for DTPSError {
-    fn from(err: http::Error) -> DTPSError {
-        DTPSError::FromHTTP(format!("converted: {}", err))
-    }
+pub fn indent_inside(s: &String) -> String {
+    indent_all_with("| ", s)
+
+    // s.insert_str(0, "  ");
+    // s.replace("\n", "\n  ")
 }
+//
+// impl DTPSError {
+//     fn con<S: AsRef<str>>(&self, s: S) -> Self {
+//
+//         self.context(s.as_ref()).unwrap()
+//
+//
+//         // reject::custom(DTPSError::FromAnyhow(err))
+//
+//     }
+// }
+// //
+// impl<T> Context<T, DTPSError> for anyhow::Result<T, DTPSError>
+// {
+//     fn context<C>(self, context: C) -> Result<T, DTPSError>
+//     where
+//         C: Display + Send + Sync + 'static,
+//     {
+//         // Not using map_err to save 2 useless frames off the captured backtrace
+//         // in ext_context.
+//         match self {
+//             Ok(ok) => Ok(ok),
+//             Err(error) => Err(error.ext_context(context)),
+//         }
+//     }
+//
+//     fn with_context<C, F>(self, context: F) -> Result<T, anyhow::Error>
+//     where
+//         C: Display + Send + Sync + 'static,
+//         F: FnOnce() -> C,
+//     {
+//         match self {
+//             Ok(ok) => Ok(ok),
+//             Err(error) => Err(error.ext_context(context())),
+//         }
+//     }
+// }
+
+//
+// impl<T> DTPSR<T>
+// {
+//     fn context<C>(self, context: C) -> Result<T, DTPSError>
+//     where
+//         C: Display + Send + Sync + 'static,
+//     {
+//         // Not using map_err to save 2 useless frames off the captured backtrace
+//         // in ext_context.
+//         match self {
+//             Ok(ok) => Ok(ok),
+//             Err(error) => Err(error.ext_context(context)),
+//         }
+//     }
+//
+//     fn with_context<C, F>(self, context: F) -> Result<T, anyhow::Error>
+//     where
+//         C: Display + Send + Sync + 'static,
+//         F: FnOnce() -> C,
+//     {
+//         match self {
+//             Ok(ok) => Ok(ok),
+//             Err(error) => Err(error.ext_context(context())),
+//         }
+//     }
+// }
+
+// #[derive(Debug)]
+// pub struct CustomAnyHowError(anyhow::Error);
+//
+// impl warp::reject::Reject for CustomAnyHowError {}
+// impl warp::reject::Reject for anyhow::Error {}
+
+// impl From<std::io::Error> for DTPSError {
+//     fn from(err: std::io::Error) -> DTPSError {
+//         DTPSError::FromStdError(format!("{}", err))
+//     }
+// }
+
+// impl From<hyper::Error> for DTPSError {
+//     fn from(err: hyper::Error) -> DTPSError {
+//         DTPSError::FromHyper(format!("{}", err))
+//     }
+// }
+//
+// impl From<http::Error> for DTPSError {
+//     fn from(err: http::Error) -> DTPSError {
+//         DTPSError::FromHTTP(format!("converted: {}", err))
+//     }
+// }
+//
+// impl From<anyhow::Error> for DTPSError {
+//     fn from(err: anyhow::Error) -> DTPSError {
+//         DTPSError::Anyhow(err)
+//     }
+// }
 //
 // impl Into<Rejection> for DTPSError {
 //     fn into(self) -> Rejection {
@@ -89,15 +183,42 @@ impl From<http::Error> for DTPSError {
 //     }
 // }
 
-impl warp::reject::Reject for DTPSError {}
-
-macro_rules! add_context {
-    ($func:expr, $ctx:expr) => {
-        match $func {
-            Ok(val) => Ok(val),
-            Err(err) => Err(DTPSError::RecursiveError(Box::new(err), $ctx)),
+impl DTPSError {
+    pub fn status_code(&self) -> StatusCode {
+        match self {
+            DTPSError::TopicNotFound(_) => StatusCode::NOT_FOUND,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
-    };
+    }
 }
 
-// Usage
+impl warp::reject::Reject for DTPSError {
+    // fn status_code(&self) -> StatusCode {
+    //     match self {
+    //         DTPSError::TopicNotFound(_) => StatusCode::NOT_FOUND,
+    //         _ => StatusCode::INTERNAL_SERVER_ERROR
+    //     }
+    // }
+}
+
+pub async fn handle_rejection(err: Rejection) -> std::result::Result<impl Reply, Rejection> {
+    if let Some(custom_error) = err.find::<DTPSError>() {
+        let status_code = custom_error.status_code();
+
+        let error_message = format!("{}\n\n{:?}", status_code, custom_error);
+        return Ok(warp::reply::with_status(error_message, status_code));
+    }
+
+    // handle other rejections
+    Err(err)
+}
+
+//
+// macro_rules! add_context {
+//     ($func:expr, $ctx:expr) => {
+//         match $func {
+//             Ok(val) => Ok(val),
+//             Err(err) => Err(DTPSError::RecursiveError(Box::new(err), $ctx)),
+//         }
+//     };
+// }

@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
 use bytes::Bytes;
-use chrono::Local;
+use chrono::{Duration, Local};
 use log::{debug, error, info, warn};
 use maplit::hashmap;
 use serde::{Deserialize, Serialize};
+use tokio::time::sleep;
 
 use crate::constants::*;
 use crate::object_queues::*;
@@ -306,17 +308,58 @@ impl ServerState {
     }
 
     pub async fn add_proxied(&mut self, proxied_name: String, url: TypeOfConnection) -> DTPSR<()> {
-        let md = match get_metadata(&url).await {
-            Ok(md) => md,
-            Err(e) => {
-                return DTPSError::not_reachable(format!(
-                    "Error getting metadata for proxied {:?} at {}: \n {}",
-                    proxied_name, url, e
-                ));
+        let (md, index_internal) = loop {
+            match get_proxy_info(&url).await {
+                Ok(s) => break s,
+                Err(e) => {
+                    error!(
+                        "add_proxied: error getting proxy info for proxied {:?} at {}: \n {}",
+                        proxied_name, url, e
+                    );
+                    info!("add_proxied: retrying in 2 seconds");
+                    sleep(std::time::Duration::from_secs(2)).await;
+                    continue;
+                }
             }
         };
-        debug!("add_proxied: md:\n{:#?}", md);
-        let index_internal = get_index(&url).await?;
+        //
+        // let index_internal =
+        //     loop {
+        //         match (
+        //             md = get_metadata(&url).await
+        //                 .with_context(|| {
+        //                     format!(
+        //                         "Error getting metadata for proxied {:?} at {}",
+        //                         proxied_name, url
+        //                     )
+        //                 })?;
+        //
+        //             debug!("add_proxied: md:\n{:#?}", md);
+        //             get_index(&url).await
+        //         ) {}
+        //
+        //         //     .or_else(
+        //         //     |e| {
+        //         //         error!("add_proxied: error getting index for proxied {:?} at {}: \n {}", proxied_name, url, e);
+        //         //         Err(e)
+        //         //     }
+        //         // )?;
+        //
+        //         // sleep 5 seconds
+        //         tokio::time::sleep(Duration::from_secs(5)).await;
+        //     }
+        //     ;
+
+        // let md = match get_metadata(&url).await {
+        //     Ok(md) => md,
+        //     Err(e) => {
+        //         return DTPSError::not_reachable(format!(
+        //             "Error getting metadata for proxied {:?} at {}: \n {}",
+        //             proxied_name, url, e
+        //         ));
+        //     }
+        // };
+
         self.proxied.insert(
             proxied_name.clone(),
             ForwardInfo {
@@ -382,4 +425,14 @@ impl ServerState {
 
         return topics_index;
     }
+}
+
+async fn get_proxy_info(url: &TypeOfConnection) -> DTPSR<(FoundMetadata, TopicsIndexInternal)> {
+    let md = get_metadata(url)
+        .await
+        .with_context(|| format!("Error getting metadata for proxied at {}", url))?;
+    let index_internal = get_index(url)
+        .await
+        .with_context(|| format!("Error getting index for proxied at {}", url))?;
+    Ok((md, index_internal))
 }

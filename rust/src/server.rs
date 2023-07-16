@@ -9,8 +9,8 @@ use std::sync::Arc;
 use chrono::Local;
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
+use indent::indent_all_with;
 use log::{debug, error, info, warn};
-use maplit::hashmap;
 use maud::PreEscaped;
 use maud::{html, DOCTYPE};
 use serde::{Deserialize, Serialize};
@@ -39,12 +39,13 @@ use crate::master::{
 use crate::object_queues::*;
 use crate::server_state::*;
 use crate::structures::*;
-use crate::types::*;
 use crate::utils::divide_in_components;
 use crate::websocket_signals::{
     ChannelInfo, ChannelInfoDesc, MsgClientToServer, MsgServerToClient,
 };
-use crate::{error_other, format_digest_path, parse_url_ext, utils, vec_concat, DTPSError, DTPSR};
+use crate::{
+    error_other, format_digest_path, handle_rejection, parse_url_ext, utils, DTPSError, DTPSR,
+};
 
 pub type HandlersResponse = Result<http::Response<hyper::Body>, Rejection>;
 
@@ -54,7 +55,7 @@ pub struct DTPSServer {
     pub cloudflare_tunnel_name: Option<String>,
     pub cloudflare_executable: String,
     pub unix_path: Option<String>,
-    // initial_proxy: HashMap<String, TypeOfConnection>,
+    initial_proxy: HashMap<String, TypeOfConnection>,
 }
 
 impl DTPSServer {
@@ -65,11 +66,7 @@ impl DTPSServer {
         unix_path: Option<String>,
         initial_proxy: HashMap<String, TypeOfConnection>,
     ) -> DTPSR<Self> {
-        let mut ss = ServerState::new(None)?;
-
-        for (k, v) in initial_proxy {
-            ss.add_proxied(k, v).await?;
-        }
+        let ss = ServerState::new(None)?;
 
         let mutex = Arc::new(Mutex::new(ss));
 
@@ -79,6 +76,7 @@ impl DTPSServer {
             cloudflare_tunnel_name,
             cloudflare_executable,
             unix_path,
+            initial_proxy,
         })
     }
     pub async fn serve(&mut self) -> DTPSR<()> {
@@ -101,7 +99,8 @@ impl DTPSServer {
             .and(warp::get())
             .and(clone_access.clone())
             .and(warp::header::headers_cloned())
-            .and_then(serve_master_get);
+            .and_then(serve_master_get)
+            .recover(handle_rejection);
 
         let master_route_post = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
@@ -109,14 +108,16 @@ impl DTPSServer {
             .and(clone_access.clone())
             .and(warp::header::headers_cloned())
             .and(warp::body::bytes())
-            .and_then(serve_master_post);
+            .and_then(serve_master_post)
+            .recover(handle_rejection);
 
         let master_route_head = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
             .and(warp::head())
             .and(clone_access.clone())
             .and(warp::header::headers_cloned())
-            .and_then(serve_master_head);
+            .and_then(serve_master_head)
+            .recover(handle_rejection);
 
         // let static_route = warp::path("static")
         //     .and(warp::path::tail())
@@ -252,6 +253,8 @@ impl DTPSServer {
             {
                 let mut s = self.mutex.lock().await;
 
+                info!("Listening on port {}", address.port());
+
                 let s1 = format!("http://localhost:{}{}", address.port(), "/");
                 s.add_advertise_url(&s1)?;
 
@@ -360,6 +363,21 @@ impl DTPSServer {
         // let (shutdown_send, shutdown_recv) = mpsc::unbounded_channel();
 
         spawn(clock_go(self.get_lock(), TOPIC_LIST_CLOCK, 1.0));
+
+        if self.initial_proxy.len() > 0 {
+            let mut s = self.mutex.lock().await;
+            for (k, v) in &self.initial_proxy {
+                s.add_proxied(k.clone(), v.clone()).await?;
+            }
+            info!("Proxies started");
+        }
+        {
+            let s = self.mutex.lock().await;
+            info!(
+                "Server started. Advertised URLs: \n{}\n",
+                indent_all_with(" ", s.get_advertise_urls().join("\n"))
+            );
+        }
 
         let mut sig_hup = tokio::signal::unix::signal(SignalKind::hangup())?;
         let mut sig_term = tokio::signal::unix::signal(SignalKind::terminate())?;

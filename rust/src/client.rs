@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::any::Any;
 use std::io::ErrorKind;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -485,6 +486,7 @@ pub async fn compute_best_alternative(
 // }
 
 pub async fn make_request(conbase: &TypeOfConnection, method: hyper::Method) -> DTPSR<Response> {
+    // return not_available("just a test");
     let use_url = match conbase {
         TCP(url) => url.clone().to_string(),
         UNIX(uc) => {
@@ -510,25 +512,26 @@ pub async fn make_request(conbase: &TypeOfConnection, method: hyper::Method) -> 
     };
 
     let req0 = hyper::Request::builder()
-        .method(method)
+        .method(&method)
         .uri(use_url.as_str())
         // .header("user-agent", "the-awesome-agent/007")
-        .body(hyper::Body::from(""))?;
+        .body(hyper::Body::from(""))
+        .with_context(|| format!("cannot build request for {} {}", method, use_url.as_str()))?;
 
     let resp = match conbase {
         TypeOfConnection::TCP(url) => {
             if url.scheme() == "https" {
                 let https = HttpsConnector::new();
                 let client = Client::builder().build::<_, hyper::Body>(https);
-                client.request(req0).await?
+                client.request(req0).await
             } else {
                 let client = hyper::Client::new();
-                client.request(req0).await?
+                client.request(req0).await
             }
         }
         TypeOfConnection::UNIX(_) => {
             let client = Client::unix();
-            client.request(req0).await?
+            client.request(req0).await
         }
 
         TypeOfConnection::Relative(_, _) => {
@@ -537,7 +540,8 @@ pub async fn make_request(conbase: &TypeOfConnection, method: hyper::Method) -> 
         TypeOfConnection::Same() => {
             return not_available("cannot handle a Same url to get_metadata");
         }
-    };
+    }
+    .with_context(|| format!("cannot make request for {} {}", method, use_url.as_str()))?;
 
     Ok(resp)
 }

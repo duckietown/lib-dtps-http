@@ -572,7 +572,7 @@ pub async fn interpret_path_components(
             "Cannot find a matching topic for {:?}.\nMy Topics: {:?}\n",
             path_components, subtopics_vec
         );
-        return DTPSError::other(s);
+        return Err(DTPSError::TopicNotFound(s));
     }
 
     let mut sc = SourceComposition {

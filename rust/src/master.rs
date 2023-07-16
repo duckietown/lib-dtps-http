@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 use std::string::ToString;
 use std::sync::Arc;
@@ -22,7 +23,7 @@ use crate::utils::{divide_in_components, get_good_url_for_components};
 use crate::{
     get_accept_header, handle_topic_post, handle_websocket_generic, handler_topic_generic,
     object_queues, put_alternative_locations, put_common_headers, root_handler,
-    serve_static_file_path, HandlersResponse, ObjectQueue, RawData, ServerState,
+    serve_static_file_path, todtpserror, HandlersResponse, ObjectQueue, RawData, ServerState,
     TopicsIndexInternal, HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID, HEADER_SEE_EVENTS,
     HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
 };
@@ -225,6 +226,7 @@ pub async fn serve_master_get(
     ss_mutex: Arc<Mutex<ServerState>>,
     headers: HeaderMap,
 ) -> HandlersResponse {
+    debug!("headers:\n{:?}", headers);
     let path_str = path_normalize(path);
     if path_str.len() > 250 {
         panic!("Path too long: {:?}", path_str);
@@ -284,22 +286,25 @@ pub async fn serve_master_get(
         }
     }
 
-    let matched = interpret_path(&path_str, ss_mutex.clone()).await;
+    let matched = interpret_path(&path_str, ss_mutex.clone())
+        .await
+        .with_context(|| format!("Cannot interpret the path {:?}:\n", path_components));
+    let ds = matched.map_err(todtpserror)?;
     // debug!(
     //     "serve_master:\npaths: {:#?}\nmatched: {:#?}",
     //     path_components, matched
     // );
-    let ds = match matched {
-        Ok(ds) => ds,
-        Err(s) => {
-            let s = format!("Cannot resolve the path {:?}:\n{}", path_components, s);
-            let res = http::Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::from(s))
-                .unwrap();
-            return Ok(res);
-        }
-    };
+    // let ds = match matched {
+    //     Ok(ds) => ds,
+    //     Err(s) => {
+    //         let s = format!("Cannot resolve the path {:?}:\n{}", path_components, s);
+    //         let res = http::Response::builder()
+    //             .status(StatusCode::NOT_FOUND)
+    //             .body(Body::from(s))
+    //             .unwrap();
+    //         return Ok(res);
+    //     }
+    // };
 
     let ds_props = ds.get_properties();
 
