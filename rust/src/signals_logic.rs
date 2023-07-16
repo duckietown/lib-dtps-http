@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use log::debug;
 use maplit::hashmap;
-use maud::PreEscaped;
 use serde::{Deserialize, Serialize};
 use serde_cbor::Value as CBORValue;
 use serde_cbor::Value::Null as CBORNull;
@@ -13,10 +12,11 @@ use serde_cbor::Value::Text as CBORText;
 
 use crate::cbor_manipulation::{get_as_cbor, get_inside};
 use crate::signals_logic::ResolvedData::{NotAvailableYet, NotFound, Regular};
-use crate::utils::{divide_in_components, is_prefix_of, vec_concat};
+use crate::utils::{divide_in_components, is_prefix_of};
 use crate::{
-    make_rel_url, DTPSError, NodeAppData, RawData, ServerStateAccess, TopicName, TopicRefInternal,
-    TopicsIndexInternal, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
+    get_rawdata, DTPSError, LinkBenchmark, NodeAppData, RawData, ServerState, ServerStateAccess,
+    TopicName, TopicReachabilityInternal, TopicRefInternal, TopicsIndexInternal, TypeOfConnection,
+    CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
 };
 
 #[derive(Debug, Clone)]
@@ -58,9 +58,17 @@ impl DataProps for SourceComposition {
 }
 
 #[derive(Debug, Clone)]
+pub struct ForwardedQueue {
+    pub subscription: String,
+    pub his_topic_name: TopicName,
+    pub my_topic_name: TopicName,
+    pub properties: TopicProperties,
+}
+
+#[derive(Debug, Clone)]
 pub enum TypeOFSource {
-    ForwardedQueue(String),
-    OurQueue(String, Vec<String>, TopicProperties),
+    ForwardedQueue(ForwardedQueue),
+    OurQueue(TopicName, Vec<String>, TopicProperties),
     Compose(SourceComposition),
     Transformed(Box<TypeOFSource>, Transforms),
     Digest(String, String),
@@ -90,22 +98,31 @@ pub struct TopicProperties {
 
 #[async_trait]
 pub trait ResolveDataSingle {
-    async fn resolve_data_single(&self, ss_mutex: ServerStateAccess) -> DTPSR<ResolvedData>;
+    async fn resolve_data_single(
+        &self,
+        presented_as: &TopicName,
+        ss_mutex: ServerStateAccess,
+    ) -> DTPSR<ResolvedData>;
 }
 
 #[async_trait]
 pub trait GetMeta {
-    async fn get_meta_index(&self, ss_mutex: ServerStateAccess) -> DTPSR<TopicsIndexInternal>;
-}
-
-#[async_trait]
-pub trait GetHTML {
     async fn get_meta_index(
         &self,
+        presented_as: &TopicName,
         ss_mutex: ServerStateAccess,
-        headers: HashMap<String, String>,
-    ) -> DTPSR<PreEscaped<String>>;
+    ) -> DTPSR<TopicsIndexInternal>;
 }
+
+// #[async_trait]
+// pub trait GetHTML {
+//     async fn get_meta_index(
+//         &self,
+//         presented_as: &TopicName,
+//         ss_mutex: ServerStateAccess,
+//         headers: HashMap<String, String>,
+//     ) -> DTPSR<PreEscaped<String>>;
+// }
 
 pub trait DataProps {
     fn get_properties(&self) -> TopicProperties;
@@ -113,7 +130,11 @@ pub trait DataProps {
 
 #[async_trait]
 impl ResolveDataSingle for TypeOFSource {
-    async fn resolve_data_single(&self, ss_mutex: ServerStateAccess) -> DTPSR<ResolvedData> {
+    async fn resolve_data_single(
+        &self,
+        presented_as: &TopicName,
+        ss_mutex: ServerStateAccess,
+    ) -> DTPSR<ResolvedData> {
         match self {
             TypeOFSource::Digest(digest, content_type) => {
                 let ss = ss_mutex.lock().await;
@@ -121,11 +142,16 @@ impl ResolveDataSingle for TypeOFSource {
                 let rd = RawData::new(data, content_type);
                 Ok(ResolvedData::RawData(rd))
             }
-            TypeOFSource::ForwardedQueue(q) => Err(DTPSError::NotImplemented(
-                "not implemented TypeOFSource::ForwardedQueue".to_string(),
-            )),
+            TypeOFSource::ForwardedQueue(q) => {
+                let ss = ss_mutex.lock().await;
+                let use_url = &ss.proxied_topics.get(&q.my_topic_name).unwrap().data_url;
+
+                let rd = get_rawdata(use_url).await?;
+
+                Ok(ResolvedData::RawData(rd))
+            }
             TypeOFSource::OurQueue(q, _, _) => {
-                if false && q == &"" {
+                if false && q.is_root() {
                     let ss = ss_mutex.lock().await;
                     let index_internal = ss.create_topic_index();
                     let index = index_internal.to_wire(None);
@@ -141,7 +167,7 @@ impl ResolveDataSingle for TypeOFSource {
                 }
             }
             TypeOFSource::Compose(sc) => {
-                let index = self.get_meta_index(ss_mutex).await?;
+                let index = self.get_meta_index(presented_as, ss_mutex).await?;
                 // debug!("Compose index intenral:\n {:#?}", index);
                 let to_wire = index.to_wire(None);
 
@@ -154,10 +180,12 @@ impl ResolveDataSingle for TypeOFSource {
                 Ok(ResolvedData::RawData(raw_data))
             }
             TypeOFSource::Transformed(source, transforms) => {
-                let data = source.resolve_data_single(ss_mutex.clone()).await?;
+                let data = source
+                    .resolve_data_single(presented_as, ss_mutex.clone())
+                    .await?;
                 transform(data, transforms).await
             }
-            TypeOFSource::Deref(sc) => single_compose(sc, ss_mutex).await,
+            TypeOFSource::Deref(sc) => single_compose(sc, presented_as, ss_mutex).await,
         }
     }
 }
@@ -171,9 +199,7 @@ impl DataProps for TypeOFSource {
                 readable: true,
                 immutable: true,
             },
-            TypeOFSource::ForwardedQueue(_) => {
-                todo!()
-            }
+            TypeOFSource::ForwardedQueue(q) => q.properties.clone(),
             TypeOFSource::OurQueue(_, _, props) => props.clone(),
 
             TypeOFSource::Compose(sc) => sc.get_properties(),
@@ -204,16 +230,16 @@ async fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<Resolved
     }
 }
 
-async fn our_queue(topic_name: &str, ss_mutex: ServerStateAccess) -> DTPSR<ResolvedData> {
+async fn our_queue(topic_name: &TopicName, ss_mutex: ServerStateAccess) -> DTPSR<ResolvedData> {
     let ss = ss_mutex.lock().await;
     if !ss.oqs.contains_key(topic_name) {
-        return Ok(NotFound(format!("No queue with name {}", topic_name)));
+        return Ok(NotFound(format!("No queue with name {:?}", topic_name)));
     }
     let oq = ss.oqs.get(topic_name).unwrap();
 
     return match oq.sequence.last() {
         None => {
-            let s = format!("No data in queue {}", topic_name);
+            let s = format!("No data in queue {:?}", topic_name);
             Ok(NotAvailableYet(s))
         }
         Some(v) => {
@@ -226,33 +252,70 @@ async fn our_queue(topic_name: &str, ss_mutex: ServerStateAccess) -> DTPSR<Resol
 
 #[async_trait]
 impl GetMeta for TypeOFSource {
-    async fn get_meta_index(&self, ss_mutex: ServerStateAccess) -> DTPSR<TopicsIndexInternal> {
+    async fn get_meta_index(
+        &self,
+        presented_as: &TopicName,
+        ss_mutex: ServerStateAccess,
+    ) -> DTPSR<TopicsIndexInternal> {
         // debug!("get_meta_index: {:?}", self);
         return match self {
-            TypeOFSource::ForwardedQueue(_) => {
-                todo!()
+            TypeOFSource::ForwardedQueue(q) => {
+                let ss = ss_mutex.lock().await;
+                let node_id = ss.node_id.clone();
+                let the_data = ss.proxied_topics.get(&q.my_topic_name).unwrap();
+                let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
+
+                let mut tr = the_data.tr.clone();
+
+                let np = presented_as.as_components().len();
+                let components = q.my_topic_name.as_components();
+                let rel_components = components[np..].to_vec();
+                let rel_topic_name = TopicName::from_components(&rel_components);
+                let rurl = rel_topic_name.as_relative_url();
+                tr.reachability.push(TopicReachabilityInternal {
+                    con: TypeOfConnection::Relative(rurl, None),
+                    answering: node_id.clone(),
+                    forwarders: vec![],
+                    benchmark: LinkBenchmark::identity(),
+                });
+
+                topics.insert(TopicName::root(), tr);
+                let n: NodeAppData = NodeAppData::from("dede");
+                let index = TopicsIndexInternal {
+                    node_id: "".to_string(),
+                    node_started: 0,
+                    node_app_data: hashmap! {"here2".to_string() => n},
+                    topics,
+                };
+                Ok(index)
+
+                // Err(DTPSError::NotImplemented("get_meta_index for forwarded queue".to_string()))
             }
             TypeOFSource::OurQueue(topic_name, _, _) => {
-                if topic_name == "" {
+                if topic_name.is_root() {
                     panic!("get_meta_index for empty topic name");
                 }
                 let ss = ss_mutex.lock().await;
+                let node_id = ss.node_id.clone();
+
                 let oq = ss.oqs.get(topic_name).unwrap();
-                let tr0 = &oq.tr; //.to_wire(Some("".to_string()));
-                                  // let components = divide_in_components(topic_name, '.');
-                                  // let as_url = make_rel_url(rel_index);
-                                  // let tr1 = tr0.add_path(&as_url);
-                                  // let tr1 = TopicRefInternal {
-                                  //     unique_id: tr0.unique_id.clone(),
-                                  //     origin_node: tr0.origin_node.clone(),
-                                  //     app_data: tr0.app_data.clone(),
-                                  //     reachability: vec![],
-                                  //     created: 0,
-                                  //     properties: tr0.properties.clone(),
-                                  // };
+                let mut tr = oq.tr.clone();
+
+                let np = presented_as.as_components().len();
+                let components = topic_name.as_components();
+                let rel_components = components[np..].to_vec();
+                let rel_topic_name = TopicName::from_components(&rel_components);
+                let rurl = rel_topic_name.as_relative_url();
+
+                tr.reachability.push(TopicReachabilityInternal {
+                    con: TypeOfConnection::Relative(rurl, None),
+                    answering: node_id.clone(),
+                    forwarders: vec![],
+                    benchmark: LinkBenchmark::identity(),
+                });
 
                 let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
-                topics.insert("".to_string(), tr0.clone());
+                topics.insert(TopicName::root(), tr);
                 let n: NodeAppData = NodeAppData::from("dede");
                 let index = TopicsIndexInternal {
                     node_id: "".to_string(),
@@ -262,27 +325,33 @@ impl GetMeta for TypeOFSource {
                 };
                 Ok(index)
             }
-            TypeOFSource::Compose(sc) => get_sc_meta(sc, ss_mutex).await,
-            TypeOFSource::Transformed(_, _) => {
-                todo!()
-            }
-            TypeOFSource::Digest(_, _) => {
-                todo!()
-            }
-            TypeOFSource::Deref(_) => {
-                todo!()
-            }
+            TypeOFSource::Compose(sc) => get_sc_meta(sc, presented_as, ss_mutex).await,
+            TypeOFSource::Transformed(_, _) => Err(DTPSError::NotImplemented(
+                "get_meta_index for Transformed".to_string(),
+            )),
+            TypeOFSource::Digest(_, _) => Err(DTPSError::NotImplemented(
+                "get_meta_index for Digest".to_string(),
+            )),
+            TypeOFSource::Deref(_) => Err(DTPSError::NotImplemented(
+                "get_meta_index for Deref".to_string(),
+            )),
         };
     }
 }
 
 async fn get_sc_meta(
     sc: &SourceComposition,
+    presented_as: &TopicName,
     ss_mutex: ServerStateAccess,
 ) -> DTPSR<TopicsIndexInternal> {
     if sc.is_root {
         let ss = ss_mutex.lock().await;
         return Ok(ss.create_topic_index());
+    }
+    let node_id;
+    {
+        let ss = ss_mutex.lock().await;
+        node_id = ss.node_id.clone();
     }
     // debug!("get_sc_meta: START: {:?}", sc);
     let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
@@ -314,7 +383,9 @@ async fn get_sc_meta(
         // let s = format!("get_sc_meta: prefix: {:?}, rurl: {}\n inside {:#?}", prefix, rurl,
         //                 inside);
         // debug_s.push_str(&s);
-        let x = inside.get_meta_index(ss_mutex.clone()).await?;
+        let x = inside
+            .get_meta_index(presented_as, ss_mutex.clone())
+            .await?;
         // let inside = ts.get_meta_index(ss_mutex.clone()).await?;
 
         // debug!("get_sc_meta: {:#?} inside: {:#?}", prefix, x);
@@ -322,14 +393,37 @@ async fn get_sc_meta(
         // let dotsep = prefix.join(".");
 
         for (a, b) in x.topics {
-            let its = divide_in_components(&a, '.');
-            let full: Vec<String> = vec_concat(&prefix, &its);
+            let mut tr = b.clone();
 
-            let rurl = make_rel_url(&prefix);
+            tr.app_data
+                .insert("created by get_sc_meta".to_string(), NodeAppData::from(""));
+            //
+            // match is_prefix_of(&presented_as.as_components(),  &a) {
+            //
+            // }
+
+            let url = a.as_relative_url();
+            //
+            // tr.reachability.push(
+            //     TopicReachabilityInternal {
+            //         con: TypeOfConnection::Relative(url, None),
+            //         answering: node_id.clone(),
+            //         forwarders: vec![],
+            //         benchmark: LinkBenchmark::identity(),
+            //     }
+            //
+            // );
+
+            // let its = divide_in_components(&a, '.');
+            //
+            // let full: Vec<String> = vec_concat(&prefix, &its);
+
+            let a_with_prefix = a.add_prefix(&prefix);
+
+            let rurl = a_with_prefix.as_relative_url();
             let b2 = b.add_path(&rurl);
 
-            let dotsep = full.join(".");
-            topics.insert(dotsep, b2);
+            topics.insert(a_with_prefix, tr);
         }
 
         // topics.insert(dotsep, oq.tr.to_wire(Some(rurl)));
@@ -366,6 +460,7 @@ async fn get_sc_meta(
 
 async fn single_compose(
     sc: &SourceComposition,
+    presented_as: &TopicName,
     ss_mutex: ServerStateAccess,
 ) -> DTPSR<ResolvedData> {
     // let ss = ss_mutex.lock().await;
@@ -402,7 +497,9 @@ async fn single_compose(
         let key_to_put = CBORText(prefix.last().unwrap().clone().into());
         let key_to_put2 = CBORText(format!("{}?", prefix.last().unwrap()));
 
-        let value = source.resolve_data_single(ss_mutex.clone()).await?;
+        let value = source
+            .resolve_data_single(presented_as, ss_mutex.clone())
+            .await?;
 
         match value {
             Regular(x) => {
@@ -475,10 +572,10 @@ pub async fn interpret_path_components(
         // let q = ss.oqs.get("").unwrap();
         let mut topics = hashmap! {};
         for (topic_name, oq) in &ss.oqs {
-            if topic_name == "" {
+            if topic_name.is_root() {
                 continue;
             }
-            let prefix = divide_in_components(&topic_name, '.');
+            let prefix = topic_name.as_components();
             // let rurl = make_rel_url(&prefix.clone());
             let val = TypeOFSource::OurQueue(
                 topic_name.clone(),
@@ -516,16 +613,23 @@ pub async fn interpret_path_components(
     }
 
     // look for all the keys in our queues
-    let keys: Vec<String> = {
+    let keys: Vec<TopicName> = {
         let ss = ss_mutex.lock().await;
         ss.oqs.keys().cloned().collect()
     };
-    log::debug!(" = path_components = {:?} ", path_components);
-    let mut subtopics: Vec<(String, Vec<String>, Vec<String>)> = vec![];
+    // log::debug!(" = path_components = {:?} ", path_components);
+    let mut subtopics: Vec<(TopicName, Vec<String>, Vec<String>, TypeOFSource)> = vec![];
     let mut subtopics_vec = vec![];
-    for k in &keys {
-        let topic_components = divide_in_components(&k, '.');
 
+    let all_sources = {
+        let ss = ss_mutex.lock().await;
+        iterate_type_of_sources(&ss)
+    };
+
+    // log::debug!(" = all_sources =\n{:#?} ", all_sources);
+    for (k, source) in all_sources.iter() {
+        // let topic_components = divide_in_components(&k, '.');
+        let topic_components = k.as_components();
         subtopics_vec.push(topic_components.clone());
 
         if topic_components.len() == 0 {
@@ -535,14 +639,15 @@ pub async fn interpret_path_components(
         match is_prefix_of(&topic_components, &path_components) {
             None => {}
             Some((p1, rest)) => {
-                let ss = ss_mutex.lock().await;
-                let oq = ss.oqs.get(k).unwrap();
-                let source_type = TypeOFSource::OurQueue(k.clone(), p1, oq.tr.properties.clone());
+                // let ss = ss_mutex.lock().await;
+                // let oq = ss.oqs.get(k).unwrap();
+                // let source_type = TypeOFSource::OurQueue(k.clone(), p1, oq.tr.properties.clone());
+
                 return if rest.len() == 0 {
-                    Ok(source_type)
+                    Ok(source.clone())
                 } else {
                     Ok(TypeOFSource::Transformed(
-                        Box::new(source_type),
+                        Box::new(source.clone()),
                         Transforms::GetInside(rest),
                     ))
                 };
@@ -557,10 +662,10 @@ pub async fn interpret_path_components(
             Some(rest) => rest,
         };
 
-        subtopics.push((k.clone(), matched, rest));
+        subtopics.push((k.clone(), matched, rest, source.clone()));
     }
 
-    eprintln!("subtopics: {:?}", subtopics);
+    // eprintln!("subtopics: {:?}", subtopics);
     if subtopics.len() == 0 {
         let s = format!(
             "Cannot find a matching topic for {:?}.\nMy Topics: {:?}\n",
@@ -574,11 +679,44 @@ pub async fn interpret_path_components(
         compose: hashmap! {},
     };
     let ss = ss_mutex.lock().await;
-    for (topic_name, p1, rest) in subtopics {
-        let oq = ss.oqs.get(&topic_name).unwrap();
-        let source_type = TypeOFSource::OurQueue(topic_name.clone(), p1, oq.tr.properties.clone());
-        sc.compose.insert(rest.clone(), Box::new(source_type));
+    for (topic_name, p1, rest, source) in subtopics {
+        // let oq = ss.oqs.get(&topic_name).unwrap();
+        // let source_type = TypeOFSource::OurQueue(topic_name.clone(), p1, oq.tr.properties.clone());
+        sc.compose.insert(rest.clone(), Box::new(source));
     }
 
     Ok(TypeOFSource::Compose(sc))
+}
+
+pub fn iterate_type_of_sources(s: &ServerState) -> HashMap<TopicName, TypeOFSource> {
+    let mut res = hashmap! {};
+    for (topic_name, x) in s.proxied_topics.iter() {
+        let fq = ForwardedQueue {
+            subscription: x.from_subscription.clone(),
+            his_topic_name: x.its_topic_name.clone(),
+            my_topic_name: topic_name.clone(),
+            properties: x.tr.properties.clone(),
+        };
+        res.insert(topic_name.clone(), TypeOFSource::ForwardedQueue(fq));
+
+        // let x = ForwardedQueue {
+        //     proxied: "".to_string(),
+        //     his_topic_name: (),
+        //     my_topic_name: (),
+        // }
+        //
+        // res.insert(topic_name.clone(), TypeOFSource::Proxy(x.clone()));
+    }
+
+    for (topic_name, oq) in s.oqs.iter() {
+        res.insert(
+            topic_name.clone(),
+            TypeOFSource::OurQueue(
+                topic_name.clone(),
+                topic_name.to_components(),
+                oq.tr.properties.clone(),
+            ),
+        );
+    }
+    res
 }

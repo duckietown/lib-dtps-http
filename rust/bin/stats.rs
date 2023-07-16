@@ -91,8 +91,8 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                 }
             }
 
-            if topic_name == "dtps.clock" {
-                let handle = spawn(listen_events(md));
+            if topic_name.as_dotted().contains(".clock") {
+                let handle = spawn(listen_events(topic_name.clone(), md));
                 handles.push(handle);
             }
         }

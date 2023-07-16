@@ -35,8 +35,9 @@ use crate::structures::{
 use crate::urls::{join_ext, parse_url_ext};
 use crate::utils::time_nanos;
 use crate::websocket_signals::MsgServerToClient;
+use crate::TypeOfConnection::Same;
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
-use crate::{not_available, DTPSError, RawData, DTPSR};
+use crate::{not_available, DTPSError, RawData, TopicName, DTPSR};
 
 /// Note: need to have use futures::{StreamExt} in scope to use this
 pub async fn get_events_stream_inline(
@@ -49,11 +50,9 @@ pub async fn get_events_stream_inline(
     (handle, stream)
 }
 
-pub async fn listen_events(md: FoundMetadata) {
+pub async fn listen_events(which: TopicName, md: FoundMetadata) {
     // let (tx, rx) = mpsc::unbounded_channel();
     let inline_url = md.events_data_inline_url.unwrap().clone();
-    // let handle = spawn(listen_events_url_inline(inline_url, tx));
-    // let mut stream = UnboundedReceiverStream::new(rx);
 
     let (handle, mut stream) = get_events_stream_inline(inline_url).await;
 
@@ -83,7 +82,8 @@ pub async fn listen_events(md: FoundMetadata) {
             let latencies_min_ns = *latencies_ns.iter().min().unwrap();
             let latencies_max_ns = *latencies_ns.iter().max().unwrap();
             info!(
-                "clock latency: {:.3}ms   (last {} : mean: {:.3}ms  min: {:.3}ms  max {:.3}ms )",
+                "{:?} latency: {:.3}ms   (last {} : mean: {:.3}ms  min: {:.3}ms  max {:.3}ms )",
+                which,
                 ms_from_ns(diff),
                 latencies_ns.len(),
                 ms_from_ns(latencies_mean_ns),
@@ -218,7 +218,7 @@ pub async fn listen_events_url_inline(
         Relative(_, _) => {
             panic!("not expected here {}", con);
         }
-        Same => {
+        Same() => {
             panic!("not expected here {}", con);
         }
     };
@@ -353,6 +353,24 @@ pub async fn listen_events_url_inline(
     Ok(())
 }
 
+pub async fn get_rawdata(con: &TypeOfConnection) -> DTPSR<RawData> {
+    let resp = make_request(con, hyper::Method::GET).await?;
+    // TODO: send more headers
+
+    //  .header("Accept", "application/cbor")
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .map(|x| x.to_str().unwrap().to_string())
+        .unwrap_or("application/octet-stream".to_string());
+    // Get the response body bytes.
+    let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
+    Ok(RawData {
+        content: body_bytes,
+        content_type,
+    })
+}
+
 pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
     let resp = make_request(con, hyper::Method::GET).await?;
     // TODO: send more headers
@@ -364,6 +382,7 @@ pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
     let x0: TopicsIndexWire = serde_cbor::from_slice(&body_bytes).unwrap();
     let ti = TopicsIndexInternal::from_wire(x0, con);
 
+    debug!("get_index: {:#?}\n {:#?}", con, ti);
     Ok(ti)
 }
 
@@ -377,7 +396,7 @@ pub enum UrlResult {
     Accessible(LinkBenchmark),
 }
 
-async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResult {
+pub async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResult {
     let md = get_metadata(con).await;
     let complexity = match con {
         TCP(_) => 1,
@@ -385,7 +404,7 @@ async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResult {
         Relative(_, _) => {
             panic!("unexpected relative url here: {}", con);
         }
-        Same => {
+        Same() => {
             panic!("not expected here {}", con);
         }
     };
@@ -395,7 +414,7 @@ async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResult {
         Relative(_, _) => {
             panic!("unexpected relative url here: {}", con);
         }
-        Same => {
+        Same() => {
             panic!("not expected here {}", con);
         }
     };
@@ -415,7 +434,7 @@ async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResult {
                         let latency = (md_.latency_ns as f32) / 1_000_000_000.0;
                         let lb = LinkBenchmark {
                             complexity,
-                            bandwidth: 100_000_000.0,
+                            bandwidth: 100_000_000,
                             latency,
                             reliability,
                             hops: 0,
@@ -518,7 +537,7 @@ pub async fn make_request(conbase: &TypeOfConnection, method: hyper::Method) -> 
                 "cannot handle a relative url get_metadata".to_string(),
             ));
         }
-        Same => {
+        Same() => {
             panic!("not expected here {}", conbase);
         }
     };

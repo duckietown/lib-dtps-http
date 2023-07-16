@@ -3,7 +3,7 @@ use std::string::ToString;
 
 use anyhow::Context;
 use bytes::Bytes;
-use log::debug;
+use log::{debug, error};
 use maud::{html, PreEscaped};
 
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
@@ -21,9 +21,9 @@ use crate::utils::{divide_in_components, get_good_url_for_components};
 use crate::{
     get_accept_header, handle_topic_post, handle_websocket_generic, handler_topic_generic,
     object_queues, put_alternative_locations, put_common_headers, root_handler,
-    serve_static_file_path, todtpserror, HandlersResponse, ObjectQueue, RawData, ServerStateAccess,
-    TopicsIndexInternal, HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID, HEADER_SEE_EVENTS,
-    HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
+    serve_static_file_path, todtpserror, DTPSError, HandlersResponse, ObjectQueue, RawData,
+    ServerStateAccess, TopicName, TopicsIndexInternal, DTPSR, HEADER_DATA_ORIGIN_NODE_ID,
+    HEADER_DATA_UNIQUE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
 };
 
 pub async fn serve_master_post(
@@ -60,8 +60,8 @@ pub async fn serve_master_post(
 
     match ds {
         TypeOFSource::OurQueue(topic_name, _, _) => {
-            debug!("Pushing to topic {}", topic_name);
-            return handle_topic_post(topic_name, ss_mutex, headers, data).await;
+            debug!("Pushing to topic {:?}", topic_name);
+            return handle_topic_post(&topic_name, ss_mutex, headers, data).await;
         }
         _ => {
             let res = http::Response::builder()
@@ -114,7 +114,7 @@ pub async fn serve_master_head(
         match ds {
             TypeOFSource::OurQueue(topic_name, _, _) => {
                 let x: &ObjectQueue;
-                match ss.oqs.get(topic_name.as_str()) {
+                match ss.oqs.get(&topic_name) {
                     None => return Err(warp::reject::not_found()),
 
                     Some(y) => x = y,
@@ -123,8 +123,9 @@ pub async fn serve_master_head(
             }
             _ => {
                 if path_str == "/" {
-                    let x = ss.oqs.get("").unwrap();
-                    ("".to_string(), x)
+                    let tr = TopicName::root();
+                    let x = ss.oqs.get(&tr).unwrap();
+                    (tr, x)
                 } else {
                     let res = http::Response::builder()
                         .status(StatusCode::METHOD_NOT_ALLOWED)
@@ -156,7 +157,7 @@ pub async fn serve_master_head(
         HeaderValue::from_static("events/?send_data=1"),
     );
 
-    let suffix = format!("{}/", topic_name); // FIXME
+    let suffix = topic_name.as_relative_url();
 
     put_alternative_locations(&ss, h, &suffix);
     put_common_headers(&ss, h);
@@ -218,6 +219,8 @@ fn path_normalize(path: warp::path::FullPath) -> String {
 //     return serve_master0(&new_path, query, ss_mutex, headers).await;
 // }
 
+const STATIC_PREFIX: &str = "static";
+
 pub async fn serve_master_get(
     path: warp::path::FullPath,
     query: HashMap<String, String>,
@@ -245,8 +248,6 @@ pub async fn serve_master_get(
     //     path_components = rest;
     // }
 
-    let STATIC_PREFIX = "static".to_string();
-
     match path_components.first() {
         None => {}
         Some(first) => {
@@ -262,7 +263,7 @@ pub async fn serve_master_get(
         }
     }
 
-    if !path_components.contains(&STATIC_PREFIX) {
+    if !path_components.contains(&STATIC_PREFIX.to_string()) {
         let good_url = get_good_url_for_components(&path_components);
         if good_url != path_str {
             let good_relative_url = format!("./{}/", path_components.last().unwrap());
@@ -288,10 +289,10 @@ pub async fn serve_master_get(
         .await
         .with_context(|| format!("Cannot interpret the path {:?}:\n", path_components));
     let ds = matched.map_err(todtpserror)?;
-    // debug!(
-    //     "serve_master:\npaths: {:#?}\nmatched: {:#?}",
-    //     path_components, matched
-    // );
+    debug!(
+        "serve_master:\npaths: {:#?}\nmatched: {:#?}",
+        path_components, ds
+    );
     // let ds = match matched {
     //     Ok(ds) => ds,
     //     Err(s) => {
@@ -308,15 +309,19 @@ pub async fn serve_master_get(
 
     match ds {
         TypeOFSource::OurQueue(topic_name, _, _) => {
-            return if true || topic_name != "" {
-                handler_topic_generic(topic_name, ss_mutex.clone(), headers).await
+            return if true || topic_name.is_root() {
+                handler_topic_generic(&topic_name, ss_mutex.clone(), headers).await
             } else {
                 root_handler(ss_mutex.clone(), headers).await
             };
         }
         _ => {}
     }
-    let resd0 = ds.resolve_data_single(ss_mutex.clone()).await;
+    let presented_as = TopicName::from_components(&path_components0);
+
+    let resd0 = ds
+        .resolve_data_single(&presented_as, ss_mutex.clone())
+        .await;
 
     let resd = match resd0 {
         Ok(x) => x,
@@ -353,13 +358,19 @@ pub async fn serve_master_get(
     };
     let extra_html = match ds {
         TypeOFSource::Compose(_) => {
-            let index = ds.get_meta_index(ss_mutex.clone()).await.unwrap();
-            make_index_html(&index)
+            match ds.get_meta_index(&presented_as, ss_mutex.clone()).await {
+                Ok(index) => make_index_html(&index),
+                Err(err) => {
+                    let s = format!("Cannot make index html: {}", err);
+                    html! {p { (s) }}
+                }
+            }
         }
         _ => {
             html! {}
         }
     };
+
     return visualize_data(
         &ds_props,
         path_str.to_string(),
@@ -372,7 +383,7 @@ pub async fn serve_master_get(
 }
 
 pub async fn go_queue(
-    topic_name: String,
+    topic_name: &TopicName,
     components: Vec<String>,
     ss_mutex: ServerStateAccess,
     headers: HeaderMap,
@@ -430,7 +441,7 @@ pub async fn go_queue(
             };
             visualize_data(
                 &properties,
-                topic_name.to_string(),
+                topic_name.to_dotted(),
                 html! {},
                 "application/cbor",
                 &cbor_bytes,
@@ -561,7 +572,7 @@ pub async fn handle_websocket_generic2(
     let components = components[0..components.len() - 1].to_vec();
 
     if components.len() == 0 {
-        return handle_websocket_generic(ws, state, "".to_string(), send_data).await;
+        return handle_websocket_generic(ws, state, TopicName::root(), send_data).await;
     }
     // debug!("handle_websocket_generic2: {:?}", components);
     let matched = interpret_path_components(&components, state.clone()).await;
@@ -581,19 +592,24 @@ pub async fn handle_websocket_generic2(
             return handle_websocket_generic(ws, state, topic_name, send_data).await;
         }
         TypeOFSource::Compose(sc) => {
-            panic!("not implemented");
+            error!("handle_websocket_generic2 not implemented TypeOFSource::Compose");
+            return;
         }
         TypeOFSource::Digest(digest, content_type) => {
-            panic!("not implemented");
+            error!("handle_websocket_generic2 not implemented TypeOFSource::Digest");
+            return;
         }
         TypeOFSource::ForwardedQueue(_) => {
-            panic!("not implemented");
+            error!("handle_websocket_generic2 not implemented TypeOFSource::ForwardedQueue");
+            return;
         }
         TypeOFSource::Transformed(_, _) => {
-            panic!("not implemented");
+            error!("handle_websocket_generic2 not implemented TypeOFSource::Transformed");
+            return;
         }
         TypeOFSource::Deref(_) => {
-            panic!("not implemented");
+            error!("handle_websocket_generic2 not implemented TypeOFSource::Deref");
+            return;
         }
     }
 
@@ -774,7 +790,7 @@ pub async fn handle_websocket_generic2(
 }
 
 pub fn make_index_html(index: &TopicsIndexInternal) -> PreEscaped<String> {
-    let mut keys: Vec<&str> = index.topics.keys().map(|k| k.as_str()).collect();
+    let mut keys: Vec<&str> = index.topics.keys().map(|k| k.as_dotted()).collect();
 
     keys.sort();
     let mut topic2url = Vec::new();

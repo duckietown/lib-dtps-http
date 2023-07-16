@@ -1,3 +1,5 @@
+use crate::TopicName;
+
 pub static HEADER_SEE_EVENTS: &'static str = "X-dtps-events";
 pub static HEADER_SEE_EVENTS_INLINE_DATA: &'static str = "X-dtps-events-inline-data";
 

@@ -1,9 +1,10 @@
-use std::cmp::Ordering;
+use std::cmp::{min, Ordering};
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
+use std::ops::Add;
 
-use crate::{join_con, RawData};
+use crate::{join_con, RawData, TopicName};
 use derive_more::Constructor;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -14,13 +15,15 @@ use crate::utils::divide_in_components;
 
 pub type NodeAppData = String;
 
+pub type DottedName = String;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TopicsIndexWire {
     pub node_id: String,
     pub node_started: i64,
 
     pub node_app_data: HashMap<String, NodeAppData>,
-    pub topics: HashMap<String, TopicRefWire>,
+    pub topics: HashMap<DottedName, TopicRefWire>,
 }
 
 #[derive(Debug, Clone)]
@@ -28,15 +31,15 @@ pub struct TopicsIndexInternal {
     pub node_id: String,
     pub node_started: i64,
     pub node_app_data: HashMap<String, NodeAppData>,
-    pub topics: HashMap<String, TopicRefInternal>,
+    pub topics: HashMap<TopicName, TopicRefInternal>,
 }
 
 impl TopicsIndexInternal {
     pub fn to_wire(self, use_rel: Option<String>) -> TopicsIndexWire {
-        let mut topics = HashMap::new();
+        let mut topics: HashMap<String, TopicRefWire> = HashMap::new();
         for (topic_name, topic_ref_internal) in self.topics {
             let topic_ref_wire = topic_ref_internal.to_wire(use_rel.clone());
-            topics.insert(topic_name, topic_ref_wire);
+            topics.insert(topic_name.to_dotted(), topic_ref_wire);
         }
         TopicsIndexWire {
             node_id: self.node_id,
@@ -46,10 +49,10 @@ impl TopicsIndexInternal {
         }
     }
     pub fn from_wire(wire: TopicsIndexWire, conbase: &TypeOfConnection) -> Self {
-        let mut topics = HashMap::new();
+        let mut topics: HashMap<TopicName, TopicRefInternal> = HashMap::new();
         for (topic_name, topic_ref_wire) in &wire.topics {
             let topic_ref_internal = TopicRefInternal::from_wire(topic_ref_wire, conbase);
-            topics.insert(topic_name.clone(), topic_ref_internal);
+            topics.insert(TopicName::from_dotted(topic_name), topic_ref_internal);
         }
         TopicsIndexInternal {
             node_id: wire.node_id,
@@ -60,7 +63,7 @@ impl TopicsIndexInternal {
     }
 
     pub fn add_path<S: AsRef<str>>(&self, rel: S) -> Self {
-        let mut topics = HashMap::new();
+        let mut topics: HashMap<TopicName, _> = HashMap::new();
         for (topic_name, topic_ref_internal) in &self.topics {
             let t = topic_ref_internal.add_path(rel.as_ref());
             topics.insert(topic_name.clone(), t);
@@ -170,13 +173,39 @@ impl TopicRefInternal {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LinkBenchmark {
     pub complexity: u32,
-    pub bandwidth: f32,
+    pub bandwidth: u32,
     pub latency: f32,
     pub reliability: f32,
     pub hops: i32,
 }
 
+impl LinkBenchmark {
+    pub fn identity() -> Self {
+        Self {
+            complexity: 0,
+            bandwidth: 1000_000_000,
+            latency: 0.0,
+            reliability: 1.0,
+            hops: 0,
+        }
+    }
+}
+
 impl Eq for LinkBenchmark {}
+
+impl Add for LinkBenchmark {
+    type Output = LinkBenchmark;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        LinkBenchmark {
+            complexity: self.complexity + rhs.complexity,
+            bandwidth: min(self.bandwidth, rhs.bandwidth),
+            latency: self.latency + rhs.latency,
+            reliability: self.reliability * rhs.reliability,
+            hops: self.hops + rhs.hops,
+        }
+    }
+}
 
 impl PartialEq<Self> for LinkBenchmark {
     fn eq(&self, other: &Self) -> bool {

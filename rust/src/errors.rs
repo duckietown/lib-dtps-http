@@ -1,5 +1,8 @@
+use crate::TopicName;
 use anyhow::Result;
 use http::StatusCode;
+use indent::indent_all_with;
+use std::fmt::Debug;
 use warp::{Rejection, Reply};
 
 #[derive(thiserror::Error, Debug)]
@@ -15,6 +18,8 @@ pub enum DTPSError {
 
     #[error("DTPSError: Topic not found:\n{}", indent_inside(.0))]
     TopicNotFound(String),
+    #[error("DTPSError: Topic already exists:\n{}", indent_inside(.0))]
+    TopicAlreadyExists(String),
 
     #[error("DTPSError: Unknown DTPS error")]
     Unknown,
@@ -53,9 +58,26 @@ impl DTPSError {
     pub fn not_reachable<X, S: AsRef<str>>(s: S) -> Result<X, DTPSError> {
         Err(DTPSError::ResourceNotReachable(s.as_ref().to_string()))
     }
+    pub fn not_implemented<X, S: AsRef<str>>(s: S) -> Result<X, DTPSError> {
+        Err(DTPSError::NotImplemented(s.as_ref().to_string()))
+    }
 }
 
 pub type DTPSR<T> = anyhow::Result<T, DTPSError>;
+
+// struct Mine<T, X> (  anyhow::Result<T, X>);
+
+//
+// impl<T, X> Mine<T, X> {
+//     pub fn just_log(&self) -> () {
+//         match self {
+//             Ok(_) => (),
+//             Err(e) => {
+//                 log::error!("Error: {:?}", e);
+//             }
+//         }
+//     }
+// }
 
 pub fn not_available<T, S: AsRef<str>>(s: S) -> Result<T, DTPSError> {
     Err(DTPSError::NotAvailable(s.as_ref().to_string()))
@@ -68,8 +90,6 @@ pub fn error_other<T, S: AsRef<str>>(s: S) -> Result<T, DTPSError> {
 pub fn todtpserror(t: anyhow::Error) -> DTPSError {
     DTPSError::from(t)
 }
-
-use indent::indent_all_with;
 
 pub fn indent_inside(s: &String) -> String {
     indent_all_with("| ", s)
@@ -220,3 +240,7 @@ pub async fn handle_rejection(err: Rejection) -> std::result::Result<impl Reply,
 //         }
 //     };
 // }
+
+pub fn just_log<E: Debug>(e: E) -> () {
+    log::error!("Ignoring error: {:?}", e);
+}

@@ -44,7 +44,8 @@ use crate::websocket_signals::{
     ChannelInfo, ChannelInfoDesc, MsgClientToServer, MsgServerToClient,
 };
 use crate::{
-    error_other, format_digest_path, handle_rejection, parse_url_ext, utils, DTPSError, DTPSR,
+    error_other, format_digest_path, handle_rejection, parse_url_ext, utils, DTPSError, TopicName,
+    DTPSR,
 };
 
 pub type HandlersResponse = Result<http::Response<hyper::Body>, Rejection>;
@@ -363,12 +364,21 @@ impl DTPSServer {
         }
         // let (shutdown_send, shutdown_recv) = mpsc::unbounded_channel();
 
-        spawn(clock_go(self.get_lock(), TOPIC_LIST_CLOCK, 1.0));
+        spawn(clock_go(
+            self.get_lock(),
+            TopicName::from_dotted(TOPIC_LIST_CLOCK),
+            1.0,
+        ));
 
         if self.initial_proxy.len() > 0 {
             // let s = ssa.lock().await;
+            let mut i = 0;
             for (k, v) in self.initial_proxy.clone() {
-                self.add_proxied(k.clone(), v.clone()).await?;
+                let subname = format!("proxy-{}", i);
+                let mounted_at = TopicName::from_dotted(&k);
+                self.add_proxied(&subname, &mounted_at, v.clone()).await?;
+
+                i += 1;
             }
             info!("Proxies started");
         }
@@ -433,7 +443,13 @@ impl DTPSServer {
         ss.node_id.clone()
     }
 
-    pub async fn add_proxied(&mut self, proxied_name: String, url: TypeOfConnection) -> DTPSR<()> {
+    pub async fn add_proxied(
+        &mut self,
+        subcription_name: &String,
+        mounted_at: &TopicName,
+
+        url: TypeOfConnection,
+    ) -> DTPSR<()> {
         // let (md, index_internal) = loop {
         //     match get_proxy_info(&url).await {
         //         Ok(s) => break s,
@@ -488,7 +504,15 @@ impl DTPSServer {
 
         let ssa = self.get_lock();
 
-        let handle = tokio::spawn(observe_proxy(proxied_name.clone(), url.clone(), ssa));
+        // let proxied_name = TopicName::from_dotted(proxied_name);
+        // let subcription_name =format!("{}-{}", proxied_name, "proxy").to_string();
+        let future = observe_proxy(
+            subcription_name.clone(),
+            mounted_at.clone(),
+            url.clone(),
+            ssa,
+        );
+        let handle = tokio::spawn(show_errors(future));
 
         //
         // self.proxied.insert(
@@ -509,18 +533,18 @@ impl DTPSServer {
     }
 }
 
-async fn check_exists(
-    topic_name: String,
-    ss_mutex: ServerStateAccess,
-) -> Result<String, Rejection> {
-    let ss = ss_mutex.lock().await;
-
-    match ss.oqs.get(topic_name.as_str()) {
-        None => Err(warp::reject::not_found()),
-        // Some(_) => Err(warp::reject::not_found()),
-        Some(_) => Ok(topic_name),
-    }
-}
+// async fn check_exists(
+//     topic_name: String,
+//     ss_mutex: ServerStateAccess,
+// ) -> Result<String, Rejection> {
+//     let ss = ss_mutex.lock().await;
+//
+//     match ss.oqs.get(topic_name.as_str()) {
+//         None => Err(warp::reject::not_found()),
+//         // Some(_) => Err(warp::reject::not_found()),
+//         Some(_) => Ok(topic_name),
+//     }
+// }
 
 pub fn get_accept_header(headers: &HeaderMap) -> Vec<String> {
     let accept_header = headers.get("accept");
@@ -633,7 +657,7 @@ pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> Ha
 pub async fn handle_websocket_generic(
     ws: warp::ws::WebSocket,
     state: ServerStateAccess,
-    topic_name: String,
+    topic_name: TopicName,
     send_data: bool,
 ) -> () {
     // debug!("handle_websocket_generic: {}", topic_name);
@@ -836,22 +860,23 @@ pub fn get_header_with_default(headers: &HeaderMap, key: &str, default: &str) ->
 }
 
 pub async fn handle_topic_post(
-    topic_name: String,
+    topic_name: &TopicName,
     ss_mutex: ServerStateAccess,
     headers: HeaderMap,
     data: hyper::body::Bytes,
 ) -> HandlersResponse {
     let mut ss = ss_mutex.lock().await;
+    // let topic_name= TopicName::from_dotted(topic_name);
 
     let content_type = get_header_with_default(&headers, CONTENT_TYPE, OCTET_STREAM);
 
-    let x: &mut ObjectQueue;
-    match ss.oqs.get_mut(topic_name.as_str()) {
-        None => {
-            return Err(warp::reject::not_found());
-        }
-        Some(y) => x = y,
-    };
+    // let x: &mut ObjectQueue;
+    // match ss.oqs.get_mut(topic_name.as_str()) {
+    //     None => {
+    //         return Err(warp::reject::not_found());
+    //     }
+    //     Some(y) => x = y,
+    // };
 
     let byte_vector: Vec<u8> = data.to_vec().clone();
 
@@ -868,13 +893,13 @@ pub async fn handle_topic_post(
 }
 
 async fn handler_topic_html_summary(
-    topic_name: String,
+    topic_name: &TopicName,
     ss_mutex: ServerStateAccess,
 ) -> Result<http::Response<Body>, Rejection> {
     let ss = ss_mutex.lock().await;
 
     let x: &ObjectQueue;
-    match ss.oqs.get(topic_name.as_str()) {
+    match ss.oqs.get(topic_name) {
         None => return Err(warp::reject::not_found()),
 
         Some(y) => x = y,
@@ -936,7 +961,7 @@ async fn handler_topic_html_summary(
     }
 
     let x = make_html(
-        &topic_name,
+        topic_name.as_dotted(),
         html! {
 
 
@@ -1008,7 +1033,7 @@ pub const JAVASCRIPT_SEND: &str = r##"
 "##;
 
 pub async fn handler_topic_generic(
-    topic_name: String,
+    topic_name: &TopicName,
     ss_mutex: ServerStateAccess,
     headers: HeaderMap,
 ) -> Result<http::Response<Body>, Rejection> {
@@ -1026,7 +1051,7 @@ pub async fn handler_topic_generic(
         let ss = ss_mutex.lock().await;
 
         let x: &ObjectQueue;
-        match ss.oqs.get(topic_name.as_str()) {
+        match ss.oqs.get(topic_name) {
             None => return Err(warp::reject::not_found()),
 
             Some(y) => x = y,
@@ -1041,8 +1066,8 @@ pub async fn handler_topic_generic(
                     .unwrap();
                 let h = res.headers_mut();
 
-                let suffix = format!("{}/", topic_name);
-                put_alternative_locations(&ss, h, &suffix);
+                // let suffix = format!("{}/", topic_name);
+                put_alternative_locations(&ss, h, &topic_name.as_relative_url());
                 put_common_headers(&ss, h);
 
                 return Ok(res);
@@ -1058,47 +1083,47 @@ pub async fn handler_topic_generic(
         .await;
 }
 
-async fn handler_topic_generic_head(
-    topic_name: String,
-    ss_mutex: ServerStateAccess,
-) -> Result<Response, Rejection> {
-    let ss = ss_mutex.lock().await;
-
-    let x: &ObjectQueue;
-    match ss.oqs.get(topic_name.as_str()) {
-        None => return Err(warp::reject::not_found()),
-
-        Some(y) => x = y,
-    }
-    let empty_vec: Vec<u8> = Vec::new();
-    let mut resp = Response::new(Body::from(empty_vec));
-
-    let h = resp.headers_mut();
-
-    h.insert(
-        HEADER_DATA_ORIGIN_NODE_ID,
-        HeaderValue::from_str(x.tr.origin_node.as_str()).unwrap(),
-    );
-    h.insert(
-        HEADER_DATA_UNIQUE_ID,
-        HeaderValue::from_str(x.tr.unique_id.as_str()).unwrap(),
-    );
-
-    h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static("events/"));
-    h.insert(
-        HEADER_SEE_EVENTS_INLINE_DATA,
-        HeaderValue::from_static("events/?send_data=1"),
-    );
-
-    let suffix = format!("{}/", topic_name);
-    put_alternative_locations(&ss, h, &suffix);
-    put_common_headers(&ss, h);
-
-    Ok(resp.into())
-}
+// async fn handler_topic_generic_head(
+//     topic_name: String,
+//     ss_mutex: ServerStateAccess,
+// ) -> Result<Response, Rejection> {
+//     let ss = ss_mutex.lock().await;
+//
+//     let x: &ObjectQueue;
+//     match ss.oqs.get(topic_name.as_str()) {
+//         None => return Err(warp::reject::not_found()),
+//
+//         Some(y) => x = y,
+//     }
+//     let empty_vec: Vec<u8> = Vec::new();
+//     let mut resp = Response::new(Body::from(empty_vec));
+//
+//     let h = resp.headers_mut();
+//
+//     h.insert(
+//         HEADER_DATA_ORIGIN_NODE_ID,
+//         HeaderValue::from_str(x.tr.origin_node.as_str()).unwrap(),
+//     );
+//     h.insert(
+//         HEADER_DATA_UNIQUE_ID,
+//         HeaderValue::from_str(x.tr.unique_id.as_str()).unwrap(),
+//     );
+//
+//     h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static("events/"));
+//     h.insert(
+//         HEADER_SEE_EVENTS_INLINE_DATA,
+//         HeaderValue::from_static("events/?send_data=1"),
+//     );
+//
+//     let suffix = format!("{}/", topic_name);
+//     put_alternative_locations(&ss, h, &suffix);
+//     put_common_headers(&ss, h);
+//
+//     Ok(resp.into())
+// }
 
 async fn handler_topic_generic_data(
-    topic_name: String,
+    topic_name: &TopicName,
     content_type: String,
     digest: String,
     ss_mutex: ServerStateAccess,
@@ -1109,7 +1134,7 @@ async fn handler_topic_generic_data(
     let ss = ss_mutex.lock().await;
 
     let x: &ObjectQueue;
-    match ss.oqs.get(topic_name.as_str()) {
+    match ss.oqs.get(topic_name) {
         None => return Err(warp::reject::not_found()),
         Some(y) => x = y,
     }
@@ -1172,8 +1197,8 @@ async fn handler_topic_generic_data(
 
     let mut resp = Response::new(Body::from(data_bytes));
     let h = resp.headers_mut();
-    let suffix = format!("{}/", topic_name);
-    put_alternative_locations(&ss, h, &suffix);
+    // let suffix = format!("{}/", topic_name);
+    put_alternative_locations(&ss, h, &topic_name.as_relative_url());
 
     h.insert(
         HEADER_DATA_ORIGIN_NODE_ID,
@@ -1306,7 +1331,7 @@ pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {
     .await
 }
 
-async fn clock_go(state: ServerStateAccess, topic_name: &str, interval_s: f32) {
+async fn clock_go(state: ServerStateAccess, topic_name: TopicName, interval_s: f32) {
     let mut clock = interval(Duration::from_secs_f32(interval_s));
     clock.tick().await;
     loop {
@@ -1316,7 +1341,7 @@ async fn clock_go(state: ServerStateAccess, topic_name: &str, interval_s: f32) {
         // get the current time in nanoseconds
         let now = Local::now().timestamp_nanos();
         let s = format!("{}", now);
-        let _inserted = ss.publish_json(topic_name, &s, None);
+        let _inserted = ss.publish_json(&topic_name, &s, None);
 
         // debug!("inserted {}: {:?}", topic_name, inserted);
     }

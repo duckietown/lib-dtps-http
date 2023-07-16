@@ -3,7 +3,8 @@ pub fn get_random_node_id() -> String {
     format!("{}", rnd_part)
 }
 
-pub fn get_queue_id(node_id: &str, queue_name: &str) -> String {
+pub fn get_queue_id(node_id: &str, topic_name: &TopicName) -> String {
+    let queue_name = topic_name.to_dotted();
     if queue_name == "" {
         return node_id.to_string();
     }
@@ -12,6 +13,7 @@ pub fn get_queue_id(node_id: &str, queue_name: &str) -> String {
 }
 
 // use base64::{engine::general_purpose, Engine as _};
+use crate::TopicName;
 use rand::Rng;
 
 pub fn short_random_id(nchars: i8) -> String {
