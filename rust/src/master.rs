@@ -1,16 +1,6 @@
 use std::collections::HashMap;
 use std::string::ToString;
 
-use anyhow::Context;
-use bytes::Bytes;
-use log::{debug, error};
-use maud::{html, PreEscaped};
-
-use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
-use warp::http::header;
-use warp::hyper::Body;
-use warp::reply::Response;
-
 use crate::cbor_manipulation::{display_printable, get_as_cbor, get_inside};
 use crate::html_utils::make_html;
 use crate::signals_logic::{
@@ -19,12 +9,36 @@ use crate::signals_logic::{
 };
 use crate::utils::{divide_in_components, get_good_url_for_components};
 use crate::{
-    get_accept_header, handle_topic_post, handle_websocket_generic, handler_topic_generic,
+    context, get_accept_header, handle_topic_post, handle_websocket_generic, handler_topic_generic,
     object_queues, put_alternative_locations, put_common_headers, root_handler,
-    serve_static_file_path, todtpserror, DTPSError, HandlersResponse, ObjectQueue, RawData,
-    ServerStateAccess, TopicName, TopicsIndexInternal, DTPSR, HEADER_DATA_ORIGIN_NODE_ID,
-    HEADER_DATA_UNIQUE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
+    serve_static_file_path, todtpserror, HandlersResponse, ObjectQueue, RawData, ServerStateAccess,
+    TopicName, TopicsIndexInternal, HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID,
+    HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
 };
+use anyhow::Context;
+use bytes::Bytes;
+use log::{debug, error};
+use maud::{html, PreEscaped};
+use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
+use warp::http::header;
+use warp::hyper::Body;
+use warp::reply::Response;
+
+fn format_query(params: &HashMap<String, String>) -> Option<String> {
+    if params.is_empty() {
+        return None;
+    }
+    let mut query = String::new();
+
+    for (key, value) in params.iter() {
+        if !query.is_empty() {
+            query.push('&');
+        }
+        query.push_str(&format!("{}={}", key, value));
+    }
+
+    Some(query)
+}
 
 pub async fn serve_master_post(
     path: warp::path::FullPath,
@@ -34,7 +48,8 @@ pub async fn serve_master_post(
     data: hyper::body::Bytes,
 ) -> HandlersResponse {
     let path_str = path_normalize(path);
-    let matched = interpret_path(&path_str, ss_mutex.clone()).await;
+    let query_str = format_query(&query);
+    let matched = interpret_path(&path_str, &query_str, ss_mutex.clone()).await;
 
     let ds = match matched {
         Ok(ds) => ds,
@@ -88,8 +103,9 @@ pub async fn serve_master_head(
     headers: HeaderMap,
 ) -> HandlersResponse {
     let path_str = path_normalize(path);
-    debug!("serve_master_head: path_str: {}", path_str);
-    let matched = interpret_path(&path_str, ss_mutex.clone()).await;
+    // debug!("serve_master_head: path_str: {}", path_str);
+    let query_str = format_query(&query);
+    let matched = interpret_path(&path_str, &query_str, ss_mutex.clone()).await;
     let ss = ss_mutex.lock().await;
 
     // debug!(
@@ -100,7 +116,7 @@ pub async fn serve_master_head(
         Ok(ds) => ds,
         Err(s) => {
             // let s = format!("Cannot resolve the path {:?}:\n{}", path_components, s);
-            debug!("serve_master_head: path_str: {}\n{}", path_str, s);
+            // debug!("serve_master_head: path_str: {}\n{}", path_str, s);
 
             let res = http::Response::builder()
                 .status(StatusCode::NOT_FOUND)
@@ -109,7 +125,7 @@ pub async fn serve_master_head(
             return Ok(res);
         }
     };
-    debug!("serve_master_head: ds: {:?}", ds);
+    // debug!("serve_master_head: ds: {:?}", ds);
     let (topic_name, x) = {
         match ds {
             TypeOFSource::OurQueue(topic_name, _, _) => {
@@ -208,17 +224,6 @@ fn path_normalize(path: warp::path::FullPath) -> String {
     new_path
 }
 
-// pub async fn serve_master_get(
-//     path: warp::path::FullPath,
-//     query: HashMap<String, String>,
-//     ss_mutex: ServerStateAccess,
-//     headers: HeaderMap,
-// ) -> HandlersResponse {
-//     let path_str = path.as_str();
-//
-//     return serve_master0(&new_path, query, ss_mutex, headers).await;
-// }
-
 const STATIC_PREFIX: &str = "static";
 
 pub async fn serve_master_get(
@@ -227,8 +232,31 @@ pub async fn serve_master_get(
     ss_mutex: ServerStateAccess,
     headers: HeaderMap,
 ) -> HandlersResponse {
-    debug!("headers:\n{:?}", headers);
+    // get referrer
+    let referrer = headers.get("referer");
+    debug!("GET {} ", path.as_str());
+    debug!("Referrer {:?} ", referrer);
+
     let path_str = path_normalize(path);
+    //
+    // let path_str =
+    //     if let Some(x) = referrer {
+    //         let s = x.to_str().unwrap();
+    //         if s == "http://localhost:9000/proxy1/" {
+    //
+    //             format!("/proxy1{}",   path.as_str())
+    //
+    //         } else {
+    //             // path_normalize(path)
+    //             path.as_str().to_string()
+    //         }
+    //     } else {
+    //         // path_normalize(path)
+    //         path.as_str().to_string()
+    //     };
+    debug!("After proxy {} ", path_str);
+    // debug!("headers:\n{:?}", headers);
+    // let path_str = path_normalize(path);
     if path_str.len() > 250 {
         panic!("Path too long: {:?}", path_str);
     }
@@ -263,47 +291,38 @@ pub async fn serve_master_get(
         }
     }
 
-    if !path_components.contains(&STATIC_PREFIX.to_string()) {
-        let good_url = get_good_url_for_components(&path_components);
-        if good_url != path_str {
-            let good_relative_url = format!("./{}/", path_components.last().unwrap());
+    if false {
+        if !path_components.contains(&STATIC_PREFIX.to_string()) {
+            let good_url = get_good_url_for_components(&path_components);
+            if good_url != path_str {
+                let good_relative_url = format!("./{}/", path_components.last().unwrap());
 
-            debug!(
-                "Redirecting\n - {}\n->  {};\n rel = {}\n",
-                path_str, good_url, good_relative_url
-            );
+                debug!(
+                    "Redirecting\n - {}\n->  {};\n rel = {}\n",
+                    path_str, good_url, good_relative_url
+                );
 
-            let text_response = format!("Redirecting to {}", good_url);
-            let res = http::Response::builder()
-                .status(StatusCode::MOVED_PERMANENTLY)
-                .header(header::LOCATION, good_relative_url)
-                .body(Body::from(text_response))
-                .unwrap();
+                let text_response = format!("Redirecting to {}", good_url);
+                let res = http::Response::builder()
+                    .status(StatusCode::MOVED_PERMANENTLY)
+                    .header(header::LOCATION, good_relative_url)
+                    .body(Body::from(text_response))
+                    .unwrap();
 
-            // TODO: renable
-            return Ok(res);
+                // TODO: renable
+                return Ok(res);
+            }
         }
     }
 
-    let matched = interpret_path(&path_str, ss_mutex.clone())
-        .await
-        .with_context(|| format!("Cannot interpret the path {:?}:\n", path_components));
-    let ds = matched.map_err(todtpserror)?;
-    debug!(
-        "serve_master:\npaths: {:#?}\nmatched: {:#?}",
-        path_components, ds
-    );
-    // let ds = match matched {
-    //     Ok(ds) => ds,
-    //     Err(s) => {
-    //         let s = format!("Cannot resolve the path {:?}:\n{}", path_components, s);
-    //         let res = http::Response::builder()
-    //             .status(StatusCode::NOT_FOUND)
-    //             .body(Body::from(s))
-    //             .unwrap();
-    //         return Ok(res);
-    //     }
-    // };
+    let query_str = format_query(&query);
+
+    let ds = context!(
+        interpret_path(&path_str, &query_str, ss_mutex.clone()).await,
+        "Cannot interpret the path {:?}:\n",
+        path_components,
+    )
+    .map_err(todtpserror)?;
 
     let ds_props = ds.get_properties();
 
@@ -458,6 +477,14 @@ pub async fn go_queue(
     // return Err(warp::reject::not_found());
 }
 
+fn is_html(content_type: &str) -> bool {
+    content_type.starts_with("text/html")
+}
+
+fn is_image(content_type: &str) -> bool {
+    content_type.starts_with("image/")
+}
+
 pub async fn visualize_data(
     properties: &TopicProperties,
     title: String,
@@ -471,7 +498,10 @@ pub async fn visualize_data(
     let default_content_type = "application/yaml";
     let initial_value = "{}";
     let js = PreEscaped(JAVASCRIPT_SEND);
-    if accept_headers.contains(&"text/html".to_string()) {
+    if !is_html(content_type)
+        && !is_image(content_type)
+        && accept_headers.contains(&"text/html".to_string())
+    {
         let x = make_html(
             &title,
             html! {
@@ -575,7 +605,7 @@ pub async fn handle_websocket_generic2(
         return handle_websocket_generic(ws, state, TopicName::root(), send_data).await;
     }
     // debug!("handle_websocket_generic2: {:?}", components);
-    let matched = interpret_path_components(&components, state.clone()).await;
+    let matched = interpret_path_components(&components, &None, state.clone()).await;
     debug!("events: matched: {:?}", matched);
 
     let ds = match matched {
@@ -609,6 +639,10 @@ pub async fn handle_websocket_generic2(
         }
         TypeOFSource::Deref(_) => {
             error!("handle_websocket_generic2 not implemented TypeOFSource::Deref");
+            return;
+        }
+        TypeOFSource::OtherProxied(_) => {
+            error!("handle_websocket_generic2 not implemented TypeOFSource::OtherProxied");
             return;
         }
     }

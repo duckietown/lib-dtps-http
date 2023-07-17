@@ -14,7 +14,6 @@ use hyperlocal::UnixClientExt;
 use log::{debug, error, info};
 use rand::Rng;
 use tokio::net::UnixStream;
-
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
@@ -37,7 +36,10 @@ use crate::utils::time_nanos;
 use crate::websocket_signals::MsgServerToClient;
 use crate::TypeOfConnection::Same;
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
-use crate::{not_available, DTPSError, RawData, TopicName, DTPSR};
+use crate::{
+    context, not_available, not_implemented, DTPSError, RawData, TopicName,
+    CONTENT_TYPE_DTPS_INDEX, DTPSR,
+};
 
 /// Note: need to have use futures::{StreamExt} in scope to use this
 pub async fn get_events_stream_inline(
@@ -371,15 +373,55 @@ pub async fn get_rawdata(con: &TypeOfConnection) -> DTPSR<RawData> {
     })
 }
 
+#[derive(Debug)]
+pub enum TypeOfResource {
+    Other,
+    DTPSTopic,
+    DTPSIndex,
+}
+
+pub fn get_content_type<T>(resp: &http::Response<T>) -> String {
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .map(|x| x.to_str().unwrap().to_string())
+        .unwrap_or("application/octet-stream".to_string());
+    content_type
+}
+
+pub async fn sniff_type_resource(con: &TypeOfConnection) -> DTPSR<TypeOfResource> {
+    let resp = context!(
+        make_request(con, hyper::Method::GET).await,
+        "Cannot make request to {}",
+        con.to_string(),
+    )?;
+    let content_type = get_content_type(&resp);
+    debug!("content_type: {:#?}", content_type);
+
+    if content_type.contains(CONTENT_TYPE_DTPS_INDEX) {
+        Ok(TypeOfResource::DTPSIndex)
+    } else {
+        Ok(TypeOfResource::Other)
+    }
+}
+
 pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
-    let resp = make_request(con, hyper::Method::GET).await?;
-    // TODO: send more headers
+    let resp = context!(
+        make_request(con, hyper::Method::GET).await,
+        "Cannot make request to {:?}",
+        con
+    )?;
 
-    //  .header("Accept", "application/cbor")
+    let body_bytes = context!(
+        hyper::body::to_bytes(resp.into_body()).await,
+        "Cannot get body bytes"
+    )?;
 
-    // Get the response body bytes.
-    let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
-    let x0: TopicsIndexWire = serde_cbor::from_slice(&body_bytes).unwrap();
+    let x0: TopicsIndexWire = context!(
+        serde_cbor::from_slice(&body_bytes),
+        "Cannot interpret as CBOR"
+    )?;
+
     let ti = TopicsIndexInternal::from_wire(x0, con);
 
     debug!("get_index: {:#?}\n {:#?}", con, ti);
@@ -538,41 +580,49 @@ pub async fn make_request(conbase: &TypeOfConnection, method: hyper::Method) -> 
             ));
         }
         Same() => {
-            panic!("not expected here {}", conbase);
+            return not_implemented!("not expected to reach here");
         }
     };
 
-    let req0 = hyper::Request::builder()
-        .method(&method)
-        .uri(use_url.as_str())
-        // .header("user-agent", "the-awesome-agent/007")
-        .body(hyper::Body::from(""))
-        .with_context(|| format!("cannot build request for {} {}", method, use_url.as_str()))?;
+    let req0 = context!(
+        hyper::Request::builder()
+            .method(&method)
+            .uri(use_url.as_str())
+            // .header("user-agent", "the-awesome-agent/007")
+            .body(hyper::Body::from("")),
+        "cannot build request for {} {}",
+        method,
+        use_url.as_str()
+    )?;
 
-    let resp = match conbase {
-        TypeOfConnection::TCP(url) => {
-            if url.scheme() == "https" {
-                let https = HttpsConnector::new();
-                let client = Client::builder().build::<_, hyper::Body>(https);
-                client.request(req0).await
-            } else {
-                let client = hyper::Client::new();
+    let resp = context!(
+        match conbase {
+            TypeOfConnection::TCP(url) => {
+                if url.scheme() == "https" {
+                    let https = HttpsConnector::new();
+                    let client = Client::builder().build::<_, hyper::Body>(https);
+                    client.request(req0).await
+                } else {
+                    let client = hyper::Client::new();
+                    client.request(req0).await
+                }
+            }
+            TypeOfConnection::UNIX(_) => {
+                let client = Client::unix();
                 client.request(req0).await
             }
-        }
-        TypeOfConnection::UNIX(_) => {
-            let client = Client::unix();
-            client.request(req0).await
-        }
 
-        TypeOfConnection::Relative(_, _) => {
-            return not_available("cannot handle a relative url get_metadata");
-        }
-        TypeOfConnection::Same() => {
-            return not_available("cannot handle a Same url to get_metadata");
-        }
-    }
-    .with_context(|| format!("cannot make request for {} {}", method, use_url.as_str()))?;
+            TypeOfConnection::Relative(_, _) => {
+                return not_available("cannot handle a relative url get_metadata");
+            }
+            TypeOfConnection::Same() => {
+                return not_available("cannot handle a Same url to get_metadata");
+            }
+        },
+        "cannot make request for {} {}",
+        method,
+        use_url.as_str()
+    )?;
 
     Ok(resp)
 }

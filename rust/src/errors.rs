@@ -1,3 +1,5 @@
+use std::backtrace::Backtrace;
+
 use crate::TopicName;
 use anyhow::Result;
 use http::StatusCode;
@@ -50,6 +52,9 @@ pub enum DTPSError {
 
     #[error(transparent)]
     NetworkError(#[from] AddrParseError),
+
+    #[error(transparent)]
+    CBORError(#[from] serde_cbor::Error),
 }
 
 impl DTPSError {
@@ -212,6 +217,13 @@ impl DTPSError {
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
+
+    pub fn is_temp_env_error(&self) -> bool {
+        match self {
+            DTPSError::TopicNotFound(_) => false,
+            _ => true,
+        }
+    }
 }
 
 impl warp::reject::Reject for DTPSError {
@@ -247,4 +259,27 @@ pub async fn handle_rejection(err: Rejection) -> std::result::Result<impl Reply,
 
 pub fn just_log<E: Debug>(e: E) -> () {
     log::error!("Ignoring error: {:?}", e);
+}
+
+#[macro_export]
+macro_rules! add_info {
+    ($($u:expr),* $(,)?) => {{
+        format!("{}:{}:\n{}", file!(), line!(),
+            indent::indent_all_with("| ", format!($($u),*))
+        )
+    }};
+}
+
+#[macro_export]
+macro_rules! context {
+    ($t: expr,  $($u:expr),* $(,)?) => {{
+        ($t).context( crate::add_info!($($u),*) )
+    }};
+}
+
+#[macro_export]
+macro_rules! not_implemented {
+    ($($u:expr),* $(,)?) => {{
+        DTPSError::not_implemented(crate::add_info!($($u),*) )
+    }};
 }

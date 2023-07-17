@@ -6,19 +6,24 @@ RELEASE='--release' # 0.5ms
 RELEASE='' # 2.5
 
 run-server-continuous:
-	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8000'
+	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8000 --unix-path /tmp/demo1-a'
 
-run-proxy-continuous:
-	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8001  --proxy node1=http://localhost:8000 --tunnel  test-dtps1-tunnel.json'
+run-proxy1-continuous-http:
+	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8001  --unix-path /tmp/demo1-b  --proxy node1=http://localhost:8000 --tunnel  test-dtps1-tunnel.json'
+
+
+run-proxy1-continuous-socket:
+	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8001  --unix-path /tmp/demo1-b  --proxy node1=unix:///tmp/demo1-a/ --tunnel  test-dtps1-tunnel.json'
+
 
 
 run-proxy2-continuous:
-	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8002  --proxy proxy1=http://localhost:8001 '
+	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8002 --unix-path /tmp/demo1-c  --proxy proxy1=http://localhost:8001 '
 
 
-run-proxy2-continuous-b:
-	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8002  --proxy proxy1=https'
-
+#run-proxy2-continuous-b:
+#	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8002  --proxy proxy1=https'
+#
 
 run-proxy3-continuous:
 	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8003  --proxy proxy2=http://localhost:8002 '
@@ -28,6 +33,14 @@ run-client-continuous-to-rust-server:
 
 run-client-continuous-to-python-server:
 	cargo watch -c -w rust/src -w rust/bin -E RUST_BACKTRACE=full  -x 'run  $(RELEASE)  --bin dtps-http-rust-client-stats -- --url http://127.0.0.1:8081/ '
+
+
+
+run-proxy-external:
+	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 11000 --proxy proxy1=http://localhot:10000/'
+
+
+
 
 
 docker-build-debug:

@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
+use anyhow::Context;
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -11,12 +12,14 @@ use serde_cbor::Value::Null as CBORNull;
 use serde_cbor::Value::Text as CBORText;
 
 use crate::cbor_manipulation::{get_as_cbor, get_inside};
+use crate::client::make_request;
 use crate::signals_logic::ResolvedData::{NotAvailableYet, NotFound, Regular};
 use crate::utils::{divide_in_components, is_prefix_of};
 use crate::{
-    get_rawdata, DTPSError, ForwardingStep, LinkBenchmark, NodeAppData, RawData, ServerState,
-    ServerStateAccess, TopicName, TopicReachabilityInternal, TopicRefInternal, TopicsIndexInternal,
-    TypeOfConnection, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
+    context, get_content_type, get_rawdata, not_implemented, DTPSError, ForwardingStep,
+    LinkBenchmark, NodeAppData, OtherProxyInfo, RawData, ServerState, ServerStateAccess, TopicName,
+    TopicReachabilityInternal, TopicRefInternal, TopicsIndexInternal, TypeOfConnection,
+    CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
 };
 
 #[derive(Debug, Clone)]
@@ -73,6 +76,16 @@ pub enum TypeOFSource {
     Transformed(Box<TypeOFSource>, Transforms),
     Digest(String, String),
     Deref(SourceComposition),
+
+    OtherProxied(OtherProxied),
+}
+
+#[derive(Debug, Clone)]
+pub struct OtherProxied {
+    reached_at: TopicName,
+    path_and_query: String,
+    // query: Option<String>,
+    op: OtherProxyInfo,
 }
 
 // #[derive(Debug, Clone)]
@@ -186,8 +199,34 @@ impl ResolveDataSingle for TypeOFSource {
                 transform(data, transforms).await
             }
             TypeOFSource::Deref(sc) => single_compose(sc, presented_as, ss_mutex).await,
+            TypeOFSource::OtherProxied(op) => resolve_proxied(op).await,
         }
     }
+}
+
+pub async fn resolve_proxied(op: &OtherProxied) -> DTPSR<ResolvedData> {
+    let con0 = op.op.con.clone();
+
+    let rest = &op.path_and_query;
+
+    let con = con0.join(&rest)?;
+
+    debug!("Proxied: {:?} -> {:?}", con0, con);
+
+    let resp = context!(
+        make_request(&con, hyper::Method::GET).await,
+        "Cannot make request to {:?}",
+        con
+    )?;
+    let content_type = get_content_type(&resp);
+
+    let body_bytes = context!(
+        hyper::body::to_bytes(resp.into_body()).await,
+        "Cannot get body bytes"
+    )?;
+    let rd = RawData::new(body_bytes, content_type);
+
+    Ok(ResolvedData::RawData(rd))
 }
 
 impl DataProps for TypeOFSource {
@@ -205,6 +244,14 @@ impl DataProps for TypeOFSource {
             TypeOFSource::Compose(sc) => sc.get_properties(),
             TypeOFSource::Transformed(s, _) => s.get_properties(),
             TypeOFSource::Deref(d) => d.get_properties(),
+            TypeOFSource::OtherProxied(_) => {
+                TopicProperties {
+                    streamable: false,
+                    pushable: false,
+                    readable: true,
+                    immutable: false, // maybe we can say it true sometime
+                }
+            }
         }
     }
 }
@@ -353,6 +400,9 @@ impl GetMeta for TypeOFSource {
             TypeOFSource::Deref(_) => Err(DTPSError::NotImplemented(
                 "get_meta_index for Deref".to_string(),
             )),
+            TypeOFSource::OtherProxied(_) => {
+                not_implemented!("OtherProxied")
+            }
         };
     }
 }
@@ -540,15 +590,20 @@ async fn single_compose(
 }
 
 #[async_recursion]
-pub async fn interpret_path(path: &str, ss_mutex: ServerStateAccess) -> DTPSR<TypeOFSource> {
+pub async fn interpret_path(
+    path: &str,
+    query: &Option<String>,
+    ss_mutex: ServerStateAccess,
+) -> DTPSR<TypeOFSource> {
     let path_components0 = divide_in_components(&path, '/');
     let path_components = path_components0.clone();
-    interpret_path_components(&path_components, ss_mutex.clone()).await
+    interpret_path_components(&path_components, query, ss_mutex.clone()).await
 }
 
 #[async_recursion]
 pub async fn interpret_path_components(
     path_components: &Vec<String>,
+    query: &Option<String>,
     ss_mutex: ServerStateAccess,
 ) -> DTPSR<TypeOFSource> {
     if path_components.contains(&"!".to_string()) {
@@ -564,7 +619,7 @@ pub async fn interpret_path_components(
         let after = path_components.get(i + 1..).unwrap().to_vec();
         debug!("interpret_path: before: {:?} after: {:?}", before, after);
 
-        let interpret_before = interpret_path_components(&before, ss_mutex.clone()).await?;
+        let interpret_before = interpret_path_components(&before, query, ss_mutex.clone()).await?;
 
         let first_part = match interpret_before {
             TypeOFSource::Compose(sc) => TypeOFSource::Deref(sc),
@@ -611,7 +666,7 @@ pub async fn interpret_path_components(
     }
 
     if path_components.len() > 1 {
-        if path_components.first().unwrap() == "ipfs" {
+        if path_components.first().unwrap() == ":ipfs" {
             if path_components.len() != 3 {
                 return DTPSError::other(format!(
                     "Wrong number of components: {:?}; expected 3",
@@ -631,11 +686,32 @@ pub async fn interpret_path_components(
     }
 
     // look for all the keys in our queues
-    let keys: Vec<TopicName> = {
-        let ss = ss_mutex.lock().await;
-        ss.oqs.keys().cloned().collect()
-    };
+    // let keys: Vec<TopicName> = {
+    //     let ss = ss_mutex.lock().await;
+    //     ss.oqs.keys().cloned().collect()
+    // };
     // log::debug!(" = path_components = {:?} ", path_components);
+
+    {
+        let ss = ss_mutex.lock().await;
+        for (mounted_at, info) in &ss.proxied_other {
+            if let Some((_, b)) = is_prefix_of(mounted_at.as_components(), &path_components) {
+                let mut path_and_query = b.join("/");
+                if let Some(q) = query {
+                    path_and_query.push_str("?");
+                    path_and_query.push_str(q);
+                }
+
+                let other = OtherProxied {
+                    reached_at: mounted_at.clone(),
+                    path_and_query,
+                    op: info.clone(),
+                };
+                return Ok(TypeOFSource::OtherProxied(other));
+            }
+        }
+    }
+
     let mut subtopics: Vec<(TopicName, Vec<String>, Vec<String>, TypeOFSource)> = vec![];
     let mut subtopics_vec = vec![];
 

@@ -1,31 +1,83 @@
-use crate::{DTPSError, DTPSR};
 use url::Url;
 
 use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
 use crate::structures::{TypeOfConnection, UnixCon};
+use crate::{DTPSError, DTPSR};
+
+fn get_scheme_part(s0: &str) -> Option<&str> {
+    let scheme_end = s0.find("://")?;
+    Some(&s0[..scheme_end])
+}
+
+fn is_unix_scheme(s0: &str) -> bool {
+    s0 == "unix" || s0 == "http+unix"
+}
+
+enum FoundScheme {
+    Unix(String),
+    Other(String),
+    None,
+}
+
+fn get_scheme(s: &str) -> FoundScheme {
+    let scheme = get_scheme_part(s);
+    match scheme {
+        Some(scheme) => {
+            if is_unix_scheme(scheme) {
+                FoundScheme::Unix(scheme.to_string())
+            } else {
+                FoundScheme::Other(scheme.to_string())
+            }
+        }
+        None => FoundScheme::None,
+    }
+}
+
+const SPECIAL_CHAR: &str = "%2F";
 
 pub fn parse_url_ext(s0: &str) -> DTPSR<TypeOfConnection> {
-    if s0.starts_with("http+unix://") {
+    let scheme = get_scheme(s0);
+
+    if let FoundScheme::None = scheme {
+        return Ok(UNIX(UnixCon {
+            scheme: "http+unix".to_string(),
+            socket_name: s0.to_string(),
+            path: "/".to_string(),
+            query: None,
+        }));
+    }
+    if let FoundScheme::Unix(_) = scheme {
         let (query, s) = match s0.find("?") {
             Some(i) => (Some(s0[i..].to_string()), s0[..i].to_string()),
             None => (None, s0.to_string()),
         };
         let scheme_end = s.find("://").unwrap();
-        let host_start = scheme_end + "://".len();
-        let path_start = s[host_start..].find('/').unwrap() + host_start;
-
         let scheme = s[..scheme_end].to_string().clone();
-        let host = &s[host_start..path_start];
-        let path = (&s[path_start..].to_string()).clone();
 
-        let socket_name = host.to_string().replace("%2F", "/");
+        let host_start = scheme_end + "://".len();
+        if s0.contains(SPECIAL_CHAR) {
+            let path_start = s[host_start..].find('/').unwrap() + host_start;
+            let host = &s[host_start..path_start];
+            let path = (&s[path_start..].to_string()).clone();
 
-        Ok(UNIX(UnixCon {
-            scheme,
-            socket_name,
-            path: path.clone(),
-            query,
-        }))
+            let socket_name = host.to_string().replace(SPECIAL_CHAR, "/");
+            Ok(UNIX(UnixCon {
+                scheme,
+                socket_name,
+                path: path.clone(),
+                query,
+            }))
+        } else {
+            let path_start = s[host_start..].rfind('/').unwrap() + host_start;
+            let socket_name = &s[host_start..path_start];
+            let path = (&s[path_start..].to_string()).clone();
+            Ok(UNIX(UnixCon {
+                scheme,
+                socket_name: socket_name.to_string(),
+                path: path.clone(),
+                query,
+            }))
+        }
     } else {
         match Url::parse(s0) {
             Ok(p) => Ok(TCP(p)),
@@ -111,5 +163,5 @@ mod tests {
 }
 
 pub fn format_digest_path(digest: &str, content_type: &str) -> String {
-    return format!("!/ipfs/{}/{}/", digest, content_type.replace("/", "_"));
+    return format!("!/:ipfs/{}/{}/", digest, content_type.replace("/", "_"));
 }

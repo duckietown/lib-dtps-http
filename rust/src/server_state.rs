@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 
-use anyhow::Context;
+use anyhow::{Context, Error};
 use bytes::Bytes;
 use chrono::Local;
 use futures::StreamExt;
@@ -16,8 +16,9 @@ use crate::signals_logic::TopicProperties;
 use crate::structures::*;
 use crate::types::*;
 use crate::{
-    get_events_stream_inline, get_index, get_metadata, get_queue_id, get_random_node_id, get_stats,
-    DTPSError, ServerStateAccess, UrlResult, DTPSR, MASK_ORIGIN,
+    context, get_events_stream_inline, get_index, get_metadata, get_queue_id, get_random_node_id,
+    get_stats, not_implemented, sniff_type_resource, DTPSError, ServerStateAccess, TypeOfResource,
+    UrlResult, DTPSR, MASK_ORIGIN,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -51,6 +52,11 @@ pub struct ProxiedTopicInfo {
     // pub link_benchmark_total: LinkBenchmark,
 }
 
+#[derive(Debug, Clone)]
+pub struct OtherProxyInfo {
+    pub con: TypeOfConnection,
+}
+
 #[derive(Debug)]
 pub struct ServerState {
     pub node_started: i64,
@@ -62,7 +68,11 @@ pub struct ServerState {
     /// The topics that we proxy
     pub proxied_topics: HashMap<TopicName, ProxiedTopicInfo>,
 
+    /// The subscriptions to other nodes
     pub proxied: HashMap<String, ForwardInfo>,
+
+    /// The proxied other resources
+    pub proxied_other: HashMap<TopicName, OtherProxyInfo>,
     pub blobs: HashMap<String, Vec<u8>>,
     advertise_urls: Vec<String>,
 }
@@ -112,6 +122,7 @@ impl ServerState {
             node_started,
             node_app_data,
             oqs,
+            proxied_other: HashMap::new(),
             proxied_topics: HashMap::new(),
             blobs: HashMap::new(),
             proxied: HashMap::new(),
@@ -486,14 +497,14 @@ impl ServerState {
         return topics_index;
     }
 }
-
 async fn get_proxy_info(url: &TypeOfConnection) -> DTPSR<(FoundMetadata, TopicsIndexInternal)> {
-    let md = get_metadata(url)
-        .await
-        .with_context(|| format!("Error getting metadata for proxied at {}", url))?;
-    let index_internal = get_index(url)
-        .await
-        .with_context(|| format!("Error getting index for proxied at {}", url))?;
+    let md = context!(
+        get_metadata(url).await,
+        "Error getting metadata for proxied at {}",
+        url,
+    )?;
+
+    let index_internal = context!(get_index(url).await, "Error getting the index for {}", url,)?;
     Ok((md, index_internal))
 }
 
@@ -501,7 +512,7 @@ pub async fn show_errors<X, F: Future<Output = DTPSR<X>>>(future: F) {
     match future.await {
         Ok(_) => {}
         Err(e) => {
-            error!("{}", e);
+            error!("\n{:?}", e);
             // error!("Error: {:#?}", e.backtrace());
         }
     }
@@ -513,13 +524,54 @@ pub async fn observe_proxy(
     url: TypeOfConnection,
     ss_mutex: ServerStateAccess,
 ) -> DTPSR<()> {
+    let rtype = context!(
+        sniff_type_resource(&url).await,
+        "Cannot sniff type of resource for subscription {} => {}",
+        subcription_name,
+        url.to_string()
+    )?;
+    debug!("observe_proxy: rtype: {:#?}", rtype);
+
+    match rtype {
+        TypeOfResource::Other => {
+            handle_proxy_other(subcription_name, mounted_at, url, ss_mutex).await
+        }
+        TypeOfResource::DTPSTopic => {
+            not_implemented!("observe_proxy: TypeOfResource::DTPSTopic")
+        }
+        TypeOfResource::DTPSIndex => {
+            observe_node_proxy(subcription_name, mounted_at, url, ss_mutex).await
+        }
+    }
+}
+
+pub async fn handle_proxy_other(
+    subcription_name: String,
+    mounted_at: TopicName,
+    url: TypeOfConnection,
+    ss_mutex: ServerStateAccess,
+) -> DTPSR<()> {
+    let mut ss = ss_mutex.lock().await;
+    let info = OtherProxyInfo { con: url.clone() };
+
+    ss.proxied_other.insert(mounted_at, info);
+
+    Ok(())
+}
+
+pub async fn observe_node_proxy(
+    subcription_name: String,
+    mounted_at: TopicName,
+    url: TypeOfConnection,
+    ss_mutex: ServerStateAccess,
+) -> DTPSR<()> {
     let (md, index_internal_at_t0) = loop {
         match get_proxy_info(&url).await {
             Ok(s) => break s,
             Err(e) => {
-                error!(
-                    "observe_proxy: error getting proxy info for proxied {:?} at {}: \n {}",
-                    subcription_name, url, e
+                warn!(
+                    "observe_proxy: error getting proxy info for proxied {:?}:\n{:?}",
+                    subcription_name, e
                 );
                 info!("observe_proxy: retrying in 2 seconds");
                 sleep(std::time::Duration::from_secs(2)).await;
@@ -533,11 +585,11 @@ pub async fn observe_proxy(
     let stats = get_stats(&url, md.clone().answering.unwrap().clone().as_ref()).await;
     let link1 = match stats {
         UrlResult::Inaccessible(_) => {
-            /// TODO
+            // TODO
             LinkBenchmark::identity() // ok
         }
         UrlResult::WrongNodeAnswering => {
-            /// TODO
+            // TODO
             LinkBenchmark::identity() // ok
         }
         UrlResult::Accessible(l) => l,
