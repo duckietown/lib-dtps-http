@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Context;
 use async_recursion::async_recursion;
@@ -53,7 +53,7 @@ impl DataProps for SourceComposition {
         let pushable = false;
         let mut readable = true;
 
-        for (k, v) in self.compose.iter() {
+        for (_k, v) in self.compose.iter() {
             let p = v.get_properties();
 
             // immutable: ALL immutable
@@ -98,10 +98,10 @@ pub enum TypeOFSource {
 impl TypeOFSource {
     pub fn get_inside(&self, s: &str) -> DTPSR<Self> {
         match self {
-            TypeOFSource::ForwardedQueue(q) => {
+            TypeOFSource::ForwardedQueue(_q) => {
                 not_implemented!("get_inside for {self:?} with {s:?}")
             }
-            TypeOFSource::OurQueue(_, _, p) => {
+            TypeOFSource::OurQueue(_, _, _p) => {
                 not_implemented!("get_inside for {self:?} with {s:?}")
             }
             TypeOFSource::MountedDir(topic_name, path, props) => {
@@ -132,7 +132,7 @@ impl TypeOFSource {
 
                 // not_implemented!("get_inside for {self:?} with {s:?}")
             }
-            TypeOFSource::Compose(c) => {
+            TypeOFSource::Compose(_c) => {
                 not_implemented!("get_inside for {self:?} with {s:?}")
             }
             TypeOFSource::Transformed(source, transform) => {
@@ -145,7 +145,7 @@ impl TypeOFSource {
             TypeOFSource::Digest(_, _) => {
                 not_implemented!("get_inside for {self:?} with {s:?}")
             }
-            TypeOFSource::Deref(c) => {
+            TypeOFSource::Deref(_c) => {
                 not_implemented!("get_inside for {self:?} with {s:?}")
             }
             TypeOFSource::OtherProxied(_) => {
@@ -163,7 +163,7 @@ impl TypeOFSource {
 
 #[derive(Debug, Clone)]
 pub struct OtherProxied {
-    reached_at: TopicName,
+    // reached_at: TopicName,
     path_and_query: String,
     // query: Option<String>,
     op: OtherProxyInfo,
@@ -260,7 +260,7 @@ impl ResolveDataSingle for TypeOFSource {
                 our_queue(q, ss_mutex).await
                 // }
             }
-            TypeOFSource::Compose(sc) => {
+            TypeOFSource::Compose(_sc) => {
                 let index = self.get_meta_index(presented_as, ss_mutex).await?;
                 // debug!("Compose index intenral:\n {:#?}", index);
                 let to_wire = index.to_wire(None);
@@ -282,7 +282,7 @@ impl ResolveDataSingle for TypeOFSource {
             TypeOFSource::Deref(sc) => single_compose(sc, presented_as, ss_mutex).await,
             TypeOFSource::OtherProxied(op) => resolve_proxied(op).await,
 
-            TypeOFSource::MountedDir(topic_name, _, comps) => {
+            TypeOFSource::MountedDir(topic_name, _, _comps) => {
                 let ss = ss_mutex.lock().await;
                 let the_dir = ss.local_dirs.get(topic_name).unwrap();
                 let the_path = PathBuf::from(&the_dir.local_dir);
@@ -585,11 +585,11 @@ async fn get_sc_meta(
         let ss = ss_mutex.lock().await;
         return Ok(ss.create_topic_index());
     }
-    let node_id;
-    {
-        let ss = ss_mutex.lock().await;
-        node_id = ss.node_id.clone();
-    }
+    // let node_id;
+    // {
+    //     let ss = ss_mutex.lock().await;
+    //     node_id = ss.node_id.clone();
+    // }
     // debug!("get_sc_meta: START: {:?}", sc);
     let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
     let mut node_app_data = HashMap::new();
@@ -639,7 +639,7 @@ async fn get_sc_meta(
             //
             // }
 
-            let url = a.as_relative_url();
+            let _url = a.as_relative_url();
             //
             // tr.reachability.push(
             //     TopicReachabilityInternal {
@@ -658,7 +658,7 @@ async fn get_sc_meta(
             let a_with_prefix = a.add_prefix(&prefix);
 
             let rurl = a_with_prefix.as_relative_url();
-            let b2 = b.add_path(&rurl);
+            let _b2 = b.add_path(&rurl);
 
             topics.insert(a_with_prefix, tr);
         }
@@ -864,7 +864,7 @@ pub async fn interpret_path(
                 path_and_query.push_str(&format_query(&query));
 
                 let other = OtherProxied {
-                    reached_at: mounted_at.clone(),
+                    // reached_at: mounted_at.clone(),
                     path_and_query,
                     op: info.clone(),
                 };

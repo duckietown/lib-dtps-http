@@ -1,9 +1,9 @@
-use log::{debug, info};
+use log::info;
 use url::Url;
 
 use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
 use crate::structures::{TypeOfConnection, UnixCon};
-use crate::{normalize_path, not_implemented, DTPSError, FilePaths, DTPSR};
+use crate::{normalize_path, DTPSError, FilePaths, DTPSR};
 
 fn get_scheme_part(s0: &str) -> Option<&str> {
     let scheme_end = s0.find("://")?;
@@ -151,7 +151,7 @@ pub fn join_con(a: &str, b: &TypeOfConnection) -> DTPSR<TypeOfConnection> {
         TCP(_) => Ok(b.clone()),
         UNIX(_) => Ok(b.clone()),
         Relative(path2, query2) => {
-            let (path3, query3) = join_path(a, path2.as_str());
+            let (path3, _query3) = join_path(a, path2.as_str());
             Ok(Relative(path3, query2.clone()))
         }
 

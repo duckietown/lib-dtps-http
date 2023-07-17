@@ -675,7 +675,7 @@ pub async fn observe_proxy(
 }
 
 pub async fn handle_proxy_other(
-    subcription_name: String,
+    _subcription_name: String,
     mounted_at: TopicName,
     url: TypeOfConnection,
     ss_mutex: ServerStateAccess,
@@ -749,7 +749,7 @@ pub async fn observe_node_proxy(
     // let (tx, rx) = mpsc::unbounded_channel();
     let inline_url = md.events_data_inline_url.unwrap().clone();
     //
-    let (handle, mut stream) = get_events_stream_inline(inline_url).await;
+    let (_handle, mut stream) = get_events_stream_inline(inline_url).await;
 
     {
         let mut ss = ss_mutex.lock().await;
@@ -793,12 +793,12 @@ pub async fn observe_node_proxy(
 
 pub fn add_from_response(
     s: &mut ServerState,
-    who_answers: String,
+    _who_answers: String,
     subscription: &String,
     mounted_at: &TopicName,
     tii: &TopicsIndexInternal,
     link_benchmark1: LinkBenchmark,
-    connected_url: String,
+    _connected_url: String,
 ) -> DTPSR<()> {
     // let mut l = hashmap! {};
     debug!("topics_index: tii: \n{:#?}", tii);

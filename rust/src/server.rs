@@ -519,7 +519,7 @@ impl DTPSServer {
             url.clone(),
             ssa,
         );
-        let handle = tokio::spawn(show_errors(
+        let _handle = tokio::spawn(show_errors(
             format!("observe_proxy {subcription_name} : {url}"),
             future,
         ));

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::string::ToString;
 
-use anyhow::Context;
 use bytes::Bytes;
 use log::{debug, error};
 use maud::{html, PreEscaped};
@@ -10,7 +9,7 @@ use warp::http::header;
 use warp::hyper::Body;
 use warp::reply::Response;
 
-use crate::cbor_manipulation::{display_printable, get_as_cbor, get_inside};
+use crate::cbor_manipulation::display_printable;
 use crate::html_utils::make_html;
 use crate::signals_logic::{
     interpret_path, DataProps, GetMeta, ResolveDataSingle, ResolvedData, TopicProperties,
@@ -20,26 +19,26 @@ use crate::utils::{divide_in_components, get_good_url_for_components};
 use crate::{
     error_with_info, get_accept_header, handle_topic_post, handle_websocket_generic,
     handler_topic_generic, object_queues, put_alternative_locations, put_common_headers,
-    root_handler, serve_static_file_path, HandlersResponse, ObjectQueue, RawData,
-    ServerStateAccess, TopicName, TopicsIndexInternal, HEADER_DATA_ORIGIN_NODE_ID,
-    HEADER_DATA_UNIQUE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
+    root_handler, serve_static_file_path, HandlersResponse, ObjectQueue, ServerStateAccess,
+    TopicName, TopicsIndexInternal, HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID,
+    HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
 };
-
-fn format_query(params: &HashMap<String, String>) -> Option<String> {
-    if params.is_empty() {
-        return None;
-    }
-    let mut query = String::new();
-
-    for (key, value) in params.iter() {
-        if !query.is_empty() {
-            query.push('&');
-        }
-        query.push_str(&format!("{}={}", key, value));
-    }
-
-    Some(query)
-}
+//
+// fn format_query(params: &HashMap<String, String>) -> Option<String> {
+//     if params.is_empty() {
+//         return None;
+//     }
+//     let mut query = String::new();
+//
+//     for (key, value) in params.iter() {
+//         if !query.is_empty() {
+//             query.push('&');
+//         }
+//         query.push_str(&format!("{}={}", key, value));
+//     }
+//
+//     Some(query)
+// }
 
 pub async fn serve_master_post(
     path: warp::path::FullPath,
@@ -398,82 +397,82 @@ pub async fn serve_master_get(
     )
     .await;
 }
-
-pub async fn go_queue(
-    topic_name: &TopicName,
-    components: Vec<String>,
-    ss_mutex: ServerStateAccess,
-    headers: HeaderMap,
-) -> HandlersResponse {
-    if components.len() == 0 {
-        return handler_topic_generic(topic_name, ss_mutex, headers).await;
-    }
-    let ss = ss_mutex.lock().await;
-    let oq = match ss.oqs.get(&topic_name) {
-        None => return Err(warp::reject::not_found()),
-        Some(x) => x,
-    };
-
-    let (content_type, digest) = match oq.sequence.last() {
-        None => {
-            let res = http::Response::builder()
-                .status(StatusCode::NO_CONTENT)
-                .body(Body::from(""))
-                .unwrap();
-            // let h = res.headers_mut();
-
-            // let suffix = format!("topics/{}/", topic_name);
-            // put_alternative_locations(&ss, h, &suffix);
-            // put_common_headers(&ss, h);
-
-            return Ok(res);
-        }
-
-        Some(y) => (y.content_type.clone(), y.digest.clone()),
-    };
-
-    let content = match ss.get_blob_bytes(&digest) {
-        Err(e) => return Err(warp::reject::not_found()),
-        Ok(x) => x,
-    };
-    let raw_data = RawData {
-        content_type: content_type.clone(),
-        content,
-    };
-    let c = get_as_cbor(&raw_data)?;
-
-    let x = get_inside(vec![], &c, &components);
-    return match x {
-        Err(s) => {
-            debug!("Error: {}", s);
-            Err(warp::reject::not_found())
-        }
-        Ok(q) => {
-            let cbor_bytes: Vec<u8> = serde_cbor::to_vec(&q).unwrap();
-            let properties = TopicProperties {
-                streamable: true,
-                pushable: true,
-                readable: true,
-                immutable: false,
-            };
-            visualize_data(
-                &properties,
-                topic_name.to_relative_url(),
-                html! {},
-                "application/cbor",
-                &cbor_bytes,
-                headers,
-            )
-            .await
-        }
-    };
-    //
-    // eprintln!(
-    //     "go_queue: topic_name = {:?} components = {:?}",
-    //     topic_name, components
-    // );
-    // return Err(warp::reject::not_found());
-}
+//
+// pub async fn go_queue(
+//     topic_name: &TopicName,
+//     components: Vec<String>,
+//     ss_mutex: ServerStateAccess,
+//     headers: HeaderMap,
+// ) -> HandlersResponse {
+//     if components.len() == 0 {
+//         return handler_topic_generic(topic_name, ss_mutex, headers).await;
+//     }
+//     let ss = ss_mutex.lock().await;
+//     let oq = match ss.oqs.get(&topic_name) {
+//         None => return Err(warp::reject::not_found()),
+//         Some(x) => x,
+//     };
+//
+//     let (content_type, digest) = match oq.sequence.last() {
+//         None => {
+//             let res = http::Response::builder()
+//                 .status(StatusCode::NO_CONTENT)
+//                 .body(Body::from(""))
+//                 .unwrap();
+//             // let h = res.headers_mut();
+//
+//             // let suffix = format!("topics/{}/", topic_name);
+//             // put_alternative_locations(&ss, h, &suffix);
+//             // put_common_headers(&ss, h);
+//
+//             return Ok(res);
+//         }
+//
+//         Some(y) => (y.content_type.clone(), y.digest.clone()),
+//     };
+//
+//     let content = match ss.get_blob_bytes(&digest) {
+//         Err(_e) => return Err(warp::reject::not_found()),
+//         Ok(x) => x,
+//     };
+//     let raw_data = RawData {
+//         content_type: content_type.clone(),
+//         content,
+//     };
+//     let c = get_as_cbor(&raw_data)?;
+//
+//     let x = get_inside(vec![], &c, &components);
+//     return match x {
+//         Err(s) => {
+//             debug!("Error: {}", s);
+//             Err(warp::reject::not_found())
+//         }
+//         Ok(q) => {
+//             let cbor_bytes: Vec<u8> = serde_cbor::to_vec(&q).unwrap();
+//             let properties = TopicProperties {
+//                 streamable: true,
+//                 pushable: true,
+//                 readable: true,
+//                 immutable: false,
+//             };
+//             visualize_data(
+//                 &properties,
+//                 topic_name.to_relative_url(),
+//                 html! {},
+//                 "application/cbor",
+//                 &cbor_bytes,
+//                 headers,
+//             )
+//             .await
+//         }
+//     };
+//     //
+//     // eprintln!(
+//     //     "go_queue: topic_name = {:?} components = {:?}",
+//     //     topic_name, components
+//     // );
+//     // return Err(warp::reject::not_found());
+// }
 
 fn is_html(content_type: &str) -> bool {
     content_type.starts_with("text/html")
@@ -621,11 +620,11 @@ pub async fn handle_websocket_generic2(
         TypeOFSource::OurQueue(topic_name, _, _) => {
             return handle_websocket_generic(ws, state, topic_name, send_data).await;
         }
-        TypeOFSource::Compose(sc) => {
+        TypeOFSource::Compose(_sc) => {
             error_with_info!("handle_websocket_generic2 not implemented TypeOFSource::Compose");
             return;
         }
-        TypeOFSource::Digest(digest, content_type) => {
+        TypeOFSource::Digest(_digest, _content_type) => {
             error_with_info!("handle_websocket_generic2 not implemented TypeOFSource::Digest");
             return;
         }

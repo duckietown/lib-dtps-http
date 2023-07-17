@@ -1,6 +1,3 @@
-use std::backtrace::Backtrace;
-
-use crate::TopicName;
 use anyhow::Result;
 use http::StatusCode;
 use indent::indent_all_with;
