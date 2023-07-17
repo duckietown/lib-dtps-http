@@ -44,8 +44,8 @@ use crate::websocket_signals::{
     ChannelInfo, ChannelInfoDesc, MsgClientToServer, MsgServerToClient,
 };
 use crate::{
-    error_other, format_digest_path, handle_rejection, parse_url_ext, utils, DTPSError, TopicName,
-    DTPSR,
+    error_other, error_with_info, format_digest_path, handle_rejection, parse_url_ext, utils,
+    DTPSError, TopicName, DTPSR,
 };
 
 pub type HandlersResponse = Result<http::Response<hyper::Body>, Rejection>;
@@ -339,13 +339,13 @@ impl DTPSServer {
                 Ok(l) => l,
 
                 Err(e) => {
-                    error!("error binding to unix socket {}: {:?}", unix_path, e);
-                    error!("note that this is not supported on Docker+OS X");
+                    error_with_info!("error binding to unix socket {}: {:?}", unix_path, e);
+                    error_with_info!("note that this is not supported on Docker+OS X");
                     if i == 0 {
                         // this is our default
                         continue;
                     } else {
-                        error!("Returning error because this was specified by user.");
+                        error_with_info!("Returning error because this was specified by user.");
                         return Err(e.into());
                     }
                 }
@@ -455,7 +455,7 @@ impl DTPSServer {
         //     match get_proxy_info(&url).await {
         //         Ok(s) => break s,
         //         Err(e) => {
-        //             error!(
+        //             error_with_info!(
         //                 "add_proxied: error getting proxy info for proxied {:?} at {}: \n {}",
         //                 proxied_name, url, e
         //             );
@@ -483,7 +483,7 @@ impl DTPSServer {
         //
         //         //     .or_else(
         //         //     |e| {
-        //         //         error!("add_proxied: error getting index for proxied {:?} at {}: \n {}", proxied_name, url, e);
+        //         //         error_with_info!("add_proxied: error getting index for proxied {:?} at {}: \n {}", proxied_name, url, e);
         //         //         Err(e)
         //         //     }
         //         // )?;
@@ -513,7 +513,10 @@ impl DTPSServer {
             url.clone(),
             ssa,
         );
-        let handle = tokio::spawn(show_errors(future));
+        let handle = tokio::spawn(show_errors(
+            format!("observe_proxy {subcription_name} : {url}"),
+            future,
+        ));
 
         //
         // self.proxied.insert(

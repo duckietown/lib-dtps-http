@@ -15,6 +15,8 @@ pub enum DTPSError {
 
     #[error("Not available:\n{}", indent_inside(.0))]
     NotAvailable(String),
+    #[error("InvalidInput:\n{}", indent_inside(.0))]
+    InvalidInput(String),
 
     #[error("DTPSError: Not implemented:\n{}", indent_inside(.0))]
     NotImplemented(String),
@@ -69,6 +71,13 @@ impl DTPSError {
     }
     pub fn not_implemented<X, S: AsRef<str>>(s: S) -> Result<X, DTPSError> {
         Err(DTPSError::NotImplemented(s.as_ref().to_string()))
+    }
+    pub fn not_available<X, S: AsRef<str>>(s: S) -> Result<X, DTPSError> {
+        Err(DTPSError::NotAvailable(s.as_ref().to_string()))
+    }
+
+    pub fn invalid_input<X, S: AsRef<str>>(s: S) -> Result<X, DTPSError> {
+        Err(DTPSError::InvalidInput(s.as_ref().to_string()))
     }
 }
 
@@ -271,6 +280,15 @@ macro_rules! add_info {
 }
 
 #[macro_export]
+macro_rules! error_with_info {
+    ($($u:expr),* $(,)?) => {{
+        error!("{}:{}:\n{}", file!(), line!(),
+            indent::indent_all_with("| ", format!($($u),*))
+        )
+    }};
+}
+
+#[macro_export]
 macro_rules! context {
     ($t: expr,  $($u:expr),* $(,)?) => {{
         ($t).context( crate::add_info!($($u),*) )
@@ -281,5 +299,25 @@ macro_rules! context {
 macro_rules! not_implemented {
     ($($u:expr),* $(,)?) => {{
         DTPSError::not_implemented(crate::add_info!($($u),*) )
+    }};
+}
+#[macro_export]
+macro_rules! not_available {
+    ($($u:expr),* $(,)?) => {{
+        DTPSError::not_available(crate::add_info!($($u),*) )
+    }};
+}
+
+#[macro_export]
+macro_rules! invalid_input {
+    ($($u:expr),* $(,)?) => {{
+        DTPSError::invalid_input(crate::add_info!($($u),*) )
+    }};
+}
+
+#[macro_export]
+macro_rules! not_reachable {
+    ($($u:expr),* $(,)?) => {{
+        DTPSError::not_reachable(crate::add_info!($($u),*) )
     }};
 }

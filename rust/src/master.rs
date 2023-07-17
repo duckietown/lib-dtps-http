@@ -9,11 +9,11 @@ use crate::signals_logic::{
 };
 use crate::utils::{divide_in_components, get_good_url_for_components};
 use crate::{
-    context, get_accept_header, handle_topic_post, handle_websocket_generic, handler_topic_generic,
-    object_queues, put_alternative_locations, put_common_headers, root_handler,
-    serve_static_file_path, todtpserror, HandlersResponse, ObjectQueue, RawData, ServerStateAccess,
-    TopicName, TopicsIndexInternal, HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID,
-    HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
+    context, error_with_info, get_accept_header, handle_topic_post, handle_websocket_generic,
+    handler_topic_generic, object_queues, put_alternative_locations, put_common_headers,
+    root_handler, serve_static_file_path, todtpserror, HandlersResponse, ObjectQueue, RawData,
+    ServerStateAccess, TopicName, TopicsIndexInternal, HEADER_DATA_ORIGIN_NODE_ID,
+    HEADER_DATA_UNIQUE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
 };
 use anyhow::Context;
 use bytes::Bytes;
@@ -622,27 +622,31 @@ pub async fn handle_websocket_generic2(
             return handle_websocket_generic(ws, state, topic_name, send_data).await;
         }
         TypeOFSource::Compose(sc) => {
-            error!("handle_websocket_generic2 not implemented TypeOFSource::Compose");
+            error_with_info!("handle_websocket_generic2 not implemented TypeOFSource::Compose");
             return;
         }
         TypeOFSource::Digest(digest, content_type) => {
-            error!("handle_websocket_generic2 not implemented TypeOFSource::Digest");
+            error_with_info!("handle_websocket_generic2 not implemented TypeOFSource::Digest");
             return;
         }
         TypeOFSource::ForwardedQueue(_) => {
-            error!("handle_websocket_generic2 not implemented TypeOFSource::ForwardedQueue");
+            error_with_info!(
+                "handle_websocket_generic2 not implemented TypeOFSource::ForwardedQueue"
+            );
             return;
         }
         TypeOFSource::Transformed(_, _) => {
-            error!("handle_websocket_generic2 not implemented TypeOFSource::Transformed");
+            error_with_info!("handle_websocket_generic2 not implemented TypeOFSource::Transformed");
             return;
         }
         TypeOFSource::Deref(_) => {
-            error!("handle_websocket_generic2 not implemented TypeOFSource::Deref");
+            error_with_info!("handle_websocket_generic2 not implemented TypeOFSource::Deref");
             return;
         }
         TypeOFSource::OtherProxied(_) => {
-            error!("handle_websocket_generic2 not implemented TypeOFSource::OtherProxied");
+            error_with_info!(
+                "handle_websocket_generic2 not implemented TypeOFSource::OtherProxied"
+            );
             return;
         }
     }

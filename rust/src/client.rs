@@ -1,4 +1,17 @@
 use std::any::Any;
+//
+// pub async fn get_metadata(tc: &TypeOfConnection) -> Result<FoundMetadata, Box<dyn error::Error>> {
+//     match tc {
+//         TypeOfConnection::TCP(url) => get_metadata_http(url).await,
+//         TypeOfConnection::UNIX(_path) => {
+//             Err("unix socket not supported yet for get_metadata()".into())
+//         }
+//         TypeOfConnection::Relative(_, _) => {
+//             Err("cannot handle a relative url get_metadata()".into())
+//         }
+//     }
+// }
+use std::os::unix::fs::FileTypeExt;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -37,8 +50,8 @@ use crate::websocket_signals::MsgServerToClient;
 use crate::TypeOfConnection::Same;
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
 use crate::{
-    context, not_available, not_implemented, DTPSError, RawData, TopicName,
-    CONTENT_TYPE_DTPS_INDEX, DTPSR,
+    context, error_with_info, not_available, not_implemented, not_reachable, DTPSError, RawData,
+    TopicName, CONTENT_TYPE_DTPS_INDEX, DTPSR,
 };
 
 /// Note: need to have use futures::{StreamExt} in scope to use this
@@ -99,7 +112,7 @@ pub async fn listen_events(which: TopicName, md: FoundMetadata) {
     match handle.await {
         Ok(_) => {}
         Err(e) => {
-            error!("error in handle: {:?}", e);
+            error_with_info!("error in handle: {:?}", e);
         }
     };
 
@@ -151,7 +164,7 @@ pub async fn listen_events_url_inline(
                     connection = c;
                 }
                 Err(err) => {
-                    error!("could not connect to {}: {}", url, err);
+                    error_with_info!("could not connect to {}: {}", url, err);
                     return Ok(());
                 }
             }
@@ -205,7 +218,7 @@ pub async fn listen_events_url_inline(
                 match client_async_with_config(request, stream, Some(config)).await {
                     Ok(s) => s,
                     Err(err) => {
-                        error!("could not connect to {}: {}", uc.socket_name, err);
+                        error_with_info!("could not connect to {}: {}", uc.socket_name, err);
                         return DTPSError::other(format!(
                             "could not connect to {}: {}",
                             uc.socket_name, err
@@ -246,13 +259,13 @@ pub async fn listen_events_url_inline(
         };
         let msg = match msg_res {
             None => {
-                error!("unexpected end of stream");
+                error_with_info!("unexpected end of stream");
                 break;
             }
             Some(x) => match x {
                 Ok(m) => m,
                 Err(err) => {
-                    error!("unexpected error: {}", err);
+                    error_with_info!("unexpected error: {}", err);
                     break;
                 }
             },
@@ -294,9 +307,10 @@ pub async fn listen_events_url_inline(
                 }
             };
             if dr.chunks_arriving == 0 {
-                error!(
+                error_with_info!(
                     "message #{}: no chunks arriving. listening to {}",
-                    index, con
+                    index,
+                    con
                 );
                 continue;
             }
@@ -310,13 +324,13 @@ pub async fn listen_events_url_inline(
                 };
                 let msg = match msg_res {
                     None => {
-                        error!("unexpected end of stream");
+                        error_with_info!("unexpected end of stream");
                         break;
                     }
                     Some(x) => match x {
                         Ok(m) => m,
                         Err(err) => {
-                            error!("unexpected error: {}", err);
+                            error_with_info!("unexpected error: {}", err);
                             break;
                         }
                     },
@@ -325,12 +339,12 @@ pub async fn listen_events_url_inline(
                     let data = msg.into_data();
                     content.extend(data);
                 } else {
-                    error!("unexpected message #{}: {:#?}", index, msg);
+                    error_with_info!("unexpected message #{}: {:#?}", index, msg);
                 }
                 index += 1;
             }
             if content.len() != dr.content_length {
-                error!(
+                error_with_info!(
                     "unexpected content length: {} != {}",
                     content.len(),
                     dr.content_length
@@ -346,7 +360,7 @@ pub async fn listen_events_url_inline(
             match tx.send(notification) {
                 Ok(_) => {}
                 Err(e) => {
-                    error!("cannot send data: {}", e);
+                    error_with_info!("cannot send data: {}", e);
                     break;
                 }
             }
@@ -545,24 +559,32 @@ pub async fn compute_best_alternative(
     );
     return Ok(best_url);
 }
-//
-// pub async fn get_metadata(tc: &TypeOfConnection) -> Result<FoundMetadata, Box<dyn error::Error>> {
-//     match tc {
-//         TypeOfConnection::TCP(url) => get_metadata_http(url).await,
-//         TypeOfConnection::UNIX(_path) => {
-//             Err("unix socket not supported yet for get_metadata()".into())
-//         }
-//         TypeOfConnection::Relative(_, _) => {
-//             Err("cannot handle a relative url get_metadata()".into())
-//         }
-//     }
-// }
+
+fn check_unix_socket(file_path: &str) -> DTPSR<()> {
+    if let Ok(metadata) = std::fs::metadata(file_path) {
+        debug!("metadata for {}: {:?}", file_path, metadata);
+        let is_socket = metadata.file_type().is_socket();
+        if is_socket {
+            Ok(())
+        } else {
+            not_reachable!("File {file_path} exists but it is not a socket.")
+        }
+    } else {
+        Err(DTPSError::NotAvailable(format!(
+            "Socket {file_path} does not exist."
+        )))
+    }
+}
 
 pub async fn make_request(conbase: &TypeOfConnection, method: hyper::Method) -> DTPSR<Response> {
-    // return not_available("just a test");
     let use_url = match conbase {
         TCP(url) => url.clone().to_string(),
         UNIX(uc) => {
+            context!(
+                check_unix_socket(&uc.socket_name),
+                "cannot use unix socket {uc}",
+            )?;
+
             let h = hex::encode(&uc.socket_name);
             let p0 = format!("unix://{}{}", h, uc.path);
             match uc.query {
@@ -619,8 +641,10 @@ pub async fn make_request(conbase: &TypeOfConnection, method: hyper::Method) -> 
                 return not_available("cannot handle a Same url to get_metadata");
             }
         },
-        "cannot make request for {} {}",
+        "make_request(): cannot make {} request for connection {:?} \
+        (use_url={})",
         method,
+        conbase,
         use_url.as_str()
     )?;
 

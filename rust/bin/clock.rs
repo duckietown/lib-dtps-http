@@ -51,9 +51,18 @@ async fn clock() -> DTPSR<()> {
 
     //
     // // spawn(clock_go(server.get_lock(), "clock", 1.0));
-    spawn(show_errors(clock_go(server.get_lock(), "clock5", 5.0)));
-    spawn(show_errors(clock_go(server.get_lock(), "clock15", 15.0)));
-    spawn(show_errors(clock_go(server.get_lock(), "clock30", 30.0)));
+    spawn(show_errors(
+        "clock5".to_string(),
+        clock_go(server.get_lock(), "clock5", 5.0),
+    ));
+    spawn(show_errors(
+        "clock15".to_string(),
+        clock_go(server.get_lock(), "clock15", 15.0),
+    ));
+    spawn(show_errors(
+        "clock30".to_string(),
+        clock_go(server.get_lock(), "clock30", 30.0),
+    ));
 
     server.serve().await
 }

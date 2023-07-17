@@ -1,10 +1,12 @@
+use anyhow::__private::kind::TraitKind;
 use std::collections::HashMap;
 use std::future::Future;
 
-use anyhow::{Context, Error};
+use anyhow::Context;
 use bytes::Bytes;
 use chrono::Local;
 use futures::StreamExt;
+use indent::indent_all_with;
 use log::{debug, error, info, warn};
 use maplit::hashmap;
 use serde::{Deserialize, Serialize};
@@ -16,9 +18,9 @@ use crate::signals_logic::TopicProperties;
 use crate::structures::*;
 use crate::types::*;
 use crate::{
-    context, get_events_stream_inline, get_index, get_metadata, get_queue_id, get_random_node_id,
-    get_stats, not_implemented, sniff_type_resource, DTPSError, ServerStateAccess, TypeOfResource,
-    UrlResult, DTPSR, MASK_ORIGIN,
+    context, error_with_info, get_events_stream_inline, get_index, get_metadata, get_queue_id,
+    get_random_node_id, get_stats, invalid_input, not_implemented, sniff_type_resource, DTPSError,
+    ServerStateAccess, TypeOfResource, UrlResult, DTPSR, MASK_ORIGIN,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -497,6 +499,7 @@ impl ServerState {
         return topics_index;
     }
 }
+
 async fn get_proxy_info(url: &TypeOfConnection) -> DTPSR<(FoundMetadata, TopicsIndexInternal)> {
     let md = context!(
         get_metadata(url).await,
@@ -508,11 +511,14 @@ async fn get_proxy_info(url: &TypeOfConnection) -> DTPSR<(FoundMetadata, TopicsI
     Ok((md, index_internal))
 }
 
-pub async fn show_errors<X, F: Future<Output = DTPSR<X>>>(future: F) {
+pub async fn show_errors<X, F: Future<Output = DTPSR<X>>>(desc: String, future: F) {
     match future.await {
         Ok(_) => {}
         Err(e) => {
-            error!("\n{:?}", e);
+            // e.anyhow_kind().print_backtrace();
+            // let ef = format!("{}\n---\n{:?}", e, e);
+            let ef = format!("{:?}", e);
+            error_with_info!("Error in async {desc}:\n{}", indent_all_with("| ", ef));
             // error!("Error: {:#?}", e.backtrace());
         }
     }
@@ -581,6 +587,15 @@ pub async fn observe_node_proxy(
     };
 
     let who_answers = md.clone().answering.unwrap().clone();
+    {
+        let ss = ss_mutex.lock().await;
+        if who_answers == ss.node_id {
+            return invalid_input!(
+                "observe_node_proxy: invalid proxy connection: we find ourselves at the connection {url}"
+
+                );
+        }
+    }
 
     let stats = get_stats(&url, md.clone().answering.unwrap().clone().as_ref()).await;
     let link1 = match stats {
