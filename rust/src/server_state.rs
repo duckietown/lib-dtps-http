@@ -530,12 +530,24 @@ pub async fn observe_proxy(
     url: TypeOfConnection,
     ss_mutex: ServerStateAccess,
 ) -> DTPSR<()> {
-    let rtype = context!(
-        sniff_type_resource(&url).await,
-        "Cannot sniff type of resource for subscription {} => {}",
-        subcription_name,
-        url.to_string()
-    )?;
+    let rtype = loop {
+        match sniff_type_resource(&url).await {
+            Ok(s) => break s,
+            Err(e) => {
+                warn!("Cannot sniff {} \n{:?}", subcription_name, e);
+                info!("observe_proxy: retrying in 2 seconds");
+                sleep(std::time::Duration::from_secs(2)).await;
+                continue;
+            }
+        }
+    };
+    //
+    // let rtype = context!(
+    //     sniff_type_resource(&url).await,
+    //     "Cannot sniff type of resource for subscription {} => {}",
+    //     subcription_name,
+    //     url.to_string()
+    // )?;
     debug!("observe_proxy: rtype: {:#?}", rtype);
 
     match rtype {

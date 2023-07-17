@@ -1,11 +1,3 @@
-use std::collections::HashMap;
-use std::env;
-use std::net::SocketAddr;
-use std::path::Path;
-use std::process::Command;
-use std::string::ToString;
-use std::sync::Arc as StdArc;
-
 use chrono::Local;
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
@@ -15,7 +7,14 @@ use maud::PreEscaped;
 use maud::{html, DOCTYPE};
 use serde::{Deserialize, Serialize};
 use serde_yaml;
+use std::collections::HashMap;
+use std::env;
+use std::net::SocketAddr;
+use std::path::Path;
+use std::string::ToString;
+use std::sync::Arc as StdArc;
 use tokio::net::UnixListener;
+use tokio::process::Command;
 use tokio::signal::unix::SignalKind;
 use tokio::spawn;
 use tokio::sync::broadcast::error::RecvError;
@@ -305,13 +304,17 @@ impl DTPSServer {
             ];
             info!("starting tunnel: {:?}", cmdline);
 
-            let child = Command::new(&self.cloudflare_executable)
+            let mut child = Command::new(&self.cloudflare_executable)
                 .args(cmdline)
                 // .stdout(Stdio::piped())
                 .spawn()
                 .expect("Failed to start ping process");
 
-            debug!("Started process: {}", child.id());
+            let handle = spawn(async move {
+                let output = child.wait().await;
+                error!("tunnel exited: {:?}", output);
+            });
+            handles.push(handle);
         }
 
         let ssa = self.mutex.clone();
