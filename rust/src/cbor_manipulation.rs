@@ -1,6 +1,7 @@
 use crate::{DTPSError, RawData, DTPSR};
+use log::debug;
 
-pub fn get_as_cbor(data: &RawData) -> serde_cbor::Value {
+pub fn get_as_cbor(data: &RawData) -> DTPSR<serde_cbor::Value> {
     let cbor_data = match data.content_type.as_str() {
         "application/cbor" => {
             let cbor_data: serde_cbor::Value = serde_cbor::from_slice(&data.content).unwrap();
@@ -13,16 +14,19 @@ pub fn get_as_cbor(data: &RawData) -> serde_cbor::Value {
             let c = serde_json::from_value(json_data).unwrap();
             c
         }
-        "application/yaml" => {
+        "application/yaml" | "text/x-yaml" => {
             let json_data: serde_yaml::Value = serde_yaml::from_slice(&data.content).unwrap();
             // let cbor_data = serde_cbor::from_value(json_data).unwrap();
             // cbor_data
             let c = serde_yaml::from_value(json_data).unwrap();
             c
         }
-        _ => serde_cbor::value::Value::Text("cannot".to_string().into()),
+        _ => {
+            let s = format!("Cannot parse content type {}", data.content_type);
+            return DTPSError::other(s);
+        }
     };
-    cbor_data
+    Ok(cbor_data)
 }
 
 pub fn get_inside(
@@ -30,6 +34,10 @@ pub fn get_inside(
     data: &serde_cbor::Value,
     path: &Vec<String>,
 ) -> DTPSR<serde_cbor::Value> {
+    debug!(
+        "get_inside: context: {:?}, data: {:?}, path: {:?}",
+        context, data, path
+    );
     let current = data;
     if path.len() == 0 {
         return Ok(current.clone());
@@ -85,7 +93,8 @@ pub fn get_inside(
             }
         }
         _ => {
-            let s = format!("{}Cannot get inside this type", context_s);
+            let context_s = context.join(" -> ");
+            let s = format!("{context_s}: Cannot get inside this: {data:?}");
             return DTPSError::other(s);
         }
     };

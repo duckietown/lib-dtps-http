@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use bytes::Bytes;
-use log::debug;
+use log::{debug, error};
 use maplit::hashmap;
 use serde::{Deserialize, Serialize};
 use serde_cbor::Value as CBORValue;
@@ -25,6 +26,18 @@ use crate::{
 #[derive(Debug, Clone)]
 pub enum Transforms {
     GetInside(Vec<String>),
+}
+
+impl Transforms {
+    pub fn get_inside(&self, s: &str) -> Self {
+        match self {
+            Transforms::GetInside(vs) => {
+                let mut vs = vs.clone();
+                vs.push(s.to_string());
+                Transforms::GetInside(vs)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -72,12 +85,80 @@ pub struct ForwardedQueue {
 pub enum TypeOFSource {
     ForwardedQueue(ForwardedQueue),
     OurQueue(TopicName, Vec<String>, TopicProperties),
+    MountedDir(TopicName, String, TopicProperties),
+    MountedFile(TopicName, String, TopicProperties),
     Compose(SourceComposition),
     Transformed(Box<TypeOFSource>, Transforms),
     Digest(String, String),
     Deref(SourceComposition),
 
     OtherProxied(OtherProxied),
+}
+
+impl TypeOFSource {
+    pub fn get_inside(&self, s: &str) -> DTPSR<Self> {
+        match self {
+            TypeOFSource::ForwardedQueue(q) => {
+                not_implemented!("get_inside for {self:?} with {s:?}")
+            }
+            TypeOFSource::OurQueue(_, _, p) => {
+                not_implemented!("get_inside for {self:?} with {s:?}")
+            }
+            TypeOFSource::MountedDir(topic_name, path, props) => {
+                let p = PathBuf::from(&path);
+                let inside = p.join(s);
+                if inside.exists() {
+                    if inside.is_dir() {
+                        Ok(TypeOFSource::MountedDir(
+                            topic_name.clone(),
+                            inside.to_str().unwrap().to_string(),
+                            props.clone(),
+                        ))
+                    } else if inside.is_file() {
+                        Ok(TypeOFSource::MountedFile(
+                            topic_name.clone(),
+                            inside.to_str().unwrap().to_string(),
+                            props.clone(),
+                        ))
+                    } else {
+                        not_implemented!("get_inside for {self:?} with {s:?}")
+                    }
+                } else {
+                    Err(DTPSError::TopicNotFound(format!(
+                        "File not found: {}",
+                        p.join(s).to_str().unwrap()
+                    )))
+                }
+
+                // not_implemented!("get_inside for {self:?} with {s:?}")
+            }
+            TypeOFSource::Compose(c) => {
+                not_implemented!("get_inside for {self:?} with {s:?}")
+            }
+            TypeOFSource::Transformed(source, transform) => {
+                // not_implemented!("get_inside for {self:?} with {s:?}")
+                Ok(TypeOFSource::Transformed(
+                    source.clone(),
+                    transform.get_inside(s),
+                ))
+            }
+            TypeOFSource::Digest(_, _) => {
+                not_implemented!("get_inside for {self:?} with {s:?}")
+            }
+            TypeOFSource::Deref(c) => {
+                not_implemented!("get_inside for {self:?} with {s:?}")
+            }
+            TypeOFSource::OtherProxied(_) => {
+                not_implemented!("get_inside for {self:?} with {s:?}")
+            }
+            TypeOFSource::MountedFile(_, _, _) => {
+                let v = vec![s.to_string()];
+                let transform = Transforms::GetInside(v);
+                let tr = TypeOFSource::Transformed(Box::new(self.clone()), transform);
+                Ok(tr)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -200,6 +281,39 @@ impl ResolveDataSingle for TypeOFSource {
             }
             TypeOFSource::Deref(sc) => single_compose(sc, presented_as, ss_mutex).await,
             TypeOFSource::OtherProxied(op) => resolve_proxied(op).await,
+
+            TypeOFSource::MountedDir(topic_name, _, comps) => {
+                let ss = ss_mutex.lock().await;
+                let the_dir = ss.local_dirs.get(topic_name).unwrap();
+                let the_path = PathBuf::from(&the_dir.local_dir);
+                if !the_path.exists() {
+                    return Ok(ResolvedData::NotFound(format!("Not found: {:?}", the_path)));
+                }
+                if the_path.is_dir() {
+                    drop(ss);
+                    let index = self.get_meta_index(presented_as, ss_mutex).await?;
+                    // debug!("Compose index intenral:\n {:#?}", index);
+                    let to_wire = index.to_wire(None);
+
+                    // convert to cbor
+                    let cbor_bytes = serde_cbor::to_vec(&to_wire).unwrap();
+                    let raw_data = RawData {
+                        content: Bytes::from(cbor_bytes),
+                        content_type: CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(),
+                    };
+                    return Ok(ResolvedData::RawData(raw_data));
+                }
+                not_implemented!("MountedDir: {self:?}")
+            }
+            TypeOFSource::MountedFile(_, filename, _) => {
+                let data = std::fs::read(filename)?;
+                let content_type = mime_guess::from_path(&filename)
+                    .first()
+                    .unwrap_or(mime::APPLICATION_OCTET_STREAM);
+                let rd = RawData::new(data, content_type);
+
+                Ok(ResolvedData::RawData(rd))
+            }
         }
     }
 }
@@ -252,6 +366,8 @@ impl DataProps for TypeOFSource {
                     immutable: false, // maybe we can say it true sometime
                 }
             }
+            TypeOFSource::MountedDir(_, _, props) => props.clone(),
+            TypeOFSource::MountedFile(_, _, props) => props.clone(),
         }
     }
 }
@@ -262,12 +378,13 @@ async fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<Resolved
         NotAvailableYet(s) => return Ok(NotAvailableYet(s.clone())),
         NotFound(s) => return Ok(NotFound(s.clone())),
         ResolvedData::RawData(rd) => {
-            let x = get_as_cbor(&rd);
+            let x = get_as_cbor(&rd)?;
             x
         }
     };
-    match transform {
+    match &transform {
         Transforms::GetInside(path) => {
+            debug!("Get inside: {:?}", d);
             let inside = get_inside(vec![], &d, path);
             match inside {
                 Ok(d) => Ok(ResolvedData::Regular(d)),
@@ -370,7 +487,7 @@ impl GetMeta for TypeOFSource {
                 let components = topic_name.as_components();
                 let rel_components = components[np..].to_vec();
                 let rel_topic_name = TopicName::from_components(&rel_components);
-                let rurl = rel_topic_name.as_relative_url();
+                let rurl = rel_topic_name.to_relative_url();
 
                 tr.reachability.push(TopicReachabilityInternal {
                     con: TypeOfConnection::Relative(rurl, None),
@@ -401,7 +518,59 @@ impl GetMeta for TypeOFSource {
                 "get_meta_index for Deref".to_string(),
             )),
             TypeOFSource::OtherProxied(_) => {
-                not_implemented!("OtherProxied")
+                not_implemented!("OtherProxied: {self:?}")
+            }
+            TypeOFSource::MountedDir(_, the_path, props) => {
+                // let ss = ss_mutex.lock().await;
+                // let dir = ss.local_dirs.get(topic_name).unwrap();
+                let d = PathBuf::from(the_path);
+                if !d.exists() {
+                    return Err(DTPSError::TopicNotFound(format!(
+                        "MountedDir: {:?} does not exist",
+                        d
+                    )));
+                }
+                let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
+
+                debug!("MountedDir: {:?}", d);
+                let inside = d.read_dir().unwrap();
+                for x in inside {
+                    let filename = x?.file_name().to_str().unwrap().to_string();
+                    // if filename.starts_with(".") {
+                    //     continue;
+                    // }
+                    let mut tr = TopicRefInternal {
+                        unique_id: "".to_string(),
+                        origin_node: "".to_string(),
+                        app_data: Default::default(),
+                        reachability: vec![],
+                        created: 0,
+                        properties: props.clone(),
+                        accept_content_type: vec![],
+                        produces_content_type: vec![],
+                        examples: vec![],
+                    };
+                    tr.reachability.push(TopicReachabilityInternal {
+                        con: TypeOfConnection::Relative(filename.clone(), None),
+                        answering: "".to_string(),
+                        forwarders: vec![],
+                        benchmark: LinkBenchmark::identity(), //ok
+                    });
+
+                    topics.insert(TopicName::from_components(&vec![filename]), tr);
+                }
+
+                Ok(TopicsIndexInternal {
+                    node_id: "".to_string(),
+                    node_started: 0,
+                    node_app_data: hashmap! {
+                        "path".to_string() => NodeAppData::from(the_path),
+                    },
+                    topics,
+                })
+            }
+            TypeOFSource::MountedFile(_, _, _) => {
+                not_implemented!("MountedFile: {self:?}")
             }
         };
     }
@@ -580,7 +749,7 @@ async fn single_compose(
             }
             NotFound(_) => {}
             ResolvedData::RawData(rd) => {
-                let x = get_as_cbor(&rd);
+                let x = get_as_cbor(&rd)?;
                 where_to_put.insert(key_to_put, x);
             }
         }
@@ -592,20 +761,14 @@ async fn single_compose(
 #[async_recursion]
 pub async fn interpret_path(
     path: &str,
-    query: &Option<String>,
+    query: &HashMap<String, String>,
+    referrer: &Option<String>,
     ss_mutex: ServerStateAccess,
 ) -> DTPSR<TypeOFSource> {
+    debug!("interpret_path: path: {}", path);
     let path_components0 = divide_in_components(&path, '/');
     let path_components = path_components0.clone();
-    interpret_path_components(&path_components, query, ss_mutex.clone()).await
-}
 
-#[async_recursion]
-pub async fn interpret_path_components(
-    path_components: &Vec<String>,
-    query: &Option<String>,
-    ss_mutex: ServerStateAccess,
-) -> DTPSR<TypeOFSource> {
     if path_components.contains(&"!".to_string()) {
         return DTPSError::other(format!(
             "interpret_path: Cannot have ! in path: {:?}",
@@ -619,7 +782,8 @@ pub async fn interpret_path_components(
         let after = path_components.get(i + 1..).unwrap().to_vec();
         debug!("interpret_path: before: {:?} after: {:?}", before, after);
 
-        let interpret_before = interpret_path_components(&before, query, ss_mutex.clone()).await?;
+        let before2 = before.join("/") + "/";
+        let interpret_before = interpret_path(&before2, query, referrer, ss_mutex.clone()).await?;
 
         let first_part = match interpret_before {
             TypeOFSource::Compose(sc) => TypeOFSource::Deref(sc),
@@ -697,10 +861,7 @@ pub async fn interpret_path_components(
         for (mounted_at, info) in &ss.proxied_other {
             if let Some((_, b)) = is_prefix_of(mounted_at.as_components(), &path_components) {
                 let mut path_and_query = b.join("/");
-                if let Some(q) = query {
-                    path_and_query.push_str("?");
-                    path_and_query.push_str(q);
-                }
+                path_and_query.push_str(&format_query(&query));
 
                 let other = OtherProxied {
                     reached_at: mounted_at.clone(),
@@ -720,8 +881,9 @@ pub async fn interpret_path_components(
         iterate_type_of_sources(&ss)
     };
 
-    // log::debug!(" = all_sources =\n{:#?} ", all_sources);
+    log::debug!(" = all_sources =\n{:#?} ", all_sources);
     for (k, source) in all_sources.iter() {
+        debug!(" = k = {:?} ", k);
         // let topic_components = divide_in_components(&k, '.');
         let topic_components = k.as_components();
         subtopics_vec.push(topic_components.clone());
@@ -732,19 +894,16 @@ pub async fn interpret_path_components(
 
         match is_prefix_of(&topic_components, &path_components) {
             None => {}
-            Some((p1, rest)) => {
-                // let ss = ss_mutex.lock().await;
-                // let oq = ss.oqs.get(k).unwrap();
-                // let source_type = TypeOFSource::OurQueue(k.clone(), p1, oq.tr.properties.clone());
-
-                return if rest.len() == 0 {
-                    Ok(source.clone())
-                } else {
-                    Ok(TypeOFSource::Transformed(
-                        Box::new(source.clone()),
-                        Transforms::GetInside(rest),
-                    ))
-                };
+            Some((_, rest)) => {
+                let mut cur = source.clone();
+                for a in rest.iter() {
+                    cur = cur.get_inside(&a)?;
+                }
+                return Ok(cur);
+                // Ok(TypeOFSource::Transformed(
+                //     Box::new(source.clone()),
+                //     Transforms::GetInside(rest),
+                // ))
             }
         };
 
@@ -756,15 +915,17 @@ pub async fn interpret_path_components(
             Some(rest) => rest,
         };
 
+        debug!("pushing: {k:?}");
         subtopics.push((k.clone(), matched, rest, source.clone()));
     }
 
-    // eprintln!("subtopics: {:?}", subtopics);
+    debug!("subtopics: {subtopics:?}");
     if subtopics.len() == 0 {
         let s = format!(
             "Cannot find a matching topic for {:?}.\nMy Topics: {:?}\n",
             path_components, subtopics_vec
         );
+        error!("{}", s);
         return Err(DTPSError::TopicNotFound(s));
     }
 
@@ -772,13 +933,13 @@ pub async fn interpret_path_components(
         is_root: false,
         compose: hashmap! {},
     };
-    let ss = ss_mutex.lock().await;
-    for (topic_name, p1, rest, source) in subtopics {
+    // let ss = ss_mutex.lock().await;
+    for (_, _, rest, source) in subtopics {
         // let oq = ss.oqs.get(&topic_name).unwrap();
         // let source_type = TypeOFSource::OurQueue(topic_name.clone(), p1, oq.tr.properties.clone());
         sc.compose.insert(rest.clone(), Box::new(source));
     }
-
+    log::debug!("  \n{sc:#?} ");
     Ok(TypeOFSource::Compose(sc))
 }
 
@@ -811,6 +972,34 @@ pub fn iterate_type_of_sources(s: &ServerState) -> HashMap<TopicName, TypeOFSour
                 oq.tr.properties.clone(),
             ),
         );
+    }
+
+    for (topic_name, oq) in s.local_dirs.iter() {
+        let props = TopicProperties {
+            streamable: false,
+            pushable: false,
+            readable: true,
+            immutable: false,
+        };
+        res.insert(
+            topic_name.clone(),
+            TypeOFSource::MountedDir(topic_name.clone(), oq.local_dir.clone(), props),
+        );
+    }
+    res
+}
+
+fn format_query(q: &HashMap<String, String>) -> String {
+    if q.len() == 0 {
+        return "".to_string();
+    }
+
+    let mut res = String::from("?");
+    for (k, v) in q {
+        res.push_str(k);
+        res.push_str("=");
+        res.push_str(v);
+        res.push_str("&");
     }
     res
 }

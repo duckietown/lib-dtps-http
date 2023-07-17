@@ -1,6 +1,7 @@
-use anyhow::__private::kind::TraitKind;
 use std::collections::HashMap;
+use std::env;
 use std::future::Future;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use bytes::Bytes;
@@ -59,6 +60,13 @@ pub struct OtherProxyInfo {
     pub con: TypeOfConnection,
 }
 
+#[derive(Debug, Clone)]
+pub struct LocalDirInfo {
+    pub unique_id: String,
+    pub local_dir: String,
+    pub from_subscription: String,
+}
+
 #[derive(Debug)]
 pub struct ServerState {
     pub node_started: i64,
@@ -67,8 +75,12 @@ pub struct ServerState {
 
     /// Our queues
     pub oqs: HashMap<TopicName, ObjectQueue>,
+
     /// The topics that we proxy
     pub proxied_topics: HashMap<TopicName, ProxiedTopicInfo>,
+
+    /// Filesystem match
+    pub local_dirs: HashMap<TopicName, LocalDirInfo>,
 
     /// The subscriptions to other nodes
     pub proxied: HashMap<String, ForwardInfo>,
@@ -129,6 +141,7 @@ impl ServerState {
             blobs: HashMap::new(),
             proxied: HashMap::new(),
             advertise_urls: vec![],
+            local_dirs: HashMap::new(),
         };
         let p = TopicProperties {
             streamable: true,
@@ -138,25 +151,25 @@ impl ServerState {
         };
 
         ss.new_topic(
-            &TopicName::from_dotted(TOPIC_LIST_NAME),
+            &TopicName::from_relative_url(TOPIC_LIST_NAME)?,
             None,
             "application/json",
             &p,
         )?;
         ss.new_topic(
-            &TopicName::from_dotted(TOPIC_LIST_CLOCK),
+            &TopicName::from_relative_url(TOPIC_LIST_CLOCK)?,
             None,
             "text/plain",
             &p,
         )?;
         ss.new_topic(
-            &TopicName::from_dotted(TOPIC_LIST_AVAILABILITY),
+            &TopicName::from_relative_url(TOPIC_LIST_AVAILABILITY)?,
             None,
             "application/json",
             &p,
         )?;
         ss.new_topic(
-            &TopicName::from_dotted(TOPIC_LOGS),
+            &TopicName::from_relative_url(TOPIC_LOGS)?,
             None,
             "application/yaml",
             &p,
@@ -170,7 +183,7 @@ impl ServerState {
         }
         self.advertise_urls.push(url.to_string());
         self.publish_object_as_json(
-            &TopicName::from_dotted(TOPIC_LIST_AVAILABILITY),
+            &TopicName::from_relative_url(TOPIC_LIST_AVAILABILITY)?,
             &self.advertise_urls.clone(),
             None,
         )?;
@@ -184,7 +197,11 @@ impl ServerState {
             level: level.to_string(),
             msg,
         };
-        let x = self.publish_object_as_json(&TopicName::from_dotted(TOPIC_LOGS), &log_entry, None);
+        let x = self.publish_object_as_json(
+            &TopicName::from_relative_url(TOPIC_LOGS).unwrap(),
+            &log_entry,
+            None,
+        );
         if let Err(e) = x {
             error!("Error publishing log message: {:?}", e);
         }
@@ -214,31 +231,12 @@ impl ServerState {
         topic_name: &TopicName,
         tr_original: &TopicRefInternal,
         reachability_we_used: TopicReachabilityInternal,
-        // forwarding_steps: Vec<ForwardingStep>,
         link_benchmark_last: LinkBenchmark,
-        // link_benchmark_total: LinkBenchmark,
-        // data_url: TypeOfConnection,
     ) -> DTPSR<()> {
         if self.proxied_topics.contains_key(topic_name) {
-            return Err(DTPSError::TopicAlreadyExists(topic_name.to_dotted()));
+            return Err(DTPSError::TopicAlreadyExists(topic_name.to_relative_url()));
         }
 
-        // // TODO: need to add forwarders info
-        // let mut reachability = vec![];
-        // for r in &tr_original.reachability {
-        //     reachability.push(r.clone());
-        // }
-        // let tr = TopicRefInternal {
-        //     unique_id: tr_original.unique_id.clone(),
-        //     origin_node: tr_original.origin_node.clone(),
-        //     app_data: tr_original.app_data.clone(),
-        //     created: tr_original.created,
-        //     reachability: reachability,
-        //     properties: tr_original.properties.clone(),
-        //     accept_content_type: tr_original.accept_content_type.clone(),
-        //     produces_content_type: tr_original.produces_content_type.clone(),
-        //     examples: tr_original.examples.clone(),
-        // };
         let data_url = reachability_we_used.con.clone();
         self.proxied_topics.insert(
             topic_name.clone(),
@@ -256,6 +254,41 @@ impl ServerState {
         info!("New proxy topic {:?} -> {:?}", topic_name, its_topic_name);
         self.update_my_topic()
     }
+
+    pub fn new_filesystem_mount(
+        &mut self,
+        from_subscription: &String,
+        topic_name: &TopicName,
+        fp: FilePaths,
+    ) -> DTPSR<()> {
+        if self.local_dirs.contains_key(&topic_name) {
+            return Err(DTPSError::TopicAlreadyExists(topic_name.to_relative_url()));
+        }
+
+        let local_dir = match fp {
+            FilePaths::Absolute(s) => PathBuf::from(s),
+            FilePaths::Relative(s) => {
+                absolute_path(s).map_err(|e| DTPSError::Other(e.to_string()))?
+            }
+        };
+
+        // let local_dir = PathBuf::from(path);
+        info!(
+            "New local folder {:?} -> {:?}",
+            topic_name,
+            local_dir.to_str()
+        );
+        let uuid = get_queue_id(&self.node_id, &topic_name);
+        self.local_dirs.insert(
+            topic_name.clone(),
+            LocalDirInfo {
+                unique_id: uuid,
+                local_dir: local_dir.as_path().to_str().unwrap().to_string(),
+                from_subscription: from_subscription.clone(),
+            },
+        );
+        self.update_my_topic()
+    }
     pub fn has_topic(&self, topic_name: &TopicName) -> bool {
         self.oqs.contains_key(topic_name) || self.proxied_topics.contains_key(topic_name)
     }
@@ -267,7 +300,7 @@ impl ServerState {
         properties: &TopicProperties,
     ) -> DTPSR<()> {
         if self.oqs.contains_key(topic_name) {
-            return Err(DTPSError::TopicAlreadyExists(topic_name.to_dotted()));
+            return Err(DTPSError::TopicAlreadyExists(topic_name.to_relative_url()));
         }
         // let topic_name = topic_name.to_string();
         let uuid = get_queue_id(&self.node_id, &topic_name);
@@ -312,10 +345,10 @@ impl ServerState {
         let oqs = &mut self.oqs;
 
         for topic_name in oqs.keys() {
-            topics.push(topic_name.to_dotted());
+            topics.push(topic_name.to_relative_url());
         }
         self.publish_object_as_json(
-            &TopicName::from_dotted(TOPIC_LIST_NAME),
+            &TopicName::from_relative_url(TOPIC_LIST_NAME)?,
             &topics.clone(),
             None,
         )?;
@@ -347,7 +380,7 @@ impl ServerState {
         };
         self.save_blob(&data.digest(), &data.content);
         if !self.oqs.contains_key(&topic_name) {
-            return Err(DTPSError::TopicNotFound(topic_name.to_dotted()));
+            return Err(DTPSError::TopicNotFound(topic_name.to_relative_url()));
         }
         let oq = self.oqs.get_mut(&topic_name).unwrap();
 
@@ -434,7 +467,7 @@ impl ServerState {
             let mut tr = oq.tr.clone();
 
             tr.reachability.push(TopicReachabilityInternal {
-                con: TypeOfConnection::Relative(topic_name.as_relative_url(), None),
+                con: TypeOfConnection::Relative(topic_name.to_relative_url(), None),
                 answering: self.node_id.clone(),
                 forwarders: vec![],
                 benchmark: LinkBenchmark::identity(),
@@ -466,10 +499,82 @@ impl ServerState {
             }
 
             tr.reachability.push(TopicReachabilityInternal {
-                con: TypeOfConnection::Relative(topic_name.as_relative_url(), None),
+                con: TypeOfConnection::Relative(topic_name.to_relative_url(), None),
                 answering: self.node_id.clone(),
                 forwarders,
                 benchmark: total,
+            });
+
+            topics.insert(topic_name.clone(), tr);
+        }
+
+        for (topic_name, pinfo) in self.proxied_other.iter() {
+            let mut forwarders = vec![];
+
+            forwarders.push(ForwardingStep {
+                forwarding_node: self.node_id.clone(),
+                forwarding_node_connects_to: pinfo.con.to_string(),
+
+                performance: LinkBenchmark::identity(), // TODO:
+            });
+
+            let prop = TopicProperties {
+                streamable: false,
+                pushable: false,
+                readable: true,
+                immutable: false,
+            };
+
+            let mut tr = TopicRefInternal {
+                unique_id: pinfo.con.to_string(),
+                origin_node: pinfo.con.to_string(),
+                app_data: Default::default(),
+                reachability: vec![],
+                created: 0,
+                properties: prop,
+                accept_content_type: vec![],
+                produces_content_type: vec![],
+                examples: vec![],
+            };
+
+            tr.reachability.push(TopicReachabilityInternal {
+                con: TypeOfConnection::Relative(topic_name.to_relative_url(), None),
+                answering: self.node_id.clone(),
+                forwarders,
+                benchmark: LinkBenchmark::identity(),
+            });
+
+            topics.insert(topic_name.clone(), tr);
+        }
+
+        for (topic_name, pinfo) in self.local_dirs.iter() {
+            let prop = TopicProperties {
+                streamable: false,
+                pushable: false,
+                readable: true,
+                immutable: true,
+            };
+
+            let app_data = hashmap! {
+                "path".to_string() => pinfo.local_dir.clone(),
+            };
+            let mut tr = TopicRefInternal {
+                unique_id: pinfo.unique_id.clone(),
+                origin_node: self.node_id.clone(),
+                app_data,
+                reachability: vec![],
+                created: 0,
+                properties: prop,
+                accept_content_type: vec![],
+                produces_content_type: vec![],
+                examples: vec![],
+            };
+
+            tr.reachability.push(TopicReachabilityInternal {
+                con: TypeOfConnection::Relative(topic_name.to_relative_url(), None),
+                answering: self.node_id.clone(),
+                forwarders: vec![],
+                benchmark: LinkBenchmark::identity(),
             });
 
             topics.insert(topic_name.clone(), tr);
@@ -482,7 +587,7 @@ impl ServerState {
         // node_app_data.insert("@create_topic_index2".to_string(),
         //                      NodeAppData::from(format!("{:#?}", self.proxied)));
 
-        let mut node_app_data = self.node_app_data.clone();
+        let node_app_data = self.node_app_data.clone();
         // node_app_data.insert(
         //     "@ServerStatE::create_topic_index".to_string(),
         //     NodeAppData::from(format!("{:#?}", self.proxied_topics)),
@@ -530,6 +635,12 @@ pub async fn observe_proxy(
     url: TypeOfConnection,
     ss_mutex: ServerStateAccess,
 ) -> DTPSR<()> {
+    if let TypeOfConnection::File(_, fp) = url {
+        let mut ss = ss_mutex.lock().await;
+        ss.new_filesystem_mount(&subcription_name, &mounted_at, fp)?;
+        return Ok(());
+    }
+
     let rtype = loop {
         match sniff_type_resource(&url).await {
             Ok(s) => break s,
@@ -749,4 +860,19 @@ pub fn add_from_response(
     //             topics.insert(dotsep, b2);
     //         }
     //     }
+}
+
+use path_clean::PathClean;
+
+pub fn absolute_path(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
+    let path = path.as_ref();
+
+    let absolute_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()?.join(path)
+    }
+    .clean();
+
+    Ok(absolute_path)
 }

@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
 use std::ops::Add;
+use std::path::PathBuf;
 
-use crate::{join_con, RawData, TopicName};
 use derive_more::Constructor;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -12,10 +12,11 @@ use url::Url;
 use crate::signals_logic::TopicProperties;
 use crate::urls::join_ext;
 use crate::utils::divide_in_components;
+use crate::{join_con, RawData, TopicName};
 
 pub type NodeAppData = String;
 
-pub type DottedName = String;
+// pub type DottedName = String;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TopicsIndexWire {
@@ -23,7 +24,7 @@ pub struct TopicsIndexWire {
     pub node_started: i64,
 
     pub node_app_data: HashMap<String, NodeAppData>,
-    pub topics: HashMap<DottedName, TopicRefWire>,
+    pub topics: HashMap<String, TopicRefWire>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,7 +40,7 @@ impl TopicsIndexInternal {
         let mut topics: HashMap<String, TopicRefWire> = HashMap::new();
         for (topic_name, topic_ref_internal) in self.topics {
             let topic_ref_wire = topic_ref_internal.to_wire(use_rel.clone());
-            topics.insert(topic_name.to_dotted(), topic_ref_wire);
+            topics.insert(topic_name.to_relative_url(), topic_ref_wire);
         }
         TopicsIndexWire {
             node_id: self.node_id,
@@ -52,7 +53,10 @@ impl TopicsIndexInternal {
         let mut topics: HashMap<TopicName, TopicRefInternal> = HashMap::new();
         for (topic_name, topic_ref_wire) in &wire.topics {
             let topic_ref_internal = TopicRefInternal::from_wire(topic_ref_wire, conbase);
-            topics.insert(TopicName::from_dotted(topic_name), topic_ref_internal);
+            topics.insert(
+                TopicName::from_relative_url(topic_name).unwrap(),
+                topic_ref_internal,
+            );
         }
         TopicsIndexInternal {
             node_id: wire.node_id,
@@ -276,9 +280,64 @@ impl Display for UnixCon {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum FilePaths {
+    Absolute(String),
+    Relative(String),
+}
+
+pub fn join_and_normalize(path1: &str, path2: &str) -> String {
+    let mut path = PathBuf::from(path1);
+    path.push(path2);
+    path.canonicalize()
+        .unwrap_or(path)
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+pub fn normalize_path(path1: &str) -> String {
+    let path = PathBuf::from(path1);
+    let mut p = path
+        .canonicalize()
+        .unwrap_or(path)
+        .to_str()
+        .unwrap()
+        .to_string();
+    if p.len() > 1 {
+        p = p.trim_end_matches("/").to_string();
+    }
+    return p;
+}
+
+impl FilePaths {
+    pub(crate) fn add_prefix(&self, prefix: &str) -> FilePaths {
+        match self {
+            FilePaths::Absolute(s) => FilePaths::Absolute(s.clone()),
+            FilePaths::Relative(s) => FilePaths::Relative(join_and_normalize(prefix, s)),
+        }
+    }
+    pub(crate) fn join(&self, suffix: &str) -> FilePaths {
+        match self {
+            FilePaths::Absolute(s) => FilePaths::Absolute(join_and_normalize(s, suffix)),
+            FilePaths::Relative(s) => FilePaths::Relative(join_and_normalize(s, suffix)),
+        }
+    }
+}
+
+impl Display for FilePaths {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            FilePaths::Absolute(s) => write!(f, "{}", s),
+            FilePaths::Relative(s) => write!(f, "./{}", s),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum TypeOfConnection {
     /// a
     TCP(Url),
+    File(Option<String>, FilePaths),
     /// b
     UNIX(UnixCon),
     /// c
@@ -312,6 +371,7 @@ impl TypeOfConnection {
                 s
             }
             TypeOfConnection::Same() => "".to_string(),
+            TypeOfConnection::File(_, path) => path.clone().to_string(),
         }
     }
 }
@@ -319,6 +379,9 @@ impl TypeOfConnection {
 impl fmt::Display for TypeOfConnection {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            TypeOfConnection::File(hostname, path) => {
+                write!(f, "File(host={:?},path={:?})", hostname, path)
+            }
             TypeOfConnection::TCP(url) => write!(f, "TCP({:?})", url.to_string()),
             TypeOfConnection::UNIX(unix_con) => write!(f, "UNIX({})", unix_con),
             TypeOfConnection::Relative(s, q) => write!(f, "Relative({},{:?})", s, q),
@@ -353,6 +416,7 @@ impl TopicReachabilityInternal {
                 TypeOfConnection::TCP(_) => self.con.clone(),
                 TypeOfConnection::UNIX(_) => self.con.clone(),
                 TypeOfConnection::Same() => self.con.clone(),
+                TypeOfConnection::File(..) => self.con.clone(),
                 TypeOfConnection::Relative(_, query) => {
                     TypeOfConnection::Relative(use_patch.clone(), query.clone())
                 }

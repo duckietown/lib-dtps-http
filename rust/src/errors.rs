@@ -4,6 +4,7 @@ use crate::TopicName;
 use anyhow::Result;
 use http::StatusCode;
 use indent::indent_all_with;
+use log::{debug, error};
 use std::fmt::Debug;
 use std::net::AddrParseError;
 use warp::{Rejection, Reply};
@@ -63,9 +64,9 @@ impl DTPSError {
     pub fn other<X, S: AsRef<str>>(s: S) -> Result<X, DTPSError> {
         Err(DTPSError::Other(s.as_ref().to_string()))
     }
-}
-
-impl DTPSError {
+    pub fn internal_assertion<X, S: AsRef<str>>(s: S) -> Result<X, DTPSError> {
+        Err(DTPSError::InternalInconsistency(s.as_ref().to_string()))
+    }
     pub fn not_reachable<X, S: AsRef<str>>(s: S) -> Result<X, DTPSError> {
         Err(DTPSError::ResourceNotReachable(s.as_ref().to_string()))
     }
@@ -245,10 +246,15 @@ impl warp::reject::Reject for DTPSError {
 }
 
 pub async fn handle_rejection(err: Rejection) -> std::result::Result<impl Reply, Rejection> {
+    debug!("handle_rejection: {:?}", err);
     if let Some(custom_error) = err.find::<DTPSError>() {
         let status_code = custom_error.status_code();
 
         let error_message = format!("{}\n\n{:?}", status_code, custom_error);
+
+        if status_code != 404 {
+            error!("{}", error_message);
+        }
         return Ok(warp::reply::with_status(error_message, status_code));
     }
 
@@ -294,6 +300,12 @@ macro_rules! context {
         ($t).context( crate::add_info!($($u),*) )
     }};
 }
+#[macro_export]
+macro_rules! internal_assertion {
+    ($($u:expr),* $(,)?) => {{
+        DTPSError::internal_assertion(crate::add_info!($($u),*) )
+    }};
+}
 
 #[macro_export]
 macro_rules! not_implemented {
@@ -304,20 +316,20 @@ macro_rules! not_implemented {
 #[macro_export]
 macro_rules! not_available {
     ($($u:expr),* $(,)?) => {{
-        DTPSError::not_available(crate::add_info!($($u),*) )
+        crate::DTPSError::not_available(crate::add_info!($($u),*) )
     }};
 }
 
 #[macro_export]
 macro_rules! invalid_input {
     ($($u:expr),* $(,)?) => {{
-        DTPSError::invalid_input(crate::add_info!($($u),*) )
+        crate::DTPSError::invalid_input(crate::add_info!($($u),*) )
     }};
 }
 
 #[macro_export]
 macro_rules! not_reachable {
     ($($u:expr),* $(,)?) => {{
-        DTPSError::not_reachable(crate::add_info!($($u),*) )
+        crate::DTPSError::not_reachable(crate::add_info!($($u),*) )
     }};
 }

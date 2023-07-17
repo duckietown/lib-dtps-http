@@ -1,16 +1,4 @@
 use std::any::Any;
-//
-// pub async fn get_metadata(tc: &TypeOfConnection) -> Result<FoundMetadata, Box<dyn error::Error>> {
-//     match tc {
-//         TypeOfConnection::TCP(url) => get_metadata_http(url).await,
-//         TypeOfConnection::UNIX(_path) => {
-//             Err("unix socket not supported yet for get_metadata()".into())
-//         }
-//         TypeOfConnection::Relative(_, _) => {
-//             Err("cannot handle a relative url get_metadata()".into())
-//         }
-//     }
-// }
 use std::os::unix::fs::FileTypeExt;
 use std::time::Duration;
 
@@ -50,8 +38,8 @@ use crate::websocket_signals::MsgServerToClient;
 use crate::TypeOfConnection::Same;
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
 use crate::{
-    context, error_with_info, not_available, not_implemented, not_reachable, DTPSError, RawData,
-    TopicName, CONTENT_TYPE_DTPS_INDEX, DTPSR,
+    context, error_with_info, internal_assertion, not_available, not_implemented, not_reachable,
+    DTPSError, RawData, TopicName, CONTENT_TYPE_DTPS_INDEX, DTPSR,
 };
 
 /// Note: need to have use futures::{StreamExt} in scope to use this
@@ -231,10 +219,13 @@ pub async fn listen_events_url_inline(
             use_stream = EitherStream::UnixStream(socket_stream);
         }
         Relative(_, _) => {
-            panic!("not expected here {}", con);
+            return not_implemented!("Not expected! {con:?}");
         }
         Same() => {
-            panic!("not expected here {}", con);
+            return not_implemented!("Not expected! {con:?}");
+        }
+        TypeOfConnection::File(..) => {
+            return not_implemented!("Events not supported for {con:?}");
         }
     };
 
@@ -463,16 +454,18 @@ pub async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResul
         Same() => {
             panic!("not expected here {}", con);
         }
+        TypeOfConnection::File(..) => 0,
     };
     let reliability = match con {
-        TCP(_) => 0.9,
-        UNIX(_) => 1.0,
+        TCP(_) => 0.7,
+        UNIX(_) => 0.9,
         Relative(_, _) => {
             panic!("unexpected relative url here: {}", con);
         }
         Same() => {
             panic!("not expected here {}", con);
         }
+        TypeOfConnection::File(..) => 1.0,
     };
     match md {
         Err(err) => {
@@ -597,12 +590,13 @@ pub async fn make_request(conbase: &TypeOfConnection, method: hyper::Method) -> 
         }
 
         Relative(_, _) => {
-            return Err(DTPSError::NotAvailable(
-                "cannot handle a relative url get_metadata".to_string(),
-            ));
+            return internal_assertion!("cannot handle a relative url get_metadata: {conbase}");
         }
         Same() => {
-            return not_implemented!("not expected to reach here");
+            return internal_assertion!("!!! not expected to reach here: {conbase}");
+        }
+        TypeOfConnection::File(..) => {
+            return not_implemented!("read from file to implement: {conbase}");
         }
     };
 
@@ -639,6 +633,9 @@ pub async fn make_request(conbase: &TypeOfConnection, method: hyper::Method) -> 
             }
             TypeOfConnection::Same() => {
                 return not_available("cannot handle a Same url to get_metadata");
+            }
+            TypeOfConnection::File(..) => {
+                return internal_assertion!("not supposed to reach here: {conbase}");
             }
         },
         "make_request(): cannot make {} request for connection {:?} \

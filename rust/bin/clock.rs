@@ -25,7 +25,7 @@ async fn clock_go(state: ServerStateAccess, topic_name: &str, interval_s: f32) -
         };
         // let data = HashMap::new();
         ss.new_topic(
-            &TopicName::from_dotted(topic_name),
+            &TopicName::from_relative_url(topic_name)?,
             None,
             "application/json",
             &props,
@@ -38,11 +38,11 @@ async fn clock_go(state: ServerStateAccess, topic_name: &str, interval_s: f32) -
         // get the current time in nanoseconds
         let now = Local::now().timestamp_nanos();
         let s = format!("{}", now);
-        let _inserted = ss.publish_json(&TopicName::from_dotted(topic_name), &s, None)?;
+        let _inserted = ss.publish_json(&TopicName::from_relative_url(topic_name)?, &s, None)?;
 
         // debug!("inserted {}: {:?}", topic_name, inserted);
     }
-    Ok(())
+    // Ok(())
 }
 
 async fn clock() -> DTPSR<()> {

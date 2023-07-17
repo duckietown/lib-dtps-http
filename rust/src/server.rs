@@ -100,8 +100,7 @@ impl DTPSServer {
             .and(warp::get())
             .and(clone_access.clone())
             .and(warp::header::headers_cloned())
-            .and_then(serve_master_get)
-            .recover(handle_rejection);
+            .and_then(serve_master_get);
 
         let master_route_post = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
@@ -109,16 +108,14 @@ impl DTPSServer {
             .and(clone_access.clone())
             .and(warp::header::headers_cloned())
             .and(warp::body::bytes())
-            .and_then(serve_master_post)
-            .recover(handle_rejection);
+            .and_then(serve_master_post);
 
         let master_route_head = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
             .and(warp::head())
             .and(clone_access.clone())
             .and(warp::header::headers_cloned())
-            .and_then(serve_master_head)
-            .recover(handle_rejection);
+            .and_then(serve_master_head);
 
         // let static_route = warp::path("static")
         //     .and(warp::path::tail())
@@ -236,16 +233,16 @@ impl DTPSServer {
             .or(master_route_head)
             .or(master_route_get)
             .or(master_route_post)
-            // .or(static_route)
-            // .or(static_route_empty)
-            // .or(static_route2)
-            // .or(topic_generic_events_route)
-            // .or(topic_generic_route_head)
-            // .or(topic_generic_route_get)
-            // .or(root_route)
-            // .or(topic_generic_route_data)
-            // .or(topic_post);
-            ;
+            .recover(handle_rejection);
+        // .or(static_route)
+        // .or(static_route_empty)
+        // .or(static_route2)
+        // .or(topic_generic_events_route)
+        // .or(topic_generic_route_head)
+        // .or(topic_generic_route_get)
+        // .or(root_route)
+        // .or(topic_generic_route_data)
+        // .or(topic_post);
         let mut handles = vec![];
 
         if let Some(address) = self.listen_address {
@@ -375,7 +372,7 @@ impl DTPSServer {
 
         spawn(clock_go(
             self.get_lock(),
-            TopicName::from_dotted(TOPIC_LIST_CLOCK),
+            TopicName::from_relative_url(TOPIC_LIST_CLOCK)?,
             1.0,
         ));
 
@@ -384,7 +381,7 @@ impl DTPSServer {
             let mut i = 0;
             for (k, v) in self.initial_proxy.clone() {
                 let subname = format!("proxy-{}", i);
-                let mounted_at = TopicName::from_dotted(&k);
+                let mounted_at = TopicName::from_relative_url(&k)?;
                 self.add_proxied(&subname, &mounted_at, v.clone()).await?;
 
                 i += 1;
@@ -974,7 +971,7 @@ async fn handler_topic_html_summary(
     }
 
     let x = make_html(
-        topic_name.as_dotted(),
+        &topic_name.as_relative_url(),
         html! {
 
 

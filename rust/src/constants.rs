@@ -10,10 +10,10 @@ pub static HEADER_DATA_UNIQUE_ID: &'static str = "X-DTPS-data-unique-id";
 pub static HEADER_DATA_ORIGIN_NODE_ID: &'static str = "X-DTPS-data-origin-node";
 pub static HEADER_CONTENT_LOCATION: &'static str = "Content-Location";
 
-pub static TOPIC_LIST_NAME: &'static str = "dtps.topic_list";
-pub static TOPIC_LIST_CLOCK: &'static str = "dtps.clock";
-pub static TOPIC_LOGS: &'static str = "dtps.logs";
-pub static TOPIC_LIST_AVAILABILITY: &'static str = "dtps.availability";
+pub static TOPIC_LIST_NAME: &'static str = "dtps/topic_list";
+pub static TOPIC_LIST_CLOCK: &'static str = "dtps/clock";
+pub static TOPIC_LOGS: &'static str = "dtps/logs";
+pub static TOPIC_LIST_AVAILABILITY: &'static str = "dtps/availability";
 
 pub static CONTENT_TYPE: &'static str = "content-type";
 pub static OCTET_STREAM: &'static str = "application/octet-stream";

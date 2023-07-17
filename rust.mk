@@ -37,7 +37,7 @@ run-client-continuous-to-python-server:
 
 
 run-proxy-external:
-	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 11000 --unix-path /tmp/proxy-external --proxy proxy1=http+unix://%2Ftmp/'
+	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 11000 --unix-path /tmp/proxy-external --proxy proxy1=https://www.duckietown.org/ --proxy static2=.'
 
 
 

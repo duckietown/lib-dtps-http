@@ -4,11 +4,11 @@ pub fn get_random_node_id() -> String {
 }
 
 pub fn get_queue_id(node_id: &str, topic_name: &TopicName) -> String {
-    let queue_name = topic_name.to_dotted();
+    let queue_name = topic_name.as_relative_url();
     if queue_name == "" {
         return node_id.to_string();
     }
-    let queue_id = format!("{}.{}", node_id, queue_name);
+    let queue_id = format!("{}:{}", node_id, queue_name);
     return queue_id;
 }
 

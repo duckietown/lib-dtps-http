@@ -1,9 +1,9 @@
-use log::info;
+use log::{debug, info};
 use url::Url;
 
 use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
 use crate::structures::{TypeOfConnection, UnixCon};
-use crate::{DTPSError, DTPSR};
+use crate::{normalize_path, not_implemented, DTPSError, FilePaths, DTPSR};
 
 fn get_scheme_part(s0: &str) -> Option<&str> {
     let scheme_end = s0.find("://")?;
@@ -36,16 +36,42 @@ fn get_scheme(s: &str) -> FoundScheme {
 
 const SPECIAL_CHAR: &str = "%2F";
 
-pub fn parse_url_ext(s0: &str) -> DTPSR<TypeOfConnection> {
+pub fn parse_url_ext(mut s0: &str) -> DTPSR<TypeOfConnection> {
+    if s0.starts_with("file:") {
+        s0 = &s0["file:".len()..];
+        // collapse multiple slashes into one
+        loop {
+            let mut c = s0.chars();
+            let first = c.next();
+            let second = c.next();
+            if first == Some('/') && second == Some('/') {
+                s0 = &s0[1..];
+            } else {
+                break;
+            }
+        }
+    }
+    if s0.starts_with("/./") {
+        let x = s0[3..].to_string();
+        let x = normalize_path(&x);
+        return Ok(TypeOfConnection::File(None, FilePaths::Relative(x)));
+    }
+    if s0.starts_with("/") {
+        let x = normalize_path(s0);
+        return Ok(TypeOfConnection::File(None, FilePaths::Absolute(x)));
+    }
+    if s0.starts_with("./") {
+        let x = s0[2..].to_string();
+        let x = normalize_path(&x);
+        return Ok(TypeOfConnection::File(None, FilePaths::Relative(x)));
+    }
+
     let scheme = get_scheme(s0);
 
     if let FoundScheme::None = scheme {
-        return Ok(UNIX(UnixCon {
-            scheme: "http+unix".to_string(),
-            socket_name: s0.to_string(),
-            path: "/".to_string(),
-            query: None,
-        }));
+        let x = normalize_path(s0);
+
+        return Ok(TypeOfConnection::File(None, FilePaths::Relative(x)));
     }
     if let FoundScheme::Unix(_) = scheme {
         let (query, s) = match s0.find("?") {
@@ -98,7 +124,17 @@ pub fn parse_url_ext(s0: &str) -> DTPSR<TypeOfConnection> {
         }
     } else {
         match Url::parse(s0) {
-            Ok(p) => Ok(TCP(p)),
+            Ok(p) => {
+                if p.scheme() == "file" {
+                    eprintln!("parse raw: {p:?}");
+                    Ok(TypeOfConnection::File(
+                        p.host().map(|s| s.to_string()),
+                        FilePaths::Absolute(p.path().to_string()),
+                    ))
+                } else {
+                    Ok(TCP(p))
+                }
+            }
             Err(e) => DTPSR::Err(DTPSError::Other(format!("Could not parse url: {}", e))),
         }
     }
@@ -120,6 +156,10 @@ pub fn join_con(a: &str, b: &TypeOfConnection) -> DTPSR<TypeOfConnection> {
         }
 
         TypeOfConnection::Same() => Ok(Relative(a.to_string(), None)),
+        TypeOfConnection::File(hostname, path) => {
+            // let (path3, query3) = join_path(a, path.add_prefix(a)as_str());
+            Ok(TypeOfConnection::File(hostname.clone(), path.add_prefix(a)))
+        }
     }
 }
 
@@ -146,6 +186,9 @@ pub fn join_ext(conbase: &TypeOfConnection, s: &str) -> DTPSR<TypeOfConnection> 
             }
 
             TypeOfConnection::Same() => Ok(Relative(s.to_string(), None)),
+            TypeOfConnection::File(hostname, path) => {
+                Ok(TypeOfConnection::File(hostname, path.join(s)))
+            }
         }
     }
 }
@@ -174,6 +217,16 @@ mod tests {
 
     use log::debug;
 
+    use crate::FilePaths;
+
+    use super::*;
+
+    #[test]
+    fn normalize1() {
+        assert_eq!(normalize_path("/the/path"), "/the/path");
+        assert_eq!(normalize_path("/the/path/"), "/the/path");
+    }
+
     #[test]
     fn url_parse_p1() {
         let s = "http+unix://%2Fsockets%2Fargo%2Fnode1%2F_node/";
@@ -191,6 +244,7 @@ mod tests {
         // let x = parse_url_ext("/the/path?ade").unwrap();
         // warn!("test_add_two {:?}", x);
     }
+
     #[test]
     fn url_parse_p2() {
         // without end /
@@ -208,6 +262,128 @@ mod tests {
         );
         // let x = parse_url_ext("/the/path?ade").unwrap();
         // warn!("test_add_two {:?}", x);
+    }
+
+    #[test]
+    fn url_parse_3() {
+        // without end /
+        let s = "file:///abs/file";
+        //         file://localhost/etc/fstab
+        // file:///etc/fstab
+        let x = super::parse_url_ext(s).unwrap();
+        debug!("test_p1 {s:?} {x:?}");
+        assert_eq!(
+            x,
+            super::TypeOfConnection::File(None, FilePaths::Absolute("/abs/file".to_string()))
+        );
+        // let x = parse_url_ext("/the/path?ade").unwrap();
+        // warn!("test_add_two {:?}", x);
+    }
+
+    #[test]
+    fn url_parse_4() {
+        // without end /
+        let s = "./reldir";
+        //         file://localhost/etc/fstab
+        // file:///etc/fstab
+        let x = super::parse_url_ext(s).unwrap();
+        debug!("test_p1 {s:?} {x:?}");
+        assert_eq!(
+            x,
+            super::TypeOfConnection::File(None, FilePaths::Relative("reldir".to_string()))
+        );
+        // let x = parse_url_ext("/the/path?ade").unwrap();
+        // warn!("test_add_two {:?}", x);
+    }
+    #[test]
+    fn url_parse_4c() {
+        let s = "reldir";
+        let x = super::parse_url_ext(s).unwrap();
+        assert_eq!(
+            x,
+            super::TypeOfConnection::File(None, FilePaths::Relative("reldir".to_string()))
+        );
+        // let x = parse_url_ext("/the/path?ade").unwrap();
+        // warn!("test_add_two {:?}", x);
+    }
+
+    #[test]
+    fn url_parse_4b() {
+        // without end /
+        let s = "./reldir/";
+        //         file://localhost/etc/fstab
+        // file:///etc/fstab
+        let x = super::parse_url_ext(s).unwrap();
+        debug!("test_p1 {s:?} {x:?}");
+        assert_eq!(
+            x,
+            super::TypeOfConnection::File(None, FilePaths::Relative("reldir".to_string()))
+        );
+        // let x = parse_url_ext("/the/path?ade").unwrap();
+        // warn!("test_add_two {:?}", x);
+    }
+
+    #[test]
+    fn url_parse_5() {
+        // without end /
+        let s = "/abs/dir/";
+        //         file://localhost/etc/fstab
+        // file:///etc/fstab
+        let x = super::parse_url_ext(s).unwrap();
+        assert_eq!(
+            x,
+            super::TypeOfConnection::File(None, FilePaths::Absolute("/abs/dir".to_string()))
+        );
+        // let x = parse_url_ext("/the/path?ade").unwrap();
+        // warn!("test_add_two {:?}", x);
+    }
+
+    #[test]
+    fn url_parse_6() {
+        // without end /
+        let s = "/abs/dir/";
+        let x = super::parse_url_ext(s).unwrap();
+        assert_eq!(
+            x,
+            super::TypeOfConnection::File(None, FilePaths::Absolute("/abs/dir".to_string()))
+        );
+    }
+
+    #[test]
+    fn url_parse_7() {
+        let s = "file:/abs/dir/";
+        let x = super::parse_url_ext(s).unwrap();
+        assert_eq!(
+            x,
+            super::TypeOfConnection::File(None, FilePaths::Absolute("/abs/dir".to_string()))
+        );
+    }
+    #[test]
+    fn url_parse_8() {
+        let s = "file://abs/dir/";
+        let x = super::parse_url_ext(s).unwrap();
+        assert_eq!(
+            x,
+            super::TypeOfConnection::File(None, FilePaths::Absolute("/abs/dir".to_string()))
+        );
+    }
+    #[test]
+    fn url_parse_9() {
+        let s = "file:///abs/dir/";
+        let x = super::parse_url_ext(s).unwrap();
+        assert_eq!(
+            x,
+            super::TypeOfConnection::File(None, FilePaths::Absolute("/abs/dir".to_string()))
+        );
+    }
+    #[test]
+    fn url_parse_10() {
+        let s = "file://./reldir/";
+        let x = super::parse_url_ext(s).unwrap();
+        assert_eq!(
+            x,
+            super::TypeOfConnection::File(None, FilePaths::Relative("reldir".to_string()))
+        );
     }
 }
 

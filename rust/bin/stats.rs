@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                 }
             }
 
-            if topic_name.as_dotted().contains(".clock") {
+            if topic_name.as_relative_url().contains("clock") {
                 let handle = spawn(listen_events(topic_name.clone(), md));
                 handles.push(handle);
             }
