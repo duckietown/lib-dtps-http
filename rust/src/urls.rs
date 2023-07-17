@@ -1,3 +1,4 @@
+use log::info;
 use url::Url;
 
 use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
@@ -56,17 +57,34 @@ pub fn parse_url_ext(s0: &str) -> DTPSR<TypeOfConnection> {
 
         let host_start = scheme_end + "://".len();
         if s0.contains(SPECIAL_CHAR) {
-            let path_start = s[host_start..].find('/').unwrap() + host_start;
-            let host = &s[host_start..path_start];
-            let path = (&s[path_start..].to_string()).clone();
+            let (socket_name, path) = match s[host_start..].find('/') {
+                None => {
+                    let path = "/".to_string();
+                    let host = s[host_start..].to_string().clone();
+                    let host = host.replace(SPECIAL_CHAR, "/");
 
-            let socket_name = host.to_string().replace(SPECIAL_CHAR, "/");
-            Ok(UNIX(UnixCon {
+                    (host, path)
+                }
+                Some(path_start0) => {
+                    let path_start = path_start0 + host_start;
+                    let path = (s[path_start..].to_string()).clone();
+
+                    let host = s[host_start..path_start].to_string().clone();
+
+                    let host = host.replace(SPECIAL_CHAR, "/");
+                    (host, path)
+                }
+            };
+            // let path_start = s[host_start..].find('/').unwrap() + host_start;
+            let con = UnixCon {
                 scheme,
                 socket_name,
-                path: path.clone(),
+                path,
                 query,
-            }))
+            };
+
+            info!("UnixCon: parsed {:?} as {:?}", s, con);
+            Ok(UNIX(con))
         } else {
             let path_start = s[host_start..].rfind('/').unwrap() + host_start;
             let socket_name = &s[host_start..path_start];
@@ -154,9 +172,40 @@ mod tests {
 
     // Bring the function into scope
 
+    use log::debug;
+
     #[test]
-    fn test_add_two() {
-        // let x = Url::parse("/the/path?ade").unwrap();
+    fn url_parse_p1() {
+        let s = "http+unix://%2Fsockets%2Fargo%2Fnode1%2F_node/";
+        let x = super::parse_url_ext(s).unwrap();
+        eprintln!("test_p1 {s:?} -> {x:?}");
+        assert_eq!(
+            x,
+            super::TypeOfConnection::UNIX(super::UnixCon {
+                scheme: "http+unix".to_string(),
+                socket_name: "/sockets/argo/node1/_node".to_string(),
+                path: "/".to_string(),
+                query: None,
+            })
+        );
+        // let x = parse_url_ext("/the/path?ade").unwrap();
+        // warn!("test_add_two {:?}", x);
+    }
+    #[test]
+    fn url_parse_p2() {
+        // without end /
+        let s = "http+unix://%2Fsockets%2Fargo%2Fnode1%2F_node";
+        let x = super::parse_url_ext(s).unwrap();
+        debug!("test_p1 {s:?} {x:?}");
+        assert_eq!(
+            x,
+            super::TypeOfConnection::UNIX(super::UnixCon {
+                scheme: "http+unix".to_string(),
+                socket_name: "/sockets/argo/node1/_node".to_string(),
+                path: "/".to_string(),
+                query: None,
+            })
+        );
         // let x = parse_url_ext("/the/path?ade").unwrap();
         // warn!("test_add_two {:?}", x);
     }

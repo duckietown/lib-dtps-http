@@ -254,7 +254,7 @@ pub struct ForwardingStep {
     pub performance: LinkBenchmark,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UnixCon {
     pub scheme: String,
     pub socket_name: String,
@@ -275,7 +275,7 @@ impl Display for UnixCon {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TypeOfConnection {
     /// a
     TCP(Url),

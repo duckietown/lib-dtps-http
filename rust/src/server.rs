@@ -329,6 +329,12 @@ impl DTPSServer {
 
         for (i, unix_path) in unix_paths.iter().enumerate() {
             let the_path = Path::new(&unix_path);
+            warn!("Opening socket on: {the_path:?}");
+            let dirname = the_path.parent().unwrap();
+            if !dirname.exists() {
+                warn!("Creating dirname: {dirname:?}");
+                std::fs::create_dir_all(dirname).unwrap();
+            }
             // remove the socket if it exists
             if the_path.exists() {
                 warn!("removing existing socket: {:?}", unix_path);
