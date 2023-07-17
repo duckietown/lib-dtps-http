@@ -245,20 +245,20 @@ impl ResolveDataSingle for TypeOFSource {
                 Ok(ResolvedData::RawData(rd))
             }
             TypeOFSource::OurQueue(q, _, _) => {
-                if false && q.is_root() {
-                    let ss = ss_mutex.lock().await;
-                    let index_internal = ss.create_topic_index();
-                    let index = index_internal.to_wire(None);
-
-                    let cbor_bytes = serde_cbor::to_vec(&index).unwrap();
-                    let raw_data = RawData {
-                        content: Bytes::from(cbor_bytes),
-                        content_type: CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(),
-                    };
-                    Ok(ResolvedData::RawData(raw_data))
-                } else {
-                    our_queue(q, ss_mutex).await
-                }
+                // if false && q.is_root() {
+                //     let ss = ss_mutex.lock().await;
+                //     let index_internal = ss.create_topic_index();
+                //     let index = index_internal.to_wire(None);
+                //
+                //     let cbor_bytes = serde_cbor::to_vec(&index).unwrap();
+                //     let raw_data = RawData {
+                //         content: Bytes::from(cbor_bytes),
+                //         content_type: CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(),
+                //     };
+                //     Ok(ResolvedData::RawData(raw_data))
+                // } else {
+                our_queue(q, ss_mutex).await
+                // }
             }
             TypeOFSource::Compose(sc) => {
                 let index = self.get_meta_index(presented_as, ss_mutex).await?;
