@@ -2,12 +2,19 @@ use std::collections::HashMap;
 use std::string::ToString;
 
 use bytes::Bytes;
+use futures::stream::{SplitSink, SplitStream};
+use futures::SinkExt;
+use futures::StreamExt;
 use log::{debug, error};
 use maud::{html, PreEscaped};
+use tokio::spawn;
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use warp::http::header;
 use warp::hyper::Body;
 use warp::reply::Response;
+use warp::ws::Message;
 
 use crate::cbor_manipulation::display_printable;
 use crate::html_utils::make_html;
@@ -16,13 +23,16 @@ use crate::signals_logic::{
     TypeOFSource,
 };
 use crate::utils::{divide_in_components, get_good_url_for_components};
+use crate::websocket_signals::MsgClientToServer;
 use crate::{
-    error_with_info, get_accept_header, handle_topic_post, handle_websocket_generic,
-    handler_topic_generic, object_queues, put_alternative_locations, put_common_headers,
-    root_handler, serve_static_file_path, HandlersResponse, ObjectQueue, ServerStateAccess,
-    TopicName, TopicsIndexInternal, HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID,
+    do_receiving, error_with_info, get_accept_header, handle_topic_post, handle_websocket_queue,
+    handler_topic_generic, not_implemented, object_queues, put_alternative_locations,
+    put_common_headers, receive_from_websocket, root_handler, serve_static_file_path,
+    HandlersResponse, ObjectQueue, ServerStateAccess, TopicName, TopicsIndexInternal, DTPSR,
+    EVENTS_SUFFIX, EVENTS_SUFFIX_DATA, HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID,
     HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
 };
+
 //
 // fn format_query(params: &HashMap<String, String>) -> Option<String> {
 //     if params.is_empty() {
@@ -169,10 +179,10 @@ pub async fn serve_master_head(
         HeaderValue::from_str(x.tr.unique_id.as_str()).unwrap(),
     );
 
-    h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static("events/"));
+    h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static(EVENTS_SUFFIX));
     h.insert(
         HEADER_SEE_EVENTS_INLINE_DATA,
-        HeaderValue::from_static("events/?send_data=1"),
+        HeaderValue::from_static(EVENTS_SUFFIX_DATA),
     );
 
     let suffix = topic_name.as_relative_url();
@@ -576,10 +586,10 @@ pub async fn visualize_data(
         HeaderValue::from_str(content_type).unwrap(),
     );
     // see events
-    h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static("events/"));
+    h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static(EVENTS_SUFFIX));
     h.insert(
         HEADER_SEE_EVENTS_INLINE_DATA,
-        HeaderValue::from_static("events/?send_data=1"),
+        HeaderValue::from_static(EVENTS_SUFFIX_DATA),
     );
 
     // put_common_headers(&ss, resp.headers_mut());
@@ -588,244 +598,113 @@ pub async fn visualize_data(
 }
 
 pub async fn handle_websocket_generic2(
-    path: warp::path::FullPath,
+    path: String,
     ws: warp::ws::WebSocket,
     state: ServerStateAccess,
     send_data: bool,
 ) -> () {
+    let (mut ws_tx, ws_rx) = ws.split();
+    let (receiver, join_handle) = receive_from_websocket(ws_rx);
+
+    // let msg = Message::text("closing with error");
+    //            let _ = ws_tx.send(msg).await.map_err(|e| {
+    //                error_with_info!("Cnnot send closing error: {:?}", e);
+    //            });
+    //            let msg = Message::close();
+    //            let _ = ws_tx.send(msg).await.map_err(|e| {
+    //                error_with_info!("Cnnot send closing error: {:?}", e);
+    //            });
+    //    return;
+
+    match handle_websocket_generic2_(path, &mut ws_tx, receiver, state, send_data).await {
+        Ok(_) => (),
+        Err(e) => {
+            let close_code: u16 = 1006; // Close codes 4000-4999 are available for private use
+            let s = format!("handle_websocket_generic2: {}", e);
+            error_with_info!("{s}");
+            let msg = Message::text("closing with error");
+            let _ = ws_tx.send(msg).await.map_err(|e| {
+                error_with_info!("Cnnot send closing error: {:?}", e);
+            });
+            let msg = Message::close_with(close_code, s);
+            let _ = ws_tx.send(msg).await.map_err(|e| {
+                error_with_info!("Cnnot send closing error: {:?}", e);
+            });
+        }
+    }
+
+    let _ = join_handle.await;
+}
+
+pub async fn handle_websocket_generic2_(
+    path: String,
+    ws_tx: &mut SplitSink<warp::ws::WebSocket, Message>,
+    // ws_rx: SplitStream<warp::ws::WebSocket>,
+    receiver: UnboundedReceiverStream<MsgClientToServer>,
+    state: ServerStateAccess,
+    send_data: bool,
+) -> DTPSR<()> {
     let referrer = None;
     let query = HashMap::new();
     // remove the last "events"
-    let components = divide_in_components(path.as_str(), '/');
+    let components = divide_in_components(&path, '/');
     // remove last onw
-    let components = components[0..components.len() - 1].to_vec();
+    // let components = components[0..components.len() - 1].to_vec();
 
-    if components.len() == 0 {
-        return handle_websocket_generic(ws, state, TopicName::root(), send_data).await;
-    }
+    // if components.len() == 0 {
+    //     return handle_websocket_queue(ws_tx, ws_rx, state, TopicName::root(), send_data).await;
+    // }
     // debug!("handle_websocket_generic2: {:?}", components);
-    let matched = interpret_path(path.as_str(), &query, &referrer, state.clone()).await;
-    debug!("events: matched: {:?}", matched);
+    let ds = interpret_path(&path, &query, &referrer, state.clone()).await?;
+    // debug!("events: matched: {:?}", matched);
 
-    let ds = match matched {
-        Ok(ds) => ds,
-        Err(_) => {
-            ws.close().await.unwrap();
-            // how to send error?
-            return;
+    // let ds = match matched {
+    //     Ok(ds) => ds,
+    //     Err(_) => {
+    //         ws.close().await.unwrap();
+    //         // how to send error?
+    //         not_available!(format!("not available: {:?}", path.as_str()))
+    //     }
+    // };
+
+    return match ds {
+        TypeOFSource::Compose(sc) => {
+            if sc.is_root {
+                let topic_name = TopicName::root();
+                spawn(do_receiving(topic_name.clone(), state.clone(), receiver));
+
+                return handle_websocket_queue(ws_tx, state, topic_name, send_data).await;
+            } else {
+                not_implemented!("handle_websocket_generic2 not implemented TypeOFSource::Compose")
+            }
         }
-    };
-
-    match ds {
         TypeOFSource::OurQueue(topic_name, _, _) => {
-            return handle_websocket_generic(ws, state, topic_name, send_data).await;
-        }
-        TypeOFSource::Compose(_sc) => {
-            error_with_info!("handle_websocket_generic2 not implemented TypeOFSource::Compose");
-            return;
+            spawn(do_receiving(topic_name.clone(), state.clone(), receiver));
+
+            return handle_websocket_queue(ws_tx, state, topic_name, send_data).await;
         }
         TypeOFSource::Digest(_digest, _content_type) => {
-            error_with_info!("handle_websocket_generic2 not implemented TypeOFSource::Digest");
-            return;
+            not_implemented!("handle_websocket_generic2 not implemented TypeOFSource::Digest")
         }
         TypeOFSource::ForwardedQueue(_) => {
-            error_with_info!("handle_websocket_generic2 not implemented for {ds:?}");
-            return;
+            not_implemented!("handle_websocket_generic2 not implemented for {ds:?}")
         }
         TypeOFSource::Transformed(_, _) => {
-            error_with_info!("handle_websocket_generic2 not implemented for {ds:?}");
-            return;
+            not_implemented!("handle_websocket_generic2 not implemented for {ds:?}")
         }
         TypeOFSource::Deref(_) => {
-            error_with_info!("handle_websocket_generic2 not implemented for {ds:?}");
-            return;
+            not_implemented!("handle_websocket_generic2 not implemented for {ds:?}")
         }
         TypeOFSource::OtherProxied(_) => {
-            error_with_info!("handle_websocket_generic2 not implemented {ds:?}");
-            return;
+            not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
         }
         TypeOFSource::MountedDir(..) => {
-            error_with_info!("handle_websocket_generic2 not implemented {ds:?}");
+            not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
         }
         TypeOFSource::MountedFile(..) => {
-            error_with_info!("handle_websocket_generic2 not implemented {ds:?}");
+            not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
         }
-    }
-
-    //
-    // // debug!("handle_websocket_generic: {}", topic_name);
-    // let (mut ws_tx, mut ws_rx) = ws.split();
-    // let channel_info_message: MsgServerToClient;
-    // let mut rx2: Receiver<usize>;
-    // {
-    //     // important: release the lock
-    //     let ss0 = state.lock().await;
-    //
-    //     let oq: &ObjectQueue;
-    //     match ss0.oqs.get(&topic_name) {
-    //         None => {
-    //             // TODO: we shouldn't be here
-    //             ws_tx.close().await.unwrap();
-    //             return;
-    //         }
-    //         Some(y) => oq = y,
-    //     }
-    //     match oq.sequence.last() {
-    //         None => {}
-    //         Some(last) => {
-    //             let the_availability = vec![ResourceAvailabilityWire {
-    //                 url: format!("../data/{}/", last.digest),
-    //                 available_until: epoch() + 60.0,
-    //             }];
-    //             let nchunks = if send_data { 1 } else { 0 };
-    //             let dr = DataReady {
-    //                 unique_id: oq.tr.unique_id.clone(),
-    //                 origin_node: oq.tr.origin_node.clone(),
-    //                 sequence: last.index,
-    //                 time_inserted: last.time_inserted,
-    //                 digest: last.digest.clone(),
-    //                 content_type: last.content_type.clone(),
-    //                 content_length: last.content_length.clone(),
-    //                 clocks: last.clocks.clone(),
-    //                 availability: the_availability,
-    //                 chunks_arriving: nchunks,
-    //             };
-    //             let m = MsgServerToClient::DataReady(dr);
-    //             let message = warp::ws::Message::binary(serde_cbor::to_vec(&m).unwrap());
-    //             ws_tx.send(message).await.unwrap();
-    //
-    //             if send_data {
-    //                 let message_data = oq.data.get(&last.digest).unwrap();
-    //                 let message = warp::ws::Message::binary(message_data.content.clone());
-    //                 ws_tx.send(message).await.unwrap();
-    //             }
-    //         }
-    //     }
-    //
-    //     let c = ChannelInfo {
-    //         queue_created: 0,
-    //         num_total: 0,
-    //         newest: None,
-    //         oldest: None,
-    //     };
-    //     channel_info_message = MsgServerToClient::ChannelInfo(c);
-    //
-    //     rx2 = oq.tx.subscribe();
-    // }
-    // let state2_for_receive = state.clone();
-    // let topic_name2 = topic_name.clone();
-    //
-    // tokio::spawn(async move {
-    //     let topic_name = topic_name2.clone();
-    //     loop {
-    //         match ws_rx.next().await {
-    //             None => {
-    //                 // debug!("ws_rx.next() returned None");
-    //                 // finished = true;
-    //                 break;
-    //             }
-    //             Some(Ok(msg)) => {
-    //                 if msg.is_binary() {
-    //                     let raw_data = msg.clone().into_bytes();
-    //                     // let v: serde_cbor::Value = serde_cbor::from_slice(&raw_data).unwrap();
-    //                     //
-    //                     // debug!("ws_rx.next() returned {:#?}", v);
-    //                     //
-    //                     let ms: MsgClientToServer = match serde_cbor::from_slice(&raw_data) {
-    //                         Ok(x) => x,
-    //                         Err(err) => {
-    //                             debug!("ws_rx.next() cannot nterpret error {:#?}", err);
-    //                             continue;
-    //                         }
-    //                     };
-    //                     debug!("ws_rx.next() returned {:#?}", ms);
-    //                     match ms {
-    //                         MsgClientToServer::RawData(rd) => {
-    //                             let mut ss0 = state2_for_receive.lock().await;
-    //
-    //                             // let oq: &ObjectQueue=  ss0.oqs.get(topic_name.as_str()).unwrap();
-    //
-    //                             let _ds =
-    //                                 ss0.publish(&topic_name, &rd.content, &rd.content_type, None);
-    //                         }
-    //                     }
-    //                 }
-    //             }
-    //             Some(Err(err)) => {
-    //                 debug!("ws_rx.next() returned error {:#?}", err);
-    //                 // match err {
-    //                 //     Error { .. } => {}
-    //                 // }
-    //             }
-    //         }
-    //     }
-    // });
-    // let message = warp::ws::Message::binary(serde_cbor::to_vec(&channel_info_message).unwrap());
-    // match ws_tx.send(message).await {
-    //     Ok(_) => {}
-    //     Err(e) => {
-    //         debug!("Error sending ChannelInfo message: {}", e);
-    //     }
-    // }
-    //
-    // // now wait for one message at least
-    //
-    // loop {
-    //     let r = rx2.recv().await;
-    //     let message;
-    //     match r {
-    //         Ok(_message) => message = _message,
-    //         Err(RecvError::Closed) => break,
-    //         Err(RecvError::Lagged(_)) => {
-    //             debug!("Lagged!");
-    //             continue;
-    //         }
-    //     }
-    //
-    //     let ss2 = state.lock().await;
-    //     let oq2 = ss2.oqs.get(&topic_name).unwrap();
-    //     let this_one: &DataSaved = oq2.sequence.get(message).unwrap();
-    //     let the_availability = vec![ResourceAvailabilityWire {
-    //         url: format!("../data/{}/", this_one.digest),
-    //         available_until: epoch() + 60.0,
-    //     }];
-    //     let nchunks = if send_data { 1 } else { 0 };
-    //     let dr2 = DataReady {
-    //         origin_node: oq2.tr.origin_node.clone(),
-    //         unique_id: oq2.tr.unique_id.clone(),
-    //         sequence: this_one.index,
-    //         time_inserted: this_one.time_inserted,
-    //         digest: this_one.digest.clone(),
-    //         content_type: this_one.content_type.clone(),
-    //         content_length: this_one.content_length,
-    //         clocks: this_one.clocks.clone(),
-    //         availability: the_availability,
-    //         chunks_arriving: nchunks,
-    //     };
-    //
-    //     let out_message: MsgServerToClient = MsgServerToClient::DataReady(dr2);
-    //
-    //     let message = warp::ws::Message::binary(serde_cbor::to_vec(&out_message).unwrap());
-    //     match ws_tx.send(message).await {
-    //         Ok(_) => {}
-    //         Err(e) => {
-    //             debug!("Error sending DataReady message: {}", e);
-    //             break; // TODO: do better handling
-    //         }
-    //     }
-    //     if send_data {
-    //         let message_data = oq2.data.get(&this_one.digest).unwrap();
-    //         let message = warp::ws::Message::binary(message_data.content.clone());
-    //         match ws_tx.send(message).await {
-    //             Ok(_) => {}
-    //             Err(e) => {
-    //                 debug!("Error sending binary data message: {}", e);
-    //                 break; // TODO: do better handling
-    //             }
-    //         }
-    //     }
-    // }
-    // debug!("handle_websocket_generic: {} - done", topic_name);
+    };
 }
 
 pub fn make_index_html(index: &TopicsIndexInternal) -> PreEscaped<String> {

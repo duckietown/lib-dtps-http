@@ -300,14 +300,14 @@ macro_rules! context {
 #[macro_export]
 macro_rules! internal_assertion {
     ($($u:expr),* $(,)?) => {{
-        DTPSError::internal_assertion(crate::add_info!($($u),*) )
+        crate::DTPSError::internal_assertion(crate::add_info!($($u),*) )
     }};
 }
 
 #[macro_export]
 macro_rules! not_implemented {
     ($($u:expr),* $(,)?) => {{
-        DTPSError::not_implemented(crate::add_info!($($u),*) )
+        crate::DTPSError::not_implemented(crate::add_info!($($u),*) )
     }};
 }
 #[macro_export]

@@ -42,8 +42,8 @@ impl Transforms {
 
 #[derive(Debug, Clone)]
 pub struct SourceComposition {
-    is_root: bool,
-    compose: HashMap<Vec<String>, Box<TypeOFSource>>,
+    pub is_root: bool,
+    pub compose: HashMap<Vec<String>, Box<TypeOFSource>>,
 }
 
 impl DataProps for SourceComposition {
@@ -881,9 +881,9 @@ pub async fn interpret_path(
         iterate_type_of_sources(&ss)
     };
 
-    log::debug!(" = all_sources =\n{:#?} ", all_sources);
+    // log::debug!(" = all_sources =\n{:#?} ", all_sources);
     for (k, source) in all_sources.iter() {
-        debug!(" = k = {:?} ", k);
+        // debug!(" = k = {:?} ", k);
         // let topic_components = divide_in_components(&k, '.');
         let topic_components = k.as_components();
         subtopics_vec.push(topic_components.clone());
@@ -897,7 +897,10 @@ pub async fn interpret_path(
             Some((_, rest)) => {
                 let mut cur = source.clone();
                 for a in rest.iter() {
-                    cur = cur.get_inside(&a)?;
+                    cur = context!(
+                        cur.get_inside(&a),
+                        "interpret_path: cannot match for {k:?} rest: {rest:?}",
+                    )?;
                 }
                 return Ok(cur);
                 // Ok(TypeOFSource::Transformed(
@@ -915,11 +918,11 @@ pub async fn interpret_path(
             Some(rest) => rest,
         };
 
-        debug!("pushing: {k:?}");
+        // debug!("pushing: {k:?}");
         subtopics.push((k.clone(), matched, rest, source.clone()));
     }
 
-    debug!("subtopics: {subtopics:?}");
+    // debug!("subtopics: {subtopics:?}");
     if subtopics.len() == 0 {
         let s = format!(
             "Cannot find a matching topic for {:?}.\nMy Topics: {:?}\n",
@@ -939,7 +942,7 @@ pub async fn interpret_path(
         // let source_type = TypeOFSource::OurQueue(topic_name.clone(), p1, oq.tr.properties.clone());
         sc.compose.insert(rest.clone(), Box::new(source));
     }
-    log::debug!("  \n{sc:#?} ");
+    // log::debug!("  \n{sc:#?} ");
     Ok(TypeOFSource::Compose(sc))
 }
 

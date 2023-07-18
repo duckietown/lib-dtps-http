@@ -47,7 +47,7 @@ function subscribeWebSocket(url, fieldId) {
 
     // Listen for messages
     socket.addEventListener('message', async function (event) {
-
+        console.log('Message from server: ', event);
         let message0 = await convert(event);
 
         if ('DataReady' in message0) {
@@ -109,8 +109,11 @@ async function convert(event) {
             return CBOR.decode(arrayBuffer);
         } catch (error) {
             console.error('Error reading blob: ', error);
-            return 42;
+            return  {'Error': error};
         }
+    } else {
+        console.error('Unknown data type: ', event.data);
+        return  {'Unknown data type': event.data};
     }
 
 }
@@ -128,7 +131,7 @@ function readFileAsArrayBuffer(blob) {
 
 
 document.addEventListener("DOMContentLoaded", function () {
-    let s = ((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + window.location.pathname + "events/";
+    let s = ((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + window.location.pathname + ":events";
 
     console.log("subscribing to: ", s);
 

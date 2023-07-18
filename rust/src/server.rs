@@ -1,27 +1,33 @@
-use chrono::Local;
-use clap::Parser;
-use futures::{SinkExt, StreamExt};
-use indent::indent_all_with;
-use log::{debug, error, info, warn};
-use maud::PreEscaped;
-use maud::{html, DOCTYPE};
-use serde::{Deserialize, Serialize};
-use serde_yaml;
 use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::string::ToString;
 use std::sync::Arc as StdArc;
+
+use chrono::Local;
+use clap::Parser;
+use futures::stream::{SplitSink, SplitStream};
+use futures::{SinkExt, StreamExt};
+use indent::indent_all_with;
+use log::{debug, error, info, warn};
+use maud::PreEscaped;
+use maud::{html, DOCTYPE};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_yaml;
 use tokio::net::UnixListener;
 use tokio::process::Command;
 use tokio::signal::unix::SignalKind;
 use tokio::spawn;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Mutex as TokioMutex;
+use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
-use tokio_stream::wrappers::UnixListenerStream;
+use tokio_stream::wrappers::{UnboundedReceiverStream, UnixListenerStream};
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use warp::http::header;
 use warp::hyper::Body;
@@ -43,8 +49,8 @@ use crate::websocket_signals::{
     ChannelInfo, ChannelInfoDesc, MsgClientToServer, MsgServerToClient,
 };
 use crate::{
-    error_other, error_with_info, format_digest_path, handle_rejection, parse_url_ext, utils,
-    DTPSError, TopicName, DTPSR,
+    error_other, error_with_info, format_digest_path, handle_rejection, not_available,
+    parse_url_ext, utils, DTPSError, TopicName, DTPSR,
 };
 
 pub type HandlersResponse = Result<http::Response<hyper::Body>, Rejection>;
@@ -117,112 +123,30 @@ impl DTPSServer {
             .and(warp::header::headers_cloned())
             .and_then(serve_master_head);
 
-        // let static_route = warp::path("static")
-        //     .and(warp::path::tail())
-        //     .and_then(serve_static_file);
-        //
-        // let static_route_empty = warp::path("static").and_then(serve_static_file_empty);
-        //
-        // let static_route2 = warp::path!("topics" / String / "static")
-        //     .and(warp::path::tail())
-        //     // .map(|tn: String, path: warp::path::Tail| {
-        //     //     debug!("static_route2: tn = {} path={}",tn, path.as_str());
-        //     //     path
-        //     // })
-        //     .and_then(serve_static_file2);
-
-        // log::info!(" {:?}", STATIC_FILES);
-
-        // root GET /
-        // let root_route = endbar()
-        //     .and(clone_access.clone())
-        //     .and(warp::header::headers_cloned())
-        //     .and_then(root_handler);
-        //
-        // let topic_address = warp::path!("topics" / String).and(endbar());
-
-        // GEt request
-        // let topic_generic_route_get = topic_address
-        //     .and(warp::get())
-        //     .and(clone_access.clone())
-        //     .and(warp::header::headers_cloned())
-        //     .and_then(handler_topic_generic);
-
-        // HEAD request
-        // let topic_generic_route_head = topic_address
-        //     .and(warp::head())
-        //     .and(clone_access.clone())
-        //     .and_then(handler_topic_generic_head);
-
-        // POST request
-        // let topic_post = topic_address
-        //     .and(warp::post())
-        //     .and(clone_access.clone())
-        //     .and(warp::header::headers_cloned())
-        //     .and(warp::body::bytes())
-        //     .and_then(handle_topic_post);
-
-        // GET request for data
-        // let topic_generic_route_data = warp::get()
-        //     .and(warp::path!("topics" / String / "data" / String))
-        //     .and(endbar())
-        //     .and(clone_access.clone())
-        //     .and(warp::header::headers_cloned())
-        //     .and_then(handler_topic_generic_data);
-
-        // websockets for events
-        // let topic_generic_events_route = warp::path!("topics" / String / "events")
-        //     .and(endbar())
-        //     .and(clone_access.clone())
-        //     .and_then(check_exists)
-        //     .and(warp::query::<EventsQuery>())
-        //     .and(warp::ws())
-        //     .and(clone_access.clone())
-        //     // .and_then(handle_websocket_generic_pre);
-        //     .map({
-        //         move |c: String,
-        //               q: EventsQuery,
-        //               ws: warp::ws::Ws,
-        //               state1: ServerStateAccess| {
-        //             let send_data = match q.send_data {
-        //                 Some(x) => x != 0,
-        //                 None => false,
-        //             };
-        //             ws.on_upgrade(move |socket| {
-        //                 handle_websocket_generic(socket, state1, c, send_data)
-        //             })
-        //         }
-        //     });
-
         let topic_generic_events_route2 = warp::path::full()
             .and_then(|path: warp::path::FullPath| async move {
                 let path1 = path.as_str();
                 let segments: Vec<String> = divide_in_components(path1, '/');
                 let last = segments.last();
-                if last == Some(&"events".to_string()) {
-                    // debug!("topic_generic_events_route2: path={} OK ", path.as_str());
-                    Ok(path)
+                if last == Some(&EVENTS_SUFFIX.to_string()) {
+                    let start = path.as_str().rfind(EVENTS_SUFFIX).unwrap();
+                    let part = &path.as_str()[..start];
+                    // debug!("websocket raw {path1:?} -> {part:?}");
+                    Ok(part.to_string())
                 } else {
-                    // debug!(
-                    //     "topic_generic_events_route2: path={} NOT MATCH {:?}",
-                    //     path.as_str(),
-                    //     last
-                    // );
-                    Err(warp::reject::not_found())
+                    Err(warp::reject::not_found()) // should be not_available
                 }
             })
             .and(clone_access.clone())
             .and(warp::query::<EventsQuery>())
             .and(warp::ws())
             .map({
-                move |path: warp::path::FullPath,
-                      state1: ServerStateAccess,
-                      q: EventsQuery,
-                      ws: warp::ws::Ws| {
+                move |path: String, state1: ServerStateAccess, q: EventsQuery, ws: warp::ws::Ws| {
                     let send_data = match q.send_data {
                         Some(x) => x != 0,
                         None => false,
                     };
+                    let path = path.to_string();
                     ws.on_upgrade(move |socket| {
                         handle_websocket_generic2(path, socket, state1, send_data)
                     })
@@ -664,14 +588,15 @@ pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> Ha
     }
 }
 
-pub async fn handle_websocket_generic(
-    ws: warp::ws::WebSocket,
+pub async fn handle_websocket_queue(
+    ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
+    // ws_rx: SplitStream<warp::ws::WebSocket>,
     state: ServerStateAccess,
     topic_name: TopicName,
     send_data: bool,
-) -> () {
-    // debug!("handle_websocket_generic: {}", topic_name);
-    let (mut ws_tx, mut ws_rx) = ws.split();
+) -> DTPSR<()> {
+    // debug!("handle_websocket_queue: {}", topic_name);
+
     let channel_info_message: MsgServerToClient;
     let mut rx2: Receiver<usize>;
     {
@@ -682,8 +607,8 @@ pub async fn handle_websocket_generic(
         match ss0.oqs.get(&topic_name) {
             None => {
                 // TODO: we shouldn't be here
-                ws_tx.close().await.unwrap();
-                return;
+                // ws_tx.close().await.unwrap();
+                return not_available!("topic not found");
             }
             Some(y) => oq = y,
         }
@@ -749,51 +674,6 @@ pub async fn handle_websocket_generic(
     let state2_for_receive = state.clone();
     let topic_name2 = topic_name.clone();
 
-    spawn(async move {
-        let topic_name = topic_name2.clone();
-        loop {
-            match ws_rx.next().await {
-                None => {
-                    // debug!("ws_rx.next() returned None");
-                    // finished = true;
-                    break;
-                }
-                Some(Ok(msg)) => {
-                    if msg.is_binary() {
-                        let raw_data = msg.clone().into_bytes();
-                        // let v: serde_cbor::Value = serde_cbor::from_slice(&raw_data).unwrap();
-                        //
-                        // debug!("ws_rx.next() returned {:#?}", v);
-                        //
-                        let ms: MsgClientToServer = match serde_cbor::from_slice(&raw_data) {
-                            Ok(x) => x,
-                            Err(err) => {
-                                debug!("ws_rx.next() cannot nterpret error {:#?}", err);
-                                continue;
-                            }
-                        };
-                        debug!("ws_rx.next() returned {:#?}", ms);
-                        match ms {
-                            MsgClientToServer::RawData(rd) => {
-                                let mut ss0 = state2_for_receive.lock().await;
-
-                                // let oq: &ObjectQueue=  ss0.oqs.get(topic_name.as_str()).unwrap();
-
-                                let _ds =
-                                    ss0.publish(&topic_name, &rd.content, &rd.content_type, None);
-                            }
-                        }
-                    }
-                }
-                Some(Err(err)) => {
-                    debug!("ws_rx.next() returned error {:#?}", err);
-                    // match err {
-                    //     Error { .. } => {}
-                    // }
-                }
-            }
-        }
-    });
     let message = warp::ws::Message::binary(serde_cbor::to_vec(&channel_info_message).unwrap());
     match ws_tx.send(message).await {
         Ok(_) => {}
@@ -859,7 +739,8 @@ pub async fn handle_websocket_generic(
             }
         }
     }
-    // debug!("handle_websocket_generic: {} - done", topic_name);
+    Ok(())
+    // debug!("handle_websocket_queue: {} - done", topic_name);
 }
 
 pub fn get_header_with_default(headers: &HeaderMap, key: &str, default: &str) -> String {
@@ -1224,10 +1105,10 @@ async fn handler_topic_generic_data(
         HeaderValue::from_str(content_type.clone().as_str()).unwrap(),
     );
     // see events
-    h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static("events/"));
+    h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static(EVENTS_SUFFIX));
     h.insert(
         HEADER_SEE_EVENTS_INLINE_DATA,
-        HeaderValue::from_static("events/?send_data=1"),
+        HeaderValue::from_static(EVENTS_SUFFIX_DATA),
     );
 
     put_common_headers(&ss, resp.headers_mut());
@@ -1369,5 +1250,92 @@ async fn clock_go(state: ServerStateAccess, topic_name: TopicName, interval_s: f
         let _inserted = ss.publish_json(&topic_name, &s, None);
 
         // debug!("inserted {}: {:?}", topic_name, inserted);
+    }
+}
+
+pub fn receive_from_websocket<T: DeserializeOwned + Clone + Send + 'static>(
+    ws_rx: SplitStream<warp::ws::WebSocket>,
+) -> (UnboundedReceiverStream<T>, JoinHandle<()>) {
+    let (tx, rx) = mpsc::unbounded_channel();
+
+    let handle = tokio::spawn(show_errors("websocket".to_string(), pull_(ws_rx, tx)));
+
+    let stream = UnboundedReceiverStream::new(rx);
+    (stream, handle)
+}
+
+pub async fn pull_<T: DeserializeOwned + Clone + Send>(
+    mut ws_rx: SplitStream<warp::ws::WebSocket>,
+    tx: UnboundedSender<T>,
+) -> DTPSR<()> {
+    loop {
+        match ws_rx.next().await {
+            None => {
+                // debug!("ws_rx.next() returned None");
+                // finished = true;
+                break;
+            }
+            Some(Ok(msg)) => {
+                if msg.is_binary() {
+                    let raw_data = msg.as_bytes().to_vec().clone();
+                    // let v: serde_cbor::Value = serde_cbor::from_slice(&raw_data).unwrap();
+                    //
+                    // debug!("ws_rx.next() returned {:#?}", v);
+                    //
+
+                    let ms: T = match serde_cbor::from_slice(raw_data.as_slice()) {
+                        Ok(x) => x,
+                        Err(err) => {
+                            debug!("ws_rx.next() cannot interpret error {:#?}", err);
+                            continue;
+                        }
+                    };
+                    // let c = serde_cbor::to_vec(&ms).unwrap();
+                    tx.send(ms.clone()).unwrap();
+                    // debug!("ws_rx.next() returned {:#?}", ms);
+                    // match ms {
+                    //     MsgClientToServer::RawData(rd) => {
+                    //         let mut ss0 = ss_mutex.lock().await;
+                    //
+                    //         // let oq: &ObjectQueue=  ss0.oqs.get(topic_name.as_str()).unwrap();
+                    //
+                    //         let _ds =
+                    //             ss0.publish(&topic_name, &rd.content, &rd.content_type, None);
+                    //     }
+                    // }
+                }
+            }
+            Some(Err(err)) => {
+                debug!("ws_rx.next() returned error {:#?}", err);
+                // match err {
+                //     Error { .. } => {}
+                // }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub async fn do_receiving(
+    topic_name2: TopicName,
+    ss_mutex: ServerStateAccess,
+    mut receiver: UnboundedReceiverStream<MsgClientToServer>,
+) {
+    let topic_name = topic_name2.clone();
+    loop {
+        match receiver.next().await {
+            None => {
+                debug!("do_receiving: receiver.next() returned None");
+                // finished = true;
+                break;
+            }
+            Some(MsgClientToServer::RawData(rd)) => {
+                let mut ss0 = ss_mutex.lock().await;
+
+                // let oq: &ObjectQueue=  ss0.oqs.get(topic_name.as_str()).unwrap();
+
+                let _ds = ss0.publish(&topic_name, &rd.content, &rd.content_type, None);
+            }
+        }
     }
 }
