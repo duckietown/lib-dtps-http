@@ -22,7 +22,9 @@ pub mod urls;
 mod utils;
 pub use utils::*;
 pub mod errors;
+mod websocket_abstractions;
 mod websocket_signals;
+
 pub use errors::*;
 
 pub use client::*;

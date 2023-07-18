@@ -1,12 +1,14 @@
 use std::any::Any;
+use std::fmt::Debug;
 use std::os::unix::fs::FileTypeExt;
 use std::time::Duration;
 
 use anyhow::Context;
+use async_trait::async_trait;
 use base64;
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
-use futures::StreamExt;
+
 use hex;
 use hyper;
 use hyper::Client;
@@ -14,16 +16,19 @@ use hyper_tls::HttpsConnector;
 use hyperlocal::UnixClientExt;
 use log::{debug, error, info};
 use rand::Rng;
-use tokio::net::UnixStream;
+use tokio::net::{TcpStream, UnixStream};
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
-use tokio_tungstenite::{client_async_with_config, connect_async};
+use tokio_tungstenite::{client_async_with_config, connect_async, MaybeTlsStream, WebSocketStream};
 use tungstenite::handshake::client::Request;
+use url::Url;
 use warp::reply::Response;
+use warp::ws::Message;
 
 use crate::constants::{
     HEADER_CONTENT_LOCATION, HEADER_NODE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA,
@@ -34,12 +39,13 @@ use crate::structures::{
 };
 use crate::urls::{join_ext, parse_url_ext};
 use crate::utils::time_nanos;
+use crate::websocket_abstractions::open_websocket_connection;
 use crate::websocket_signals::MsgServerToClient;
 use crate::TypeOfConnection::Same;
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
 use crate::{
     context, error_with_info, internal_assertion, not_available, not_implemented, not_reachable,
-    DTPSError, RawData, TopicName, CONTENT_TYPE_DTPS_INDEX, DTPSR,
+    show_errors, DTPSError, RawData, TopicName, UnixCon, CONTENT_TYPE_DTPS_INDEX, DTPSR,
 };
 
 /// Note: need to have use futures::{StreamExt} in scope to use this
@@ -52,7 +58,7 @@ pub async fn get_events_stream_inline(
     let stream = UnboundedReceiverStream::new(rx);
     (handle, stream)
 }
-
+use futures::StreamExt;
 pub async fn listen_events(which: TopicName, md: FoundMetadata) {
     // let (tx, rx) = mpsc::unbounded_channel();
     let inline_url = md.events_data_inline_url.unwrap().clone();
@@ -118,146 +124,25 @@ pub struct Notification {
     pub rd: RawData,
 }
 
-// async fn establish_stream(con: &TypeOfConnection) -> WebSocketStream<> {}
-
-#[derive(Debug)]
-enum EitherStream<A, B> {
-    UnixStream(A),
-    TCPStream(B),
-}
-
 pub async fn listen_events_url_inline(
     con: TypeOfConnection,
     tx: UnboundedSender<Notification>,
 ) -> DTPSR<()> {
-    let use_stream: EitherStream<_, _>;
-    match con.clone() {
-        TCP(mut url) => {
-            // debug!("connecting to {:?}", url_);
+    let wsc = open_websocket_connection(&con).await?;
 
-            // let mut url = md.events_data_inline_url.unwrap().clone();
-            // replace https with wss, and http with ws
-            if url.scheme() == "https" {
-                url.set_scheme("wss").unwrap();
-            } else if url.scheme() == "http" {
-                url.set_scheme("ws").unwrap();
-            } else {
-                panic!("unexpected scheme: {}", url.scheme());
-            }
-            let connection_res = connect_async(url.clone()).await;
-            // debug!("connection: {:#?}", connection);
-            let connection;
-            match connection_res {
-                Ok(c) => {
-                    connection = c;
-                }
-                Err(err) => {
-                    error_with_info!("could not connect to {}: {}", url, err);
-                    return Ok(());
-                }
-            }
-            let (ws_stream, response) = connection;
-            debug!("TCP response: {:#?}", response);
-
-            use_stream = EitherStream::TCPStream(ws_stream);
-        }
-
-        UNIX(uc) => {
-            let stream_res = UnixStream::connect(uc.socket_name.clone()).await;
-            let stream = match stream_res {
-                Ok(s) => s,
-                Err(err) => {
-                    return DTPSError::not_reachable(format!(
-                        "could not connect to {}: {}",
-                        uc.socket_name, err
-                    ));
-                }
-            };
-            // let ready = stream.ready(Interest::WRITABLE).await.unwrap();
-
-            let mut path = uc.path.clone();
-            match uc.query {
-                None => {}
-                Some(q) => {
-                    path.push_str("?");
-                    path.push_str(&q);
-                }
-            }
-            let connection_id = generate_websocket_key();
-
-            let url = format!("ws://localhost{}", path);
-            let request = Request::builder()
-                .uri(url)
-                .header("Host", "localhost")
-                .header("Upgrade", "websocket")
-                .header("Connection", "Upgrade")
-                .header("Sec-WebSocket-Key", connection_id)
-                .header("Sec-WebSocket-Version", "13")
-                .header("Host", "localhost")
-                .body(())
-                .unwrap();
-            let (socket_stream, response) = {
-                let config = WebSocketConfig {
-                    max_send_queue: None,
-                    max_message_size: None,
-                    max_frame_size: None,
-                    accept_unmasked_frames: false,
-                };
-                match client_async_with_config(request, stream, Some(config)).await {
-                    Ok(s) => s,
-                    Err(err) => {
-                        error_with_info!("could not connect to {}: {}", uc.socket_name, err);
-                        return DTPSError::other(format!(
-                            "could not connect to {}: {}",
-                            uc.socket_name, err
-                        ));
-                    }
-                }
-            };
-
-            debug!("WS response: {:#?}", response);
-            use_stream = EitherStream::UnixStream(socket_stream);
-        }
-        Relative(_, _) => {
-            return not_implemented!("Not expected! {con:?}");
-        }
-        Same() => {
-            return not_implemented!("Not expected! {con:?}");
-        }
-        TypeOfConnection::File(..) => {
-            return not_implemented!("Events not supported for {con:?}");
-        }
-    };
-
-    // debug!("Connected to the server");
-    // debug!("Response HTTP code: {}", response.status());
-    // debug!("Response contains the following headers:");
-    // for (header, value) in response.headers().iter() {
-    //     debug!("* {:?} {:?}", header, value);
-    // }
-
-    let mut read = match use_stream {
-        EitherStream::UnixStream(s) => EitherStream::UnixStream(s.split().1),
-        EitherStream::TCPStream(s) => EitherStream::TCPStream(s.split().1),
-    };
-
-    debug!("starting to listen to events for {} on {:?}", con, read);
+    // debug!("starting to listen to events for {} on {:?}", con, read);
     let mut index: u32 = 0;
+    let mut rx = wsc.get_incoming().await;
     loop {
-        let msg_res = match read {
-            EitherStream::UnixStream(ref mut s) => s.next().await,
-            EitherStream::TCPStream(ref mut s) => s.next().await,
-        };
-        let msg = match msg_res {
-            None => {
-                error_with_info!("unexpected end of stream");
-                break;
-            }
-            Some(x) => match x {
-                Ok(m) => m,
-                Err(err) => {
-                    error_with_info!("unexpected error: {}", err);
+        let msg = match rx.recv().await {
+            Ok(msg) => msg,
+            Err(e) => match e {
+                RecvError::Closed => {
                     break;
+                }
+                RecvError::Lagged(_) => {
+                    error_with_info!("lagged");
+                    continue;
                 }
             },
         };
@@ -309,23 +194,20 @@ pub async fn listen_events_url_inline(
             index += 1;
             let mut content: Vec<u8> = Vec::with_capacity(dr.content_length);
             for _ in 0..(dr.chunks_arriving) {
-                let msg_res = match read {
-                    EitherStream::UnixStream(ref mut s) => s.next().await,
-                    EitherStream::TCPStream(ref mut s) => s.next().await,
-                };
-                let msg = match msg_res {
-                    None => {
-                        error_with_info!("unexpected end of stream");
-                        break;
-                    }
-                    Some(x) => match x {
-                        Ok(m) => m,
-                        Err(err) => {
-                            error_with_info!("unexpected error: {}", err);
+                let msg = match rx.recv().await {
+                    Ok(msg) => msg,
+                    Err(e) => match e {
+                        RecvError::Closed => {
+                            error_with_info!("unexpected end of stream");
                             break;
+                        }
+                        RecvError::Lagged(_) => {
+                            error_with_info!("lagged");
+                            continue;
                         }
                     },
                 };
+
                 if msg.is_binary() {
                     let data = msg.into_data();
                     content.extend(data);
@@ -429,7 +311,7 @@ pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
 
     let ti = TopicsIndexInternal::from_wire(x0, con);
 
-    debug!("get_index: {:#?}\n {:#?}", con, ti);
+    // debug!("get_index: {:#?}\n {:#?}", con, ti);
     Ok(ti)
 }
 
@@ -699,9 +581,9 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
 fn string_from_header_value(header_value: &hyper::header::HeaderValue) -> String {
     header_value.to_str().unwrap().to_string()
 }
-
-fn generate_websocket_key() -> String {
-    let mut rng = rand::thread_rng();
-    let random_bytes: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
-    general_purpose::URL_SAFE_NO_PAD.encode(&random_bytes)
-}
+//
+// struct WebsocketOpen {
+//     pub tx: UnboundedSender<Notification>,
+//     pub rx: UnboundedReceiver<Notification>,
+//     pub join_handle: JoinHandle<DTPSR<()>>,
+// }

@@ -801,7 +801,7 @@ pub fn add_from_response(
     _connected_url: String,
 ) -> DTPSR<()> {
     // let mut l = hashmap! {};
-    debug!("topics_index: tii: \n{:#?}", tii);
+    // debug!("topics_index: tii: \n{:#?}", tii);
     for (its_topic_name, tr) in tii.topics.iter() {
         if its_topic_name.is_root() {
             continue; // TODO

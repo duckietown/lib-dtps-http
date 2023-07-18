@@ -54,6 +54,7 @@ indent = "0.1.1"
 colored = "2.0.4"
 tokio-reactor = "0.1.12"
 path-clean = "1.0.1"
+crossbeam = { version = "0.8.2", features = ["crossbeam-channel", "crossbeam-queue", "crossbeam-epoch", "crossbeam-deque"] }
 
 
 [target.'cfg(target_os = "wasi")'.dependencies]

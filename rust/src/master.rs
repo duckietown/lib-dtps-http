@@ -707,6 +707,8 @@ pub async fn handle_websocket_generic2_(
     };
 }
 
+pub fn handle_websocket_forwarded() {}
+
 pub fn make_index_html(index: &TopicsIndexInternal) -> PreEscaped<String> {
     let mut keys: Vec<&str> = index.topics.keys().map(|k| k.as_relative_url()).collect();
 
