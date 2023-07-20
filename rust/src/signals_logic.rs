@@ -946,8 +946,8 @@ pub async fn interpret_path(
     Ok(TypeOFSource::Compose(sc))
 }
 
-pub fn iterate_type_of_sources(s: &ServerState) -> HashMap<TopicName, TypeOFSource> {
-    let mut res = hashmap! {};
+pub fn iterate_type_of_sources(s: &ServerState) -> Vec<(TopicName, TypeOFSource)> {
+    let mut res: Vec<(TopicName, TypeOFSource)> = vec![];
     for (topic_name, x) in s.proxied_topics.iter() {
         let fq = ForwardedQueue {
             subscription: x.from_subscription.clone(),
@@ -955,7 +955,7 @@ pub fn iterate_type_of_sources(s: &ServerState) -> HashMap<TopicName, TypeOFSour
             my_topic_name: topic_name.clone(),
             properties: x.tr_original.properties.clone(),
         };
-        res.insert(topic_name.clone(), TypeOFSource::ForwardedQueue(fq));
+        res.push((topic_name.clone(), TypeOFSource::ForwardedQueue(fq)));
 
         // let x = ForwardedQueue {
         //     proxied: "".to_string(),
@@ -967,14 +967,14 @@ pub fn iterate_type_of_sources(s: &ServerState) -> HashMap<TopicName, TypeOFSour
     }
 
     for (topic_name, oq) in s.oqs.iter() {
-        res.insert(
+        res.push((
             topic_name.clone(),
             TypeOFSource::OurQueue(
                 topic_name.clone(),
                 topic_name.to_components(),
                 oq.tr.properties.clone(),
             ),
-        );
+        ));
     }
 
     for (topic_name, oq) in s.local_dirs.iter() {
@@ -984,11 +984,15 @@ pub fn iterate_type_of_sources(s: &ServerState) -> HashMap<TopicName, TypeOFSour
             readable: true,
             immutable: false,
         };
-        res.insert(
+        res.push((
             topic_name.clone(),
             TypeOFSource::MountedDir(topic_name.clone(), oq.local_dir.clone(), props),
-        );
+        ));
     }
+    // sort res by length of topic_name
+    res.sort_by(|a, b| a.0.as_components().len().cmp(&b.0.as_components().len()));
+    // now reverse
+    res.reverse();
     res
 }
 

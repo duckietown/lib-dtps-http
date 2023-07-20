@@ -31,8 +31,8 @@ struct StatsArgs {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error>> {
     init_logging();
-    debug!("now waiting 1 seconds so that the server can start");
-    sleep(Duration::from_secs(1)).await;
+    // debug!("now waiting 1 seconds so that the server can start");
+    // sleep(Duration::from_secs(1)).await;
 
     let args = StatsArgs::parse();
     // print!("{} {}", args.url, args.inline_data);
@@ -43,8 +43,8 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     // debug!("metadata:\n{:#?}", md);
     match md.answering {
         None => {
-            info!("no answering url found");
-            return Err(anyhow::anyhow!("no alternative are accessible").into());
+            let msg = format!("no answering url found:\nconbase:{bc}\nmd:{md:?}");
+            return Err(anyhow::anyhow!(msg).into());
 
             // return Err(Box::new(io::Error::new(ErrorKind::Other, "no answering url found")));
         }

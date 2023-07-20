@@ -1,6 +1,8 @@
-use crate::{DataReady, RawData};
+use bytes::Bytes;
 use derive_more::Constructor;
 use serde::{Deserialize, Serialize};
+
+use crate::{DataReady, RawData};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MsgClientToServer {
@@ -22,7 +24,17 @@ pub struct ChannelInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Chunk {
+    pub digest: String,
+    pub i: usize,
+    pub n: usize,
+    pub index: usize,
+    pub data: Bytes,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MsgServerToClient {
     DataReady(DataReady),
     ChannelInfo(ChannelInfo),
+    Chunk(Chunk),
 }

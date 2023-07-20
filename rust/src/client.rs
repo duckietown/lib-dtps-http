@@ -4,31 +4,23 @@ use std::os::unix::fs::FileTypeExt;
 use std::time::Duration;
 
 use anyhow::Context;
-use async_trait::async_trait;
 use base64;
-use base64::{engine::general_purpose, Engine as _};
+use base64::Engine as _;
 use bytes::Bytes;
-
+use futures::StreamExt;
 use hex;
 use hyper;
 use hyper::Client;
 use hyper_tls::HttpsConnector;
 use hyperlocal::UnixClientExt;
 use log::{debug, error, info};
-use rand::Rng;
-use tokio::net::{TcpStream, UnixStream};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
-use tokio_tungstenite::{client_async_with_config, connect_async, MaybeTlsStream, WebSocketStream};
-use tungstenite::handshake::client::Request;
-use url::Url;
 use warp::reply::Response;
-use warp::ws::Message;
 
 use crate::constants::{
     HEADER_CONTENT_LOCATION, HEADER_NODE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA,
@@ -45,7 +37,7 @@ use crate::TypeOfConnection::Same;
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
 use crate::{
     context, error_with_info, internal_assertion, not_available, not_implemented, not_reachable,
-    show_errors, DTPSError, RawData, TopicName, UnixCon, CONTENT_TYPE_DTPS_INDEX, DTPSR,
+    DTPSError, RawData, TopicName, CONTENT_TYPE_DTPS_INDEX, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
 };
 
 /// Note: need to have use futures::{StreamExt} in scope to use this
@@ -58,7 +50,7 @@ pub async fn get_events_stream_inline(
     let stream = UnboundedReceiverStream::new(rx);
     (handle, stream)
 }
-use futures::StreamExt;
+
 pub async fn listen_events(which: TopicName, md: FoundMetadata) {
     // let (tx, rx) = mpsc::unbounded_channel();
     let inline_url = md.events_data_inline_url.unwrap().clone();
@@ -148,7 +140,7 @@ pub async fn listen_events_url_inline(
         };
 
         if !msg.is_binary() {
-            debug!("unexpected message #{}: {:#?}", index, msg);
+            debug!("unexpected message, expected binary #{}: {:#?}", index, msg);
             continue;
         } else {
             let data = msg.clone().into_data();
@@ -198,7 +190,6 @@ pub async fn listen_events_url_inline(
                     Ok(msg) => msg,
                     Err(e) => match e {
                         RecvError::Closed => {
-                            error_with_info!("unexpected end of stream");
                             break;
                         }
                         RecvError::Lagged(_) => {
@@ -208,12 +199,38 @@ pub async fn listen_events_url_inline(
                     },
                 };
 
-                if msg.is_binary() {
-                    let data = msg.into_data();
-                    content.extend(data);
-                } else {
-                    error_with_info!("unexpected message #{}: {:#?}", index, msg);
+                let chunk_from_server: MsgServerToClient;
+                let data = msg.clone().into_data();
+
+                match serde_cbor::from_slice::<MsgServerToClient>(&data) {
+                    Ok(dr_) => {
+                        // debug!("dr: {:#?}", dr_);
+                        chunk_from_server = dr_;
+                    }
+                    Err(e) => {
+                        let rawvalue = serde_cbor::from_slice::<serde_cbor::Value>(&data);
+                        debug!(
+                        "message #{}: cannot parse cbor as MsgServerToClient: {:#?}\n{:#?}\n{:#?}",
+                        index,
+                        e,
+                        msg.type_id(),
+                        rawvalue,
+                    );
+                        continue;
+                    }
                 }
+
+                let chunk = match chunk_from_server {
+                    MsgServerToClient::DataReady(..) | MsgServerToClient::ChannelInfo(..) => {
+                        error_with_info!("unexpected message #{}: {:#?}", index, msg);
+                        continue;
+                    }
+                    MsgServerToClient::Chunk(chunk) => chunk,
+                };
+
+                let data = chunk.data;
+                content.extend_from_slice(&data);
+
                 index += 1;
             }
             if content.len() != dr.content_length {
@@ -298,7 +315,20 @@ pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
         "Cannot make request to {:?}",
         con
     )?;
-
+    // let h = resp.headers();
+    // debug!("headers: {h:?}");
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    // debug!("{con:?}: content type {content_type}");
+    if content_type != CONTENT_TYPE_DTPS_INDEX_CBOR {
+        return not_available!(
+            "Expected content type {CONTENT_TYPE_DTPS_INDEX_CBOR}, obtained {content_type} "
+        );
+    }
     let body_bytes = context!(
         hyper::body::to_bytes(resp.into_body()).await,
         "Cannot get body bytes"
@@ -581,9 +611,3 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
 fn string_from_header_value(header_value: &hyper::header::HeaderValue) -> String {
     header_value.to_str().unwrap().to_string()
 }
-//
-// struct WebsocketOpen {
-//     pub tx: UnboundedSender<Notification>,
-//     pub rx: UnboundedReceiver<Notification>,
-//     pub join_handle: JoinHandle<DTPSR<()>>,
-// }

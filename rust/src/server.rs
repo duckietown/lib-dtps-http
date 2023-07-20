@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
@@ -46,7 +47,7 @@ use crate::server_state::*;
 use crate::structures::*;
 use crate::utils::divide_in_components;
 use crate::websocket_signals::{
-    ChannelInfo, ChannelInfoDesc, MsgClientToServer, MsgServerToClient,
+    ChannelInfo, ChannelInfoDesc, Chunk, MsgClientToServer, MsgServerToClient,
 };
 use crate::{
     error_other, error_with_info, format_digest_path, handle_rejection, not_available,
@@ -671,8 +672,8 @@ pub async fn handle_websocket_queue(
 
         rx2 = oq.tx.subscribe();
     }
-    let state2_for_receive = state.clone();
-    let topic_name2 = topic_name.clone();
+    // let state2_for_receive = state.clone();
+    // let topic_name2 = topic_name.clone();
 
     let message = warp::ws::Message::binary(serde_cbor::to_vec(&channel_info_message).unwrap());
     match ws_tx.send(message).await {
@@ -729,7 +730,15 @@ pub async fn handle_websocket_queue(
         }
         if send_data {
             let content = ss2.get_blob(&this_one.digest).unwrap();
-            let message = warp::ws::Message::binary(content.clone());
+            let chunk = MsgServerToClient::Chunk(Chunk {
+                digest: this_one.digest.clone(),
+                i: 0,
+                n: nchunks,
+                index: 0,
+                data: Bytes::from(content.clone()),
+            });
+            let message = warp::ws::Message::binary(serde_cbor::to_vec(&chunk).unwrap());
+            // let message = warp::ws::Message::binary(content.clone());
             match ws_tx.send(message).await {
                 Ok(_) => {}
                 Err(e) => {
@@ -1110,6 +1119,9 @@ async fn handler_topic_generic_data(
         HEADER_SEE_EVENTS_INLINE_DATA,
         HeaderValue::from_static(EVENTS_SUFFIX_DATA),
     );
+
+    let val = format!("<{EVENTS_SUFFIX_DATA}/>; rel=dtps-events");
+    h.insert("Link", HeaderValue::from_str(&val).unwrap());
 
     put_common_headers(&ss, resp.headers_mut());
 

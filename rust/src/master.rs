@@ -2,19 +2,23 @@ use std::collections::HashMap;
 use std::string::ToString;
 
 use bytes::Bytes;
-use futures::stream::{SplitSink, SplitStream};
+use futures::stream::SplitSink;
 use futures::SinkExt;
 use futures::StreamExt;
 use log::{debug, error};
 use maud::{html, PreEscaped};
 use tokio::spawn;
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::broadcast::error::RecvError;
+// use tokio::sync::broadcast::error::RecvError;
+// use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
+use tungstenite::Message as TungsteniteMessage;
 use warp::http::header;
 use warp::hyper::Body;
 use warp::reply::Response;
 use warp::ws::Message;
+use warp::ws::Message as WarpMessage;
 
 use crate::cbor_manipulation::display_printable;
 use crate::html_utils::make_html;
@@ -23,14 +27,15 @@ use crate::signals_logic::{
     TypeOFSource,
 };
 use crate::utils::{divide_in_components, get_good_url_for_components};
+use crate::websocket_abstractions::open_websocket_connection;
 use crate::websocket_signals::MsgClientToServer;
 use crate::{
-    do_receiving, error_with_info, get_accept_header, handle_topic_post, handle_websocket_queue,
-    handler_topic_generic, not_implemented, object_queues, put_alternative_locations,
-    put_common_headers, receive_from_websocket, root_handler, serve_static_file_path,
-    HandlersResponse, ObjectQueue, ServerStateAccess, TopicName, TopicsIndexInternal, DTPSR,
-    EVENTS_SUFFIX, EVENTS_SUFFIX_DATA, HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID,
-    HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
+    do_receiving, error_with_info, get_accept_header, get_metadata, handle_topic_post,
+    handle_websocket_queue, handler_topic_generic, not_implemented, object_queues,
+    put_alternative_locations, put_common_headers, receive_from_websocket, root_handler,
+    serve_static_file_path, HandlersResponse, ObjectQueue, ServerStateAccess, TopicName,
+    TopicsIndexInternal, DTPSR, EVENTS_SUFFIX, EVENTS_SUFFIX_DATA, HEADER_DATA_ORIGIN_NODE_ID,
+    HEADER_DATA_UNIQUE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
 };
 
 //
@@ -118,7 +123,7 @@ pub async fn serve_master_head(
     let referrer = get_referrer(&headers);
 
     let matched = interpret_path(&path_str, &query, &referrer, ss_mutex.clone()).await;
-    let ss = ss_mutex.lock().await;
+    // let ss = ss_mutex.lock().await;
 
     // debug!(
     //     "serve_master:\npaths: {:#?}\nmatched: {:#?}",
@@ -137,59 +142,160 @@ pub async fn serve_master_head(
             return Ok(res);
         }
     };
+    let res = http::Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .body(Body::from("We dont support head to this"))
+        .unwrap();
+    let not_supported = Ok(res);
+
     // debug!("serve_master_head: ds: {:?}", ds);
-    let (topic_name, x) = {
-        match ds {
+    return {
+        match &ds {
             TypeOFSource::OurQueue(topic_name, _, _) => {
                 let x: &ObjectQueue;
+                let ss = ss_mutex.lock().await;
                 match ss.oqs.get(&topic_name) {
                     None => return Err(warp::reject::not_found()),
 
                     Some(y) => x = y,
                 }
-                (topic_name, x)
+                let empty_vec: Vec<u8> = Vec::new();
+                let mut resp = Response::new(Body::from(empty_vec));
+                let h = resp.headers_mut();
+
+                h.insert(
+                    HEADER_DATA_ORIGIN_NODE_ID,
+                    HeaderValue::from_str(x.tr.origin_node.as_str()).unwrap(),
+                );
+                h.insert(
+                    HEADER_DATA_UNIQUE_ID,
+                    HeaderValue::from_str(x.tr.unique_id.as_str()).unwrap(),
+                );
+
+                put_events_headers(h);
+
+                let suffix = topic_name.as_relative_url();
+                put_alternative_locations(&ss, h, &suffix);
+                put_common_headers(&ss, h);
+                Ok(resp.into())
             }
-            _ => {
-                if path_str == "/" {
-                    let tr = TopicName::root();
-                    let x = ss.oqs.get(&tr).unwrap();
-                    (tr, x)
-                } else {
-                    let res = http::Response::builder()
-                        .status(StatusCode::METHOD_NOT_ALLOWED)
-                        .body(Body::from("We dont support push to this"))
-                        .unwrap();
-                    return Ok(res);
+            TypeOFSource::ForwardedQueue(fq) => {
+                let tr = {
+                    let ss = ss_mutex.lock().await;
+                    let pti = ss.proxied_topics.get(&fq.my_topic_name).unwrap();
+                    pti.tr_original.clone()
+                };
+                let empty_vec: Vec<u8> = Vec::new();
+                let mut resp = Response::new(Body::from(empty_vec));
+                let h = resp.headers_mut();
+
+                h.insert(
+                    HEADER_DATA_ORIGIN_NODE_ID,
+                    HeaderValue::from_str(tr.origin_node.as_str()).unwrap(),
+                );
+                h.insert(
+                    HEADER_DATA_UNIQUE_ID,
+                    HeaderValue::from_str(tr.unique_id.as_str()).unwrap(),
+                );
+
+                put_events_headers(h);
+                // let suffix = topic_name.as_relative_url();
+                // put_alternative_locations(&ss, h, &suffix);
+                {
+                    let ss = ss_mutex.lock().await;
+                    put_common_headers(&ss, h);
                 }
+                Ok(resp.into())
+            }
+            //
+            // _ => {
+            //
+            //     // if path_str == "/" {
+            //     //     let tr = TopicName::root();
+            //     //     let x = ss.oqs.get(&tr).unwrap();
+            //     //     (tr, x)
+            //     // } else {
+            //     error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
+            //     let res = http::Response::builder()
+            //         .status(StatusCode::SERVICE_UNAVAILABLE)
+            //         .body(Body::from("We dont support head to this"))
+            //         .unwrap();
+            //     return Ok(res);
+            // }
+            TypeOFSource::MountedDir(_, _, _) => {
+                error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
+
+                not_supported
+            }
+            TypeOFSource::MountedFile(_, _, _) => {
+                error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
+
+                not_supported
+            }
+            TypeOFSource::Compose(c) => {
+                if c.is_root {
+                    let ss = ss_mutex.lock().await;
+                    let topic_name = TopicName::root();
+                    let x: &ObjectQueue = ss.oqs.get(&topic_name).unwrap();
+
+                    let empty_vec: Vec<u8> = Vec::new();
+                    let mut resp = Response::new(Body::from(empty_vec));
+                    let h = resp.headers_mut();
+
+                    h.insert(
+                        HEADER_DATA_ORIGIN_NODE_ID,
+                        HeaderValue::from_str(x.tr.origin_node.as_str()).unwrap(),
+                    );
+                    h.insert(
+                        HEADER_DATA_UNIQUE_ID,
+                        HeaderValue::from_str(x.tr.unique_id.as_str()).unwrap(),
+                    );
+
+                    put_events_headers(h);
+                    let suffix = topic_name.as_relative_url();
+                    put_alternative_locations(&ss, h, &suffix);
+                    put_common_headers(&ss, h);
+                    Ok(resp.into())
+                } else {
+                    error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
+
+                    not_supported
+                }
+            }
+            TypeOFSource::Transformed(_, _) => {
+                error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
+
+                not_supported
+            }
+            TypeOFSource::Digest(_, _) => {
+                error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
+
+                not_supported
+            }
+            TypeOFSource::Deref(_) => {
+                error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
+
+                not_supported
+            }
+            TypeOFSource::OtherProxied(_) => {
+                error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
+                not_supported
             }
         }
     };
+}
 
-    let empty_vec: Vec<u8> = Vec::new();
-    let mut resp = Response::new(Body::from(empty_vec));
-
-    let h = resp.headers_mut();
-
-    h.insert(
-        HEADER_DATA_ORIGIN_NODE_ID,
-        HeaderValue::from_str(x.tr.origin_node.as_str()).unwrap(),
-    );
-    h.insert(
-        HEADER_DATA_UNIQUE_ID,
-        HeaderValue::from_str(x.tr.unique_id.as_str()).unwrap(),
-    );
-
+fn put_events_headers(h: &mut HeaderMap<HeaderValue>) {
     h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static(EVENTS_SUFFIX));
     h.insert(
         HEADER_SEE_EVENTS_INLINE_DATA,
         HeaderValue::from_static(EVENTS_SUFFIX_DATA),
     );
 
-    let suffix = topic_name.as_relative_url();
-
-    put_alternative_locations(&ss, h, &suffix);
-    put_common_headers(&ss, h);
-    Ok(resp.into())
+    let val = format!("<{EVENTS_SUFFIX_DATA}/>; rel=dtps-events-inline-data");
+    h.insert("Link", HeaderValue::from_str(&val).unwrap());
+    let val = format!("<{EVENTS_SUFFIX}/>; rel=dtps-events");
+    h.insert("Link", HeaderValue::from_str(&val).unwrap());
 }
 
 fn path_normalize(path: warp::path::FullPath) -> String {
@@ -592,6 +698,9 @@ pub async fn visualize_data(
         HeaderValue::from_static(EVENTS_SUFFIX_DATA),
     );
 
+    let val = format!("<{EVENTS_SUFFIX_DATA}/>; rel=dtps-events");
+    h.insert("Link", HeaderValue::from_str(&val).unwrap());
+
     // put_common_headers(&ss, resp.headers_mut());
 
     Ok(resp.into())
@@ -639,33 +748,14 @@ pub async fn handle_websocket_generic2(
 pub async fn handle_websocket_generic2_(
     path: String,
     ws_tx: &mut SplitSink<warp::ws::WebSocket, Message>,
-    // ws_rx: SplitStream<warp::ws::WebSocket>,
     receiver: UnboundedReceiverStream<MsgClientToServer>,
     state: ServerStateAccess,
     send_data: bool,
 ) -> DTPSR<()> {
     let referrer = None;
     let query = HashMap::new();
-    // remove the last "events"
-    let components = divide_in_components(&path, '/');
-    // remove last onw
-    // let components = components[0..components.len() - 1].to_vec();
 
-    // if components.len() == 0 {
-    //     return handle_websocket_queue(ws_tx, ws_rx, state, TopicName::root(), send_data).await;
-    // }
-    // debug!("handle_websocket_generic2: {:?}", components);
     let ds = interpret_path(&path, &query, &referrer, state.clone()).await?;
-    // debug!("events: matched: {:?}", matched);
-
-    // let ds = match matched {
-    //     Ok(ds) => ds,
-    //     Err(_) => {
-    //         ws.close().await.unwrap();
-    //         // how to send error?
-    //         not_available!(format!("not available: {:?}", path.as_str()))
-    //     }
-    // };
 
     return match ds {
         TypeOFSource::Compose(sc) => {
@@ -686,8 +776,17 @@ pub async fn handle_websocket_generic2_(
         TypeOFSource::Digest(_digest, _content_type) => {
             not_implemented!("handle_websocket_generic2 not implemented TypeOFSource::Digest")
         }
-        TypeOFSource::ForwardedQueue(_) => {
-            not_implemented!("handle_websocket_generic2 not implemented for {ds:?}")
+        TypeOFSource::ForwardedQueue(fq) => {
+            handle_websocket_forwarded(
+                state,
+                fq.subscription,
+                fq.his_topic_name,
+                ws_tx,
+                receiver,
+                send_data,
+            )
+            .await
+            // not_implemented!("handle_websocket_generic2 not implemented for {ds:?}")
         }
         TypeOFSource::Transformed(_, _) => {
             not_implemented!("handle_websocket_generic2 not implemented for {ds:?}")
@@ -707,7 +806,74 @@ pub async fn handle_websocket_generic2_(
     };
 }
 
-pub fn handle_websocket_forwarded() {}
+pub async fn handle_websocket_forwarded(
+    state: ServerStateAccess,
+    subscription: String,
+    its_topic_name: TopicName,
+    ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
+    receiver: UnboundedReceiverStream<MsgClientToServer>,
+    send_data: bool,
+) -> DTPSR<()> {
+    let url = {
+        let ss = state.lock().await;
+        let sub = ss.proxied.get(&subscription).unwrap();
+
+        let url = sub.url.join(its_topic_name.as_relative_url())?;
+        url
+    };
+
+    let md = get_metadata(&url).await?;
+
+    let use_url = if send_data {
+        md.events_data_inline_url.unwrap()
+    } else {
+        md.events_url.unwrap()
+    };
+
+    let wsc = open_websocket_connection(&use_url).await?;
+
+    let mut incoming = wsc.get_incoming().await;
+
+    loop {
+        let msg = match incoming.recv().await {
+            Ok(msg) => msg,
+            Err(e) => match e {
+                RecvError::Closed => {
+                    break;
+                }
+                RecvError::Lagged(_) => {
+                    error_with_info!("lagged");
+                    continue;
+                }
+            },
+        };
+        let x = warp_from_tungstenite(msg)?;
+        match ws_tx.send(x).await {
+            Ok(_) => {}
+            Err(e) => {
+                error_with_info!("Cannot send message: {e}")
+            }
+        }
+    }
+    Ok(())
+}
+
+fn warp_from_tungstenite(msg: TungsteniteMessage) -> DTPSR<WarpMessage> {
+    match msg {
+        TungsteniteMessage::Text(text) => Ok(WarpMessage::text(text)),
+        TungsteniteMessage::Binary(data) => Ok(WarpMessage::binary(data)),
+        TungsteniteMessage::Ping(data) => Ok(WarpMessage::ping(data)),
+        TungsteniteMessage::Pong(data) => Ok(WarpMessage::pong(data)),
+        TungsteniteMessage::Close(Some(frame)) => {
+            let code: u16 = frame.code.into();
+            Ok(WarpMessage::close_with(code, frame.reason))
+        }
+        TungsteniteMessage::Close(None) => Ok(WarpMessage::close()),
+        TungsteniteMessage::Frame(..) => {
+            return not_implemented!("we should never get here: {msg}");
+        }
+    }
+}
 
 pub fn make_index_html(index: &TopicsIndexInternal) -> PreEscaped<String> {
     let mut keys: Vec<&str> = index.topics.keys().map(|k| k.as_relative_url()).collect();

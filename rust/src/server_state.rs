@@ -20,8 +20,9 @@ use crate::structures::*;
 use crate::types::*;
 use crate::{
     context, error_with_info, get_events_stream_inline, get_index, get_metadata, get_queue_id,
-    get_random_node_id, get_stats, invalid_input, not_implemented, sniff_type_resource, DTPSError,
-    ServerStateAccess, TypeOfResource, UrlResult, DTPSR, MASK_ORIGIN,
+    get_random_node_id, get_stats, invalid_input, not_available, not_implemented,
+    sniff_type_resource, DTPSError, ServerStateAccess, TypeOfResource, UrlResult, DTPSR,
+    MASK_ORIGIN,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -412,6 +413,15 @@ impl ServerState {
         let data_json = serde_json::to_string(object).unwrap();
         return self.publish_json(topic_name, data_json.as_str(), clocks);
     }
+    pub fn publish_object_as_yaml<T: Serialize>(
+        &mut self,
+        topic_name: &TopicName,
+        object: &T,
+        clocks: Option<Clocks>,
+    ) -> DTPSR<DataSaved> {
+        let data_yaml = serde_yaml::to_string(object).unwrap();
+        return self.publish_yaml(topic_name, data_yaml.as_str(), clocks);
+    }
 
     pub fn publish_object_as_cbor<T: Serialize>(
         &mut self,
@@ -709,7 +719,13 @@ pub async fn observe_node_proxy(
         }
     };
 
-    let who_answers = md.clone().answering.unwrap().clone();
+    let who_answers = match &md.answering {
+        None => {
+            return not_available!("Nobody is answering {url:}:\n{md:?}");
+        }
+        Some(n) => n.clone(),
+    };
+
     {
         let ss = ss_mutex.lock().await;
         if who_answers == ss.node_id {
@@ -720,7 +736,7 @@ pub async fn observe_node_proxy(
         }
     }
 
-    let stats = get_stats(&url, md.clone().answering.unwrap().clone().as_ref()).await;
+    let stats = get_stats(&url, who_answers.as_ref()).await;
     let link1 = match stats {
         UrlResult::Inaccessible(_) => {
             // TODO
