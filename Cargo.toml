@@ -84,12 +84,12 @@ getaddrs = "0.1.0"
 
 
 [[bin]]
-name = "dtps-http-rust-clock"
+name = "dtps-http-rs-server-example-clock"
 path = "rust/bin/clock.rs"
 
 
 [[bin]]
-name = "dtps-http-rust-client-stats"
+name = "dtps-http-rs-client-stats"
 path = "rust/bin/stats.rs"
 
 

@@ -24,8 +24,9 @@ async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> Non
         nonlocal i
 
         current = time.time_ns()
-        if topic_name != "clock":
+        if  not  "clock" in topic_name:
             return
+
         j = int(data.content.decode())
         # j = json.loads(data.content.decode())
 

@@ -9,7 +9,6 @@ from typing import Any, AsyncContextManager, AsyncIterator, Callable, cast, Opti
 import aiohttp
 import cbor2
 from aiohttp import ClientWebSocketResponse, TCPConnector, UnixConnector, WSMessage
-from pydantic import parse_obj_as
 from tcp_latency import measure_latency
 
 from . import logger
@@ -18,8 +17,8 @@ from .constants import (
 )
 from .exceptions import EventListeningNotAvailable
 from .structures import (
-    channel_msgs_parse, ChannelInfo, DataReady, ForwardingStep, LinkBenchmark, RawData, TopicReachability,
-    TopicRef, TopicsIndex,
+    channel_msgs_parse, ChannelInfo, Chunk, DataReady, ForwardingStep, LinkBenchmark, RawData,
+    TopicReachability, TopicRef, TopicsIndex,
 )
 from .types import NodeID, TopicName, URLString
 from .urls import (
@@ -503,7 +502,7 @@ class DTPSClient:
                         break
                     if msg.type == aiohttp.WSMsgType.BINARY:
                         try:
-                            cm =channel_msgs_parse(msg.data)
+                            cm = channel_msgs_parse(msg.data)
 
                         except Exception as e:
                             logger.error(f"error in parsing {msg.data!r}: {e.__class__.__name__} {e!r}")
@@ -517,19 +516,30 @@ class DTPSClient:
 
                             if dr.chunks_arriving == 0:
                                 logger.error(f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}")
-                                raise AssertionError(f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}")
+                                raise AssertionError(
+                                    f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}")
+
+                            # create a byte array initialized at
+
 
                             data = b""
                             for _ in range(dr.chunks_arriving):
                                 msg = await ws.receive()
-                                if msg.type == aiohttp.WSMsgType.BINARY:
-                                    data += cast(bytes, msg.data)
-                                else:
-                                    logger.error(f"unexpected message {msg!r}")
+
+                                cm = channel_msgs_parse(msg.data)
+
+                                match cm:
+                                    case Chunk(index=index, data=this_data):
+                                        data += this_data
+                                    case _:
+                                        continue
+                                        logger.error(f"unexpected message {msg!r}")
 
                             if len(data) != dr.content_length:
-                                logger.error(f"unexpected data length {len(data)} != {dr.content_length}\n{dr}")
-                                raise AssertionError(f"unexpected data length {len(data)} != {dr.content_length}")
+                                logger.error(
+                                    f"unexpected data length {len(data)} != {dr.content_length}\n{dr}")
+                                raise AssertionError(
+                                    f"unexpected data length {len(data)} != {dr.content_length}")
 
                             yield dr, RawData(content_type=dr.content_type, content=data)
 

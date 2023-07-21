@@ -1,5 +1,6 @@
 import json
 from dataclasses import asdict
+from typing import Optional
 
 import cbor2
 from multidict import CIMultiDict
@@ -96,18 +97,37 @@ class ResourceAvailability:
     available_until: float  # timestamp
 
 
+
+@dataclass
+class ChannelInfoDesc:
+    sequence: int
+    time_inserted: int
+
 @dataclass
 class ChannelInfo:
-    last_sequence: int
-    last_timestamp: int
-    oldest_available_sequence: int
-    newest_available_timestamp: int
-
+    queue_created: int
+    num_total: int
+    newest: Optional[ChannelInfoDesc]
+    oldest:  Optional[ChannelInfoDesc]
 
     @classmethod
-    def from_cbor(cls, s: bytes) -> "DataReady":
+    def from_cbor(cls, s: bytes) -> "ChannelInfo":
         struct = cbor2.loads(s)
-        return parse_obj_as(DataReady, struct)
+        return parse_obj_as(ChannelInfo, struct)
+
+
+@dataclass
+class Chunk:
+    digest: str
+    i: int
+    n: int
+    index: int
+    data: bytes
+
+    @classmethod
+    def from_cbor(cls, s: bytes) -> "Chunk":
+        struct = cbor2.loads(s)
+        return parse_obj_as(Chunk, struct)
 
 @dataclass
 class DataReady:
@@ -128,13 +148,19 @@ class DataReady:
         struct = cbor2.loads(s)
         return parse_obj_as(DataReady, struct)
 
-def channel_msgs_parse(d: bytes) -> ChannelInfo | DataReady:
+def channel_msgs_parse(d: bytes) -> ChannelInfo | DataReady | Chunk:
     struct = cbor2.loads(d)
+    if not isinstance(struct, dict):
+        msg = 'Expected a dictionary here'
+        raise ValueError(f'{msg}: {d} {struct}')
     if 'DataReady' in struct:
         dr = parse_obj_as(DataReady, struct['DataReady'])
         return dr
     elif 'ChannelInfo' in struct:
         dr = parse_obj_as(ChannelInfo, struct['ChannelInfo'])
+        return dr
+    elif 'Chunk' in struct:
+        dr = parse_obj_as(Chunk, struct['Chunk'])
         return dr
     else:
         raise ValueError(f"unexpected value {struct}")
