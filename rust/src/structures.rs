@@ -1,12 +1,12 @@
+use crate::LinkBenchmark;
+use derive_more::Constructor;
+use serde::{Deserialize, Serialize};
 use std::cmp::{min, Ordering};
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
 use std::ops::Add;
 use std::path::PathBuf;
-
-use derive_more::Constructor;
-use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::signals_logic::TopicProperties;
@@ -80,6 +80,14 @@ impl TopicsIndexInternal {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ContentInfo {
+    pub accept_content_type: Vec<String>,
+    pub produces_content_type: Vec<String>,
+    pub schema_json: Option<String>,
+    pub examples: Vec<RawData>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TopicRefWire {
     pub unique_id: String,
     pub origin_node: String,
@@ -87,9 +95,7 @@ pub struct TopicRefWire {
     pub reachability: Vec<TopicReachabilityWire>,
     pub created: i64,
     pub properties: TopicProperties,
-    pub accept_content_type: Vec<String>,
-    pub produces_content_type: Vec<String>,
-    pub examples: Vec<RawData>,
+    pub content_info: ContentInfo,
 }
 
 #[derive(Debug, Clone)]
@@ -100,9 +106,7 @@ pub struct TopicRefInternal {
     pub reachability: Vec<TopicReachabilityInternal>,
     pub created: i64,
     pub properties: TopicProperties,
-    pub accept_content_type: Vec<String>,
-    pub produces_content_type: Vec<String>,
-    pub examples: Vec<RawData>,
+    pub content_info: ContentInfo,
 }
 
 impl TopicRefInternal {
@@ -119,9 +123,7 @@ impl TopicRefInternal {
             created: self.created,
             reachability,
             properties: self.properties.clone(),
-            accept_content_type: self.accept_content_type.clone(),
-            produces_content_type: self.produces_content_type.clone(),
-            examples: self.examples.clone(),
+            content_info: self.content_info.clone(),
         }
     }
     pub fn from_wire(wire: &TopicRefWire, conbase: &TypeOfConnection) -> Self {
@@ -138,9 +140,7 @@ impl TopicRefInternal {
             created: wire.created,
             reachability,
             properties: wire.properties.clone(),
-            accept_content_type: wire.accept_content_type.clone(),
-            produces_content_type: wire.produces_content_type.clone(),
-            examples: wire.examples.clone(),
+            content_info: wire.content_info.clone(),
         }
     }
     pub fn add_path(&self, rel: &str) -> Self {
@@ -156,86 +156,8 @@ impl TopicRefInternal {
             created: self.created,
             reachability,
             properties: self.properties.clone(),
-            accept_content_type: self.accept_content_type.clone(),
-            produces_content_type: self.produces_content_type.clone(),
-            examples: self.examples.clone(),
+            content_info: self.content_info.clone(),
         };
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct LinkBenchmark {
-    pub complexity: u32,
-    pub bandwidth: u32,
-    pub latency: f32,
-    pub reliability: f32,
-    pub hops: i32,
-}
-
-impl LinkBenchmark {
-    pub fn identity() -> Self {
-        Self {
-            complexity: 0,
-            bandwidth: 1_000_000_000,
-            latency: 0.0,
-            reliability: 1.0,
-            hops: 0,
-        }
-    }
-}
-
-impl Eq for LinkBenchmark {}
-
-impl Add for LinkBenchmark {
-    type Output = LinkBenchmark;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        LinkBenchmark {
-            complexity: self.complexity + rhs.complexity,
-            bandwidth: min(self.bandwidth, rhs.bandwidth),
-            latency: self.latency + rhs.latency,
-            reliability: self.reliability * rhs.reliability,
-            hops: self.hops + rhs.hops,
-        }
-    }
-}
-
-impl PartialEq<Self> for LinkBenchmark {
-    fn eq(&self, other: &Self) -> bool {
-        return self.complexity == other.complexity
-            && self.bandwidth == other.bandwidth
-            && self.latency == other.latency
-            && self.reliability == other.reliability
-            && self.hops == other.hops;
-    }
-}
-
-impl PartialOrd<Self> for LinkBenchmark {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        return Some(self.cmp(other));
-    }
-}
-
-impl Ord for LinkBenchmark {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.complexity
-            .cmp(&other.complexity)
-            .then_with(|| {
-                self.bandwidth
-                    .partial_cmp(&other.bandwidth)
-                    .unwrap_or(Ordering::Equal)
-            })
-            .then_with(|| {
-                self.latency
-                    .partial_cmp(&other.latency)
-                    .unwrap_or(Ordering::Equal)
-            })
-            .then_with(|| {
-                self.reliability
-                    .partial_cmp(&other.reliability)
-                    .unwrap_or(Ordering::Equal)
-            })
-            .then_with(|| self.hops.cmp(&other.hops))
     }
 }
 

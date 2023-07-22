@@ -17,10 +17,10 @@ use crate::client::make_request;
 use crate::signals_logic::ResolvedData::{NotAvailableYet, NotFound, Regular};
 use crate::utils::{divide_in_components, is_prefix_of};
 use crate::{
-    context, get_content_type, get_rawdata, not_implemented, DTPSError, ForwardingStep,
-    LinkBenchmark, NodeAppData, OtherProxyInfo, RawData, ServerState, ServerStateAccess, TopicName,
-    TopicReachabilityInternal, TopicRefInternal, TopicsIndexInternal, TypeOfConnection,
-    CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
+    context, get_content_type, get_rawdata, not_implemented, ContentInfo, DTPSError,
+    ForwardingStep, LinkBenchmark, NodeAppData, OtherProxyInfo, RawData, ServerState,
+    ServerStateAccess, TopicName, TopicReachabilityInternal, TopicRefInternal, TopicsIndexInternal,
+    TypeOfConnection, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
 };
 
 #[derive(Debug, Clone)]
@@ -506,9 +506,6 @@ impl GetMeta for TypeOFSource {
                 let inside = d.read_dir().unwrap();
                 for x in inside {
                     let filename = x?.file_name().to_str().unwrap().to_string();
-                    // if filename.starts_with(".") {
-                    //     continue;
-                    // }
                     let mut tr = TopicRefInternal {
                         unique_id: "".to_string(),
                         origin_node: "".to_string(),
@@ -516,9 +513,12 @@ impl GetMeta for TypeOFSource {
                         reachability: vec![],
                         created: 0,
                         properties: props.clone(),
-                        accept_content_type: vec![],
-                        produces_content_type: vec![],
-                        examples: vec![],
+                        content_info: ContentInfo {
+                            accept_content_type: vec![],
+                            produces_content_type: vec![],
+                            schema_json: None,
+                            examples: vec![],
+                        },
                     };
                     tr.reachability.push(TopicReachabilityInternal {
                         con: TypeOfConnection::Relative(filename.clone(), None),
@@ -794,10 +794,6 @@ pub async fn interpret_path(
                     )?;
                 }
                 return Ok(cur);
-                // Ok(TypeOFSource::Transformed(
-                //     Box::new(source.clone()),
-                //     Transforms::GetInside(rest),
-                // ))
             }
         };
 

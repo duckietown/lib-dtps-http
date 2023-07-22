@@ -26,12 +26,13 @@ use crate::constants::{
 };
 use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
 use crate::structures::{
-    DataReady, FoundMetadata, LinkBenchmark, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection,
+    DataReady, FoundMetadata, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection,
 };
 use crate::urls::{join_ext, parse_url_ext};
 use crate::utils::time_nanos;
 use crate::websocket_abstractions::open_websocket_connection;
 use crate::websocket_signals::MsgServerToClient;
+use crate::LinkBenchmark;
 use crate::TypeOfConnection::Same;
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
 use crate::{

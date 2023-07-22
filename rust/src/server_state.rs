@@ -10,6 +10,7 @@ use futures::StreamExt;
 use indent::indent_all_with;
 use log::{debug, error, info, warn};
 use maplit::hashmap;
+use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 
@@ -17,6 +18,7 @@ use crate::constants::*;
 use crate::object_queues::*;
 use crate::signals_logic::TopicProperties;
 use crate::structures::*;
+use crate::structures_linkproperties::LinkBenchmark;
 use crate::types::*;
 use crate::{
     context, error_with_info, get_events_stream_inline, get_index, get_metadata, get_queue_id,
@@ -121,9 +123,12 @@ impl ServerState {
                 readable: true,
                 immutable: false,
             },
-            accept_content_type: vec![],
-            produces_content_type: vec![CONTENT_TYPE_DTPS_INDEX_CBOR.to_string()],
-            examples: vec![],
+            content_info: ContentInfo {
+                accept_content_type: vec![],
+                produces_content_type: vec![CONTENT_TYPE_DTPS_INDEX_CBOR.to_string()],
+                schema_json: None,
+                examples: vec![],
+            },
         };
         oqs.insert(TopicName::root(), ObjectQueue::new(tr));
 
@@ -322,9 +327,12 @@ impl ServerState {
                 // }
             ],
             properties: properties.clone(),
-            accept_content_type: vec![content_type.to_string()],
-            produces_content_type: vec![content_type.to_string()],
-            examples: vec![],
+            content_info: ContentInfo {
+                accept_content_type: vec![content_type.to_string()],
+                produces_content_type: vec![content_type.to_string()],
+                schema_json: None,
+                examples: vec![],
+            },
         };
         let oqs = &mut self.oqs;
 
@@ -539,9 +547,12 @@ impl ServerState {
                 reachability: vec![],
                 created: 0,
                 properties: prop,
-                accept_content_type: vec![],
-                produces_content_type: vec![],
-                examples: vec![],
+                content_info: ContentInfo {
+                    accept_content_type: vec![],
+                    produces_content_type: vec![],
+                    examples: vec![],
+                    schema_json: None,
+                },
             };
 
             tr.reachability.push(TopicReachabilityInternal {
@@ -572,9 +583,12 @@ impl ServerState {
                 reachability: vec![],
                 created: 0,
                 properties: prop,
-                accept_content_type: vec![],
-                produces_content_type: vec![],
-                examples: vec![],
+                content_info: ContentInfo {
+                    accept_content_type: vec![],
+                    produces_content_type: vec![],
+                    examples: vec![],
+                    schema_json: None,
+                },
             };
 
             tr.reachability.push(TopicReachabilityInternal {
@@ -840,8 +854,6 @@ pub fn add_from_response(
     }
     Ok(())
 }
-
-use path_clean::PathClean;
 
 pub fn absolute_path(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     let path = path.as_ref();
