@@ -11,7 +11,7 @@ use tokio::task::JoinHandle;
 
 use dtps_http::parse_url_ext;
 use dtps_http::{compute_best_alternative, get_index, get_metadata};
-use dtps_http::{init_logging, listen_events};
+use dtps_http::{estimate_latencies, init_logging};
 
 /// Parameters for client
 #[derive(Parser, Debug)]
@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
             }
 
             if topic_name.as_relative_url().contains("clock") {
-                let handle = spawn(listen_events(topic_name.clone(), md));
+                let handle = spawn(estimate_latencies(topic_name.clone(), md));
                 handles.push(handle);
             }
         }

@@ -11,7 +11,6 @@ use crate::{merge_clocks, Clocks, MinMax, DTPSR};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RawData {
-    // #[serde(with = "serde_bytes")]
     pub content: Bytes,
     pub content_type: String,
 }
@@ -66,18 +65,6 @@ impl ObjectQueue {
         }
     }
 
-    // pub fn push_data(
-    //     &mut self,
-    //     content_type: &str,
-    //     content: &Vec<u8>,
-    //     previous_clocks: Option<Clocks>,
-    // ) -> DataSaved {
-    //     let data = RawData {
-    //         content: content.clone().into(),
-    //         content_type: content_type.to_string(),
-    //     };
-    //     self.push(&data, previous_clocks)
-    // }
     pub fn push(&mut self, data: &RawData, previous_clocks: Option<Clocks>) -> DTPSR<DataSaved> {
         let now = Local::now().timestamp_nanos();
 

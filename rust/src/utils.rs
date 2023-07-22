@@ -70,9 +70,3 @@ pub fn time_nanos() -> u128 {
         .unwrap()
         .as_nanos()
 }
-//
-// pub fn quick_error<T>(s: String) -> Result<T, Box<dyn std::error::Error>> {
-//     let my_error = std::io::Error::new(std::io::ErrorKind::Other, s);
-//     let boxed_error: Box<dyn std::error::Error> = Box::new(my_error);
-//     Err(boxed_error)
-// }

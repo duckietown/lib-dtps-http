@@ -61,17 +61,10 @@ struct MPMC<T> {
 }
 
 struct AnySocketConnection {
-    // pub ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
     pub response: tungstenite::handshake::client::Response,
 
     pub mmpc: MPMC<TM>,
 }
-//
-// struct UnixSocketConnection {
-//     // pub ws_stream: WebSocketStream<UnixStream>,
-//     pub response: tungstenite::handshake::client::Response,
-//     pub mmpc: MPMC<TM >,
-// }
 
 impl AnySocketConnection {
     pub fn from_tcp(
@@ -247,7 +240,7 @@ pub async fn open_websocket_connection_tcp(url: &Url) -> DTPSR<Box<dyn GenericSo
         }
     }
     let (ws_stream, response) = connection;
-    debug!("TCP response: {:#?}", response);
+    // debug!("TCP response: {:#?}", response);
 
     let tcp = AnySocketConnection::from_tcp(ws_stream, response);
 
@@ -309,7 +302,7 @@ pub async fn open_websocket_connection_unix(
         }
     };
 
-    debug!("WS response: {:#?}", response);
+    // debug!("WS response: {:#?}", response);
     // use_stream = EitherStream::UnixStream(socket_stream);
     let res = AnySocketConnection::from_unix(socket_stream, response);
     return Ok(Box::new(res));

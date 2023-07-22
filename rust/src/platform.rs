@@ -4,8 +4,6 @@ use log::debug;
 
 #[cfg(target_os = "linux")]
 pub fn get_other_addresses() -> Vec<String> {
-    println!("You are running Linux!");
-
     let addrs = InterfaceAddrs::query_system().expect("System has no network interfaces.");
     let mut ret = Vec::new();
     ret.push("localhost".to_string());

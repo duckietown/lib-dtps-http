@@ -10,7 +10,7 @@ pub fn make_html(title: &str, body: PreEscaped<String>) -> PreEscaped<String> {
 
                 script src="https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.min.js" {};
                 script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js" {};
-                 title {(title)}
+                title {(title)}
             }
             body {
                 h1 { code {(title)} }

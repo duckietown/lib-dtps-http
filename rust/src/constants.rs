@@ -38,3 +38,7 @@ mod test {
         eprintln!("suffix: {:#?}", content_type.suffix());
     }
 }
+
+pub static REL_EVENTS_NODATA: &'static str = "dtps-events";
+pub static REL_EVENTS_DATA: &'static str = "dtps-events-inline-data";
+pub static REL_META: &'static str = "dtps-meta";

@@ -1,4 +1,4 @@
-use crate::{DTPSError, RawData, DTPSR};
+use crate::{utils_mime, DTPSError, RawData, DTPSR};
 use log::debug;
 
 pub fn get_as_cbor(data: &RawData) -> DTPSR<serde_cbor::Value> {
@@ -101,22 +101,8 @@ pub fn get_inside(
     return get_inside(new_context, &inside, &path);
 }
 
-fn identify_content_presentation(content_type: &str) -> Option<&'static str> {
-    if content_type.ends_with("cbor") {
-        return Some("application/cbor");
-    } else if content_type.ends_with("json") {
-        return Some("application/json");
-    } else if content_type.ends_with("yaml") {
-        return Some("application/yaml");
-    } else if content_type.starts_with("text/") {
-        return Some("text/plain");
-    } else {
-        None
-    }
-}
-
 pub fn display_printable(content_type: &str, content: &[u8]) -> String {
-    let identified = identify_content_presentation(content_type);
+    let identified = utils_mime::identify_content_presentation(content_type);
     if identified.is_none() {
         return format!("Cannot display content type {}", content_type).to_string();
     }

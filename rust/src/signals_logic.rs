@@ -169,11 +169,6 @@ pub struct OtherProxied {
     op: OtherProxyInfo,
 }
 
-// #[derive(Debug, Clone)]
-// struct MakeSignal {
-//     source_type: TypeOFSource,
-//     transforms: Transforms,
-// }
 #[derive(Debug)]
 pub enum ResolvedData {
     RawData(RawData),
@@ -208,16 +203,6 @@ pub trait GetMeta {
     ) -> DTPSR<TopicsIndexInternal>;
 }
 
-// #[async_trait]
-// pub trait GetHTML {
-//     async fn get_meta_index(
-//         &self,
-//         presented_as: &TopicName,
-//         ss_mutex: ServerStateAccess,
-//         headers: HashMap<String, String>,
-//     ) -> DTPSR<PreEscaped<String>>;
-// }
-
 pub trait DataProps {
     fn get_properties(&self) -> TopicProperties;
 }
@@ -244,22 +229,7 @@ impl ResolveDataSingle for TypeOFSource {
 
                 Ok(ResolvedData::RawData(rd))
             }
-            TypeOFSource::OurQueue(q, _, _) => {
-                // if false && q.is_root() {
-                //     let ss = ss_mutex.lock().await;
-                //     let index_internal = ss.create_topic_index();
-                //     let index = index_internal.to_wire(None);
-                //
-                //     let cbor_bytes = serde_cbor::to_vec(&index).unwrap();
-                //     let raw_data = RawData {
-                //         content: Bytes::from(cbor_bytes),
-                //         content_type: CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(),
-                //     };
-                //     Ok(ResolvedData::RawData(raw_data))
-                // } else {
-                our_queue(q, ss_mutex).await
-                // }
-            }
+            TypeOFSource::OurQueue(q, _, _) => our_queue(q, ss_mutex).await,
             TypeOFSource::Compose(_sc) => {
                 let index = self.get_meta_index(presented_as, ss_mutex).await?;
                 // debug!("Compose index intenral:\n {:#?}", index);
@@ -596,64 +566,17 @@ async fn get_sc_meta(
 
     let debug_s = String::new();
     for (prefix, inside) in sc.compose.iter() {
-        // let inside = inside.resolve_data_single(ss_mutex.clone()).await?;
-        // let inside = match inside {
-        //     ResolvedData::Regular(d) => d,
-        //     _ => return Err(format!("Error getting inside")),
-        // };
-        // let inside = match inside {
-        //     CBORValue::Map(m) => m,
-        //     _ => return Err(format!("Error getting inside")),
-        // };
-        // for (topic_name, p1, prefix) in inside {
-        //     let oq = ss.oqs.get(&topic_name).unwrap();
-        //     let rel = prefix.join("/");
-        //
-        //     let rurl = format!("{}/", rel);
-        //
-        //     let dotsep = prefix.join(".");
-        //     topics.insert(dotsep, oq.tr.to_wire(Some(rurl)));
-        // }
-        // let rel = prefix.join("/");
-
-        // let rurl = format!("{}/", rel);
-        // let s = format!("get_sc_meta: prefix: {:?}, rurl: {}\n inside {:#?}", prefix, rurl,
-        //                 inside);
-        // debug_s.push_str(&s);
         let x = inside
             .get_meta_index(presented_as, ss_mutex.clone())
             .await?;
-        // let inside = ts.get_meta_index(ss_mutex.clone()).await?;
-
-        // debug!("get_sc_meta: {:#?} inside: {:#?}", prefix, x);
-
-        // let dotsep = prefix.join(".");
 
         for (a, b) in x.topics {
             let mut tr = b.clone();
 
             tr.app_data
                 .insert("created by get_sc_meta".to_string(), NodeAppData::from(""));
-            //
-            // match is_prefix_of(&presented_as.as_components(),  &a) {
-            //
-            // }
 
             let _url = a.as_relative_url();
-            //
-            // tr.reachability.push(
-            //     TopicReachabilityInternal {
-            //         con: TypeOfConnection::Relative(url, None),
-            //         answering: node_id.clone(),
-            //         forwarders: vec![],
-            //         benchmark: LinkBenchmark::identity(),
-            //     }
-            //
-            // );
-
-            // let its = divide_in_components(&a, '.');
-            //
-            // let full: Vec<String> = vec_concat(&prefix, &its);
 
             let a_with_prefix = a.add_prefix(&prefix);
 
@@ -662,19 +585,7 @@ async fn get_sc_meta(
 
             topics.insert(a_with_prefix, tr);
         }
-
-        // topics.insert(dotsep, oq.tr.to_wire(Some(rurl)));
     }
-    // for (topic_name, p1, prefix) in subtopics {
-    //     let oq = ss.oqs.get(&topic_name).unwrap();
-    //     let rel = prefix.join("/");
-    //
-    //     let rurl = format!("{}/", rel);
-    //
-    //     let dotsep = prefix.join(".");
-    //     topics.insert(dotsep, oq.tr.to_wire(Some(rurl)));
-    // }
-
     node_app_data.insert("get_sc_meta".to_string(), debug_s);
     let ss = ss_mutex.lock().await;
 
@@ -684,14 +595,6 @@ async fn get_sc_meta(
         node_app_data,
         topics,
     };
-    //
-    // return topics_index;
-    //
-    //     let index = topics_index(&ss);
-    //     let cbor_bytes = serde_cbor::to_vec(&index).unwrap();
-    //     cbor_bytes
-    //
-    //     debug!("get_sc_meta: END: {:#?}", index);
     Ok(index)
 }
 
@@ -700,9 +603,6 @@ async fn single_compose(
     presented_as: &TopicName,
     ss_mutex: ServerStateAccess,
 ) -> DTPSR<ResolvedData> {
-    // let ss = ss_mutex.lock().await;
-
-    // let mut result_dict = BTreeMap::new();
     let mut result_dict: serde_cbor::value::Value = serde_cbor::value::Value::Map(BTreeMap::new());
 
     for (prefix, source) in &sc.compose {
@@ -845,16 +745,7 @@ pub async fn interpret_path(
                 content_type.to_string(),
             ));
         }
-
-        // return Err("Empty path".to_string());
     }
-
-    // look for all the keys in our queues
-    // let keys: Vec<TopicName> = {
-    //     let ss = ss_mutex.lock().await;
-    //     ss.oqs.keys().cloned().collect()
-    // };
-    // log::debug!(" = path_components = {:?} ", path_components);
 
     {
         let ss = ss_mutex.lock().await;
@@ -956,14 +847,6 @@ pub fn iterate_type_of_sources(s: &ServerState) -> Vec<(TopicName, TypeOFSource)
             properties: x.tr_original.properties.clone(),
         };
         res.push((topic_name.clone(), TypeOFSource::ForwardedQueue(fq)));
-
-        // let x = ForwardedQueue {
-        //     proxied: "".to_string(),
-        //     his_topic_name: (),
-        //     my_topic_name: (),
-        // }
-        //
-        // res.insert(topic_name.clone(), TypeOFSource::Proxy(x.clone()));
     }
 
     for (topic_name, oq) in s.oqs.iter() {

@@ -16,8 +16,6 @@ use crate::{join_con, RawData, TopicName};
 
 pub type NodeAppData = String;
 
-// pub type DottedName = String;
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TopicsIndexWire {
     pub node_id: String,
@@ -78,15 +76,6 @@ impl TopicsIndexInternal {
             node_app_data: self.node_app_data.clone(),
             topics,
         };
-        // let mut topic_ref_internal = TopicRefInternal::new();
-        // topic_ref_internal.add_path(rel);
-        // topics.insert("path".to_string(), topic_ref_internal);
-        // TopicsIndexInternal {
-        //     node_id: "path".to_string(),
-        //     node_started: 0,
-        //     node_app_data: HashMap::new(),
-        //     topics,
-        // }
     }
 }
 
@@ -335,15 +324,18 @@ impl Display for FilePaths {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeOfConnection {
-    /// a
+    /// TCP Connection
     TCP(Url),
-    File(Option<String>, FilePaths),
-    /// b
+    /// Unix socket connection
     UNIX(UnixCon),
-    /// c
+    /// A file or dir in the filesystem
+    File(Option<String>, FilePaths),
+
+    /// Path relative to context (used in indices)
     Relative(String, Option<String>),
-    // path, query
-    Same(), // path, query
+
+    /// Exactly same context
+    Same(),
 }
 
 impl TypeOfConnection {
@@ -529,12 +521,7 @@ pub struct FoundMetadata {
 pub fn get_url_from_topic_name(topic_name: &str) -> String {
     let components = divide_in_components(topic_name, '.');
     make_rel_url(&components)
-
-    // let as_url = get_good_url_for_components(&components);
-    // as_url
 }
-// let components = divide_in_components(topic_name, '.');
-//                 let as_url = get_good_url_for_components(&components);
 
 pub fn make_rel_url(a: &Vec<String>) -> String {
     let mut url = String::new();

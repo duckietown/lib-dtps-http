@@ -1,12 +1,11 @@
+use http::Response;
 use hyper::Body;
 use include_dir::{include_dir, Dir};
-
 use maud::{html, DOCTYPE};
 use mime_guess::from_path;
 use warp::{Rejection, Reply};
-// use warp::reply::Response;
+
 use crate::HandlersResponse;
-use http::Response;
 
 // Embed the static directory into the crate
 pub const STATIC_FILES: Dir = include_dir!("$CARGO_MANIFEST_DIR/static");
@@ -17,6 +16,7 @@ pub async fn serve_static_file2(
 ) -> Result<impl Reply, Rejection> {
     serve_static_file(path).await
 }
+
 pub async fn serve_static_file_empty() -> Result<impl Reply, Rejection> {
     serve_static_file_path("").await
 }
@@ -41,8 +41,8 @@ pub async fn reply_for_dir(path: &str) -> Result<Response<Body>, Rejection> {
 
         html {
             head {
-                  link rel="icon" type="image/png" href="/static/favicon.png" ;
-                link rel="stylesheet" href="/static/style.css" ;
+                link rel="icon" type="image/png" href="!/static/favicon.png";
+                link rel="stylesheet" href="!/static/style.css";
                 title { "DTPS Server" }
             }
             body {

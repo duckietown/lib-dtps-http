@@ -241,8 +241,6 @@ mod tests {
                 query: None,
             })
         );
-        // let x = parse_url_ext("/the/path?ade").unwrap();
-        // warn!("test_add_two {:?}", x);
     }
 
     #[test]
@@ -260,40 +258,28 @@ mod tests {
                 query: None,
             })
         );
-        // let x = parse_url_ext("/the/path?ade").unwrap();
-        // warn!("test_add_two {:?}", x);
     }
 
     #[test]
     fn url_parse_3() {
-        // without end /
         let s = "file:///abs/file";
-        //         file://localhost/etc/fstab
-        // file:///etc/fstab
         let x = super::parse_url_ext(s).unwrap();
-        debug!("test_p1 {s:?} {x:?}");
+        // debug!("test_p1 {s:?} {x:?}");
         assert_eq!(
             x,
             super::TypeOfConnection::File(None, FilePaths::Absolute("/abs/file".to_string()))
         );
-        // let x = parse_url_ext("/the/path?ade").unwrap();
-        // warn!("test_add_two {:?}", x);
     }
 
     #[test]
     fn url_parse_4() {
         // without end /
         let s = "./reldir";
-        //         file://localhost/etc/fstab
-        // file:///etc/fstab
         let x = super::parse_url_ext(s).unwrap();
-        debug!("test_p1 {s:?} {x:?}");
         assert_eq!(
             x,
             super::TypeOfConnection::File(None, FilePaths::Relative("reldir".to_string()))
         );
-        // let x = parse_url_ext("/the/path?ade").unwrap();
-        // warn!("test_add_two {:?}", x);
     }
     #[test]
     fn url_parse_4c() {
@@ -303,39 +289,27 @@ mod tests {
             x,
             super::TypeOfConnection::File(None, FilePaths::Relative("reldir".to_string()))
         );
-        // let x = parse_url_ext("/the/path?ade").unwrap();
-        // warn!("test_add_two {:?}", x);
     }
 
     #[test]
     fn url_parse_4b() {
-        // without end /
         let s = "./reldir/";
-        //         file://localhost/etc/fstab
-        // file:///etc/fstab
         let x = super::parse_url_ext(s).unwrap();
         debug!("test_p1 {s:?} {x:?}");
         assert_eq!(
             x,
             super::TypeOfConnection::File(None, FilePaths::Relative("reldir".to_string()))
         );
-        // let x = parse_url_ext("/the/path?ade").unwrap();
-        // warn!("test_add_two {:?}", x);
     }
 
     #[test]
     fn url_parse_5() {
-        // without end /
         let s = "/abs/dir/";
-        //         file://localhost/etc/fstab
-        // file:///etc/fstab
         let x = super::parse_url_ext(s).unwrap();
         assert_eq!(
             x,
             super::TypeOfConnection::File(None, FilePaths::Absolute("/abs/dir".to_string()))
         );
-        // let x = parse_url_ext("/the/path?ade").unwrap();
-        // warn!("test_add_two {:?}", x);
     }
 
     #[test]

@@ -2,16 +2,17 @@
 // #![cfg_attr(debug_assertions, allow(unused_variables))]
 #![cfg_attr(debug_assertions, allow(unused_imports))]
 
-mod cbor_manipulation;
+pub mod cbor_manipulation;
 pub mod client;
-mod cloudflare;
+pub mod cloudflare;
 pub mod constants;
-mod html_utils;
+pub mod errors;
+pub mod html_utils;
 pub mod logs;
-mod master;
+pub mod master;
 pub mod misc;
 pub mod object_queues;
-mod platform;
+pub mod platform;
 pub mod server;
 pub mod server_state;
 pub mod signals_logic;
@@ -19,16 +20,14 @@ pub mod static_files;
 pub mod structures;
 pub mod types;
 pub mod urls;
-mod utils;
-pub use utils::*;
-pub mod errors;
-mod websocket_abstractions;
-mod websocket_signals;
-
-pub use errors::*;
-
+pub mod utils;
+pub mod utils_headers;
+pub mod utils_mime;
+pub mod websocket_abstractions;
+pub mod websocket_signals;
 pub use client::*;
 pub use constants::*;
+pub use errors::*;
 pub use logs::*;
 pub use misc::*;
 pub use object_queues::*;
@@ -39,6 +38,10 @@ pub use static_files::*;
 pub use structures::*;
 pub use types::*;
 pub use urls::*;
+pub use utils::*;
+pub use utils_headers::*;
+pub use utils_mime::*;
+
 pub use DTPSServer;
 
 pub mod built_info {

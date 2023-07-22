@@ -1,4 +1,3 @@
-use bytes::Bytes;
 use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
@@ -6,6 +5,7 @@ use std::path::Path;
 use std::string::ToString;
 use std::sync::Arc as StdArc;
 
+use bytes::Bytes;
 use chrono::Local;
 use clap::Parser;
 use futures::stream::{SplitSink, SplitStream};
@@ -18,7 +18,6 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
 use tokio::net::UnixListener;
-use tokio::process::Command;
 use tokio::signal::unix::SignalKind;
 use tokio::spawn;
 use tokio::sync::broadcast::error::RecvError;
@@ -30,23 +29,24 @@ use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
 use tokio_stream::wrappers::{UnboundedReceiverStream, UnixListenerStream};
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
-
 use warp::hyper::Body;
 use warp::reply::Response;
 use warp::{Filter, Rejection};
 
-use crate::cloudflare::CloudflareTunnel;
+use crate::cloudflare::open_cloudflare;
 use crate::constants::*;
 use crate::html_utils::make_html;
-
 use crate::master::{
-    handle_websocket_generic2, put_common_headers, put_header_content_type, put_header_location,
-    put_meta_headers, put_source_headers, serve_master_get, serve_master_head, serve_master_post,
+    handle_websocket_generic2, serve_master_get, serve_master_head, serve_master_post,
 };
 use crate::object_queues::*;
 use crate::server_state::*;
 use crate::structures::*;
 use crate::utils::divide_in_components;
+use crate::utils_headers::{
+    put_common_headers, put_header_content_type, put_header_location, put_meta_headers,
+    put_source_headers,
+};
 use crate::websocket_signals::{
     ChannelInfo, ChannelInfoDesc, Chunk, MsgClientToServer, MsgServerToClient,
 };
@@ -102,7 +102,6 @@ impl DTPSServer {
 
         let clone_access = warp::any().map(move || server_state_access.clone());
 
-        // let static_route = warp::path("static").and(warp::fs::dir(dir_to_pathbuf(STATIC_FILES)));
         let master_route_get = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
             .and(warp::get())
@@ -160,15 +159,7 @@ impl DTPSServer {
             .or(master_route_get)
             .or(master_route_post)
             .recover(handle_rejection);
-        // .or(static_route)
-        // .or(static_route_empty)
-        // .or(static_route2)
-        // .or(topic_generic_events_route)
-        // .or(topic_generic_route_head)
-        // .or(topic_generic_route_get)
-        // .or(root_route)
-        // .or(topic_generic_route_data)
-        // .or(topic_post);
+
         let mut handles = vec![];
 
         if let Some(address) = self.listen_address {
@@ -208,35 +199,8 @@ impl DTPSServer {
             (&self.cloudflare_tunnel_name, self.listen_address)
         {
             let port = address.port();
-            // open the file as json and get TunnelID
-            let contents = std::fs::File::open(tunnel_file).expect("file not found");
-            let tunnel_info: CloudflareTunnel =
-                serde_json::from_reader(contents).expect("error while reading file");
-            let hoststring_127 = format!("127.0.0.1:{}", port);
-            let cmdline = [
-                "tunnel",
-                "run",
-                "--protocol",
-                "http2",
-                // "--no-autoupdate",
-                "--cred-file",
-                &tunnel_file,
-                "--url",
-                &hoststring_127,
-                &tunnel_info.TunnelID,
-            ];
-            info!("starting tunnel: {:?}", cmdline);
+            let handle = open_cloudflare(port, tunnel_file, &self.cloudflare_executable).await;
 
-            let mut child = Command::new(&self.cloudflare_executable)
-                .args(cmdline)
-                // .stdout(Stdio::piped())
-                .spawn()
-                .expect("Failed to start ping process");
-
-            let handle = spawn(async move {
-                let output = child.wait().await;
-                error!("tunnel exited: {:?}", output);
-            });
             handles.push(handle);
         }
 
@@ -294,7 +258,6 @@ impl DTPSServer {
             }
             handles.push(handle);
         }
-        // let (shutdown_send, shutdown_recv) = mpsc::unbounded_channel();
 
         spawn(clock_go(
             self.get_lock(),
@@ -327,11 +290,8 @@ impl DTPSServer {
         let mut sig_int = tokio::signal::unix::signal(SignalKind::interrupt())?;
 
         let pid = std::process::id();
-        // s.info(format!("PID: {}", pid));
         info!("PID: {}", pid);
         let res: DTPSR<()>;
-        // let first = handles.get_mut(0).unwrap();
-        // first.await;
         tokio::select! {
 
             _ = sig_int.recv() => {
@@ -382,59 +342,7 @@ impl DTPSServer {
         subcription_name: &String,
         mounted_at: &TopicName,
         url: TypeOfConnection,
-    ) -> DTPSR<()> {
-        // let (md, index_internal) = loop {
-        //     match get_proxy_info(&url).await {
-        //         Ok(s) => break s,
-        //         Err(e) => {
-        //             error_with_info!(
-        //                 "add_proxied: error getting proxy info for proxied {:?} at {}: \n {}",
-        //                 proxied_name, url, e
-        //             );
-        //             info!("add_proxied: retrying in 2 seconds");
-        //             sleep(std::time::Duration::from_secs(2)).await;
-        //             continue;
-        //         }
-        //     }
-        // };
-        //
-        // let index_internal =
-        //     loop {
-        //         match (
-        //             md = get_metadata(&url).await
-        //                 .with_context(|| {
-        //                     format!(
-        //                         "Error getting metadata for proxied {:?} at {}",
-        //                         proxied_name, url
-        //                     )
-        //                 })?;
-        //
-        //             debug!("add_proxied: md:\n{:#?}", md);
-        //             get_index(&url).await
-        //         ) {}
-        //
-        //         //     .or_else(
-        //         //     |e| {
-        //         //         error_with_info!("add_proxied: error getting index for proxied {:?} at {}: \n {}", proxied_name, url, e);
-        //         //         Err(e)
-        //         //     }
-        //         // )?;
-        //
-        //         // sleep 5 seconds
-        //         tokio::time::sleep(Duration::from_secs(5)).await;
-        //     }
-        //     ;
-
-        // let md = match get_metadata(&url).await {
-        //     Ok(md) => md,
-        //     Err(e) => {
-        //         return DTPSError::not_reachable(format!(
-        //             "Error getting metadata for proxied {:?} at {}: \n {}",
-        //             proxied_name, url, e
-        //         ));
-        //     }
-        // };
-
+    ) -> DTPSR<JoinHandle<()>> {
         let ssa = self.get_lock();
 
         // let proxied_name = TopicName::from_dotted(proxied_name);
@@ -445,42 +353,14 @@ impl DTPSServer {
             url.clone(),
             ssa,
         );
-        let _handle = tokio::spawn(show_errors(
+        let handle = tokio::spawn(show_errors(
             format!("observe_proxy {subcription_name} : {url}"),
             future,
         ));
 
-        //
-        // self.proxied.insert(
-        //     proxied_name.clone(),
-        //     ForwardInfo {
-        //         url: url.clone(),
-        //         md,
-        //         index_internal,
-        //         handle,
-        //     },
-        // );
-        // debug!("add_proxied: done, now:\n{:#?}", self.proxied);
-        // self.update_my_topic()?;
-
-        // add_context!(std::fs::read_to_string("my_file.txt"), "Failed to read file");
-
-        Ok(())
+        Ok(handle)
     }
 }
-
-// async fn check_exists(
-//     topic_name: String,
-//     ss_mutex: ServerStateAccess,
-// ) -> Result<String, Rejection> {
-//     let ss = ss_mutex.lock().await;
-//
-//     match ss.oqs.get(topic_name.as_str()) {
-//         None => Err(warp::reject::not_found()),
-//         // Some(_) => Err(warp::reject::not_found()),
-//         Some(_) => Ok(topic_name),
-//     }
-// }
 
 pub fn get_accept_header(headers: &HeaderMap) -> Vec<String> {
     let accept_header = headers.get("accept");
@@ -1024,21 +904,22 @@ async fn handler_topic_generic_data(
 
             html {
                 head {
-                      link rel="icon" type="image/png" href="/static/favicon.png" ;
-                    link rel="stylesheet" href="/static/style.css" ;
+                    link rel="icon" type="image/png" href="!/static/favicon.png" ;
+                    link rel="stylesheet" href="!/static/style.css" ;
                     title { (digest) }
                 }
                 body {
-             p { "This data is presented as HTML because you requested it as such."}
-                     p { "Content type: " code { (content_type) } }
-                     p { "Content length: " (content.len()) }
+                    p { "This data is presented as HTML because you requested it as such."}
+                    p { "Content type: " code { (content_type) } }
+                    p { "Content length: " (content.len()) }
 
-            pre {
-                code {
+                    pre {
+                        code {
                              (display)
-                    // (serde_yaml::to_string(&index).unwrap())
+                        }
+                    }
                 }
-            }}}
+            }
         };
 
         let markup = x.into_string();

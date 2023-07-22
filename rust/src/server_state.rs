@@ -44,16 +44,12 @@ pub struct ForwardInfo {
 #[derive(Debug)]
 pub struct ProxiedTopicInfo {
     pub tr_original: TopicRefInternal,
-    // pub tr: TopicRefInternal,
     pub from_subscription: String,
     pub its_topic_name: TopicName,
-    // pub handle: JoinHandle<DTPSR<()>>,
     pub data_url: TypeOfConnection,
 
     pub reachability_we_used: TopicReachabilityInternal,
-    // pub forwarding_steps: Vec<ForwardingStep>,
     pub link_benchmark_last: LinkBenchmark,
-    // pub link_benchmark_total: LinkBenchmark,
 }
 
 #[derive(Debug, Clone)]
@@ -356,13 +352,6 @@ impl ServerState {
 
         Ok(())
     }
-    // pub fn make_sure_topic_exists(&mut self, topic_name: &str,
-    // p: &TopicProperties) {
-    //     if !self.oqs.contains_key(topic_name) {
-    //         info!("Queue {:?} does not exist, creating it.", topic_name);
-    //         return self.new_topic(topic_name, None, p);
-    //     }
-    // }
 
     pub fn publish<B: AsRef<[u8]>, C: AsRef<str>>(
         &mut self,
@@ -387,9 +376,11 @@ impl ServerState {
 
         oq.push(&data, clocks)
     }
+
     pub fn save_blob(&mut self, digest: &str, content: &[u8]) {
         self.blobs.insert(digest.to_string(), content.to_vec());
     }
+
     pub fn get_blob(&self, digest: &str) -> Option<&Vec<u8>> {
         return self.blobs.get(digest);
     }
@@ -404,6 +395,7 @@ impl ServerState {
             }
         }
     }
+
     pub fn publish_object_as_json<T: Serialize>(
         &mut self,
         topic_name: &TopicName,
@@ -413,6 +405,7 @@ impl ServerState {
         let data_json = serde_json::to_string(object).unwrap();
         return self.publish_json(topic_name, data_json.as_str(), clocks);
     }
+
     pub fn publish_object_as_yaml<T: Serialize>(
         &mut self,
         topic_name: &TopicName,
@@ -432,6 +425,7 @@ impl ServerState {
         let data_cbor = serde_cbor::to_vec(object).unwrap();
         return self.publish_cbor(topic_name, &data_cbor, clocks);
     }
+
     pub fn publish_cbor(
         &mut self,
         topic_name: &TopicName,
@@ -440,6 +434,7 @@ impl ServerState {
     ) -> DTPSR<DataSaved> {
         self.publish(topic_name, content, "application/cbor", clocks)
     }
+
     pub fn publish_json(
         &mut self,
         topic_name: &TopicName,
@@ -449,6 +444,7 @@ impl ServerState {
         let bytesdata = json_content.as_bytes().to_vec();
         self.publish(topic_name, &bytesdata, "application/json", clocks)
     }
+
     pub fn publish_yaml(
         &mut self,
         topic_name: &TopicName,
@@ -458,6 +454,7 @@ impl ServerState {
         let bytesdata = yaml_content.as_bytes().to_vec();
         self.publish(topic_name, &bytesdata, "application/yaml", clocks)
     }
+
     pub fn publish_plain(
         &mut self,
         topic_name: &TopicName,
@@ -731,8 +728,7 @@ pub async fn observe_node_proxy(
         if who_answers == ss.node_id {
             return invalid_input!(
                 "observe_node_proxy: invalid proxy connection: we find ourselves at the connection {url}"
-
-                );
+            );
         }
     }
 
@@ -801,9 +797,6 @@ pub async fn observe_node_proxy(
         }
     }
 
-    // debug!("observe_proxy: done, now:\n{:#?}", ss.proxied);
-    // ss.update_my_topic()?;
-
     Ok(())
 }
 
@@ -816,7 +809,6 @@ pub fn add_from_response(
     link_benchmark1: LinkBenchmark,
     _connected_url: String,
 ) -> DTPSR<()> {
-    // let mut l = hashmap! {};
     // debug!("topics_index: tii: \n{:#?}", tii);
     for (its_topic_name, tr) in tii.topics.iter() {
         if its_topic_name.is_root() {
@@ -836,17 +828,7 @@ pub fn add_from_response(
             ));
         }
         let reachability_we_used = tr.reachability.get(0).unwrap();
-        // let mut forwarders = we_use.forwarders.clone();
-        //
-        // forwarders.push(ForwardingStep {
-        //     forwarding_node: s.node_id.clone(),
-        //     forwarding_node_connects_to: connected_url.clone(),
-        //
-        //     performance: link_benchmark1.clone(),
-        // });
-        // let link_benchmark_total = we_use.benchmark.clone() + link_benchmark1.clone();
 
-        // let we_use_url = tr.reachability.get(0).unwrap().con.clone();
         s.new_proxy_topic(
             subscription.clone(),
             &its_topic_name,
@@ -857,25 +839,6 @@ pub fn add_from_response(
         )?;
     }
     Ok(())
-    //         let prefix = divide_in_components(&proxied, '.');
-    //
-    //         let url = get_url_from_topic_name(proxied);
-    //         let tr = fi.index_internal.add_path(url);
-    //         l.insert(
-    //             proxied.clone(),
-    //             tr.topics.keys().cloned().collect::<Vec<_>>(),
-    //         );
-    //         for (a, b) in tr.topics {
-    //             let its = divide_in_components(&a, '.');
-    //             let full: Vec<String> = vec_concat(&prefix, &its);
-    //
-    //             let rurl = make_rel_url(&prefix);
-    //             let b2 = b.add_path(&rurl);
-    //
-    //             let dotsep = full.join(".");
-    //             topics.insert(dotsep, b2);
-    //         }
-    //     }
 }
 
 use path_clean::PathClean;

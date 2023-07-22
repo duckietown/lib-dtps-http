@@ -50,7 +50,7 @@ pub async fn get_events_stream_inline(
     (handle, stream)
 }
 
-pub async fn listen_events(which: TopicName, md: FoundMetadata) {
+pub async fn estimate_latencies(which: TopicName, md: FoundMetadata) {
     // let (tx, rx) = mpsc::unbounded_channel();
     let inline_url = md.events_data_inline_url.unwrap().clone();
 

@@ -38,14 +38,6 @@ impl TopicName {
     pub fn is_root(&self) -> bool {
         self.components.is_empty()
     }
-    // formats as "a.b.c"
-    // pub fn as_dotted(&self) -> &str {
-    //     &self.dotted
-    // }
-
-    // pub fn to_dotted(&self) -> String {
-    //     self.dotted.to_string()
-    // }
 
     pub fn to_relative_url(&self) -> String {
         self.as_relative_url().to_string()
@@ -100,15 +92,3 @@ impl<'a> Add for &'a TopicName {
         other.add_prefix(&self.components)
     }
 }
-
-// impl<S: AsRef<str>> From<S> for TopicName {
-//     fn from(s: S) -> Self {
-//         TopicName(s.as_ref().to_string())
-//     }
-// }
-//
-// impl Into<String> for TopicName {
-//     fn into(self) -> String {
-//         self.0
-//     }
-// }

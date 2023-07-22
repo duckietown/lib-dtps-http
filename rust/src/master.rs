@@ -10,7 +10,7 @@ use maud::{html, PreEscaped};
 use tokio::spawn;
 use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
+use tungstenite::http::{HeaderMap, StatusCode};
 use tungstenite::Message as TungsteniteMessage;
 use warp::http::header;
 use warp::hyper::Body;
@@ -28,13 +28,11 @@ use crate::utils::{divide_in_components, get_good_url_for_components};
 use crate::websocket_abstractions::open_websocket_connection;
 use crate::websocket_signals::MsgClientToServer;
 use crate::{
-    do_receiving, error_with_info, get_accept_header, get_id_string, get_metadata,
-    handle_topic_post, handle_websocket_queue, handler_topic_generic, not_implemented,
-    object_queues, put_alternative_locations, receive_from_websocket, root_handler,
-    serve_static_file_path, HandlersResponse, ObjectQueue, ServerState, ServerStateAccess,
-    TopicName, TopicsIndexInternal, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR, EVENTS_SUFFIX,
-    EVENTS_SUFFIX_DATA, HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID, HEADER_NODE_ID,
-    HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
+    do_receiving, error_with_info, get_accept_header, get_metadata, handle_topic_post,
+    handle_websocket_queue, handler_topic_generic, not_implemented, object_queues,
+    put_alternative_locations, receive_from_websocket, root_handler, serve_static_file_path,
+    utils_headers, utils_mime, HandlersResponse, ObjectQueue, ServerStateAccess, TopicName,
+    TopicsIndexInternal, DTPSR, JAVASCRIPT_SEND,
 };
 
 pub async fn serve_master_post(
@@ -122,13 +120,13 @@ pub async fn serve_master_head(
             let empty_vec: Vec<u8> = Vec::new();
             let mut resp = Response::new(Body::from(empty_vec));
             let h = resp.headers_mut();
-            put_source_headers(h, &x.tr.origin_node, &x.tr.unique_id);
+            utils_headers::put_source_headers(h, &x.tr.origin_node, &x.tr.unique_id);
 
-            put_meta_headers(h);
+            utils_headers::put_meta_headers(h);
 
             let suffix = topic_name.as_relative_url();
             put_alternative_locations(&ss, h, &suffix);
-            put_common_headers(&ss, h);
+            utils_headers::put_common_headers(&ss, h);
             return Ok(resp.into());
         }
         TypeOFSource::ForwardedQueue(fq) => {
@@ -140,13 +138,13 @@ pub async fn serve_master_head(
             let empty_vec: Vec<u8> = Vec::new();
             let mut resp = Response::new(Body::from(empty_vec));
             let h = resp.headers_mut();
-            put_source_headers(h, &tr.origin_node, &tr.unique_id);
-            put_meta_headers(h);
+            utils_headers::put_source_headers(h, &tr.origin_node, &tr.unique_id);
+            utils_headers::put_meta_headers(h);
             // let suffix = topic_name.as_relative_url();
             // put_alternative_locations(&ss, h, &suffix);
             {
                 let ss = ss_mutex.lock().await;
-                put_common_headers(&ss, h);
+                utils_headers::put_common_headers(&ss, h);
             }
             return Ok(resp.into());
         }
@@ -171,12 +169,12 @@ pub async fn serve_master_head(
                 let empty_vec: Vec<u8> = Vec::new();
                 let mut resp = Response::new(Body::from(empty_vec));
                 let h = resp.headers_mut();
-                put_source_headers(h, &x.tr.origin_node, &x.tr.unique_id);
+                utils_headers::put_source_headers(h, &x.tr.origin_node, &x.tr.unique_id);
 
-                put_meta_headers(h);
+                utils_headers::put_meta_headers(h);
                 let suffix = topic_name.as_relative_url();
                 put_alternative_locations(&ss, h, &suffix);
-                put_common_headers(&ss, h);
+                utils_headers::put_common_headers(&ss, h);
                 return Ok(resp.into());
             } else {
             }
@@ -188,74 +186,6 @@ pub async fn serve_master_head(
     }
 
     serve_master_get(path, query, ss_mutex, headers).await
-}
-
-pub fn put_link_header(
-    h: &mut HeaderMap<HeaderValue>,
-    url: &str,
-    rel: &str,
-    content_type: Option<&str>,
-) {
-    let s = match content_type {
-        None => {
-            format!("<{url}>; rel={rel}")
-        }
-        Some(c) => {
-            format!("<{url}>; rel={rel}; type={c}")
-        }
-    };
-    h.append("Link", HeaderValue::from_str(&s).unwrap());
-}
-
-pub static REL_EVENTS_NODATA: &'static str = "dtps-events";
-pub static REL_EVENTS_DATA: &'static str = "dtps-events-inline-data";
-pub static REL_META: &'static str = "dtps-meta";
-
-pub fn put_source_headers(h: &mut HeaderMap<HeaderValue>, origin_node: &str, unique_id: &str) {
-    h.append(
-        HEADER_DATA_ORIGIN_NODE_ID,
-        HeaderValue::from_str(origin_node).unwrap(),
-    );
-    h.append(
-        HEADER_DATA_UNIQUE_ID,
-        HeaderValue::from_str(unique_id).unwrap(),
-    );
-}
-
-pub fn put_header_location(h: &mut HeaderMap<HeaderValue>, location: &str) {
-    h.append(
-        header::CONTENT_LOCATION,
-        HeaderValue::from_str(location).unwrap(),
-    );
-}
-pub fn put_header_content_type(h: &mut HeaderMap<HeaderValue>, content_type: &str) {
-    h.append(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(content_type).unwrap(),
-    );
-}
-
-pub fn put_common_headers(ss: &ServerState, headers: &mut HeaderMap<HeaderValue>) {
-    headers.append(
-        header::SERVER,
-        HeaderValue::from_str(get_id_string().as_str()).unwrap(),
-    );
-    headers.append(
-        HEADER_NODE_ID,
-        HeaderValue::from_str(ss.node_id.as_str()).unwrap(),
-    );
-}
-
-pub fn put_meta_headers(h: &mut HeaderMap<HeaderValue>) {
-    h.append(HEADER_SEE_EVENTS, HeaderValue::from_static(EVENTS_SUFFIX));
-    h.append(
-        HEADER_SEE_EVENTS_INLINE_DATA,
-        HeaderValue::from_static(EVENTS_SUFFIX_DATA),
-    );
-
-    put_link_header(h, EVENTS_SUFFIX, REL_EVENTS_NODATA, Some("websocket"));
-    put_link_header(h, EVENTS_SUFFIX_DATA, REL_EVENTS_DATA, Some("websocket"));
-    put_link_header(h, ":meta", REL_META, Some(CONTENT_TYPE_DTPS_INDEX_CBOR));
 }
 
 fn path_normalize(path: &warp::path::FullPath) -> String {
@@ -459,14 +389,6 @@ pub async fn serve_master_get(
     .await;
 }
 
-fn is_html(content_type: &str) -> bool {
-    content_type.starts_with("text/html")
-}
-
-fn is_image(content_type: &str) -> bool {
-    content_type.starts_with("image/")
-}
-
 pub async fn visualize_data(
     properties: &TopicProperties,
     title: String,
@@ -480,29 +402,29 @@ pub async fn visualize_data(
     let default_content_type = "application/yaml";
     let initial_value = "{}";
     let js = PreEscaped(JAVASCRIPT_SEND);
-    if !is_html(content_type)
-        && !is_image(content_type)
+    if !utils_mime::is_html(content_type)
+        && !utils_mime::is_image(content_type)
         && accept_headers.contains(&"text/html".to_string())
     {
         let x = make_html(
             &title,
             html! {
 
-                 p { "This data is presented as HTML because you requested it as such."}
-                         p { "Content type: " code { (content_type) } }
-                         p { "Content length: " (content.len()) }
+                p { "This data is presented as HTML because you requested it as such."}
+                p { "Content type: " code { (content_type) } }
+                p { "Content length: " (content.len()) }
 
-                            (extra_html)
+                (extra_html)
 
-                  div  {
-
-                @if properties.streamable {
-                    h3 { "notifications using websockets"}
-                    div {pre   id="result" { "result will appear here" }}
+                div {
+                    @if properties.streamable {
+                        h3 { "notifications using websockets"}
+                        div {pre   id="result" { "result will appear here" }}
+                    }
                 }
-            }
-            div {
-                @if properties.pushable {
+
+                div {
+                    @if properties.pushable {
                         h3 {"push JSON to queue"}
 
                         textarea id="myTextAreaContentType" { (default_content_type) };
@@ -511,23 +433,21 @@ pub async fn visualize_data(
                         br;
 
                         button id="myButton" { "push" };
-                }
+                    }
+                } // div
 
-
-
-            } // div
                 @if properties.pushable || properties.streamable {
 
-                 script src="!/static/send.js" {};
-
-                script type="text/javascript" { (js) };
+                    script src="!/static/send.js" {};
+                    script type="text/javascript" { (js) };
                 }
 
-              pre {
+                pre {
                     code {
-                                 (display)
+                        (display)
                     }
                 }
+
             },
         );
 
@@ -535,39 +455,15 @@ pub async fn visualize_data(
         let mut resp = Response::new(Body::from(markup));
         let headers = resp.headers_mut();
 
-        put_header_content_type(headers, "text/html");
-        // put_alternative_locations(&ss, headers, "");
+        utils_headers::put_header_content_type(headers, "text/html");
         return Ok(resp);
-        // return Ok(with_status(resp, StatusCode::OK));
     };
 
     let mut resp = Response::new(Body::from(content.to_vec()));
     let h = resp.headers_mut();
-    // let suffix = format!("topics/{}/", topic_name);
-    // put_alternative_locations(&ss, h, &suffix);
-    //
-    // h.insert(
-    //     HEADER_DATA_ORIGIN_NODE_ID,
-    //     HeaderValue::from_str(x.tr.origin_node.as_str()).unwrap(),
-    // );
-    // h.insert(
-    //     HEADER_DATA_UNIQUE_ID,
-    //     HeaderValue::from_str(x.tr.unique_id.as_str()).unwrap(),
-    // );
-    put_header_content_type(h, content_type);
-    put_meta_headers(h);
-    //
-    // // see events
-    // h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static(EVENTS_SUFFIX));
-    // h.insert(
-    //     HEADER_SEE_EVENTS_INLINE_DATA,
-    //     HeaderValue::from_static(EVENTS_SUFFIX_DATA),
-    // );
-    //
-    // let val = format!("<{EVENTS_SUFFIX_DATA}/>; rel=dtps-events");
-    // h.insert("Link", HeaderValue::from_str(&val).unwrap());
 
-    // put_common_headers(&ss, resp.headers_mut());
+    utils_headers::put_header_content_type(h, content_type);
+    utils_headers::put_meta_headers(h);
 
     Ok(resp.into())
 }
@@ -580,16 +476,6 @@ pub async fn handle_websocket_generic2(
 ) -> () {
     let (mut ws_tx, ws_rx) = ws.split();
     let (receiver, join_handle) = receive_from_websocket(ws_rx);
-
-    // let msg = Message::text("closing with error");
-    //            let _ = ws_tx.send(msg).await.map_err(|e| {
-    //                error_with_info!("Cnnot send closing error: {:?}", e);
-    //            });
-    //            let msg = Message::close();
-    //            let _ = ws_tx.send(msg).await.map_err(|e| {
-    //                error_with_info!("Cnnot send closing error: {:?}", e);
-    //            });
-    //    return;
 
     match handle_websocket_generic2_(path, &mut ws_tx, receiver, state, send_data).await {
         Ok(_) => (),
@@ -786,34 +672,28 @@ pub fn make_index_html(index: &TopicsIndexInternal) -> PreEscaped<String> {
     let x = make_html(
         "index",
         html! {
+            dl {
+                dt { a href ={("../")} { code {("up")} }}
+                dd { "One level up"}
 
+                dt { a href ={(":deref/")} { code {(":deref")} }}
+                dd { "Dereference as a single topic" }
+            }
 
-                                  dl {
-                       dt {   a href ={("../")} { code {("up")}
-                                   }}
-                                      dd{
-                                      "One level up "
-                                      }
+            h3 { "Topics" }
 
-                                  // h3 { "Dereference" }
-                     dt{   a href ={(":deref/")} { code {(":deref")} }
-        } dd {
-                                  "Dereference as a single topic"
+            ul {
+                @ for (topic_name, url) in topic2url.iter() {
 
-                                  }
-                                      }
-
-              h3 { "Topics" }
-
-                ul {
-                    @ for (topic_name,
-                    url) in topic2url.iter() {
-
-                    li { a href ={(url)} { code {(topic_name)} }}
+                    li {
+                        a href ={(url)} {
+                            code {(topic_name)}
+                        }
                     }
                 }
+            }
 
-            },
+        },
     );
     x
 }
