@@ -1,0 +1,29 @@
+---
+# This is the wiring config for dtps-http
+
+# where to serve
+serve:
+- unix://${socket_base}/_dtps
+- http://0.0.0.0:${port}/
+
+# extra URLS to advertise (beyond the ones assumed above)
+advertise:
+- https://test-dtps1.duckietown.org/
+
+# what to mount where
+topics:
+  node/node1: !Mount http+unix://[${socket_base}/node1/_dtps]/node
+  node/node2: !Mount http+unix://[${socket_base}/node2/_dtps]/node
+  pri/data_dir: !Mount file:./data_dir
+  pri/duckietown.org: !Mount https://www.duckietown.org/
+  pri/bundle: !Inline
+    node1:
+      x0: 0
+    node2:
+      x1: 0
+
+connections:
+- pri/bundle/node1 -> node/node1/config
+- pri/bundle/node2 -> node/node2/config
+- node/in/x -> node/node1/in
+- node/node2/y -> node/out/y

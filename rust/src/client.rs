@@ -596,6 +596,11 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
         .map(|x| join_ext(&conbase, &x).ok())
         .flatten();
     let answering = headers.get(HEADER_NODE_ID).map(string_from_header_value);
+
+    for link in headers.get_all("link") {
+        debug!("Link = {link:?}");
+    }
+
     let md = FoundMetadata {
         alternative_urls,
         events_url,

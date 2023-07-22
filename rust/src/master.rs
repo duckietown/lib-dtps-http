@@ -9,8 +9,6 @@ use log::{debug, error};
 use maud::{html, PreEscaped};
 use tokio::spawn;
 use tokio::sync::broadcast::error::RecvError;
-// use tokio::sync::broadcast::error::RecvError;
-// use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use tungstenite::Message as TungsteniteMessage;
@@ -30,30 +28,14 @@ use crate::utils::{divide_in_components, get_good_url_for_components};
 use crate::websocket_abstractions::open_websocket_connection;
 use crate::websocket_signals::MsgClientToServer;
 use crate::{
-    do_receiving, error_with_info, get_accept_header, get_metadata, handle_topic_post,
-    handle_websocket_queue, handler_topic_generic, not_implemented, object_queues,
-    put_alternative_locations, put_common_headers, receive_from_websocket, root_handler,
-    serve_static_file_path, HandlersResponse, ObjectQueue, ServerStateAccess, TopicName,
-    TopicsIndexInternal, DTPSR, EVENTS_SUFFIX, EVENTS_SUFFIX_DATA, HEADER_DATA_ORIGIN_NODE_ID,
-    HEADER_DATA_UNIQUE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
+    do_receiving, error_with_info, get_accept_header, get_id_string, get_metadata,
+    handle_topic_post, handle_websocket_queue, handler_topic_generic, not_implemented,
+    object_queues, put_alternative_locations, receive_from_websocket, root_handler,
+    serve_static_file_path, HandlersResponse, ObjectQueue, ServerState, ServerStateAccess,
+    TopicName, TopicsIndexInternal, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR, EVENTS_SUFFIX,
+    EVENTS_SUFFIX_DATA, HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID, HEADER_NODE_ID,
+    HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA, JAVASCRIPT_SEND,
 };
-
-//
-// fn format_query(params: &HashMap<String, String>) -> Option<String> {
-//     if params.is_empty() {
-//         return None;
-//     }
-//     let mut query = String::new();
-//
-//     for (key, value) in params.iter() {
-//         if !query.is_empty() {
-//             query.push('&');
-//         }
-//         query.push_str(&format!("{}={}", key, value));
-//     }
-//
-//     Some(query)
-// }
 
 pub async fn serve_master_post(
     path: warp::path::FullPath,
@@ -62,8 +44,7 @@ pub async fn serve_master_post(
     headers: HeaderMap,
     data: hyper::body::Bytes,
 ) -> HandlersResponse {
-    let path_str = path_normalize(path);
-    // let query_str = format_query(&query);
+    let path_str = path_normalize(&path);
     let referrer = get_referrer(&headers);
     let matched = interpret_path(&path_str, &query, &referrer, ss_mutex.clone()).await;
 
@@ -89,27 +70,19 @@ pub async fn serve_master_post(
         return Ok(res);
     }
 
-    match ds {
+    return match ds {
         TypeOFSource::OurQueue(topic_name, _, _) => {
             debug!("Pushing to topic {:?}", topic_name);
-            return handle_topic_post(&topic_name, ss_mutex, headers, data).await;
+            handle_topic_post(&topic_name, ss_mutex, headers, data).await
         }
         _ => {
             let res = http::Response::builder()
                 .status(StatusCode::METHOD_NOT_ALLOWED)
                 .body(Body::from("We dont support push to this"))
                 .unwrap();
-            return Ok(res);
+            Ok(res)
         }
-    }
-
-    // async fn handle_topic_post(
-    //     topic_name: String,
-    //     ss_mutex: ServerStateAccess,
-    //     headers: HeaderMap,
-    //     data: hyper::body::Bytes,
-    // ) -> Result<impl Reply, Rejection> {}
-    // todo!()
+    };
 }
 
 pub async fn serve_master_head(
@@ -118,21 +91,15 @@ pub async fn serve_master_head(
     ss_mutex: ServerStateAccess,
     headers: HeaderMap,
 ) -> HandlersResponse {
-    let path_str = path_normalize(path);
+    let path_str = path_normalize(&path);
     // debug!("serve_master_head: path_str: {}", path_str);
     let referrer = get_referrer(&headers);
 
     let matched = interpret_path(&path_str, &query, &referrer, ss_mutex.clone()).await;
-    // let ss = ss_mutex.lock().await;
 
-    // debug!(
-    //     "serve_master:\npaths: {:#?}\nmatched: {:#?}",
-    //     path_components, matched
-    // );
     let ds = match matched {
         Ok(ds) => ds,
         Err(s) => {
-            // let s = format!("Cannot resolve the path {:?}:\n{}", path_components, s);
             // debug!("serve_master_head: path_str: {}\n{}", path_str, s);
 
             let res = http::Response::builder()
@@ -142,163 +109,156 @@ pub async fn serve_master_head(
             return Ok(res);
         }
     };
-    let res = http::Response::builder()
-        .status(StatusCode::SERVICE_UNAVAILABLE)
-        .body(Body::from("We dont support head to this"))
-        .unwrap();
-    let not_supported = Ok(res);
-
     // debug!("serve_master_head: ds: {:?}", ds);
-    return {
-        match &ds {
-            TypeOFSource::OurQueue(topic_name, _, _) => {
-                let x: &ObjectQueue;
-                let ss = ss_mutex.lock().await;
-                match ss.oqs.get(&topic_name) {
-                    None => return Err(warp::reject::not_found()),
+    match &ds {
+        TypeOFSource::OurQueue(topic_name, _, _) => {
+            let x: &ObjectQueue;
+            let ss = ss_mutex.lock().await;
+            match ss.oqs.get(&topic_name) {
+                None => return Err(warp::reject::not_found()),
 
-                    Some(y) => x = y,
-                }
+                Some(y) => x = y,
+            }
+            let empty_vec: Vec<u8> = Vec::new();
+            let mut resp = Response::new(Body::from(empty_vec));
+            let h = resp.headers_mut();
+            put_source_headers(h, &x.tr.origin_node, &x.tr.unique_id);
+
+            put_meta_headers(h);
+
+            let suffix = topic_name.as_relative_url();
+            put_alternative_locations(&ss, h, &suffix);
+            put_common_headers(&ss, h);
+            return Ok(resp.into());
+        }
+        TypeOFSource::ForwardedQueue(fq) => {
+            let tr = {
+                let ss = ss_mutex.lock().await;
+                let pti = ss.proxied_topics.get(&fq.my_topic_name).unwrap();
+                pti.tr_original.clone()
+            };
+            let empty_vec: Vec<u8> = Vec::new();
+            let mut resp = Response::new(Body::from(empty_vec));
+            let h = resp.headers_mut();
+            put_source_headers(h, &tr.origin_node, &tr.unique_id);
+            put_meta_headers(h);
+            // let suffix = topic_name.as_relative_url();
+            // put_alternative_locations(&ss, h, &suffix);
+            {
+                let ss = ss_mutex.lock().await;
+                put_common_headers(&ss, h);
+            }
+            return Ok(resp.into());
+        }
+
+        TypeOFSource::MountedDir(_, _, _) => {
+            // return serve_master_get(path, query, ss_mutex, headers).await;
+            // error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
+            //
+            // not_supported
+        }
+        TypeOFSource::MountedFile(_, _, _) => {
+            // error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
+
+            // not_supported
+        }
+        TypeOFSource::Compose(c) => {
+            if c.is_root {
+                let ss = ss_mutex.lock().await;
+                let topic_name = TopicName::root();
+                let x: &ObjectQueue = ss.oqs.get(&topic_name).unwrap();
+
                 let empty_vec: Vec<u8> = Vec::new();
                 let mut resp = Response::new(Body::from(empty_vec));
                 let h = resp.headers_mut();
+                put_source_headers(h, &x.tr.origin_node, &x.tr.unique_id);
 
-                h.insert(
-                    HEADER_DATA_ORIGIN_NODE_ID,
-                    HeaderValue::from_str(x.tr.origin_node.as_str()).unwrap(),
-                );
-                h.insert(
-                    HEADER_DATA_UNIQUE_ID,
-                    HeaderValue::from_str(x.tr.unique_id.as_str()).unwrap(),
-                );
-
-                put_events_headers(h);
-
+                put_meta_headers(h);
                 let suffix = topic_name.as_relative_url();
                 put_alternative_locations(&ss, h, &suffix);
                 put_common_headers(&ss, h);
-                Ok(resp.into())
-            }
-            TypeOFSource::ForwardedQueue(fq) => {
-                let tr = {
-                    let ss = ss_mutex.lock().await;
-                    let pti = ss.proxied_topics.get(&fq.my_topic_name).unwrap();
-                    pti.tr_original.clone()
-                };
-                let empty_vec: Vec<u8> = Vec::new();
-                let mut resp = Response::new(Body::from(empty_vec));
-                let h = resp.headers_mut();
-
-                h.insert(
-                    HEADER_DATA_ORIGIN_NODE_ID,
-                    HeaderValue::from_str(tr.origin_node.as_str()).unwrap(),
-                );
-                h.insert(
-                    HEADER_DATA_UNIQUE_ID,
-                    HeaderValue::from_str(tr.unique_id.as_str()).unwrap(),
-                );
-
-                put_events_headers(h);
-                // let suffix = topic_name.as_relative_url();
-                // put_alternative_locations(&ss, h, &suffix);
-                {
-                    let ss = ss_mutex.lock().await;
-                    put_common_headers(&ss, h);
-                }
-                Ok(resp.into())
-            }
-            //
-            // _ => {
-            //
-            //     // if path_str == "/" {
-            //     //     let tr = TopicName::root();
-            //     //     let x = ss.oqs.get(&tr).unwrap();
-            //     //     (tr, x)
-            //     // } else {
-            //     error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
-            //     let res = http::Response::builder()
-            //         .status(StatusCode::SERVICE_UNAVAILABLE)
-            //         .body(Body::from("We dont support head to this"))
-            //         .unwrap();
-            //     return Ok(res);
-            // }
-            TypeOFSource::MountedDir(_, _, _) => {
-                error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
-
-                not_supported
-            }
-            TypeOFSource::MountedFile(_, _, _) => {
-                error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
-
-                not_supported
-            }
-            TypeOFSource::Compose(c) => {
-                if c.is_root {
-                    let ss = ss_mutex.lock().await;
-                    let topic_name = TopicName::root();
-                    let x: &ObjectQueue = ss.oqs.get(&topic_name).unwrap();
-
-                    let empty_vec: Vec<u8> = Vec::new();
-                    let mut resp = Response::new(Body::from(empty_vec));
-                    let h = resp.headers_mut();
-
-                    h.insert(
-                        HEADER_DATA_ORIGIN_NODE_ID,
-                        HeaderValue::from_str(x.tr.origin_node.as_str()).unwrap(),
-                    );
-                    h.insert(
-                        HEADER_DATA_UNIQUE_ID,
-                        HeaderValue::from_str(x.tr.unique_id.as_str()).unwrap(),
-                    );
-
-                    put_events_headers(h);
-                    let suffix = topic_name.as_relative_url();
-                    put_alternative_locations(&ss, h, &suffix);
-                    put_common_headers(&ss, h);
-                    Ok(resp.into())
-                } else {
-                    error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
-
-                    not_supported
-                }
-            }
-            TypeOFSource::Transformed(_, _) => {
-                error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
-
-                not_supported
-            }
-            TypeOFSource::Digest(_, _) => {
-                error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
-
-                not_supported
-            }
-            TypeOFSource::Deref(_) => {
-                error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
-
-                not_supported
-            }
-            TypeOFSource::OtherProxied(_) => {
-                error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
-                not_supported
+                return Ok(resp.into());
+            } else {
             }
         }
-    };
+        TypeOFSource::Transformed(_, _) => {}
+        TypeOFSource::Digest(_, _) => {}
+        TypeOFSource::Deref(_) => {}
+        TypeOFSource::OtherProxied(_) => {}
+    }
+
+    serve_master_get(path, query, ss_mutex, headers).await
 }
 
-fn put_events_headers(h: &mut HeaderMap<HeaderValue>) {
-    h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static(EVENTS_SUFFIX));
-    h.insert(
+pub fn put_link_header(
+    h: &mut HeaderMap<HeaderValue>,
+    url: &str,
+    rel: &str,
+    content_type: Option<&str>,
+) {
+    let s = match content_type {
+        None => {
+            format!("<{url}>; rel={rel}")
+        }
+        Some(c) => {
+            format!("<{url}>; rel={rel}; type={c}")
+        }
+    };
+    h.append("Link", HeaderValue::from_str(&s).unwrap());
+}
+
+pub static REL_EVENTS_NODATA: &'static str = "dtps-events";
+pub static REL_EVENTS_DATA: &'static str = "dtps-events-inline-data";
+pub static REL_META: &'static str = "dtps-meta";
+
+pub fn put_source_headers(h: &mut HeaderMap<HeaderValue>, origin_node: &str, unique_id: &str) {
+    h.append(
+        HEADER_DATA_ORIGIN_NODE_ID,
+        HeaderValue::from_str(origin_node).unwrap(),
+    );
+    h.append(
+        HEADER_DATA_UNIQUE_ID,
+        HeaderValue::from_str(unique_id).unwrap(),
+    );
+}
+
+pub fn put_header_location(h: &mut HeaderMap<HeaderValue>, location: &str) {
+    h.append(
+        header::CONTENT_LOCATION,
+        HeaderValue::from_str(location).unwrap(),
+    );
+}
+pub fn put_header_content_type(h: &mut HeaderMap<HeaderValue>, content_type: &str) {
+    h.append(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(content_type).unwrap(),
+    );
+}
+
+pub fn put_common_headers(ss: &ServerState, headers: &mut HeaderMap<HeaderValue>) {
+    headers.append(
+        header::SERVER,
+        HeaderValue::from_str(get_id_string().as_str()).unwrap(),
+    );
+    headers.append(
+        HEADER_NODE_ID,
+        HeaderValue::from_str(ss.node_id.as_str()).unwrap(),
+    );
+}
+
+pub fn put_meta_headers(h: &mut HeaderMap<HeaderValue>) {
+    h.append(HEADER_SEE_EVENTS, HeaderValue::from_static(EVENTS_SUFFIX));
+    h.append(
         HEADER_SEE_EVENTS_INLINE_DATA,
         HeaderValue::from_static(EVENTS_SUFFIX_DATA),
     );
 
-    let val = format!("<{EVENTS_SUFFIX_DATA}/>; rel=dtps-events-inline-data");
-    h.insert("Link", HeaderValue::from_str(&val).unwrap());
-    let val = format!("<{EVENTS_SUFFIX}/>; rel=dtps-events");
-    h.insert("Link", HeaderValue::from_str(&val).unwrap());
+    put_link_header(h, EVENTS_SUFFIX, REL_EVENTS_NODATA, Some("websocket"));
+    put_link_header(h, EVENTS_SUFFIX_DATA, REL_EVENTS_DATA, Some("websocket"));
+    put_link_header(h, ":meta", REL_META, Some(CONTENT_TYPE_DTPS_INDEX_CBOR));
 }
 
-fn path_normalize(path: warp::path::FullPath) -> String {
+fn path_normalize(path: &warp::path::FullPath) -> String {
     let path_str = path.as_str();
     let pat = "/!/";
 
@@ -365,29 +325,14 @@ pub async fn serve_master_get(
     debug!("GET {} ", path.as_str());
     debug!("Referrer {:?} ", referrer);
 
-    let path_str = path_normalize(path);
+    let path_str = path_normalize(&path);
 
-    // debug!("After proxy {} ", path_str);
-    // debug!("headers:\n{:?}", headers);
-    // let path_str = path_normalize(path);
     if path_str.len() > 250 {
         panic!("Path too long: {:?}", path_str);
     }
 
-    // log::debug!("serve_master: path={:?} ", path);
-    // log::debug!("serve_master: query={:?} ", query);
-    // let dereference = query.contains_key("dereference");
-    // get the components of the path
-
     let path_components0 = divide_in_components(&path_str, '/');
     let path_components = path_components0.clone();
-    // // if there is a ! in the path_components, ignore all the PREVIOUS items
-    // let bang = "!".to_string();
-    // if path_components.contains(&bang) {
-    //     let index = path_components.iter().position(|x| x == &bang).unwrap();
-    //     let rest = path_components.iter().skip(index + 1).cloned().collect::<Vec<String>>();
-    //     path_components = rest;
-    // }
 
     match path_components.first() {
         None => {}
@@ -513,82 +458,6 @@ pub async fn serve_master_get(
     )
     .await;
 }
-//
-// pub async fn go_queue(
-//     topic_name: &TopicName,
-//     components: Vec<String>,
-//     ss_mutex: ServerStateAccess,
-//     headers: HeaderMap,
-// ) -> HandlersResponse {
-//     if components.len() == 0 {
-//         return handler_topic_generic(topic_name, ss_mutex, headers).await;
-//     }
-//     let ss = ss_mutex.lock().await;
-//     let oq = match ss.oqs.get(&topic_name) {
-//         None => return Err(warp::reject::not_found()),
-//         Some(x) => x,
-//     };
-//
-//     let (content_type, digest) = match oq.sequence.last() {
-//         None => {
-//             let res = http::Response::builder()
-//                 .status(StatusCode::NO_CONTENT)
-//                 .body(Body::from(""))
-//                 .unwrap();
-//             // let h = res.headers_mut();
-//
-//             // let suffix = format!("topics/{}/", topic_name);
-//             // put_alternative_locations(&ss, h, &suffix);
-//             // put_common_headers(&ss, h);
-//
-//             return Ok(res);
-//         }
-//
-//         Some(y) => (y.content_type.clone(), y.digest.clone()),
-//     };
-//
-//     let content = match ss.get_blob_bytes(&digest) {
-//         Err(_e) => return Err(warp::reject::not_found()),
-//         Ok(x) => x,
-//     };
-//     let raw_data = RawData {
-//         content_type: content_type.clone(),
-//         content,
-//     };
-//     let c = get_as_cbor(&raw_data)?;
-//
-//     let x = get_inside(vec![], &c, &components);
-//     return match x {
-//         Err(s) => {
-//             debug!("Error: {}", s);
-//             Err(warp::reject::not_found())
-//         }
-//         Ok(q) => {
-//             let cbor_bytes: Vec<u8> = serde_cbor::to_vec(&q).unwrap();
-//             let properties = TopicProperties {
-//                 streamable: true,
-//                 pushable: true,
-//                 readable: true,
-//                 immutable: false,
-//             };
-//             visualize_data(
-//                 &properties,
-//                 topic_name.to_relative_url(),
-//                 html! {},
-//                 "application/cbor",
-//                 &cbor_bytes,
-//                 headers,
-//             )
-//             .await
-//         }
-//     };
-//     //
-//     // eprintln!(
-//     //     "go_queue: topic_name = {:?} components = {:?}",
-//     //     topic_name, components
-//     // );
-//     // return Err(warp::reject::not_found());
-// }
 
 fn is_html(content_type: &str) -> bool {
     content_type.starts_with("text/html")
@@ -666,8 +535,7 @@ pub async fn visualize_data(
         let mut resp = Response::new(Body::from(markup));
         let headers = resp.headers_mut();
 
-        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
-
+        put_header_content_type(headers, "text/html");
         // put_alternative_locations(&ss, headers, "");
         return Ok(resp);
         // return Ok(with_status(resp, StatusCode::OK));
@@ -686,20 +554,18 @@ pub async fn visualize_data(
     //     HEADER_DATA_UNIQUE_ID,
     //     HeaderValue::from_str(x.tr.unique_id.as_str()).unwrap(),
     // );
-
-    h.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(content_type).unwrap(),
-    );
-    // see events
-    h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static(EVENTS_SUFFIX));
-    h.insert(
-        HEADER_SEE_EVENTS_INLINE_DATA,
-        HeaderValue::from_static(EVENTS_SUFFIX_DATA),
-    );
-
-    let val = format!("<{EVENTS_SUFFIX_DATA}/>; rel=dtps-events");
-    h.insert("Link", HeaderValue::from_str(&val).unwrap());
+    put_header_content_type(h, content_type);
+    put_meta_headers(h);
+    //
+    // // see events
+    // h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static(EVENTS_SUFFIX));
+    // h.insert(
+    //     HEADER_SEE_EVENTS_INLINE_DATA,
+    //     HeaderValue::from_static(EVENTS_SUFFIX_DATA),
+    // );
+    //
+    // let val = format!("<{EVENTS_SUFFIX_DATA}/>; rel=dtps-events");
+    // h.insert("Link", HeaderValue::from_str(&val).unwrap());
 
     // put_common_headers(&ss, resp.headers_mut());
 

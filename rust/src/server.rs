@@ -40,7 +40,8 @@ use crate::constants::*;
 use crate::html_utils::make_html;
 use crate::logs::get_id_string;
 use crate::master::{
-    handle_websocket_generic2, serve_master_get, serve_master_head, serve_master_post,
+    handle_websocket_generic2, put_common_headers, put_header_content_type, put_header_location,
+    put_meta_headers, put_source_headers, serve_master_get, serve_master_head, serve_master_post,
 };
 use crate::object_queues::*;
 use crate::server_state::*;
@@ -565,8 +566,7 @@ pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> Ha
         let body = Body::from(markup);
         let mut resp = Response::new(body);
         let headers = resp.headers_mut();
-
-        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
+        put_header_content_type(headers, "text/html");
 
         put_alternative_locations(&ss, headers, "");
 
@@ -576,11 +576,7 @@ pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> Ha
 
         let mut resp = Response::new(Body::from(data_bytes));
         let headers = resp.headers_mut();
-
-        headers.insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/cbor"),
-        );
+        put_header_content_type(headers, "application/cbor");
 
         put_common_headers(&ss, headers);
         put_alternative_locations(&ss, headers, "");
@@ -983,45 +979,6 @@ pub async fn handler_topic_generic(
         .await;
 }
 
-// async fn handler_topic_generic_head(
-//     topic_name: String,
-//     ss_mutex: ServerStateAccess,
-// ) -> Result<Response, Rejection> {
-//     let ss = ss_mutex.lock().await;
-//
-//     let x: &ObjectQueue;
-//     match ss.oqs.get(topic_name.as_str()) {
-//         None => return Err(warp::reject::not_found()),
-//
-//         Some(y) => x = y,
-//     }
-//     let empty_vec: Vec<u8> = Vec::new();
-//     let mut resp = Response::new(Body::from(empty_vec));
-//
-//     let h = resp.headers_mut();
-//
-//     h.insert(
-//         HEADER_DATA_ORIGIN_NODE_ID,
-//         HeaderValue::from_str(x.tr.origin_node.as_str()).unwrap(),
-//     );
-//     h.insert(
-//         HEADER_DATA_UNIQUE_ID,
-//         HeaderValue::from_str(x.tr.unique_id.as_str()).unwrap(),
-//     );
-//
-//     h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static("events/"));
-//     h.insert(
-//         HEADER_SEE_EVENTS_INLINE_DATA,
-//         HeaderValue::from_static("events/?send_data=1"),
-//     );
-//
-//     let suffix = format!("{}/", topic_name);
-//     put_alternative_locations(&ss, h, &suffix);
-//     put_common_headers(&ss, h);
-//
-//     Ok(resp.into())
-// }
-
 async fn handler_topic_generic_data(
     topic_name: &TopicName,
     content_type: String,
@@ -1087,45 +1044,20 @@ async fn handler_topic_generic_data(
         let markup = x.into_string();
         let mut resp = Response::new(Body::from(markup));
         let headers = resp.headers_mut();
-
-        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
-
+        put_header_content_type(headers, "text/html");
         put_alternative_locations(&ss, headers, "");
-        return Ok(resp);
+        Ok(resp)
         // return Ok(with_status(resp, StatusCode::OK));
-    };
-
-    let mut resp = Response::new(Body::from(data_bytes));
-    let h = resp.headers_mut();
-    // let suffix = format!("{}/", topic_name);
-    put_alternative_locations(&ss, h, &topic_name.as_relative_url());
-
-    h.insert(
-        HEADER_DATA_ORIGIN_NODE_ID,
-        HeaderValue::from_str(x.tr.origin_node.as_str()).unwrap(),
-    );
-    h.insert(
-        HEADER_DATA_UNIQUE_ID,
-        HeaderValue::from_str(x.tr.unique_id.as_str()).unwrap(),
-    );
-
-    h.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(content_type.clone().as_str()).unwrap(),
-    );
-    // see events
-    h.insert(HEADER_SEE_EVENTS, HeaderValue::from_static(EVENTS_SUFFIX));
-    h.insert(
-        HEADER_SEE_EVENTS_INLINE_DATA,
-        HeaderValue::from_static(EVENTS_SUFFIX_DATA),
-    );
-
-    let val = format!("<{EVENTS_SUFFIX_DATA}/>; rel=dtps-events");
-    h.insert("Link", HeaderValue::from_str(&val).unwrap());
-
-    put_common_headers(&ss, resp.headers_mut());
-
-    Ok(resp.into())
+    } else {
+        let mut resp = Response::new(Body::from(data_bytes));
+        let h = resp.headers_mut();
+        put_alternative_locations(&ss, h, &topic_name.as_relative_url());
+        put_source_headers(h, &x.tr.origin_node, &x.tr.unique_id);
+        put_meta_headers(h);
+        put_common_headers(&ss, h);
+        put_header_content_type(h, &content_type);
+        Ok(resp.into())
+    }
 }
 
 pub fn put_alternative_locations(
@@ -1135,22 +1067,9 @@ pub fn put_alternative_locations(
 ) {
     for x in ss.get_advertise_urls().iter() {
         let x_suff = format!("{}{}", x, suffix);
-        headers.insert(
-            "Content-Location",
-            HeaderValue::from_str(x_suff.as_str()).unwrap(),
-        );
+        put_header_content_type(headers, "text/html");
+        put_header_location(headers, &x_suff);
     }
-}
-
-pub fn put_common_headers(ss: &ServerState, headers: &mut HeaderMap<HeaderValue>) {
-    headers.insert(
-        header::SERVER,
-        HeaderValue::from_str(get_id_string().as_str()).unwrap(),
-    );
-    headers.insert(
-        HEADER_NODE_ID,
-        HeaderValue::from_str(ss.node_id.as_str()).unwrap(),
-    );
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1201,15 +1120,6 @@ pub fn address_from_host_port(host: &str, port: u16) -> DTPSR<SocketAddr> {
             error_other(format!("Cannot parse {}: {}", hoststring, e))
         }
     }
-
-    // debug!("Hoststring: {}", hoststring);
-    // let mut addrs_iter = hoststring.to_socket_addrs()?;
-    // let one_addr = addrs_iter.next();
-    // return if one_addr.is_none() {
-    //     error_other(format!("Cannot resolve {}", hoststring))
-    // } else {
-    //     Ok(one_addr.unwrap())
-    // }
 }
 
 pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {

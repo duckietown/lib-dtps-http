@@ -24,7 +24,7 @@ class LinkBenchmark:
 
     @classmethod
     def identity(cls) -> "LinkBenchmark":
-        return cls(complexity=0, bandwidth=float(1_000_000_000), latency=0.0, reliability=1.0, hops=1)
+        return LinkBenchmark(complexity=0, bandwidth=float(1_000_000_000), latency=0.0, reliability=1.0, hops=1)
 
     def __or__(self, other: "LinkBenchmark") -> "LinkBenchmark":
         complexity = self.complexity + other.complexity
@@ -153,13 +153,13 @@ def channel_msgs_parse(d: bytes) -> ChannelInfo | DataReady | Chunk:
     if not isinstance(struct, dict):
         msg = 'Expected a dictionary here'
         raise ValueError(f'{msg}: {d} {struct}')
-    if 'DataReady' in struct:
+    if DataReady.__name__ in struct:
         dr = parse_obj_as(DataReady, struct['DataReady'])
         return dr
-    elif 'ChannelInfo' in struct:
+    elif ChannelInfo.__name__ in struct:
         dr = parse_obj_as(ChannelInfo, struct['ChannelInfo'])
         return dr
-    elif 'Chunk' in struct:
+    elif Chunk.__name__ in struct:
         dr = parse_obj_as(Chunk, struct['Chunk'])
         return dr
     else:

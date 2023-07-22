@@ -89,8 +89,9 @@ async def go_proxy(args: Optional[list[str]] = None) -> None:
                     metadata = await dtpsclient.get_metadata(rurl)
                     for m in metadata.alternative_urls + [rurl]:
                         reach_with_me = await dtpsclient.compute_with_hop(dtps_server.node_id, urlhere,
-                            connects_to=m, expects_answer_from=reachability.answering,
-                            forwarders=reachability.forwarders, )
+                                                                          connects_to=m,
+                                                                          expects_answer_from=reachability.answering,
+                                                                          forwarders=reachability.forwarders, )
 
                         if reach_with_me is not None:
                             possible.append((parse_url_unescape(reachability.url), reach_with_me))
@@ -116,9 +117,9 @@ async def go_proxy(args: Optional[list[str]] = None) -> None:
 
                 metadata_to_use = await dtpsclient.get_metadata(url_to_use)
                 fd = ForwardedTopic(unique_id=tr.unique_id, origin_node=tr.origin_node, app_data=tr.app_data,
-                    reachability=tr2.reachability, forward_url_data=url_to_use,
-                    forward_url_events=metadata_to_use.events_url,
-                    forward_url_events_inline_data=metadata_to_use.events_data_inline_url, )
+                                    reachability=tr2.reachability, forward_url_data=url_to_use,
+                                    forward_url_events=metadata_to_use.events_url,
+                                    forward_url_events_inline_data=metadata_to_use.events_data_inline_url, )
 
                 logger.info(f"Proxying {new_topic!r} as  {urlbase} {topic_name} ->  \n"
                             f" available at\n: {json.dumps(asdict(tr), indent=2)} \n"
