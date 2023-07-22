@@ -120,13 +120,12 @@ pub async fn serve_master_head(
             let empty_vec: Vec<u8> = Vec::new();
             let mut resp = Response::new(Body::from(empty_vec));
             let h = resp.headers_mut();
-            utils_headers::put_source_headers(h, &x.tr.origin_node, &x.tr.unique_id);
-
+            utils_headers::put_common_headers(&ss, h);
             utils_headers::put_meta_headers(h);
+            utils_headers::put_source_headers(h, &x.tr.origin_node, &x.tr.unique_id);
 
             let suffix = topic_name.as_relative_url();
             put_alternative_locations(&ss, h, &suffix);
-            utils_headers::put_common_headers(&ss, h);
             return Ok(resp.into());
         }
         TypeOFSource::ForwardedQueue(fq) => {
@@ -183,6 +182,7 @@ pub async fn serve_master_head(
         TypeOFSource::Digest(_, _) => {}
         TypeOFSource::Deref(_) => {}
         TypeOFSource::OtherProxied(_) => {}
+        TypeOFSource::Index(_) => {}
     }
 
     serve_master_get(path, query, ss_mutex, headers).await
@@ -385,8 +385,73 @@ pub async fn serve_master_get(
         &rd.content_type,
         &rd.content,
         headers,
+        ss_mutex,
     )
     .await;
+}
+
+fn make_friendly_visualization(
+    properties: &TopicProperties,
+    title: String,
+    extra_html: PreEscaped<String>,
+    content_type: &str,
+    content: &[u8],
+) -> HandlersResponse {
+    let display = display_printable(content_type, content);
+    let default_content_type = "application/yaml";
+    let initial_value = "{}";
+    let js = PreEscaped(JAVASCRIPT_SEND);
+    let x = make_html(
+        &title,
+        html! {
+
+            p { "This data is presented as HTML because you requested it as such."}
+            p { "Content type: " code { (content_type) } }
+            p { "Content length: " (content.len()) }
+
+            (extra_html)
+
+            div {
+                @if properties.streamable {
+                    h3 { "notifications using websockets"}
+                    div {pre   id="result" { "result will appear here" }}
+                }
+            }
+
+            div {
+                @if properties.pushable {
+                    h3 {"push JSON to queue"}
+
+                    textarea id="myTextAreaContentType" { (default_content_type) };
+                    textarea id="myTextArea" { (initial_value) };
+
+                    br;
+
+                    button id="myButton" { "push" };
+                }
+            } // div
+
+            @if properties.pushable || properties.streamable {
+
+                script src="!/static/send.js" {};
+                script type="text/javascript" { (js) };
+            }
+
+            pre {
+                code {
+                    (display)
+                }
+            }
+
+        },
+    );
+
+    let markup = x.into_string();
+    let mut resp = Response::new(Body::from(markup));
+    let headers = resp.headers_mut();
+
+    utils_headers::put_header_content_type(headers, "text/html");
+    return Ok(resp);
 }
 
 pub async fn visualize_data(
@@ -396,76 +461,27 @@ pub async fn visualize_data(
     content_type: &str,
     content: &[u8],
     headers: HeaderMap,
+    ssa: ServerStateAccess,
 ) -> HandlersResponse {
     let accept_headers: Vec<String> = get_accept_header(&headers);
-    let display = display_printable(content_type, content);
-    let default_content_type = "application/yaml";
-    let initial_value = "{}";
-    let js = PreEscaped(JAVASCRIPT_SEND);
+
     if !utils_mime::is_html(content_type)
         && !utils_mime::is_image(content_type)
         && accept_headers.contains(&"text/html".to_string())
     {
-        let x = make_html(
-            &title,
-            html! {
+        make_friendly_visualization(properties, title, extra_html, content_type, content)
+    } else {
+        let mut resp = Response::new(Body::from(content.to_vec()));
+        let h = resp.headers_mut();
 
-                p { "This data is presented as HTML because you requested it as such."}
-                p { "Content type: " code { (content_type) } }
-                p { "Content length: " (content.len()) }
-
-                (extra_html)
-
-                div {
-                    @if properties.streamable {
-                        h3 { "notifications using websockets"}
-                        div {pre   id="result" { "result will appear here" }}
-                    }
-                }
-
-                div {
-                    @if properties.pushable {
-                        h3 {"push JSON to queue"}
-
-                        textarea id="myTextAreaContentType" { (default_content_type) };
-                        textarea id="myTextArea" { (initial_value) };
-
-                        br;
-
-                        button id="myButton" { "push" };
-                    }
-                } // div
-
-                @if properties.pushable || properties.streamable {
-
-                    script src="!/static/send.js" {};
-                    script type="text/javascript" { (js) };
-                }
-
-                pre {
-                    code {
-                        (display)
-                    }
-                }
-
-            },
-        );
-
-        let markup = x.into_string();
-        let mut resp = Response::new(Body::from(markup));
-        let headers = resp.headers_mut();
-
-        utils_headers::put_header_content_type(headers, "text/html");
-        return Ok(resp);
-    };
-
-    let mut resp = Response::new(Body::from(content.to_vec()));
-    let h = resp.headers_mut();
-
-    utils_headers::put_header_content_type(h, content_type);
-    utils_headers::put_meta_headers(h);
-
-    Ok(resp.into())
+        utils_headers::put_header_content_type(h, content_type);
+        utils_headers::put_meta_headers(h);
+        {
+            let ss = ssa.lock().await;
+            utils_headers::put_common_headers(&ss, h);
+        }
+        Ok(resp.into())
+    }
 }
 
 pub async fn handle_websocket_generic2(
@@ -553,6 +569,9 @@ pub async fn handle_websocket_generic2_(
             not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
         }
         TypeOFSource::MountedFile(..) => {
+            not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
+        }
+        TypeOFSource::Index(..) => {
             not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
         }
     };

@@ -1,9 +1,61 @@
+use std::collections::HashMap;
+
+use http::{header, HeaderMap, HeaderValue};
+use maplit::hashmap;
+
 use crate::{
     get_id_string, ServerState, CONTENT_TYPE_DTPS_INDEX_CBOR, EVENTS_SUFFIX, EVENTS_SUFFIX_DATA,
     HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID, HEADER_NODE_ID, HEADER_SEE_EVENTS,
-    HEADER_SEE_EVENTS_INLINE_DATA, REL_EVENTS_DATA, REL_EVENTS_NODATA, REL_META,
+    HEADER_SEE_EVENTS_INLINE_DATA, REL_EVENTS_DATA, REL_EVENTS_NODATA, REL_META, REL_URL_META,
 };
-use http::{header, HeaderMap, HeaderValue};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinkHeader {
+    pub url: String,
+    pub attributes: HashMap<String, String>,
+}
+
+impl LinkHeader {
+    pub fn get(&self, a: &str) -> Option<String> {
+        let k = a.to_string();
+        return self.attributes.get(&k).map(String::clone);
+    }
+    pub fn format_header_value(&self) -> String {
+        let url = &self.url;
+
+        let s = format!("<{url}>");
+        let mut parts = vec![s];
+
+        for (k, v) in &self.attributes {
+            parts.push(format!("{k}={v}"));
+        }
+
+        parts.join("; ")
+    }
+
+    pub fn from_header_value(value: &str) -> Self {
+        // first split according to ;
+        let mut parts = value.split(';').collect::<Vec<_>>();
+        let url = parts
+            .remove(0)
+            .trim()
+            .trim_start_matches('<')
+            .trim_end_matches('>')
+            .to_string();
+
+        let mut attributes = HashMap::new();
+        for part in parts {
+            let attr_parts: Vec<&str> = part.split('=').collect();
+            if attr_parts.len() == 2 {
+                let key = attr_parts[0].trim().to_string();
+                let value = attr_parts[1].trim().to_string();
+                attributes.insert(key, value);
+            }
+        }
+
+        Self { url, attributes }
+    }
+}
 
 pub fn put_link_header(
     h: &mut HeaderMap<HeaderValue>,
@@ -11,14 +63,18 @@ pub fn put_link_header(
     rel: &str,
     content_type: Option<&str>,
 ) {
-    let s = match content_type {
-        None => {
-            format!("<{url}>; rel={rel}")
-        }
-        Some(c) => {
-            format!("<{url}>; rel={rel}; type={c}")
-        }
+    let mut l = LinkHeader {
+        url: url.to_string(),
+        attributes: hashmap! {
+            "rel".to_string() => rel.to_string(),
+        },
     };
+    if let Some(content_type) = content_type {
+        l.attributes
+            .insert("type".to_string(), content_type.to_string());
+    }
+
+    let s = l.format_header_value();
     h.append("Link", HeaderValue::from_str(&s).unwrap());
 }
 
@@ -67,5 +123,38 @@ pub fn put_meta_headers(h: &mut HeaderMap<HeaderValue>) {
 
     put_link_header(h, EVENTS_SUFFIX, REL_EVENTS_NODATA, Some("websocket"));
     put_link_header(h, EVENTS_SUFFIX_DATA, REL_EVENTS_DATA, Some("websocket"));
-    put_link_header(h, ":meta", REL_META, Some(CONTENT_TYPE_DTPS_INDEX_CBOR));
+    put_link_header(
+        h,
+        REL_URL_META,
+        REL_META,
+        Some(CONTENT_TYPE_DTPS_INDEX_CBOR),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+
+    // Bring the function into scope
+
+    use log::debug;
+    use maplit::hashmap;
+
+    use crate::utils_headers::LinkHeader;
+    use crate::FilePaths;
+
+    #[test]
+
+    fn link_parse_1() {
+        let s = "<:events?send_data=1>; rel=dtps-events-inline-data; type=websocket";
+        let found = LinkHeader::from_header_value(s);
+        let expected = LinkHeader {
+            url: ":events?send_data=1".to_string(),
+            attributes: hashmap! {
+                "rel".to_string() => "dtps-events-inline-data".to_string(),
+                "type".to_string() => "websocket".to_string(),
+            },
+        };
+
+        assert_eq!(found, expected);
+    }
 }

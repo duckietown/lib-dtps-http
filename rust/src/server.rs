@@ -521,7 +521,15 @@ pub async fn handle_websocket_queue(
 
                 if send_data {
                     let message_data = ss0.get_blob(&last.digest).unwrap();
-                    let message = warp::ws::Message::binary(message_data.clone());
+                    let chunk = MsgServerToClient::Chunk(Chunk {
+                        digest: last.digest.clone(),
+                        i: 0,
+                        n: nchunks,
+                        index: 0,
+                        data: Bytes::from(message_data.clone()),
+                    });
+                    let message = warp::ws::Message::binary(serde_cbor::to_vec(&chunk).unwrap());
+
                     ws_tx.send(message).await.unwrap();
                 }
                 num_total = last.index + 1;
@@ -988,6 +996,9 @@ pub struct ServerArgs {
 
     #[arg(long)]
     proxy: Vec<String>,
+
+    #[arg(long)]
+    connect: Vec<String>,
 }
 
 pub fn address_from_host_port(host: &str, port: u16) -> DTPSR<SocketAddr> {

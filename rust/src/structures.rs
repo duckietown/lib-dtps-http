@@ -18,17 +18,16 @@ pub type NodeAppData = String;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TopicsIndexWire {
-    pub node_id: String,
-    pub node_started: i64,
-
+    // pub node_id: String,
+    // pub node_started: i64,
     pub node_app_data: HashMap<String, NodeAppData>,
     pub topics: HashMap<String, TopicRefWire>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TopicsIndexInternal {
-    pub node_id: String,
-    pub node_started: i64,
+    // pub node_id: String,
+    // pub node_started: i64,
     pub node_app_data: HashMap<String, NodeAppData>,
     pub topics: HashMap<TopicName, TopicRefInternal>,
 }
@@ -38,11 +37,11 @@ impl TopicsIndexInternal {
         let mut topics: HashMap<String, TopicRefWire> = HashMap::new();
         for (topic_name, topic_ref_internal) in self.topics {
             let topic_ref_wire = topic_ref_internal.to_wire(use_rel.clone());
-            topics.insert(topic_name.to_relative_url(), topic_ref_wire);
+            topics.insert(topic_name.to_dash_sep(), topic_ref_wire);
         }
         TopicsIndexWire {
-            node_id: self.node_id,
-            node_started: self.node_started,
+            // node_id: self.node_id,
+            // node_started: self.node_started,
             node_app_data: self.node_app_data,
             topics,
         }
@@ -52,13 +51,13 @@ impl TopicsIndexInternal {
         for (topic_name, topic_ref_wire) in &wire.topics {
             let topic_ref_internal = TopicRefInternal::from_wire(topic_ref_wire, conbase);
             topics.insert(
-                TopicName::from_relative_url(topic_name).unwrap(),
+                TopicName::from_dash_sep(topic_name).unwrap(),
                 topic_ref_internal,
             );
         }
         TopicsIndexInternal {
-            node_id: wire.node_id,
-            node_started: wire.node_started,
+            // node_id: wire.node_id,
+            // node_started: wire.node_started,
             node_app_data: wire.node_app_data,
             topics,
         }
@@ -71,8 +70,8 @@ impl TopicsIndexInternal {
             topics.insert(topic_name.clone(), t);
         }
         return Self {
-            node_id: self.node_id.clone(),
-            node_started: self.node_started,
+            // node_id: self.node_id.clone(),
+            // node_started: self.node_started,
             node_app_data: self.node_app_data.clone(),
             topics,
         };
@@ -180,8 +179,8 @@ pub struct UnixCon {
 impl Display for UnixCon {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "UnixCon(")?;
-        write!(f, "{}", self.socket_name)?;
-        write!(f, "{}", self.path)?;
+        write!(f, "[{}]", self.socket_name)?;
+        write!(f, " {}", self.path)?;
         if let Some(query) = &self.query {
             write!(f, "?{}", query)?;
         }
@@ -438,6 +437,7 @@ pub struct FoundMetadata {
     pub events_url: Option<TypeOfConnection>,
     pub events_data_inline_url: Option<TypeOfConnection>,
     pub latency_ns: u128, // nanoseconds
+    pub index: Option<TypeOfConnection>,
 }
 
 pub fn get_url_from_topic_name(topic_name: &str) -> String {

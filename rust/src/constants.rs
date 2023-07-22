@@ -21,6 +21,8 @@ pub static CONTENT_TYPE_DTPS_INDEX: &'static str = "application/vnd.dt.dtps-inde
 pub static CONTENT_TYPE_DTPS_INDEX_CBOR: &'static str = "application/vnd.dt.dtps-index+cbor";
 pub static EVENTS_SUFFIX: &'static str = ":events";
 pub static EVENTS_SUFFIX_DATA: &'static str = ":events?send_data=1";
+pub static REL_URL_META: &'static str = ":index";
+
 #[cfg(test)]
 
 mod test {

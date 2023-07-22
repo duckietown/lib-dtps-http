@@ -17,10 +17,10 @@ use crate::client::make_request;
 use crate::signals_logic::ResolvedData::{NotAvailableYet, NotFound, Regular};
 use crate::utils::{divide_in_components, is_prefix_of};
 use crate::{
-    context, get_content_type, get_rawdata, not_implemented, ContentInfo, DTPSError,
+    context, get_content_type, get_rawdata, not_implemented, utils, ContentInfo, DTPSError,
     ForwardingStep, LinkBenchmark, NodeAppData, OtherProxyInfo, RawData, ServerState,
     ServerStateAccess, TopicName, TopicReachabilityInternal, TopicRefInternal, TopicsIndexInternal,
-    TypeOfConnection, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
+    TypeOfConnection, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR, REL_URL_META,
 };
 
 #[derive(Debug, Clone)]
@@ -91,6 +91,7 @@ pub enum TypeOFSource {
     Transformed(Box<TypeOFSource>, Transforms),
     Digest(String, String),
     Deref(SourceComposition),
+    Index(Box<TypeOFSource>),
 
     OtherProxied(OtherProxied),
 }
@@ -157,15 +158,16 @@ impl TypeOFSource {
                 let tr = TypeOFSource::Transformed(Box::new(self.clone()), transform);
                 Ok(tr)
             }
+            TypeOFSource::Index(_) => {
+                not_implemented!("get_inside for {self:?} with {s:?}")
+            }
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct OtherProxied {
-    // reached_at: TopicName,
     path_and_query: String,
-    // query: Option<String>,
     op: OtherProxyInfo,
 }
 
@@ -284,6 +286,18 @@ impl ResolveDataSingle for TypeOFSource {
 
                 Ok(ResolvedData::RawData(rd))
             }
+            TypeOFSource::Index(inside) => {
+                let x = inside.get_meta_index(presented_as, ss_mutex).await?;
+                // not_implemented!("get_inside for {self:?} with {s:?}")
+                let xw = x.to_wire(None);
+                // convert to cbor
+                let cbor_bytes = serde_cbor::to_vec(&xw).unwrap();
+                let raw_data = RawData {
+                    content: Bytes::from(cbor_bytes),
+                    content_type: CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(),
+                };
+                return Ok(ResolvedData::RawData(raw_data));
+            }
         }
     }
 }
@@ -338,6 +352,7 @@ impl DataProps for TypeOFSource {
             }
             TypeOFSource::MountedDir(_, _, props) => props.clone(),
             TypeOFSource::MountedFile(_, _, props) => props.clone(),
+            TypeOFSource::Index(s) => s.get_properties(),
         }
     }
 }
@@ -419,13 +434,12 @@ impl GetMeta for TypeOFSource {
                 });
                 let link_benchmark_total = the_data.reachability_we_used.benchmark.clone()
                     + the_data.link_benchmark_last.clone();
-                let rurl = format!("HERE/{}", rurl);
 
                 if MASK_ORIGIN {
                     tr.reachability.clear();
                 }
                 tr.reachability.push(TopicReachabilityInternal {
-                    con: TypeOfConnection::Relative(rurl, None),
+                    con: TypeOfConnection::Relative(rurl.to_string(), None),
                     answering: node_id.clone(),
                     forwarders: the_forwarders,
                     benchmark: link_benchmark_total.clone(),
@@ -434,8 +448,8 @@ impl GetMeta for TypeOFSource {
                 topics.insert(TopicName::root(), tr);
                 let n: NodeAppData = NodeAppData::from("dede");
                 let index = TopicsIndexInternal {
-                    node_id: "".to_string(),
-                    node_started: 0,
+                    // node_id: "".to_string(),
+                    // node_started: 0,
                     node_app_data: hashmap! {"here2".to_string() => n},
                     topics,
                 };
@@ -470,8 +484,8 @@ impl GetMeta for TypeOFSource {
                 topics.insert(TopicName::root(), tr);
                 let n: NodeAppData = NodeAppData::from("dede");
                 let index = TopicsIndexInternal {
-                    node_id: "".to_string(),
-                    node_started: 0,
+                    // node_id: "".to_string(),
+                    // node_started: 0,
                     node_app_data: hashmap! {"here".to_string() => n},
                     topics,
                 };
@@ -531,8 +545,8 @@ impl GetMeta for TypeOFSource {
                 }
 
                 Ok(TopicsIndexInternal {
-                    node_id: "".to_string(),
-                    node_started: 0,
+                    // node_id: "".to_string(),
+                    // node_started: 0,
                     node_app_data: hashmap! {
                         "path".to_string() => NodeAppData::from(the_path),
                     },
@@ -541,6 +555,9 @@ impl GetMeta for TypeOFSource {
             }
             TypeOFSource::MountedFile(_, _, _) => {
                 not_implemented!("MountedFile: {self:?}")
+            }
+            TypeOFSource::Index(_) => {
+                not_implemented!("Index: {self:?}")
             }
         };
     }
@@ -555,12 +572,6 @@ async fn get_sc_meta(
         let ss = ss_mutex.lock().await;
         return Ok(ss.create_topic_index());
     }
-    // let node_id;
-    // {
-    //     let ss = ss_mutex.lock().await;
-    //     node_id = ss.node_id.clone();
-    // }
-    // debug!("get_sc_meta: START: {:?}", sc);
     let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
     let mut node_app_data = HashMap::new();
 
@@ -590,8 +601,8 @@ async fn get_sc_meta(
     let ss = ss_mutex.lock().await;
 
     let index = TopicsIndexInternal {
-        node_id: ss.node_id.clone(),
-        node_started: ss.node_started,
+        // node_id: ss.node_id.clone(),
+        // node_started: ss.node_started,
         node_app_data,
         topics,
     };
@@ -694,14 +705,22 @@ pub async fn interpret_path(
                 ));
             }
         };
-        return if after.len() == 0 {
-            Ok(first_part)
-        } else {
-            Ok(TypeOFSource::Transformed(
-                Box::new(first_part),
-                Transforms::GetInside(after),
-            ))
-        };
+        return resolve_extra_components(&first_part, &after);
+    }
+    let index_marker = REL_URL_META.to_string();
+    if path_components.contains(&index_marker) {
+        let i = path_components
+            .iter()
+            .position(|x| x == &index_marker)
+            .unwrap();
+        let before = path_components.get(0..i).unwrap().to_vec();
+        let after = path_components.get(i + 1..).unwrap().to_vec();
+
+        let before2 = before.join("/") + "/";
+        let interpret_before = interpret_path(&before2, query, referrer, ss_mutex.clone()).await?;
+
+        let first_part = TypeOFSource::Index(Box::new(interpret_before));
+        return resolve_extra_components(&first_part, &after);
     }
 
     if path_components.len() == 0 {
@@ -752,7 +771,7 @@ pub async fn interpret_path(
         for (mounted_at, info) in &ss.proxied_other {
             if let Some((_, b)) = is_prefix_of(mounted_at.as_components(), &path_components) {
                 let mut path_and_query = b.join("/");
-                path_and_query.push_str(&format_query(&query));
+                path_and_query.push_str(&utils::format_query(&query));
 
                 let other = OtherProxied {
                     // reached_at: mounted_at.clone(),
@@ -786,14 +805,7 @@ pub async fn interpret_path(
         match is_prefix_of(&topic_components, &path_components) {
             None => {}
             Some((_, rest)) => {
-                let mut cur = source.clone();
-                for a in rest.iter() {
-                    cur = context!(
-                        cur.get_inside(&a),
-                        "interpret_path: cannot match for {k:?} rest: {rest:?}",
-                    )?;
-                }
-                return Ok(cur);
+                return resolve_extra_components(source, &rest);
             }
         };
 
@@ -825,8 +837,6 @@ pub async fn interpret_path(
     };
     // let ss = ss_mutex.lock().await;
     for (_, _, rest, source) in subtopics {
-        // let oq = ss.oqs.get(&topic_name).unwrap();
-        // let source_type = TypeOFSource::OurQueue(topic_name.clone(), p1, oq.tr.properties.clone());
         sc.compose.insert(rest.clone(), Box::new(source));
     }
     // log::debug!("  \n{sc:#?} ");
@@ -875,17 +885,13 @@ pub fn iterate_type_of_sources(s: &ServerState) -> Vec<(TopicName, TypeOFSource)
     res
 }
 
-fn format_query(q: &HashMap<String, String>) -> String {
-    if q.len() == 0 {
-        return "".to_string();
+fn resolve_extra_components(source: &TypeOFSource, rest: &Vec<String>) -> DTPSR<TypeOFSource> {
+    let mut cur = source.clone();
+    for a in rest.iter() {
+        cur = context!(
+            cur.get_inside(&a),
+            "interpret_path: cannot match for {a:?} rest: {rest:?}",
+        )?;
     }
-
-    let mut res = String::from("?");
-    for (k, v) in q {
-        res.push_str(k);
-        res.push_str("=");
-        res.push_str(v);
-        res.push_str("&");
-    }
-    res
+    Ok(cur)
 }

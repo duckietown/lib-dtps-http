@@ -21,10 +21,6 @@ run-proxy2-continuous:
 	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rs-server-example-clock -- --tcp-port 8002 --unix-path /tmp/demo1-c  --proxy proxy1=http://localhost:8001 '
 
 
-#run-proxy2-continuous-b:
-#	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rust-clock -- --tcp-port 8002  --proxy proxy1=https'
-#
-
 run-proxy3-continuous:
 	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rs-server-example-clock -- --tcp-port 8003  --proxy proxy2=http://localhost:8002 '
 
@@ -35,13 +31,17 @@ run-client-continuous-to-python-server:
 	cargo watch -c -w rust/src -w rust/bin -E RUST_BACKTRACE=full  -x 'run  $(RELEASE)  --bin dtps-http-rs-client-stats -- --url http://127.0.0.1:8081/ '
 
 
-
 run-proxy-external:
 	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rs-server-example-clock -- --tcp-port 11000 --unix-path /tmp/proxy-external --proxy proxy1=https://www.duckietown.org/ --proxy static2=.'
 
+run-connections-1:
+	cd ../dtps-example-agents && cargo watch -c -w lib-dtps-http -x 'run --bin dtps-nodes-all -- AddToInt --unix-path /tmp/demo1/node1/_node --tcp-port 12001'
 
+run-connections-2:
+	cd ../dtps-example-agents && cargo watch -c -w lib-dtps-http -x 'run --bin dtps-nodes-all -- AddToInt --unix-path /tmp/demo1/node2/_node --tcp-port 12002'
 
-
+run-connections-3:
+	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rs-server-example-clock -- --tcp-port 12000 --unix-path /tmp/demo1/_node --proxy node/node1=http+unix://[/tmp/demo1/node1/_node]/node  --proxy node/node2=http+unix://[/tmp/demo1/node2/_node]/node'
 
 docker-build-debug:
 	docker buildx build --build-arg CARGO_PROFILE=dev --build-arg DEST=debug --progress plain --platform linux/arm64,linux/amd64 --push --tag $(tag) .

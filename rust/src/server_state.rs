@@ -22,7 +22,7 @@ use crate::structures_linkproperties::LinkBenchmark;
 use crate::types::*;
 use crate::{
     context, error_with_info, get_events_stream_inline, get_index, get_metadata, get_queue_id,
-    get_random_node_id, get_stats, invalid_input, not_available, not_implemented,
+    get_random_node_id, get_stats, invalid_input, not_available, not_implemented, not_reachable,
     sniff_type_resource, DTPSError, ServerStateAccess, TypeOfResource, UrlResult, DTPSR,
     MASK_ORIGIN,
 };
@@ -614,8 +614,8 @@ impl ServerState {
         //     NodeAppData::from(format!("{:#?}", self.proxied_topics)),
         // );
         let topics_index = TopicsIndexInternal {
-            node_id: self.node_id.clone(),
-            node_started: self.node_started,
+            // node_id: self.node_id.clone(),
+            // node_started: self.node_started,
             node_app_data,
             topics,
         };
@@ -633,7 +633,16 @@ async fn get_proxy_info(url: &TypeOfConnection) -> DTPSR<(FoundMetadata, TopicsI
         url,
     )?;
 
-    let index_internal = context!(get_index(url).await, "Error getting the index for {}", url,)?;
+    let index_url = match &md.index {
+        None => {
+            return not_reachable!("Cannot find index url for proxy at {url}:\n{md:?}");
+        }
+        Some(u) => u.clone(),
+    };
+    let index_internal = context!(
+        get_index(&index_url).await,
+        "Error getting the index for {url} index {index_url}"
+    )?;
     Ok((md, index_internal))
 }
 

@@ -1,13 +1,19 @@
-use crate::{divide_in_components, vec_concat, DTPSR};
 use std::fmt::{Debug, Formatter};
 use std::ops::Add;
 
+use colored::Colorize;
+
+use crate::{divide_in_components, vec_concat, DTPSError, DTPSR};
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct TopicName {
+    /// ["a", "b", "c"]
     components: Vec<String>,
+    /// "a/b/c/"
     relative_url: String,
+    /// "a/b/c"
+    dash_sep: String,
 }
-use colored::Colorize;
 
 impl Debug for TopicName {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -46,29 +52,48 @@ impl TopicName {
     pub fn as_relative_url(&self) -> &str {
         &self.relative_url
     }
+
+    /// Formats as  "a/b/c"
+    pub fn to_dash_sep(&self) -> String {
+        self.as_dash_sep().to_string()
+    }
+    pub fn as_dash_sep(&self) -> &str {
+        &self.dash_sep
+    }
+    pub fn from_dash_sep<S: AsRef<str>>(s: S) -> DTPSR<Self> {
+        let s = s.as_ref();
+
+        if s.ends_with('/') {
+            return DTPSError::other("did not expect this to end in /");
+        }
+        let components = divide_in_components(s, '/');
+
+        Ok(Self::from_components(&components))
+    }
+
     pub fn from_relative_url<S: AsRef<str>>(s: S) -> DTPSR<Self> {
         let s = s.as_ref();
         let components = divide_in_components(s, '/');
-        let relative = components.join("/");
-        Ok(TopicName {
-            components: components.clone(),
-            relative_url: relative,
-        })
+        Ok(Self::from_components(&components))
     }
 
     pub fn root() -> Self {
-        TopicName {
-            components: vec![],
-            relative_url: "".to_string(),
-        }
+        Self::from_components(&vec![])
     }
 
     pub fn from_components(v: &Vec<String>) -> Self {
         let components = v.clone();
-        let dotted2 = components.join("/");
+
+        let relative_url = if components.len() == 0 {
+            "".to_string()
+        } else {
+            components.join("/") + "/"
+        };
+        let dash_sep = components.join("/");
         TopicName {
-            components: components.clone(),
-            relative_url: dotted2,
+            components,
+            relative_url,
+            dash_sep,
         }
     }
     pub fn add_prefix(&self, v: &Vec<String>) -> Self {

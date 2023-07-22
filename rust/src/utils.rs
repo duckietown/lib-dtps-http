@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::SystemTime;
 
 pub fn divide_in_components(pstr: &str, sep: char) -> Vec<String> {
@@ -69,4 +70,19 @@ pub fn time_nanos() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos()
+}
+
+pub fn format_query(q: &HashMap<String, String>) -> String {
+    if q.len() == 0 {
+        return "".to_string();
+    }
+
+    let mut res = String::from("?");
+    for (k, v) in q {
+        res.push_str(k);
+        res.push_str("=");
+        res.push_str(v);
+        res.push_str("&");
+    }
+    res
 }
