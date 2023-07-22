@@ -1,3 +1,4 @@
+use crossbeam::channel::after;
 use log::info;
 use url::Url;
 
@@ -81,21 +82,41 @@ pub fn parse_url_ext(mut s0: &str) -> DTPSR<TypeOfConnection> {
         let scheme_end = s.find("://").unwrap();
         let scheme = s[..scheme_end].to_string().clone();
 
-        let host_start = scheme_end + "://".len();
+        let host_start0 = scheme_end + "://".len();
+        let after_scheme = &s[host_start0..];
+
+        if after_scheme.starts_with('[') {
+            let end = after_scheme.find(']').unwrap();
+            let socket_name = &after_scheme[1..end].to_string();
+            let mut path = &after_scheme[end + 1..];
+            if path.len() == 0 {
+                path = "/";
+            }
+            let socket_name = socket_name.replace(SPECIAL_CHAR, "/");
+            let con = UnixCon {
+                scheme,
+                socket_name,
+                path: path.to_string(),
+                query,
+            };
+
+            info!("UnixCon: parsed {:?} as {:?}", s, con);
+            return Ok(UNIX(con));
+        }
+
         if s0.contains(SPECIAL_CHAR) {
-            let (socket_name, path) = match s[host_start..].find('/') {
+            let (socket_name, path) = match after_scheme.find('/') {
                 None => {
                     let path = "/".to_string();
-                    let host = s[host_start..].to_string().clone();
+                    let host = after_scheme.to_string().clone();
                     let host = host.replace(SPECIAL_CHAR, "/");
 
                     (host, path)
                 }
                 Some(path_start0) => {
-                    let path_start = path_start0 + host_start;
-                    let path = (s[path_start..].to_string()).clone();
+                    let path = (after_scheme[path_start0..].to_string()).clone();
 
-                    let host = s[host_start..path_start].to_string().clone();
+                    let host = after_scheme[..path_start0].to_string().clone();
 
                     let host = host.replace(SPECIAL_CHAR, "/");
                     (host, path)
@@ -112,9 +133,9 @@ pub fn parse_url_ext(mut s0: &str) -> DTPSR<TypeOfConnection> {
             info!("UnixCon: parsed {:?} as {:?}", s, con);
             Ok(UNIX(con))
         } else {
-            let path_start = s[host_start..].rfind('/').unwrap() + host_start;
-            let socket_name = &s[host_start..path_start];
-            let path = (&s[path_start..].to_string()).clone();
+            let path_start = after_scheme.rfind('/').unwrap();
+            let socket_name = &after_scheme[..path_start];
+            let path = (&after_scheme[path_start..].to_string()).clone();
             Ok(UNIX(UnixCon {
                 scheme,
                 socket_name: socket_name.to_string(),
@@ -255,6 +276,23 @@ mod tests {
                 scheme: "http+unix".to_string(),
                 socket_name: "/sockets/argo/node1/_node".to_string(),
                 path: "/".to_string(),
+                query: None,
+            })
+        );
+    }
+
+    #[test]
+    fn url_parse_square() {
+        // without end /
+        let s = "http+unix://[/sockets/argo/node1/_node]/the/path";
+        let x = super::parse_url_ext(s).unwrap();
+        debug!("test_p1 {s:?} {x:?}");
+        assert_eq!(
+            x,
+            super::TypeOfConnection::UNIX(super::UnixCon {
+                scheme: "http+unix".to_string(),
+                socket_name: "/sockets/argo/node1/_node".to_string(),
+                path: "/the/path".to_string(),
                 query: None,
             })
         );

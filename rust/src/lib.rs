@@ -5,6 +5,7 @@
 pub mod cbor_manipulation;
 pub mod client;
 pub mod cloudflare;
+mod config;
 pub mod constants;
 pub mod errors;
 pub mod html_utils;
@@ -26,6 +27,7 @@ pub mod utils_headers;
 pub mod utils_mime;
 pub mod websocket_abstractions;
 pub mod websocket_signals;
+
 pub use client::*;
 pub use constants::*;
 pub use errors::*;
