@@ -4,8 +4,7 @@ use std::os::unix::fs::FileTypeExt;
 use std::time::Duration;
 
 use anyhow::Context;
-use base64;
-use base64::Engine as _;
+
 use bytes::Bytes;
 use futures::StreamExt;
 use hex;

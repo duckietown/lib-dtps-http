@@ -30,7 +30,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
 use tokio_stream::wrappers::{UnboundedReceiverStream, UnixListenerStream};
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
-use warp::http::header;
+
 use warp::hyper::Body;
 use warp::reply::Response;
 use warp::{Filter, Rejection};
@@ -38,7 +38,7 @@ use warp::{Filter, Rejection};
 use crate::cloudflare::CloudflareTunnel;
 use crate::constants::*;
 use crate::html_utils::make_html;
-use crate::logs::get_id_string;
+
 use crate::master::{
     handle_websocket_generic2, put_common_headers, put_header_content_type, put_header_location,
     put_meta_headers, put_source_headers, serve_master_get, serve_master_head, serve_master_post,

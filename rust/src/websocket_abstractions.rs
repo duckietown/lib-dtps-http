@@ -1,14 +1,11 @@
 use std::fmt::Debug;
 
-use anyhow::Context;
 use async_trait::async_trait;
 use base64;
 use base64::{engine::general_purpose, Engine as _};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
-use hex;
-use hyper;
-use hyperlocal::UnixClientExt;
+
 use log::{debug, error};
 use rand::Rng;
 use tokio::net::{TcpStream, UnixStream};

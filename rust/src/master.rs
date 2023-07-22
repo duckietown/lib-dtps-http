@@ -783,19 +783,6 @@ pub fn make_index_html(index: &TopicsIndexInternal) -> PreEscaped<String> {
         topic2url.push((topic_name, url));
     }
 
-    // for topic_name in keys.iter() {
-    //     if topic_name == &"" {
-    //         continue;
-    //     }
-    //     let mut url = String::new();
-    //     let components = divide_in_components(topic_name, '.');
-    //     for c in components {
-    //         url.push_str(&c);
-    //         url.push_str("/");
-    //     }
-    //     topic2url.push((topic_name, url));
-    // }
-
     let x = make_html(
         "index",
         html! {
@@ -826,13 +813,6 @@ pub fn make_index_html(index: &TopicsIndexInternal) -> PreEscaped<String> {
                     }
                 }
 
-                // h2 { "Index answer presented in YAML" }
-                //
-                // pre {
-                //     code {
-                //     (serde_yaml::to_string( & index).unwrap())
-                //     }
-                // }
             },
     );
     x

@@ -2,14 +2,12 @@ extern crate dtps_http;
 extern crate url;
 
 use std::error;
-use std::time::Duration;
 
 use clap::Parser;
 use futures::future::join_all;
-use log::{debug, info, warn};
+use log::{debug, warn};
 use tokio::spawn;
 use tokio::task::JoinHandle;
-use tokio::time::sleep;
 
 use dtps_http::parse_url_ext;
 use dtps_http::{compute_best_alternative, get_index, get_metadata};
