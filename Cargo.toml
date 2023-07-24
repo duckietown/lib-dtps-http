@@ -9,77 +9,63 @@ path = "rust/src/lib.rs"
 
 [dependencies]
 anyhow = { version = "1.0.71", features = ["std", "backtrace"] }
+async-recursion = "1.0.4"
 async-trait = "0.1.71"
 base64 = "0.21.2"
 broadcast = "0.1"
 bs58 = "0.5.0"
+bytes = { version = "1.4.0", features = ["serde"] }
 chrono = "0.4"
 clap = { version = "4.3.11", features = ["derive"] }
+colored = "2.0.4"
 derive_more = "0.99.17"
 env_logger = "0.10.0"
-ethane = { version = "1.0.2", features = ["non-blocking"] }
 futures = "0.3"
+gethostname = "0.4.3"
 hex = { version = "0.4.3", features = ["serde"] }
 http = "0.2.9"
 hyper = { version = "0.14.27", features = ["full"] }
 hyperlocal = "0.8.0"
 include_dir = "0.7.3"
-libc = { version = "0.2.147", features = [] }
+indent = "0.1.1"
 log = "0.4.19"
 maplit = "1.0.2"
 maud = "0.25.0"
-md5 = "0.7.0"
 mime = "0.3.17"
 mime_guess = "2.0.4"
-ordered-map = "0.4.2"
+path-clean = "1.0.1"
 rand = "0.8.5"
+schemars = { version = "0.8.12", features = ["bytes", "rust_decimal",  "url", "chrono", "either", "impl_json_schema"] }
 serde = { version = "1", features = ["derive"] }
+serde-bytes-repr = "0.1.5"
 serde_bytes = "0.11.11"
 serde_cbor = { version = "0.11.2", features = ["tags", "unsealed_read_write"] }
 serde_json = "1"
 serde_yaml = "0.9.22"
 sha256 = "1.1.4"
-sum_type = "0.2.0"
-
-tungstenite = "0.19"
-url = "2.4.0"
-uuid = { version = "1.4.0", features = ["v4"] }
-warp = "0.3.5"
-gethostname = "0.4.3"
-bytes = { version = "1.4.0", features = ["serde"] }
-serde-bytes-repr = "0.1.5"
-async-recursion = "1.0.4"
-thiserror = "1.0.43"
-indent = "0.1.1"
-colored = "2.0.4"
-tokio-reactor = "0.1.12"
-path-clean = "1.0.1"
-crossbeam = { version = "0.8.2", features = ["crossbeam-channel", "crossbeam-queue", "crossbeam-epoch", "crossbeam-deque"] }
 strum = "0.20.0"
 strum_macros = "0.20.0"
-jsonschema = { version = "0.17.1", features = ["draft201909", "draft202012"] }
-schemars = { version = "0.8.12", features = ["bytes", "rust_decimal", "uuid", "url", "chrono", "either", "impl_json_schema"] }
+thiserror = "1.0.43"
+tungstenite = "0.19"
+url = "2.4.0"
+warp = "0.3.5"
 
 [target.'cfg(target_os = "wasi")'.dependencies]
+js-sys = "0.3"
 tokio = { version = "1",  features = ["sync","macros","io-util","rt","time"]  }
 tokio-tungstenite = { version = "0.19.0", features = [ ] }
-
 websocket =  {version="0.26.5", default-features = false, features = []}
 wasm-bindgen = "0.2.87"
-js-sys = "0.3"
 
 
 [target.'cfg(not(target_os = "wasi"))'.dependencies]
-openssl-sys = "0.9"
-openssl = { version = "*", features = ["vendored"] } #https://docs.rs/openssl/0.10.34/openssl/#vendored
-tokio = { version = "1", features = ["full"] }
 hyper-tls = "0.5.0"
-websocket = "0.26.5"
-
-
-
+openssl = { version = "*", features = ["vendored"] } #https://docs.rs/openssl/0.10.34/openssl/#vendored
+openssl-sys = "0.9"
+tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1.14", features = ["full"] }
 tokio-tungstenite = { version = "0.19.0", features = [  "rustls", "rustls-native-certs", "rustls-tls-native-roots", "rustls-tls-webpki-roots"] }
+websocket = "0.26.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 getaddrs = "0.1.0"
@@ -94,7 +80,6 @@ path = "rust/bin/clock.rs"
 [[bin]]
 name = "dtps-http-rs-client-stats"
 path = "rust/bin/stats.rs"
-
 
 
 [build-dependencies]
