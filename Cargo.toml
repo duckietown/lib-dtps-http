@@ -8,17 +8,17 @@ build = "rust/build.rs"
 path = "rust/src/lib.rs"
 
 [dependencies]
-anyhow = { version = "1.0.71", features = ["std", "backtrace"] }
-async-recursion = "1.0.4"
-async-trait = "0.1.71"
-base64 = "0.21.2"
+anyhow = { version = "1", features = ["std", "backtrace"] }
+async-recursion = "1"
+async-trait = "0.1"
+base64 = "0.21"
 broadcast = "0.1"
-bs58 = "0.5.0"
-bytes = { version = "1.4.0", features = ["serde"] }
+bs58 = "0.5"
+bytes = { version = "1", features = ["serde"] }
 chrono = "0.4"
-clap = { version = "4.3.11", features = ["derive"] }
-colored = "2.0.4"
-derive_more = "0.99.17"
+clap = { version = "4", features = ["derive"] }
+colored = "2"
+derive_more = "0.99"
 env_logger = "0.10.0"
 futures = "0.3"
 gethostname = "0.4.3"
@@ -29,32 +29,32 @@ hyperlocal = "0.8.0"
 include_dir = "0.7.3"
 indent = "0.1.1"
 log = "0.4.19"
-maplit = "1.0.2"
+maplit = "1"
 maud = "0.25.0"
 mime = "0.3.17"
-mime_guess = "2.0.4"
-path-clean = "1.0.1"
-rand = "0.8.5"
-schemars = { version = "0.8.12", features = ["bytes", "rust_decimal",  "url", "chrono", "either", "impl_json_schema"] }
+mime_guess = "2"
+path-clean = "1"
+rand = "0"
+schemars = { version = "0", features = ["bytes", "rust_decimal", "url", "chrono", "either", "impl_json_schema"] }
 serde = { version = "1", features = ["derive"] }
 serde-bytes-repr = "0.1.5"
 serde_bytes = "0.11.11"
 serde_cbor = { version = "0.11.2", features = ["tags", "unsealed_read_write"] }
 serde_json = "1"
 serde_yaml = "0.9.22"
-sha256 = "1.1.4"
+sha256 = "1"
 strum = "0.20.0"
 strum_macros = "0.20.0"
 thiserror = "1.0.43"
 tungstenite = "0.19"
-url = "2.4.0"
+url = "2"
 warp = "0.3.5"
 
 [target.'cfg(target_os = "wasi")'.dependencies]
 js-sys = "0.3"
-tokio = { version = "1",  features = ["sync","macros","io-util","rt","time"]  }
-tokio-tungstenite = { version = "0.19.0", features = [ ] }
-websocket =  {version="0.26.5", default-features = false, features = []}
+tokio = { version = "1", features = ["sync", "macros", "io-util", "rt", "time"] }
+tokio-tungstenite = { version = "0.19.0", features = [] }
+websocket = { version = "0.26.5", default-features = false, features = [] }
 wasm-bindgen = "0.2.87"
 
 
@@ -64,7 +64,7 @@ openssl = { version = "*", features = ["vendored"] } #https://docs.rs/openssl/0.
 openssl-sys = "0.9"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1.14", features = ["full"] }
-tokio-tungstenite = { version = "0.19.0", features = [  "rustls", "rustls-native-certs", "rustls-tls-native-roots", "rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.19.0", features = ["rustls", "rustls-native-certs", "rustls-tls-native-roots", "rustls-tls-webpki-roots"] }
 websocket = "0.26.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -90,4 +90,4 @@ chrono = "0.4"
 
 [dev-dependencies]
 rstest = "0.18.1"
-async-std =  {version="1.12.0", features = ["default", "attributes"]}
+async-std = { version = "1.12.0", features = ["default", "attributes"] }
