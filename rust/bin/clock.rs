@@ -2,6 +2,7 @@ extern crate dtps_http;
 
 use chrono::prelude::*;
 use log::error;
+use schemars::schema_for;
 use tokio::spawn;
 use tokio::time::{interval, Duration};
 
@@ -29,6 +30,7 @@ async fn clock_go(state: ServerStateAccess, topic_name: &str, interval_s: f32) -
             None,
             "application/json",
             &props,
+            Some(schema_for!(i64)),
         )?;
     }
     loop {
@@ -52,14 +54,17 @@ async fn clock() -> DTPSR<()> {
     //
     // // spawn(clock_go(server.get_lock(), "clock", 1.0));
     spawn(show_errors(
+        Some(server.get_lock()),
         "clock5".to_string(),
         clock_go(server.get_lock(), "clock5", 5.0),
     ));
     spawn(show_errors(
+        Some(server.get_lock()),
         "clock15".to_string(),
         clock_go(server.get_lock(), "clock15", 15.0),
     ));
     spawn(show_errors(
+        Some(server.get_lock()),
         "clock30".to_string(),
         clock_go(server.get_lock(), "clock30", 30.0),
     ));

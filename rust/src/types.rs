@@ -2,6 +2,10 @@ use std::fmt::{Debug, Formatter};
 use std::ops::Add;
 
 use colored::Colorize;
+use schemars::gen::SchemaGenerator;
+use schemars::schema::{Schema, SchemaObject};
+use schemars::JsonSchema;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{divide_in_components, vec_concat, DTPSError, DTPSR};
 
@@ -13,6 +17,37 @@ pub struct TopicName {
     relative_url: String,
     /// "a/b/c"
     dash_sep: String,
+}
+
+impl Serialize for TopicName {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_dash_sep())
+    }
+}
+impl<'de> Deserialize<'de> for TopicName {
+    fn deserialize<D>(deserializer: D) -> Result<TopicName, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(Self::from_dash_sep(s).unwrap())
+    }
+}
+impl JsonSchema for TopicName {
+    fn schema_name() -> String {
+        "TopicName".to_string()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        let mut schema_object = SchemaObject::default();
+        schema_object.metadata().description =
+            Some("dash separate topic name (empty string=root)".to_string());
+        schema_object.string(); //chemars::schema::SimpleTypes::String);
+        Schema::Object(schema_object)
+    }
 }
 
 impl Debug for TopicName {

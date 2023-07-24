@@ -6,6 +6,7 @@ use std::ops::Add;
 use std::path::PathBuf;
 
 use derive_more::Constructor;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -14,7 +15,7 @@ use crate::urls::join_ext;
 use crate::utils::divide_in_components;
 use crate::{join_con, RawData, TopicName};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 pub struct LinkBenchmark {
     pub complexity: u32,
     pub bandwidth: u32,

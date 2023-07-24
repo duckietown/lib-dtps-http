@@ -11,7 +11,12 @@ use indent::indent_all_with;
 use log::{debug, error, info, warn};
 use maplit::hashmap;
 use path_clean::PathClean;
+use schemars::schema::RootSchema;
+use schemars::{schema_for, JsonSchema};
 use serde::{Deserialize, Serialize};
+use strum_macros::{EnumString, ToString};
+use tokio::sync::broadcast::Receiver;
+use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 use crate::constants::*;
@@ -40,7 +45,6 @@ pub struct ForwardInfo {
     pub index_internal: TopicsIndexInternal,
 
     pub mounted_at: TopicName,
-    // pub handle: JoinHandle<DTPSR<()>>,
 }
 
 #[derive(Debug)]
@@ -88,6 +92,70 @@ pub struct ServerState {
     pub proxied_other: HashMap<TopicName, OtherProxyInfo>,
     pub blobs: HashMap<String, Vec<u8>>,
     advertise_urls: Vec<String>,
+
+    status_tx: mpsc::UnboundedSender<ComponentStatusNotification>,
+    status_rx: mpsc::UnboundedReceiver<ComponentStatusNotification>,
+}
+
+/// Taken from this: http://supervisord.org/subprocess.html
+#[derive(EnumString, Serialize, Deserialize, ToString, Debug, Clone, JsonSchema)]
+pub enum Status {
+    /// The process has been stopped due to a stop request or has never been started.
+    STOPPED,
+    /// The process is starting due to a start request.
+    STARTING,
+    /// The process is running.
+    RUNNING,
+    /// The process entered the STARTING state but subsequently exited too quickly (before the time defined in startsecs) to move to the RUNNING state.
+    BACKOFF,
+    /// The process is stopping due to a stop request.
+    STOPPING,
+    /// The process exited from the RUNNING state (expectedly or unexpectedly).
+    EXITED,
+    /// The process could not be started successfully.
+    FATAL,
+    /// The process is in an unknown state (programming error).
+    UNKNOWN,
+}
+
+//
+//  pub fn compose(a: Status, b: Status) -> Status {
+//      match a {
+//          Status::STOPPED => {}
+//          Status::STARTING => {}
+//          Status::RUNNING => {}
+//          Status::BACKOFF => {}
+//          Status::STOPPING => {}
+//          Status::EXITED => {}
+//          Status::FATAL => {}
+//          Status::UNKNOWN => {}
+//      }
+//
+//
+//      // match (a, b) {
+//      //     (Status::RUNNING(), Status::RUNNING()) => Status::RUNNING(),
+//      // }
+// }
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ComponentStatusNotification {
+    pub component: TopicName,
+    pub status: Status,
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StatusSummary {
+    pub components: HashMap<TopicName, Status>,
+    pub comments: HashMap<TopicName, String>,
+}
+
+impl StatusSummary {
+    pub fn incorporate(&mut self, csn: ComponentStatusNotification) {
+        self.components.insert(csn.component.clone(), csn.status);
+        if let Some(x) = csn.comment {
+            self.comments.insert(csn.component.clone(), x);
+        }
+    }
 }
 
 impl ServerState {
@@ -109,14 +177,7 @@ impl ServerState {
             origin_node: node_id.clone(),
             app_data,
             created: now,
-            reachability: vec![
-                //     TopicReachabilityInternal {
-                //     con: Same(),
-                //     answering: node_id.clone(),
-                //     forwarders: vec![],
-                //     benchmark: link_benchmark,
-                // }
-            ],
+            reachability: vec![],
             properties: TopicProperties {
                 streamable: true,
                 pushable: false,
@@ -126,13 +187,17 @@ impl ServerState {
             content_info: ContentInfo {
                 accept_content_type: vec![],
                 produces_content_type: vec![CONTENT_TYPE_DTPS_INDEX_CBOR.to_string()],
-                schema_json: None,
+                storage_content_type: vec![],
+                schema_json: Some(schema_for!(TopicsIndexWire)),
                 examples: vec![],
             },
         };
         oqs.insert(TopicName::root(), ObjectQueue::new(tr));
 
         let node_started = Local::now().timestamp_nanos();
+
+        let (status_tx, status_rx) = mpsc::unbounded_channel::<ComponentStatusNotification>();
+
         let mut ss = ServerState {
             node_id,
             node_started,
@@ -144,6 +209,8 @@ impl ServerState {
             proxied: HashMap::new(),
             advertise_urls: vec![],
             local_dirs: HashMap::new(),
+            status_tx,
+            status_rx,
         };
         let p = TopicProperties {
             streamable: true,
@@ -157,25 +224,46 @@ impl ServerState {
             None,
             "application/json",
             &p,
+            None,
         )?;
         ss.new_topic(
             &TopicName::from_relative_url(TOPIC_LIST_CLOCK)?,
             None,
-            "text/plain",
+            "application/json",
             &p,
+            Some(schema_for!(i64)),
         )?;
         ss.new_topic(
             &TopicName::from_relative_url(TOPIC_LIST_AVAILABILITY)?,
             None,
             "application/json",
             &p,
+            None,
         )?;
         ss.new_topic(
             &TopicName::from_relative_url(TOPIC_LOGS)?,
             None,
             "application/yaml",
             &p,
+            None,
         )?;
+
+        ss.new_topic(
+            &TopicName::from_relative_url(TOPIC_STATE_NOTIFICATION)?,
+            None,
+            "application/yaml",
+            &p,
+            Some(schema_for!(ComponentStatusNotification)),
+        )?;
+
+        ss.new_topic(
+            &TopicName::from_relative_url(TOPIC_STATE_SUMMARY)?,
+            None,
+            "application/yaml",
+            &p,
+            None,
+        )?;
+
         Ok(ss)
     }
 
@@ -300,6 +388,7 @@ impl ServerState {
         app_data: Option<HashMap<String, NodeAppData>>,
         content_type: &str,
         properties: &TopicProperties,
+        schema: Option<RootSchema>,
     ) -> DTPSR<()> {
         if self.oqs.contains_key(topic_name) {
             return Err(DTPSError::TopicAlreadyExists(topic_name.to_relative_url()));
@@ -330,7 +419,8 @@ impl ServerState {
             content_info: ContentInfo {
                 accept_content_type: vec![content_type.to_string()],
                 produces_content_type: vec![content_type.to_string()],
-                schema_json: None,
+                storage_content_type: vec![content_type.to_string()],
+                schema_json: schema,
                 examples: vec![],
             },
         };
@@ -341,6 +431,7 @@ impl ServerState {
 
         self.update_my_topic()
     }
+
     fn update_my_topic(&mut self) -> DTPSR<()> {
         let index_internal = self.create_topic_index();
         let index = index_internal.to_wire(None);
@@ -550,6 +641,7 @@ impl ServerState {
                 content_info: ContentInfo {
                     accept_content_type: vec![],
                     produces_content_type: vec![],
+                    storage_content_type: vec![],
                     examples: vec![],
                     schema_json: None,
                 },
@@ -586,6 +678,7 @@ impl ServerState {
                 content_info: ContentInfo {
                     accept_content_type: vec![],
                     produces_content_type: vec![],
+                    storage_content_type: vec![],
                     examples: vec![],
                     schema_json: None,
                 },
@@ -600,29 +693,37 @@ impl ServerState {
 
             topics.insert(topic_name.clone(), tr);
         }
-        // let mut node_app_data = hashmap! {};
-        // "here".to_string() => NodeAppData::from("2")};
-        //
-        // node_app_data.insert("@create_topic_index1".to_string(),
-        //                      NodeAppData::from(format!("{:#?}", l)));
-        // node_app_data.insert("@create_topic_index2".to_string(),
-        //                      NodeAppData::from(format!("{:#?}", self.proxied)));
+        // let node_app_data = self.node_app_data.clone();
 
-        let node_app_data = self.node_app_data.clone();
-        // node_app_data.insert(
-        //     "@ServerStatE::create_topic_index".to_string(),
-        //     NodeAppData::from(format!("{:#?}", self.proxied_topics)),
-        // );
         let topics_index = TopicsIndexInternal {
-            // node_id: self.node_id.clone(),
-            // node_started: self.node_started,
-            node_app_data,
+            // node_app_data,
             topics,
         };
 
         // debug!("topics_index:\n{:#?}", topics_index);
 
         return topics_index;
+    }
+
+    pub fn subscribe_insert_notification(&self, tn: &TopicName) -> Receiver<InsertNotification> {
+        let q = self.oqs.get(tn).unwrap();
+        q.subscribe_insert_notification()
+    }
+
+    pub fn send_status_notification(
+        &mut self,
+        component: &TopicName,
+        status: Status,
+        message: Option<String>,
+    ) -> DTPSR<()> {
+        let tn = TopicName::from_relative_url(TOPIC_STATE_NOTIFICATION)?;
+        let ob = ComponentStatusNotification {
+            component: component.clone(),
+            status,
+            comment: message,
+        };
+        self.publish_object_as_cbor(&tn, &ob, None)?;
+        Ok(())
     }
 }
 
@@ -646,16 +747,34 @@ async fn get_proxy_info(url: &TypeOfConnection) -> DTPSR<(FoundMetadata, TopicsI
     Ok((md, index_internal))
 }
 
-pub async fn show_errors<X, F: Future<Output = DTPSR<X>>>(desc: String, future: F) {
-    match future.await {
-        Ok(_) => {}
+pub async fn show_errors<X, F: Future<Output = DTPSR<X>>>(
+    ssa: Option<ServerStateAccess>,
+    desc: String,
+    future: F,
+) {
+    let tn = TopicName::from_dash_sep(&desc).unwrap();
+    if let Some(ssa) = &ssa {
+        let mut ss = ssa.lock().await;
+        ss.send_status_notification(&tn, Status::RUNNING, None)
+            .unwrap();
+    };
+
+    let message = match future.await {
+        Ok(_) => None,
         Err(e) => {
             // e.anyhow_kind().print_backtrace();
             // let ef = format!("{}\n---\n{:?}", e, e);
             let ef = format!("{:?}", e);
-            error_with_info!("Error in async {desc}:\n{}", indent_all_with("| ", ef));
+            error_with_info!("Error in async {desc}:\n{}", indent_all_with("| ", &ef));
             // error!("Error: {:#?}", e.backtrace());
+            Some(ef)
         }
+    };
+
+    if let Some(ssa) = &ssa {
+        let mut ss = ssa.lock().await;
+        ss.send_status_notification(&tn, Status::EXITED, message)
+            .unwrap();
     }
 }
 

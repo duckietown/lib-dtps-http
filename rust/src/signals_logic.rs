@@ -7,10 +7,12 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use log::{debug, error};
 use maplit::hashmap;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_cbor::Value as CBORValue;
 use serde_cbor::Value::Null as CBORNull;
 use serde_cbor::Value::Text as CBORText;
+use url::Url;
 
 use crate::cbor_manipulation::{get_as_cbor, get_inside};
 use crate::client::make_request;
@@ -100,10 +102,10 @@ impl TypeOFSource {
     pub fn get_inside(&self, s: &str) -> DTPSR<Self> {
         match self {
             TypeOFSource::ForwardedQueue(_q) => {
-                not_implemented!("get_inside for {self:?} with {s:?}")
+                not_implemented!("get_inside for {self:#?} with {s:?}")
             }
             TypeOFSource::OurQueue(_, _, _p) => {
-                not_implemented!("get_inside for {self:?} with {s:?}")
+                not_implemented!("get_inside for {self:#?} with {s:?}")
             }
             TypeOFSource::MountedDir(topic_name, path, props) => {
                 let p = PathBuf::from(&path);
@@ -122,7 +124,7 @@ impl TypeOFSource {
                             props.clone(),
                         ))
                     } else {
-                        not_implemented!("get_inside for {self:?} with {s:?}")
+                        not_implemented!("get_inside for {self:#?} with {s:?}")
                     }
                 } else {
                     Err(DTPSError::TopicNotFound(format!(
@@ -131,26 +133,26 @@ impl TypeOFSource {
                     )))
                 }
 
-                // not_implemented!("get_inside for {self:?} with {s:?}")
+                // not_implemented!("get_inside for {self:#?} with {s:?}")
             }
             TypeOFSource::Compose(_c) => {
-                not_implemented!("get_inside for {self:?} with {s:?}")
+                not_implemented!("get_inside for {self:#?} with {s:?}")
             }
             TypeOFSource::Transformed(source, transform) => {
-                // not_implemented!("get_inside for {self:?} with {s:?}")
+                // not_implemented!("get_inside for {self:#?} with {s:?}")
                 Ok(TypeOFSource::Transformed(
                     source.clone(),
                     transform.get_inside(s),
                 ))
             }
             TypeOFSource::Digest(_, _) => {
-                not_implemented!("get_inside for {self:?} with {s:?}")
+                not_implemented!("get_inside for {self:#?} with {s:?}")
             }
             TypeOFSource::Deref(_c) => {
-                not_implemented!("get_inside for {self:?} with {s:?}")
+                not_implemented!("get_inside for {self:#?} with {s:?}")
             }
             TypeOFSource::OtherProxied(_) => {
-                not_implemented!("get_inside for {self:?} with {s:?}")
+                not_implemented!("get_inside for {self:#?} with {s:?}")
             }
             TypeOFSource::MountedFile(_, _, _) => {
                 let v = vec![s.to_string()];
@@ -159,7 +161,7 @@ impl TypeOFSource {
                 Ok(tr)
             }
             TypeOFSource::Index(_) => {
-                not_implemented!("get_inside for {self:?} with {s:?}")
+                not_implemented!("get_inside for {self:#?} with {s:?}")
             }
         }
     }
@@ -179,12 +181,23 @@ pub enum ResolvedData {
     NotFound(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TopicProperties {
     pub streamable: bool,
     pub pushable: bool,
     pub readable: bool,
     pub immutable: bool,
+}
+
+impl TopicProperties {
+    pub fn rw() -> Self {
+        TopicProperties {
+            streamable: true,
+            pushable: true,
+            readable: true,
+            immutable: false,
+        }
+    }
 }
 
 #[async_trait]
@@ -288,7 +301,7 @@ impl ResolveDataSingle for TypeOFSource {
             }
             TypeOFSource::Index(inside) => {
                 let x = inside.get_meta_index(presented_as, ss_mutex).await?;
-                // not_implemented!("get_inside for {self:?} with {s:?}")
+                // not_implemented!("get_inside for {self:#?} with {s:?}")
                 let xw = x.to_wire(None);
                 // convert to cbor
                 let cbor_bytes = serde_cbor::to_vec(&xw).unwrap();
@@ -450,7 +463,7 @@ impl GetMeta for TypeOFSource {
                 let index = TopicsIndexInternal {
                     // node_id: "".to_string(),
                     // node_started: 0,
-                    node_app_data: hashmap! {"here2".to_string() => n},
+                    // node_app_data: hashmap! {"here2".to_string() => n},
                     topics,
                 };
                 Ok(index)
@@ -467,11 +480,22 @@ impl GetMeta for TypeOFSource {
                 let oq = ss.oqs.get(topic_name).unwrap();
                 let mut tr = oq.tr.clone();
 
-                let np = presented_as.as_components().len();
-                let components = topic_name.as_components();
-                let rel_components = components[np..].to_vec();
-                let rel_topic_name = TopicName::from_components(&rel_components);
-                let rurl = rel_topic_name.to_relative_url();
+                debug!("topic_name = {topic_name:?} presetned_as = {presented_as:?}");
+
+                let presented_url = presented_as.as_relative_url();
+                let topic_url = topic_name.as_relative_url();
+                // get relative url
+
+                let base = url::Url::parse(&format!("http://example.org/{presented_url}")).unwrap();
+                let target = url::Url::parse(&format!("http://example.org/{topic_url}")).unwrap();
+
+                let rurl = base.make_relative(&target).unwrap();
+
+                // let np = presented_as.as_components().len();
+                // let components = topic_name.as_components();
+                // let rel_components = components[np..].to_vec();
+                // let rel_topic_name = TopicName::from_components(&rel_components);
+                // let rurl = rel_topic_name.to_relative_url();
 
                 tr.reachability.push(TopicReachabilityInternal {
                     con: TypeOfConnection::Relative(rurl, None),
@@ -482,13 +506,7 @@ impl GetMeta for TypeOFSource {
 
                 let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
                 topics.insert(TopicName::root(), tr);
-                let n: NodeAppData = NodeAppData::from("dede");
-                let index = TopicsIndexInternal {
-                    // node_id: "".to_string(),
-                    // node_started: 0,
-                    node_app_data: hashmap! {"here".to_string() => n},
-                    topics,
-                };
+                let index = TopicsIndexInternal { topics };
                 Ok(index)
             }
             TypeOFSource::Compose(sc) => get_sc_meta(sc, presented_as, ss_mutex).await,
@@ -530,6 +548,7 @@ impl GetMeta for TypeOFSource {
                         content_info: ContentInfo {
                             accept_content_type: vec![],
                             produces_content_type: vec![],
+                            storage_content_type: vec![],
                             schema_json: None,
                             examples: vec![],
                         },
@@ -547,9 +566,9 @@ impl GetMeta for TypeOFSource {
                 Ok(TopicsIndexInternal {
                     // node_id: "".to_string(),
                     // node_started: 0,
-                    node_app_data: hashmap! {
-                        "path".to_string() => NodeAppData::from(the_path),
-                    },
+                    // node_app_data: hashmap! {
+                    //     "path".to_string() => NodeAppData::from(the_path),
+                    // },
                     topics,
                 })
             }
@@ -573,19 +592,19 @@ async fn get_sc_meta(
         return Ok(ss.create_topic_index());
     }
     let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
-    let mut node_app_data = HashMap::new();
+    // let mut node_app_data = HashMap::new();
 
-    let debug_s = String::new();
+    // let debug_s = String::new();
     for (prefix, inside) in sc.compose.iter() {
         let x = inside
             .get_meta_index(presented_as, ss_mutex.clone())
             .await?;
 
         for (a, b) in x.topics {
-            let mut tr = b.clone();
+            let tr = b.clone();
 
-            tr.app_data
-                .insert("created by get_sc_meta".to_string(), NodeAppData::from(""));
+            // tr.app_data
+            //     .insert("created by get_sc_meta".to_string(), NodeAppData::from(""));
 
             let _url = a.as_relative_url();
 
@@ -597,13 +616,13 @@ async fn get_sc_meta(
             topics.insert(a_with_prefix, tr);
         }
     }
-    node_app_data.insert("get_sc_meta".to_string(), debug_s);
-    let ss = ss_mutex.lock().await;
+    // node_app_data.insert("get_sc_meta".to_string(), debug_s);
+    // let ss = ss_mutex.lock().await;
 
     let index = TopicsIndexInternal {
         // node_id: ss.node_id.clone(),
         // node_started: ss.node_started,
-        node_app_data,
+        // node_app_data,
         topics,
     };
     Ok(index)

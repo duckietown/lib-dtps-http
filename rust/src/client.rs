@@ -265,16 +265,11 @@ pub async fn get_rawdata(con: &TypeOfConnection) -> DTPSR<RawData> {
     let resp = make_request(con, hyper::Method::GET).await?;
     // TODO: send more headers
 
-    //  .header("Accept", "application/cbor")
-    let content_type = resp
-        .headers()
-        .get("content-type")
-        .map(|x| x.to_str().unwrap().to_string())
-        .unwrap_or("application/octet-stream".to_string());
+    let content_type = get_content_type(&resp);
     // Get the response body bytes.
-    let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
+    let content = hyper::body::to_bytes(resp.into_body()).await?;
     Ok(RawData {
-        content: body_bytes,
+        content,
         content_type,
     })
 }
@@ -310,15 +305,6 @@ pub async fn sniff_type_resource(con: &TypeOfConnection) -> DTPSR<TypeOfResource
         Ok(TypeOfResource::Other)
     }
 }
-//
-// fn get_content_type(resp: &Response) -> String {
-//   resp
-//         .headers()
-//         .get("content-type")
-//         .unwrap()
-//         .to_str()
-//         .unwrap().to_string()
-// }
 
 pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
     let resp = context!(
@@ -362,11 +348,11 @@ pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
 
 #[derive(Debug, Clone)]
 pub enum UrlResult {
-    /// a
+    /// Cannot reach this URL
     Inaccessible(String),
-    /// b
+    /// We cannot find the expected node answering
     WrongNodeAnswering,
-    /// c
+    /// It is accessbile with this benchmark
     Accessible(LinkBenchmark),
 }
 

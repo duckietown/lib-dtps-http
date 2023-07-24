@@ -1,5 +1,7 @@
+use crate::utils_yaml::{generate_html_from_cbor, generate_html_tree};
 use crate::{utils_mime, DTPSError, RawData, DTPSR};
 use log::debug;
+use maud::{html, PreEscaped};
 
 pub fn get_as_cbor(data: &RawData) -> DTPSR<serde_cbor::Value> {
     let cbor_data = match data.content_type.as_str() {
@@ -101,34 +103,67 @@ pub fn get_inside(
     return get_inside(new_context, &inside, &path);
 }
 
-pub fn display_printable(content_type: &str, content: &[u8]) -> String {
+pub fn display_printable(content_type: &str, content: &[u8]) -> PreEscaped<String> {
     let identified = utils_mime::identify_content_presentation(content_type);
     if identified.is_none() {
-        return format!("Cannot display content type {}", content_type).to_string();
+        return html! {
+        "Cannot display content type "  code { (content_type) } "."
+        };
     }
 
     match identified.unwrap() {
         "application/yaml" => {
             let bytes: Vec<u8> = content.to_vec();
-            String::from_utf8(bytes).unwrap().to_string()
+            // let val = serde_yaml::from_slice(&content).unwrap();
+            // generate_html_tree(&val)
+            let s = String::from_utf8(bytes).unwrap().to_string();
+            html! {
+                pre {
+                    code { (s)}
+                }
+            }
         }
         "text/plain" => {
             let bytes: Vec<u8> = content.to_vec();
-
-            String::from_utf8(bytes).unwrap().to_string()
+            let s = String::from_utf8(bytes).unwrap().to_string();
+            html! {
+                pre {
+                    code {
+                        (s)
+                    }
+                }
+            }
         }
         "application/json" => {
             let val: serde_json::Value = serde_json::from_slice(&content).unwrap();
+
             let pretty = serde_json::to_string_pretty(&val).unwrap();
-            pretty
+            html! {
+                pre {
+                    code {
+                        (pretty)
+                    }
+                }
+            }
         }
         "application/cbor" => {
             let val: serde_cbor::Value = serde_cbor::from_slice(&content).unwrap();
-            match serde_yaml::to_string(&val) {
-                Ok(x) => format!("CBOR displayed as YAML:\n\n{}", x),
-                Err(e) => format!("Cannot format CBOR as YAML: {}\nRaw CBOR:\n{:?}", e, val),
-            }
+
+            generate_html_from_cbor(&val, 3)
+            // match serde_yaml::to_string(&val) {
+            //     Ok(x) => {
+            //         html! { div { "CBOR displayed as YAML:"  (x) } }
+            //
+            //
+            //     },
+            //     Err(e) =>html!{
+            //         "Cannot format CBOR as YAML"
+            //     }
+            //     // format!("Cannot format CBOR as YAML: {}\nRaw CBOR:\n{:?}", e, val),
+            // }
         }
-        _ => format!("Cannot display content type {}", content_type).to_string(),
+        _ => html! {
+            "Cannot display content type " (content_type)
+        },
     }
 }

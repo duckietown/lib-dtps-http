@@ -1,26 +1,28 @@
-use crate::LinkBenchmark;
-use derive_more::Constructor;
-use serde::{Deserialize, Serialize};
-use std::cmp::{min, Ordering};
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
 use std::ops::Add;
 use std::path::PathBuf;
+
+use derive_more::Constructor;
+use schemars::schema::RootSchema;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::signals_logic::TopicProperties;
 use crate::urls::join_ext;
 use crate::utils::divide_in_components;
+use crate::LinkBenchmark;
 use crate::{join_con, RawData, TopicName};
 
 pub type NodeAppData = String;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 pub struct TopicsIndexWire {
     // pub node_id: String,
     // pub node_started: i64,
-    pub node_app_data: HashMap<String, NodeAppData>,
+    // pub node_app_data: HashMap<String, NodeAppData>,
     pub topics: HashMap<String, TopicRefWire>,
 }
 
@@ -28,7 +30,7 @@ pub struct TopicsIndexWire {
 pub struct TopicsIndexInternal {
     // pub node_id: String,
     // pub node_started: i64,
-    pub node_app_data: HashMap<String, NodeAppData>,
+    // pub node_app_data: HashMap<String, NodeAppData>,
     pub topics: HashMap<TopicName, TopicRefInternal>,
 }
 
@@ -42,7 +44,7 @@ impl TopicsIndexInternal {
         TopicsIndexWire {
             // node_id: self.node_id,
             // node_started: self.node_started,
-            node_app_data: self.node_app_data,
+            // node_app_data: self.node_app_data,
             topics,
         }
     }
@@ -58,7 +60,7 @@ impl TopicsIndexInternal {
         TopicsIndexInternal {
             // node_id: wire.node_id,
             // node_started: wire.node_started,
-            node_app_data: wire.node_app_data,
+            // node_app_data: wire.node_app_data,
             topics,
         }
     }
@@ -72,21 +74,24 @@ impl TopicsIndexInternal {
         return Self {
             // node_id: self.node_id.clone(),
             // node_started: self.node_started,
-            node_app_data: self.node_app_data.clone(),
+            // node_app_data: self.node_app_data.clone(),
             topics,
         };
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+type ContentType = String;
+
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 pub struct ContentInfo {
-    pub accept_content_type: Vec<String>,
-    pub produces_content_type: Vec<String>,
-    pub schema_json: Option<String>,
+    pub accept_content_type: Vec<ContentType>,
+    pub storage_content_type: Vec<ContentType>,
+    pub produces_content_type: Vec<ContentType>,
+    pub schema_json: Option<RootSchema>,
     pub examples: Vec<RawData>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 pub struct TopicRefWire {
     pub unique_id: String,
     pub origin_node: String,
@@ -160,7 +165,7 @@ impl TopicRefInternal {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 pub struct ForwardingStep {
     pub forwarding_node: String,
     pub forwarding_node_connects_to: String,
@@ -313,7 +318,7 @@ pub struct TopicReachabilityInternal {
     pub benchmark: LinkBenchmark,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 pub struct TopicReachabilityWire {
     pub url: String,
     pub answering: String,
@@ -436,7 +441,8 @@ pub struct FoundMetadata {
     pub answering: Option<String>,
     pub events_url: Option<TypeOfConnection>,
     pub events_data_inline_url: Option<TypeOfConnection>,
-    pub latency_ns: u128, // nanoseconds
+    pub latency_ns: u128,
+    // nanoseconds
     pub index: Option<TypeOfConnection>,
 }
 
@@ -452,4 +458,17 @@ pub fn make_rel_url(a: &Vec<String>) -> String {
         url.push_str("/");
     }
     url
+}
+
+#[cfg(test)]
+mod test {
+    use schemars::schema_for;
+
+    use crate::TopicsIndexWire;
+
+    #[test]
+    fn testjson() {
+        let schema = schema_for!(TopicsIndexWire);
+        eprintln!("{}", serde_json::to_string_pretty(&schema).unwrap());
+    }
 }

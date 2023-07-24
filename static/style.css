@@ -11,9 +11,6 @@ body {
   padding: 2em;
 }
 
-td {
-    padding: 0.5em;
-}
 /* Style headings */
 h1 {
   color: #333333;
@@ -53,6 +50,18 @@ a:hover {
   background-color: #0056b3;
 }
 
+table.history  td {background: #fdf}
+table.history td:nth-child(2n) {background: #dff}
 
-td {background: #fdf}
-td:nth-child(2n) {background: #dff}
+table.history td {
+    padding: 0.5em;
+}
+table.Map td {
+  vertical-align: top;
+  border: solid 1px white;
+  background-color: #ddd;
+}
+table.Map {
+  /*display: block;*/
+  /*padding-left: 2em;*/
+}

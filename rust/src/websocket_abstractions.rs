@@ -21,7 +21,8 @@ use crate::structures::TypeOfConnection;
 use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
 use crate::TypeOfConnection::Same;
 use crate::{
-    error_with_info, not_implemented, not_reachable, show_errors, DTPSError, UnixCon, DTPSR,
+    error_with_info, not_implemented, not_reachable, show_errors, DTPSError, ServerState,
+    ServerStateAccess, UnixCon, DTPSR,
 };
 
 #[async_trait]
@@ -80,11 +81,13 @@ impl AnySocketConnection {
         let (sink, stream) = ws_stream.split();
 
         let handle1 = tokio::spawn(show_errors(
+            None,
             "receiver".to_string(),
             read_websocket_stream(stream, incoming_sender.clone()),
         ));
 
         let handle2 = tokio::spawn(show_errors(
+            None,
             "sender".to_string(),
             write_websocket_stream(outgoing_receiver, sink),
         ));
@@ -104,6 +107,7 @@ impl AnySocketConnection {
     }
 
     pub fn from_unix(
+        ssa: Option<ServerStateAccess>,
         ws_stream: WebSocketStream<UnixStream>,
         response: tungstenite::handshake::client::Response,
     ) -> Self {
@@ -116,11 +120,13 @@ impl AnySocketConnection {
         let (sink, stream) = ws_stream.split();
 
         let handle1 = tokio::spawn(show_errors(
+            ssa.clone(),
             "receiver".to_string(),
             read_websocket_stream(stream, incoming_sender.clone()),
         ));
 
         let handle2 = tokio::spawn(show_errors(
+            ssa.clone(),
             "sender".to_string(),
             write_websocket_stream(outgoing_receiver, sink),
         ));
@@ -304,7 +310,7 @@ pub async fn open_websocket_connection_unix(
 
     // debug!("WS response: {:#?}", response);
     // use_stream = EitherStream::UnixStream(socket_stream);
-    let res = AnySocketConnection::from_unix(socket_stream, response);
+    let res = AnySocketConnection::from_unix(None, socket_stream, response);
     return Ok(Box::new(res));
 }
 

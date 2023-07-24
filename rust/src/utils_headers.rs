@@ -4,9 +4,10 @@ use http::{header, HeaderMap, HeaderValue};
 use maplit::hashmap;
 
 use crate::{
-    get_id_string, ServerState, CONTENT_TYPE_DTPS_INDEX_CBOR, EVENTS_SUFFIX, EVENTS_SUFFIX_DATA,
+    get_id_string, ServerState, CONTENT_TYPE_DTPS_INDEX_CBOR, EVENTS_SUFFIX,
     HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID, HEADER_NODE_ID, HEADER_SEE_EVENTS,
-    HEADER_SEE_EVENTS_INLINE_DATA, REL_EVENTS_DATA, REL_EVENTS_NODATA, REL_META, REL_URL_META,
+    HEADER_SEE_EVENTS_INLINE_DATA, REL_EVENTS_DATA, REL_EVENTS_NODATA, REL_HISTORY, REL_META,
+    REL_URL_META, URL_HISTORY,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -115,18 +116,34 @@ pub fn put_common_headers(ss: &ServerState, headers: &mut HeaderMap<HeaderValue>
 }
 
 pub fn put_meta_headers(h: &mut HeaderMap<HeaderValue>) {
-    h.append(HEADER_SEE_EVENTS, HeaderValue::from_static(EVENTS_SUFFIX));
-    h.append(
-        HEADER_SEE_EVENTS_INLINE_DATA,
-        HeaderValue::from_static(EVENTS_SUFFIX_DATA),
-    );
+    // h.append(HEADER_SEE_EVENTS, HeaderValue::from_static(EVENTS_SUFFIX));
+    // h.append(
+    //     HEADER_SEE_EVENTS_INLINE_DATA,
+    //     HeaderValue::from_static(EVENTS_SUFFIX_DATA),
+    // );
 
-    put_link_header(h, EVENTS_SUFFIX, REL_EVENTS_NODATA, Some("websocket"));
-    put_link_header(h, EVENTS_SUFFIX_DATA, REL_EVENTS_DATA, Some("websocket"));
     put_link_header(
         h,
-        REL_URL_META,
+        &format!("{EVENTS_SUFFIX}/"),
+        REL_EVENTS_NODATA,
+        Some("websocket"),
+    );
+    put_link_header(
+        h,
+        &format!("{EVENTS_SUFFIX}/?send_data=1"),
+        REL_EVENTS_DATA,
+        Some("websocket"),
+    );
+    put_link_header(
+        h,
+        &format!("{REL_URL_META}/"),
         REL_META,
+        Some(CONTENT_TYPE_DTPS_INDEX_CBOR),
+    );
+    put_link_header(
+        h,
+        &format!("{URL_HISTORY}/"),
+        REL_HISTORY,
         Some(CONTENT_TYPE_DTPS_INDEX_CBOR),
     );
 }
@@ -136,11 +153,9 @@ mod tests {
 
     // Bring the function into scope
 
-    use log::debug;
     use maplit::hashmap;
 
     use crate::utils_headers::LinkHeader;
-    use crate::FilePaths;
 
     #[test]
 
@@ -156,5 +171,20 @@ mod tests {
         };
 
         assert_eq!(found, expected);
+    }
+}
+
+pub fn get_accept_header(headers: &HeaderMap) -> Vec<String> {
+    let accept_header = headers.get("accept");
+    match accept_header {
+        Some(x) => {
+            let accept_header = x.to_str().unwrap();
+            let accept_header = accept_header
+                .split(",")
+                .map(|x| x.trim().to_string())
+                .collect();
+            accept_header
+        }
+        None => vec![],
     }
 }

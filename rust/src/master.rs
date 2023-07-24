@@ -15,7 +15,6 @@ use tungstenite::Message as TungsteniteMessage;
 use warp::http::header;
 use warp::hyper::Body;
 use warp::reply::Response;
-use warp::ws::Message;
 use warp::ws::Message as WarpMessage;
 
 use crate::cbor_manipulation::display_printable;
@@ -25,14 +24,15 @@ use crate::signals_logic::{
     TypeOFSource,
 };
 use crate::utils::{divide_in_components, get_good_url_for_components};
+use crate::utils_headers::get_accept_header;
 use crate::websocket_abstractions::open_websocket_connection;
 use crate::websocket_signals::MsgClientToServer;
 use crate::{
-    do_receiving, error_with_info, get_accept_header, get_metadata, handle_topic_post,
-    handle_websocket_queue, handler_topic_generic, not_implemented, object_queues,
-    put_alternative_locations, receive_from_websocket, root_handler, serve_static_file_path,
-    utils_headers, utils_mime, HandlersResponse, ObjectQueue, ServerStateAccess, TopicName,
-    TopicsIndexInternal, DTPSR, JAVASCRIPT_SEND,
+    do_receiving, error_with_info, get_metadata, handle_topic_post, handle_websocket_queue,
+    handler_topic_generic, not_implemented, object_queues, put_alternative_locations,
+    receive_from_websocket, root_handler, serve_static_file_path, utils_headers, utils_mime,
+    HandlersResponse, ObjectQueue, ServerStateAccess, TopicName, TopicsIndexInternal, DTPSR,
+    JAVASCRIPT_SEND,
 };
 
 pub async fn serve_master_post(
@@ -499,11 +499,11 @@ pub async fn handle_websocket_generic2(
             let close_code: u16 = 1006; // Close codes 4000-4999 are available for private use
             let s = format!("handle_websocket_generic2: {}", e);
             error_with_info!("{s}");
-            let msg = Message::text("closing with error");
+            let msg = WarpMessage::text("closing with error");
             let _ = ws_tx.send(msg).await.map_err(|e| {
                 error_with_info!("Cnnot send closing error: {:?}", e);
             });
-            let msg = Message::close_with(close_code, s);
+            let msg = WarpMessage::close_with(close_code, s);
             let _ = ws_tx.send(msg).await.map_err(|e| {
                 error_with_info!("Cnnot send closing error: {:?}", e);
             });
@@ -515,7 +515,7 @@ pub async fn handle_websocket_generic2(
 
 pub async fn handle_websocket_generic2_(
     path: String,
-    ws_tx: &mut SplitSink<warp::ws::WebSocket, Message>,
+    ws_tx: &mut SplitSink<warp::ws::WebSocket, WarpMessage>,
     receiver: UnboundedReceiverStream<MsgClientToServer>,
     state: ServerStateAccess,
     send_data: bool,

@@ -5,6 +5,7 @@ use anyhow::Result;
 use http::StatusCode;
 use indent::indent_all_with;
 use log::{debug, error};
+use tokio::sync::broadcast::error::SendError;
 use warp::{Rejection, Reply};
 
 #[derive(thiserror::Error, Debug)]
@@ -54,6 +55,8 @@ pub enum DTPSError {
 
     #[error(transparent)]
     CBORError(#[from] serde_cbor::Error),
+    // #[error(transparent)]
+    // SendError(#[from] SendError),
 }
 
 impl DTPSError {

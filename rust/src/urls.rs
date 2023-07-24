@@ -1,4 +1,3 @@
-use crossbeam::channel::after;
 use log::info;
 use url::Url;
 
@@ -189,17 +188,17 @@ pub fn join_ext(conbase: &TypeOfConnection, s: &str) -> DTPSR<TypeOfConnection> 
         parse_url_ext(s)
     } else {
         match conbase.clone() {
-            TCP(mut url) => {
+            TypeOfConnection::TCP(mut url) => {
                 let (path2, query2) = join_path(url.path(), s);
                 url.set_path(&path2);
                 url.set_query(query2.as_deref());
                 Ok(TCP(url))
             }
-            Relative(path, _query) => {
+            TypeOfConnection::Relative(path, _query) => {
                 let (path2, query2) = join_path(path.as_str(), s);
                 Ok(Relative(path2, query2))
             }
-            UNIX(mut uc) => {
+            TypeOfConnection::UNIX(mut uc) => {
                 let (path2, query2) = join_path(uc.path.as_str(), s);
                 uc.path = path2;
                 uc.query = query2;
@@ -224,23 +223,47 @@ fn join_path(base: &str, s: &str) -> (String, Option<String>) {
         (s.to_string(), query)
     } else {
         if base.ends_with("/") {
-            (format!("{}{}", base, s), query)
+            (canonical(format!("{}{}", base, s)), query)
         } else {
-            (format!("{}/{}", base, s), query)
+            (canonical(format!("{}/{}", base, s)), query)
         }
     }
 }
 
+fn canonical(s: String) -> String {
+    normalize_dot_dot(&s)
+}
+
+fn normalize_dot_dot(path: &str) -> String {
+    let mut stack = Vec::new();
+
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                stack.pop();
+            }
+            _ => stack.push(segment),
+        }
+    }
+
+    stack.join("/")
+}
+
 #[cfg(test)]
 mod tests {
-
-    // Bring the function into scope
-
     use log::debug;
+    use rstest::rstest;
 
     use crate::FilePaths;
 
     use super::*;
+
+    #[test]
+    fn test_canonical() {
+        assert_eq!(canonical(format!("a/b/c/../d/")), format!("a/b/d/"));
+    }
+    // Bring the function into scope
 
     #[test]
     fn normalize1() {
@@ -319,6 +342,7 @@ mod tests {
             super::TypeOfConnection::File(None, FilePaths::Relative("reldir".to_string()))
         );
     }
+
     #[test]
     fn url_parse_4c() {
         let s = "reldir";
@@ -370,6 +394,7 @@ mod tests {
             super::TypeOfConnection::File(None, FilePaths::Absolute("/abs/dir".to_string()))
         );
     }
+
     #[test]
     fn url_parse_8() {
         let s = "file://abs/dir/";
@@ -379,6 +404,7 @@ mod tests {
             super::TypeOfConnection::File(None, FilePaths::Absolute("/abs/dir".to_string()))
         );
     }
+
     #[test]
     fn url_parse_9() {
         let s = "file:///abs/dir/";
@@ -388,6 +414,7 @@ mod tests {
             super::TypeOfConnection::File(None, FilePaths::Absolute("/abs/dir".to_string()))
         );
     }
+
     #[test]
     fn url_parse_10() {
         let s = "file://./reldir/";
@@ -396,6 +423,26 @@ mod tests {
             x,
             super::TypeOfConnection::File(None, FilePaths::Relative("reldir".to_string()))
         );
+    }
+
+    #[test]
+    fn url_rel() {
+        let s = parse_url_ext("file://abs/dir/").unwrap();
+        let s2 = s.join("../").unwrap();
+        assert_eq!(
+            s2,
+            super::TypeOfConnection::File(None, FilePaths::Absolute("/abs/".to_string()))
+        );
+    }
+
+    #[rstest]
+    #[case("http://localhost/hello/", "../", "http://localhost/")]
+    fn test_rel(#[case] base: &str, #[case] join: &str, #[case] result: &str) -> DTPSR<()> {
+        let con = parse_url_ext(base)?;
+        let expect = parse_url_ext(result)?;
+        let found = con.join(join)?;
+        assert_eq!(expect, found);
+        Ok(())
     }
 }
 

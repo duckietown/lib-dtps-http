@@ -11,6 +11,8 @@ pub static HEADER_CONTENT_LOCATION: &'static str = "Content-Location";
 pub static TOPIC_LIST_NAME: &'static str = "dtps/topic_list";
 pub static TOPIC_LIST_CLOCK: &'static str = "dtps/clock";
 pub static TOPIC_LOGS: &'static str = "dtps/logs";
+pub static TOPIC_STATE_NOTIFICATION: &'static str = "dtps/states-notification";
+pub static TOPIC_STATE_SUMMARY: &'static str = "dtps/state";
 pub static TOPIC_LIST_AVAILABILITY: &'static str = "dtps/availability";
 
 pub static CONTENT_TYPE: &'static str = "content-type";
@@ -19,9 +21,13 @@ pub static OCTET_STREAM: &'static str = "application/octet-stream";
 pub static VENDOR_PREFIX: &'static str = "application/vnd.dt.";
 pub static CONTENT_TYPE_DTPS_INDEX: &'static str = "application/vnd.dt.dtps-index";
 pub static CONTENT_TYPE_DTPS_INDEX_CBOR: &'static str = "application/vnd.dt.dtps-index+cbor";
+pub static CONTENT_TYPE_TOPIC_HISTORY_CBOR: &'static str = "application/vnd.dt.dtps-history+cbor";
 pub static EVENTS_SUFFIX: &'static str = ":events";
-pub static EVENTS_SUFFIX_DATA: &'static str = ":events?send_data=1";
+// pub static EVENTS_SUFFIX_DATA: &'static str = ":events/?send_data=1";
 pub static REL_URL_META: &'static str = ":index";
+
+pub static REL_HISTORY: &'static str = "dtps-history";
+pub static URL_HISTORY: &'static str = ":history";
 
 #[cfg(test)]
 

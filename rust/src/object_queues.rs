@@ -1,15 +1,16 @@
 use bytes::Bytes;
 
 use chrono::Local;
+use schemars::JsonSchema;
 
 use serde::{Deserialize, Serialize};
 use sha256::digest;
 use tokio::sync::broadcast;
 
 use crate::structures::TopicRefInternal;
-use crate::{merge_clocks, Clocks, MinMax, DTPSR};
+use crate::{merge_clocks, Clocks, DataReady, MinMax, Notification, DTPSR};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 pub struct RawData {
     pub content: Bytes,
     pub content_type: String,
@@ -51,17 +52,27 @@ pub struct ObjectQueue {
     pub tx: broadcast::Sender<usize>,
     pub seq: usize,
     pub tr: TopicRefInternal,
+
+    pub tx_notification: broadcast::Sender<InsertNotification>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InsertNotification {
+    pub data_saved: DataSaved,
+    pub raw_data: RawData,
 }
 
 impl ObjectQueue {
     pub fn new(tr: TopicRefInternal) -> Self {
         let (tx, _rx) = broadcast::channel(1024);
+        let (tx_notification, _rx) = broadcast::channel(1024);
         ObjectQueue {
             seq: 0,
             sequence: Vec::new(),
             // data: HashMap::new(),
             tx,
             tr,
+            tx_notification,
         }
     }
 
@@ -88,9 +99,20 @@ impl ObjectQueue {
         };
         self.sequence.push(saved_data.clone());
         if self.tx.receiver_count() > 0 {
-            self.tx.send(this_seq).unwrap();
+            self.tx.send(this_seq).unwrap(); // can only fail if there are no receivers
+        }
+        if self.tx_notification.receiver_count() > 0 {
+            let notification = InsertNotification {
+                data_saved: saved_data.clone(),
+                raw_data: data.clone(),
+            };
+            self.tx_notification.send(notification).unwrap(); // can only fail if there are no receivers
         }
         return Ok(saved_data);
+    }
+
+    pub fn subscribe_insert_notification(&self) -> broadcast::Receiver<InsertNotification> {
+        return self.tx_notification.subscribe();
     }
 
     fn current_clocks(&self, now: i64) -> Clocks {

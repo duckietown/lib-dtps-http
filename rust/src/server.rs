@@ -12,6 +12,7 @@ use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use indent::indent_all_with;
 use log::{debug, error, info, warn};
+use maplit::hashmap;
 use maud::PreEscaped;
 use maud::{html, DOCTYPE};
 use serde::de::DeserializeOwned;
@@ -31,7 +32,7 @@ use tokio_stream::wrappers::{UnboundedReceiverStream, UnixListenerStream};
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use warp::hyper::Body;
 use warp::reply::Response;
-use warp::{Filter, Rejection};
+use warp::{Filter, Rejection, Server};
 
 use crate::cloudflare::open_cloudflare;
 use crate::constants::*;
@@ -51,8 +52,8 @@ use crate::websocket_signals::{
     ChannelInfo, ChannelInfoDesc, Chunk, MsgClientToServer, MsgServerToClient,
 };
 use crate::{
-    error_other, error_with_info, format_digest_path, handle_rejection, not_available,
-    parse_url_ext, utils, DTPSError, TopicName, DTPSR,
+    error_other, error_with_info, format_digest_path, handle_rejection, interpret_path,
+    invalid_input, not_available, parse_url_ext, utils, utils_headers, DTPSError, TopicName, DTPSR,
 };
 
 pub type HandlersResponse = Result<http::Response<hyper::Body>, Rejection>;
@@ -65,6 +66,7 @@ pub struct DTPSServer {
     pub cloudflare_executable: String,
     pub unix_path: Option<String>,
     initial_proxy: HashMap<String, TypeOfConnection>,
+    topic_connections: Vec<TopicConnection>,
 }
 
 impl DTPSServer {
@@ -74,6 +76,7 @@ impl DTPSServer {
         cloudflare_executable: String,
         unix_path: Option<String>,
         initial_proxy: HashMap<String, TypeOfConnection>,
+        topic_connections: Vec<TopicConnection>,
     ) -> DTPSR<Self> {
         let ss = ServerState::new(None)?;
 
@@ -86,9 +89,10 @@ impl DTPSServer {
             cloudflare_executable,
             unix_path,
             initial_proxy,
+            topic_connections,
         })
     }
-    pub async fn serve(&mut self) -> DTPSR<()> {
+    pub async fn start_serving(&mut self) -> DTPSR<Vec<JoinHandle<()>>> {
         // get current pid
         let pid = std::process::id();
         if pid == 1 {
@@ -284,7 +288,35 @@ impl DTPSServer {
                 indent_all_with(" ", ss.get_advertise_urls().join("\n"))
             );
         }
+        for con in &self.topic_connections {
+            let fut = start_connection(ssa.clone(), con.source.clone(), con.target.clone());
 
+            let handle = tokio::spawn(show_errors(
+                Some(ssa.clone()),
+                "connection".to_string(),
+                fut,
+            ));
+            handles.push(handle);
+        }
+
+        let rx = {
+            let ss = ssa.lock().await;
+            let tsn = TopicName::from_dash_sep(TOPIC_STATE_NOTIFICATION)?;
+            let oq = ss.oqs.get(&tsn).unwrap();
+            oq.subscribe_insert_notification()
+        };
+
+        let ssa2 = ssa.clone();
+        handles.push(tokio::spawn(show_errors(
+            Some(ssa.clone()),
+            "collect_statuses".to_string(),
+            collect_statuses(ssa2, rx),
+        )));
+
+        Ok(handles)
+    }
+    pub async fn serve(&mut self) -> DTPSR<()> {
+        let handles = self.start_serving().await?;
         let mut sig_hup = tokio::signal::unix::signal(SignalKind::hangup())?;
         let mut sig_term = tokio::signal::unix::signal(SignalKind::terminate())?;
         let mut sig_int = tokio::signal::unix::signal(SignalKind::interrupt())?;
@@ -351,9 +383,10 @@ impl DTPSServer {
             subcription_name.clone(),
             mounted_at.clone(),
             url.clone(),
-            ssa,
+            ssa.clone(),
         );
         let handle = tokio::spawn(show_errors(
+            Some(ssa.clone()),
             format!("observe_proxy {subcription_name} : {url}"),
             future,
         ));
@@ -362,19 +395,17 @@ impl DTPSServer {
     }
 }
 
-pub fn get_accept_header(headers: &HeaderMap) -> Vec<String> {
-    let accept_header = headers.get("accept");
-    match accept_header {
-        Some(x) => {
-            let accept_header = x.to_str().unwrap();
-            let accept_header = accept_header
-                .split(",")
-                .map(|x| x.trim().to_string())
-                .collect();
-            accept_header
-        }
-        None => vec![],
-    }
+pub async fn start_connection(
+    ssa: ServerStateAccess,
+    source: TopicName,
+    target: TopicName,
+) -> DTPSR<()> {
+    let source = interpret_path(source.as_relative_url(), &hashmap! {}, &None, ssa.clone()).await?;
+    let target = interpret_path(target.as_relative_url(), &hashmap! {}, &None, ssa.clone()).await?;
+
+    debug!("Connecting source {source:?} with {target:?}");
+
+    Ok(())
 }
 
 pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> HandlersResponse {
@@ -382,7 +413,7 @@ pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> Ha
     let index_internal = ss.create_topic_index();
     let index = index_internal.to_wire(None);
 
-    let accept_headers: Vec<String> = get_accept_header(&headers);
+    let accept_headers: Vec<String> = utils_headers::get_accept_header(&headers);
 
     // check if 'text/html' in the accept header
 
@@ -821,7 +852,7 @@ pub async fn handler_topic_generic(
     ss_mutex: ServerStateAccess,
     headers: HeaderMap,
 ) -> Result<http::Response<Body>, Rejection> {
-    let accept_headers: Vec<String> = get_accept_header(&headers);
+    let accept_headers: Vec<String> = utils_headers::get_accept_header(&headers);
 
     if accept_headers.contains(&"text/html".to_string()) {
         return handler_topic_html_summary(topic_name, ss_mutex).await;
@@ -874,7 +905,7 @@ async fn handler_topic_generic_data(
     ss_mutex: ServerStateAccess,
     headers: HeaderMap,
 ) -> Result<Response, Rejection> {
-    let accept_headers: Vec<String> = get_accept_header(&headers);
+    let accept_headers: Vec<String> = utils_headers::get_accept_header(&headers);
 
     let ss = ss_mutex.lock().await;
 
@@ -1001,6 +1032,32 @@ pub struct ServerArgs {
     connect: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TopicConnection {
+    pub source: TopicName,
+    pub target: TopicName,
+}
+
+impl TopicConnection {
+    /// Parses a string of the form `a/b -> c/d`
+    pub fn from_string(s: &str) -> DTPSR<Self> {
+        match s.find("->") {
+            None => {
+                return invalid_input!("Cannot find -> in string {s:?}");
+            }
+            Some(i) => {
+                // divide in 2
+                let before = s[..i].trim();
+                let after = s[i + "->".len()..].trim();
+                let source = TopicName::from_dash_sep(before)?;
+                let target = TopicName::from_dash_sep(after)?;
+
+                Ok(Self { source, target })
+            }
+        }
+    }
+}
+
 pub fn address_from_host_port(host: &str, port: u16) -> DTPSR<SocketAddr> {
     let hoststring = format!("{}:{}", host, port);
 
@@ -1041,12 +1098,18 @@ pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {
     if proxy.len() != 0 {
         debug!("Proxy:\n{:#?}", proxy);
     }
+    let topic_connections = args
+        .connect
+        .iter()
+        .map(|x| TopicConnection::from_string(&x).unwrap())
+        .collect::<Vec<TopicConnection>>();
     DTPSServer::new(
         listen_address,
         args.tunnel.clone(),
         args.cloudflare_executable.clone(),
         args.unix_path,
         proxy,
+        topic_connections,
     )
     .await
 }
@@ -1072,7 +1135,7 @@ pub fn receive_from_websocket<T: DeserializeOwned + Clone + Send + 'static>(
 ) -> (UnboundedReceiverStream<T>, JoinHandle<()>) {
     let (tx, rx) = mpsc::unbounded_channel();
 
-    let handle = tokio::spawn(show_errors("websocket".to_string(), pull_(ws_rx, tx)));
+    let handle = tokio::spawn(show_errors(None, "websocket".to_string(), pull_(ws_rx, tx)));
 
     let stream = UnboundedReceiverStream::new(rx);
     (stream, handle)
@@ -1152,4 +1215,40 @@ pub async fn do_receiving(
             }
         }
     }
+}
+
+async fn collect_statuses(
+    ssa: ServerStateAccess,
+    mut rx: Receiver<InsertNotification>,
+) -> DTPSR<()> {
+    let mut cur = StatusSummary {
+        components: Default::default(),
+        comments: Default::default(),
+    };
+    let res = TopicName::from_dash_sep(TOPIC_STATE_SUMMARY).unwrap();
+
+    {
+        let mut ss = ssa.lock().await;
+        ss.publish_object_as_cbor(&res, &cur, None)?;
+    }
+    loop {
+        let inot = match rx.recv().await {
+            Ok(inot) => inot,
+            Err(e) => match e {
+                RecvError::Closed => break,
+                RecvError::Lagged(_) => continue,
+            },
+        };
+
+        let csn: ComponentStatusNotification =
+            serde_cbor::from_slice(inot.raw_data.content.as_ref()).unwrap();
+
+        cur.incorporate(csn);
+        {
+            let mut ss = ssa.lock().await;
+            ss.publish_object_as_cbor(&res, &cur, None)?;
+        }
+    }
+
+    Ok(())
 }
