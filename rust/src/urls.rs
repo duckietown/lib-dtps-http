@@ -239,7 +239,10 @@ fn normalize_dot_dot(path: &str) -> String {
 
     for segment in path.split('/') {
         match segment {
-            "" | "." => {}
+            "." => {}
+            // "" | "." => {
+            //     stac
+            // }
             ".." => {
                 stack.pop();
             }

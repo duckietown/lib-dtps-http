@@ -65,3 +65,17 @@ table.Map {
   /*display: block;*/
   /*padding-left: 2em;*/
 }
+
+table.array {
+  counter-reset: rowNumber -1;
+}
+
+table.array > tbody > tr {
+  counter-increment: rowNumber;
+}
+
+table.array > tbody > tr::before {
+  content: "#" counter(rowNumber);
+  min-width: 1em;
+  margin-right: 0.5em;
+}

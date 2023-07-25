@@ -431,11 +431,12 @@ impl GetMeta for TypeOFSource {
 
                 let mut tr = the_data.tr_original.clone();
 
-                let np = presented_as.as_components().len();
-                let components = q.my_topic_name.as_components();
-                let rel_components = components[np..].to_vec();
-                let rel_topic_name = TopicName::from_components(&rel_components);
-                let rurl = rel_topic_name.as_relative_url();
+                let presented_url = presented_as.as_relative_url();
+                let topic_url = q.my_topic_name.as_relative_url();
+                let base = url::Url::parse(&format!("http://example.org/{presented_url}")).unwrap();
+                let target = url::Url::parse(&format!("http://example.org/{topic_url}")).unwrap();
+
+                let rurl = base.make_relative(&target).unwrap();
 
                 let mut the_forwarders = the_data.reachability_we_used.forwarders.clone();
 
@@ -484,18 +485,10 @@ impl GetMeta for TypeOFSource {
 
                 let presented_url = presented_as.as_relative_url();
                 let topic_url = topic_name.as_relative_url();
-                // get relative url
-
                 let base = url::Url::parse(&format!("http://example.org/{presented_url}")).unwrap();
                 let target = url::Url::parse(&format!("http://example.org/{topic_url}")).unwrap();
 
                 let rurl = base.make_relative(&target).unwrap();
-
-                // let np = presented_as.as_components().len();
-                // let components = topic_name.as_components();
-                // let rel_components = components[np..].to_vec();
-                // let rel_topic_name = TopicName::from_components(&rel_components);
-                // let rurl = rel_topic_name.to_relative_url();
 
                 tr.reachability.push(TopicReachabilityInternal {
                     con: TypeOfConnection::Relative(rurl, None),

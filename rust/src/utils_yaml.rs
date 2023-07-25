@@ -1,4 +1,5 @@
 use maud::{html, Markup, Render};
+use serde_cbor::Value;
 
 pub fn generate_html_tree(input: &serde_yaml::Value) -> Markup {
     match input {
@@ -48,13 +49,6 @@ pub fn generate_html_tree(input: &serde_yaml::Value) -> Markup {
     }
 }
 
-// pub fn cbor_from_json(input: &serde_json::Value) -> serde_cbor::Value {
-//
-// }
-// pub fn cbor_from_yaml(input: &serde_json::Value) -> serde_cbor::Value {
-//
-// }
-
 pub fn generate_html_from_cbor(input: &serde_cbor::Value, max_level_open: i32) -> Markup {
     match input {
         serde_cbor::Value::Text(s) => html! { code {"\""(s)"\"" }},
@@ -65,18 +59,21 @@ pub fn generate_html_from_cbor(input: &serde_cbor::Value, max_level_open: i32) -
             if arr.len() == 0 {
                 html! { code{"[]"}}
             } else {
+                let mut stuff = vec![];
+                for value in arr {
+                    stuff.push(generate_html_from_cbor(value, max_level_open - 1));
+                }
+
                 html! {
-                    // details {
-                    //     summary { "Array" }
-                        ol {
-                            @for value in arr {
-                                li {
-                                    (generate_html_from_cbor(value,
-                                    max_level_open-1))
+
+                    table class="array" {
+                            @for item in stuff {
+                                tr {
+                                    td {(item)}
                                 }
                             }
-                        }
-                    // }
+
+                   }
                 }
             }
         }
@@ -130,6 +127,15 @@ pub fn generate_html_from_cbor(input: &serde_cbor::Value, max_level_open: i32) -
             }
         }
 
-        _ => html! { "" }, // for other types of values
+        Value::Float(f) => {
+            html! { (f.to_string())}
+        }
+        Value::Bytes(b) => {
+            html! { (format!("{b:?}")) }
+        }
+        Value::Tag(_tag_no, val) => generate_html_from_cbor(val, max_level_open - 1),
+        Value::__Hidden => {
+            html! {}
+        }
     }
 }
