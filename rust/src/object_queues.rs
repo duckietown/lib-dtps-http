@@ -37,6 +37,8 @@ impl RawData {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DataSaved {
+    pub origin_node: String,
+    pub unique_id: String,
     pub index: usize,
     pub time_inserted: i64,
     pub clocks: Clocks,
@@ -54,6 +56,9 @@ pub struct ObjectQueue {
     pub tr: TopicRefInternal,
 
     pub tx_notification: broadcast::Sender<InsertNotification>,
+    //
+    // pub origin_node: String,
+    // pub unique_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +95,8 @@ impl ObjectQueue {
         let digest = data.digest();
 
         let saved_data = DataSaved {
+            origin_node: self.tr.origin_node.clone(),
+            unique_id: self.tr.unique_id.clone(),
             index: this_seq,
             time_inserted: now,
             clocks: clocks.clone(),

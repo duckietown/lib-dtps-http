@@ -726,6 +726,34 @@ impl ServerState {
         q.subscribe_insert_notification()
     }
 
+    pub fn get_last_insert(&self, tn: &TopicName) -> DTPSR<Option<InsertNotification>> {
+        let q = self.get_queue(tn)?;
+        match q.sequence.last() {
+            None => Ok(None),
+            Some(data_saved) => {
+                let content = self.get_blob_bytes(&data_saved.digest)?;
+
+                Ok(Some(InsertNotification {
+                    data_saved: data_saved.clone(),
+                    raw_data: RawData {
+                        content,
+                        content_type: data_saved.content_type.clone(),
+                    },
+                }))
+            }
+        }
+    }
+
+    pub fn get_queue(&self, tn: &TopicName) -> DTPSR<&ObjectQueue> {
+        match self.oqs.get(tn) {
+            None => {
+                let s = format!("Could not find topic {}", tn.as_dash_sep());
+                Err(DTPSError::TopicNotFound(s))
+            }
+            Some(q) => Ok(q),
+        }
+    }
+
     pub fn send_status_notification(
         &mut self,
         component: &TopicName,

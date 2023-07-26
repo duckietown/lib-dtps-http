@@ -384,23 +384,21 @@ impl DTPSServer {
 
     pub async fn add_proxied(
         &mut self,
-        subcription_name: &String,
+        subscription_name: &String,
         mounted_at: &TopicName,
         url: TypeOfConnection,
     ) -> DTPSR<JoinHandle<()>> {
         let ssa = self.get_lock();
 
-        // let proxied_name = TopicName::from_dotted(proxied_name);
-        // let subcription_name =format!("{}-{}", proxied_name, "proxy").to_string();
         let future = observe_proxy(
-            subcription_name.clone(),
+            subscription_name.clone(),
             mounted_at.clone(),
             url.clone(),
             ssa.clone(),
         );
         let handle = tokio::spawn(show_errors(
             Some(ssa.clone()),
-            format!("observe_proxy {subcription_name} : {url}"),
+            format!("proxied/{subscription_name}"),
             future,
         ));
 
@@ -520,7 +518,7 @@ pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> Ha
     }
 }
 
-fn get_channel_info_message(oq: &ObjectQueue) -> MsgServerToClient {
+pub fn get_channel_info_message(oq: &ObjectQueue) -> ChannelInfo {
     let num_total;
     let newest;
     let oldest;
@@ -544,30 +542,74 @@ fn get_channel_info_message(oq: &ObjectQueue) -> MsgServerToClient {
         }
     }
 
-    let c = ChannelInfo {
+    ChannelInfo {
         queue_created: oq.tr.created,
         num_total,
         newest,
         oldest,
-    };
-    MsgServerToClient::ChannelInfo(c)
+    }
 }
+//
+// async fn get_series_of_messages_for_notification(
+//     send_data: bool,
+//     ss: &ServerState,
+//     oq: &ObjectQueue,
+//     this_one: &DataSaved,
+// ) -> Vec<MsgServerToClient> {
+//     let mut out = vec![];
+//     let the_availability = vec![ResourceAvailabilityWire {
+//         url: format_digest_path(&this_one.digest, &this_one.content_type),
+//         available_until: utils::epoch() + 60.0,
+//     }];
+//     let nchunks = if send_data { 1 } else { 0 };
+//     let dr2 = DataReady {
+//         origin_node: oq.tr.origin_node.clone(),
+//         unique_id: oq.tr.unique_id.clone(),
+//         sequence: this_one.index,
+//         time_inserted: this_one.time_inserted,
+//         digest: this_one.digest.clone(),
+//         content_type: this_one.content_type.clone(),
+//         content_length: this_one.content_length,
+//         clocks: this_one.clocks.clone(),
+//         availability: the_availability,
+//         chunks_arriving: nchunks,
+//     };
+//
+//     let out_message: MsgServerToClient = MsgServerToClient::DataReady(dr2);
+//     out.push(out_message);
+//
+//     if send_data {
+//         let content = ss.get_blob(&this_one.digest).unwrap();
+//         let chunk = MsgServerToClient::Chunk(Chunk {
+//             digest: this_one.digest.clone(),
+//             i: 0,
+//             n: nchunks,
+//             index: 0,
+//             data: Bytes::from(content.clone()),
+//         });
+//         out.push(chunk);
+//     }
+//     out
+// }
 
-async fn get_series_of_messages_for_notification(
+pub async fn get_series_of_messages_for_notification_(
     send_data: bool,
-    ss: &ServerState,
-    oq: &ObjectQueue,
-    this_one: &DataSaved,
+    insert_notification: &InsertNotification,
 ) -> Vec<MsgServerToClient> {
+    let this_one = &insert_notification.data_saved;
     let mut out = vec![];
-    let the_availability = vec![ResourceAvailabilityWire {
-        url: format_digest_path(&this_one.digest, &this_one.content_type),
-        available_until: utils::epoch() + 60.0,
-    }];
+    let the_availability = if send_data {
+        vec![]
+    } else {
+        vec![ResourceAvailabilityWire {
+            url: format_digest_path(&this_one.digest, &this_one.content_type),
+            available_until: utils::epoch() + 60.0,
+        }]
+    };
     let nchunks = if send_data { 1 } else { 0 };
     let dr2 = DataReady {
-        origin_node: oq.tr.origin_node.clone(),
-        unique_id: oq.tr.unique_id.clone(),
+        origin_node: this_one.origin_node.clone(),
+        unique_id: this_one.unique_id.clone(),
         sequence: this_one.index,
         time_inserted: this_one.time_inserted,
         digest: this_one.digest.clone(),
@@ -582,7 +624,7 @@ async fn get_series_of_messages_for_notification(
     out.push(out_message);
 
     if send_data {
-        let content = ss.get_blob(&this_one.digest).unwrap();
+        let content = &insert_notification.raw_data.content;
         let chunk = MsgServerToClient::Chunk(Chunk {
             digest: this_one.digest.clone(),
             i: 0,
@@ -601,62 +643,35 @@ pub async fn handle_websocket_queue(
     topic_name: TopicName,
     send_data: bool,
 ) -> DTPSR<()> {
-    let mut rx2: Receiver<usize>;
-    {
+    let mut rx2 = {
         let mut starting_messaging = vec![];
 
         // important: release the lock
         let ss0 = state.lock().await;
 
-        let oq: &ObjectQueue;
-        match ss0.oqs.get(&topic_name) {
-            None => {
-                // TODO: we shouldn't be here
-                // ws_tx.close().await.unwrap();
-                return not_available!("topic not found");
-            }
-            Some(y) => oq = y,
-        }
+        let oq: &ObjectQueue = ss0.get_queue(&topic_name)?;
 
-        let channel_info_message = get_channel_info_message(&oq);
+        let channel_info_message = MsgServerToClient::ChannelInfo(get_channel_info_message(&oq));
         starting_messaging.push(channel_info_message);
 
-        match oq.sequence.last() {
-            None => {}
-            Some(last) => {
-                let mut for_this =
-                    get_series_of_messages_for_notification(send_data, &ss0, oq, last).await;
-                starting_messaging.append(&mut for_this);
-            }
+        if let Some(x) = ss0.get_last_insert(&topic_name)? {
+            let mut for_this = get_series_of_messages_for_notification_(send_data, &x).await;
+            starting_messaging.append(&mut for_this);
         }
-
         send_as_ws_cbor(&starting_messaging, ws_tx).await?;
 
-        rx2 = oq.tx.subscribe();
-    }
+        oq.subscribe_insert_notification()
+    };
     loop {
-        let r = rx2.recv().await;
-        let message;
-        match r {
-            Ok(_message) => message = _message,
-            Err(RecvError::Closed) => break,
-            Err(RecvError::Lagged(_)) => {
-                debug!("Lagged!");
-                continue;
-            }
-        }
-        let ss2 = state.lock().await;
-        let oq2 = ss2.oqs.get(&topic_name).unwrap();
-        let this_one: &DataSaved = oq2.sequence.get(message).unwrap();
+        let r = rx2.recv().await?;
 
-        let for_this =
-            get_series_of_messages_for_notification(send_data, &ss2, &oq2, this_one).await;
+        let for_this = get_series_of_messages_for_notification_(send_data, &r).await;
         send_as_ws_cbor(&for_this, ws_tx).await?;
     }
     Ok(())
 }
 
-async fn send_as_ws_cbor<T: Serialize>(
+pub async fn send_as_ws_cbor<T: Serialize>(
     data: &Vec<T>,
     ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
 ) -> DTPSR<()> {

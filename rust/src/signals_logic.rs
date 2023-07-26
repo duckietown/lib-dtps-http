@@ -12,16 +12,20 @@ use serde::{Deserialize, Serialize};
 use serde_cbor::Value as CBORValue;
 use serde_cbor::Value::Null as CBORNull;
 use serde_cbor::Value::Text as CBORText;
+use tokio::sync::broadcast::Receiver;
+use tokio::task::JoinHandle;
 
 use crate::cbor_manipulation::{get_as_cbor, get_inside};
 use crate::signals_logic::ResolvedData::{NotAvailableYet, NotFound, Regular};
 use crate::utils::{divide_in_components, is_prefix_of};
+use crate::websocket_signals::ChannelInfo;
 use crate::TypeOfConnection::Relative;
 use crate::{
-    context, error_with_info, get_rawdata, not_implemented, utils, ContentInfo, DTPSError,
-    ForwardingStep, LinkBenchmark, OtherProxyInfo, RawData, ServerState, ServerStateAccess,
-    TopicName, TopicReachabilityInternal, TopicRefInternal, TopicsIndexInternal, TypeOfConnection,
-    CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR, REL_URL_META,
+    context, error_with_info, get_channel_info_message, get_rawdata, not_implemented, utils,
+    ContentInfo, DTPSError, ForwardingStep, InsertNotification, LinkBenchmark, OtherProxyInfo,
+    RawData, ServerState, ServerStateAccess, TopicName, TopicReachabilityInternal,
+    TopicRefInternal, TopicsIndexInternal, TypeOfConnection, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
+    REL_URL_META,
 };
 
 #[derive(Debug, Clone)]
@@ -387,6 +391,109 @@ impl DataProps for TypeOFSource {
             }
         }
     }
+}
+
+pub struct DataStream {
+    pub channel_info: ChannelInfo,
+
+    /// The first data (if available)
+    pub first: Option<InsertNotification>,
+
+    /// The stream (or none if no more data is coming through)
+    pub stream: Option<Receiver<InsertNotification>>,
+
+    /// handles of couroutines needed for making this happen
+    pub handles: Vec<JoinHandle<()>>,
+}
+// use tokio::stream::StreamExt;
+
+impl TypeOFSource {
+    #[async_recursion]
+    pub async fn get_data_stream(
+        &self,
+        presented_as: &str,
+        ssa: ServerStateAccess,
+    ) -> DTPSR<DataStream> {
+        match self {
+            TypeOFSource::Digest(_, _) => {
+                todo!("get_stream for {self:#?} with {self:?}");
+                let x = self.resolve_data_single(presented_as, ssa).await?;
+            }
+            TypeOFSource::ForwardedQueue(q) => {
+                todo!("get_stream for {self:#?} with {self:?}")
+            }
+            TypeOFSource::OurQueue(topic_name, _, props) => {
+                let (rx, first, channel_info) = {
+                    let ss = ssa.lock().await;
+
+                    let rx = ss.subscribe_insert_notification(topic_name);
+                    let first = ss.get_last_insert(topic_name)?;
+                    let oq = ss.get_queue(topic_name)?;
+                    let channel_info = get_channel_info_message(oq);
+                    (rx, first, channel_info)
+                };
+                // let stream = UnboundedReceiverStream::new(rx);
+
+                Ok(DataStream {
+                    channel_info,
+                    first,
+                    stream: Some(rx),
+                    handles: vec![],
+                })
+            }
+
+            TypeOFSource::Compose(sc) => get_stream_compose(presented_as, ssa, sc).await,
+            TypeOFSource::Transformed(s, _) => {
+                todo!("get_stream for {self:#?} with {self:?}")
+            }
+            TypeOFSource::Deref(d) => {
+                todo!("get_stream for {self:#?} with {self:?}")
+            }
+            TypeOFSource::OtherProxied(_) => {
+                todo!("get_stream for {self:#?} with {self:?}")
+            }
+            TypeOFSource::MountedDir(_, _, props) => {
+                todo!("get_stream for {self:#?} with {self:?}")
+            }
+            TypeOFSource::MountedFile(_, _, props) => {
+                todo!("get_stream for {self:#?} with {self:?}")
+            }
+            TypeOFSource::Index(s) => {
+                todo!("get_stream for {self:#?} with {self:?}")
+            }
+            TypeOFSource::Aliased(_, _) => {
+                todo!("get_stream for {self:#?} with {self:?}")
+            }
+        }
+    }
+}
+
+async fn get_stream_compose(
+    presented_as: &str,
+    ssa: ServerStateAccess,
+    sc: &SourceComposition,
+) -> DTPSR<DataStream> {
+    let mut components = HashMap::new();
+    let mut handles = Vec::new();
+
+    for (k, v) in sc.compose.iter() {
+        let mut component_stream = v.get_data_stream(presented_as, ssa.clone()).await?;
+        handles.append(&mut component_stream.handles);
+        components.insert(k.clone(), component_stream);
+    }
+
+    let data_stream = DataStream {
+        channel_info: ChannelInfo {
+            queue_created: 0,
+            num_total: 0,
+            newest: None,
+            oldest: None,
+        },
+        first: None,
+        stream: None,
+        handles: vec![],
+    };
+    Ok(data_stream)
 }
 
 async fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<ResolvedData> {

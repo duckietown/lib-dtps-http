@@ -26,14 +26,14 @@ use crate::signals_logic::{
 use crate::utils::{divide_in_components, get_good_url_for_components};
 use crate::utils_headers::get_accept_header;
 use crate::websocket_abstractions::open_websocket_connection;
-use crate::websocket_signals::MsgClientToServer;
+use crate::websocket_signals::{MsgClientToServer, MsgServerToClient};
 use crate::{
-    construct_response_cbor, do_receiving, error_with_info, get_header_with_default, get_metadata,
-    handle_topic_post, handle_websocket_queue, handler_topic_generic, make_request,
-    not_implemented, object_queues, post_data, put_alternative_locations, receive_from_websocket,
-    root_handler, serve_static_file_path, utils_headers, utils_mime, HandlersResponse, ObjectQueue,
-    RawData, ServerStateAccess, TopicName, TopicsIndexInternal, CONTENT_TYPE, DTPSR,
-    JAVASCRIPT_SEND, OCTET_STREAM,
+    do_receiving, error_with_info, get_header_with_default, get_metadata,
+    get_series_of_messages_for_notification_, handle_topic_post, handle_websocket_queue,
+    make_request, not_implemented, object_queues, put_alternative_locations,
+    receive_from_websocket, send_as_ws_cbor, serve_static_file_path, utils_headers, utils_mime,
+    DataStream, HandlersResponse, ObjectQueue, RawData, ServerStateAccess, TopicName,
+    TopicsIndexInternal, CONTENT_TYPE, DTPSR, JAVASCRIPT_SEND, OCTET_STREAM,
 };
 
 pub async fn serve_master_post(
@@ -456,7 +456,7 @@ fn make_friendly_visualization(
 
             div {
                 @if properties.pushable {
-                    h3 {"push JSON to queue"}
+                    h3 {"push to queue"}
 
                     textarea id="myTextAreaContentType" { (default_content_type) };
                     textarea id="myTextArea" { (initial_value) };
@@ -567,7 +567,7 @@ pub async fn handle_websocket_generic2_(
 
     // let ds = interpret_path(&path, &query, &referrer, state.clone()).await?;
 
-    return match ds {
+    return match &ds {
         TypeOFSource::Compose(sc) => {
             if sc.is_root {
                 let topic_name = TopicName::root();
@@ -575,22 +575,23 @@ pub async fn handle_websocket_generic2_(
 
                 return handle_websocket_queue(ws_tx, state, topic_name, send_data).await;
             } else {
-                not_implemented!("handle_websocket_generic2 not implemented TypeOFSource::Compose")
+                let stream = ds.get_data_stream(path.as_str(), state).await?;
+
+                handle_websocket_data_stream(ws_tx, stream, send_data).await
+                // not_implemented!("handle_websocket_generic2 not implemented TypeOFSource::Compose")
             }
         }
         TypeOFSource::OurQueue(topic_name, _, _) => {
             spawn(do_receiving(topic_name.clone(), state.clone(), receiver));
 
-            return handle_websocket_queue(ws_tx, state, topic_name, send_data).await;
+            return handle_websocket_queue(ws_tx, state, topic_name.clone(), send_data).await;
         }
-        TypeOFSource::Digest(_digest, _content_type) => {
-            not_implemented!("handle_websocket_generic2 not implemented TypeOFSource::Digest")
-        }
+
         TypeOFSource::ForwardedQueue(fq) => {
             handle_websocket_forwarded(
                 state,
-                fq.subscription,
-                fq.his_topic_name,
+                fq.subscription.clone(),
+                fq.his_topic_name.clone(),
                 ws_tx,
                 receiver,
                 send_data,
@@ -598,28 +599,68 @@ pub async fn handle_websocket_generic2_(
             .await
             // not_implemented!("handle_websocket_generic2 not implemented for {ds:?}")
         }
-        TypeOFSource::Transformed(_, _) => {
-            not_implemented!("handle_websocket_generic2 not implemented for {ds:?}")
-        }
-        TypeOFSource::Deref(_) => {
-            not_implemented!("handle_websocket_generic2 not implemented for {ds:?}")
-        }
-        TypeOFSource::OtherProxied(_) => {
-            not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
-        }
-        TypeOFSource::MountedDir(..) => {
-            not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
-        }
-        TypeOFSource::MountedFile(..) => {
-            not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
-        }
-        TypeOFSource::Index(..) => {
-            not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
-        }
-        TypeOFSource::Aliased(..) => {
-            not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
+        // TypeOFSource::Digest(_digest, _content_type) => {
+        //     not_implemented!("handle_websocket_generic2 not implemented TypeOFSource::Digest")
+        // }
+        //
+        // TypeOFSource::Transformed(_, _) => {
+        //     not_implemented!("handle_websocket_generic2 not implemented for {ds:?}")
+        // }
+        // TypeOFSource::Deref(_) => {
+        //     not_implemented!("handle_websocket_generic2 not implemented for {ds:?}")
+        // }
+        // TypeOFSource::OtherProxied(_) => {
+        //     not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
+        // }
+        // TypeOFSource::MountedDir(..) => {
+        //     not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
+        // }
+        // TypeOFSource::MountedFile(..) => {
+        //     not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
+        // }
+        // TypeOFSource::Index(..) => {
+        //     not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
+        // }
+        // TypeOFSource::Aliased(..) => {
+        //     not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
+        // }
+        _ => {
+            let stream = ds.get_data_stream(path.as_str(), state).await?;
+
+            handle_websocket_data_stream(ws_tx, stream, send_data).await
         }
     };
+}
+
+pub async fn handle_websocket_data_stream(
+    ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
+    data_stream: DataStream,
+    send_data: bool,
+) -> DTPSR<()> {
+    let mut starting_messaging = vec![];
+
+    starting_messaging.push(MsgServerToClient::ChannelInfo(data_stream.channel_info));
+
+    if let Some(first) = data_stream.first {
+        let mut for_this = get_series_of_messages_for_notification_(send_data, &first).await;
+        starting_messaging.append(&mut for_this);
+    }
+
+    send_as_ws_cbor(&starting_messaging, ws_tx).await?;
+
+    let mut stream = match data_stream.stream {
+        None => {
+            return Ok(());
+        }
+        Some(x) => x,
+    };
+    loop {
+        let r = stream.recv().await?;
+
+        let for_this = get_series_of_messages_for_notification_(send_data, &r).await;
+        send_as_ws_cbor(&for_this, ws_tx).await?;
+    }
+    Ok(())
 }
 
 pub async fn handle_websocket_forwarded(
@@ -667,6 +708,9 @@ pub async fn handle_websocket_forwarded(
         match ws_tx.send(x).await {
             Ok(_) => {}
             Err(e) => {
+                // match e {
+                //     Error { .. } => {}
+                // }
                 error_with_info!("Cannot send message: {e}")
             }
         }
