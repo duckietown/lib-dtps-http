@@ -26,11 +26,28 @@ if (button !== null) {
             headers: {'Content-Type': content_type},
             body: data
         })
-            .then(response => response.json())
-            .then(data => console.log(data))
+            .then(handle_response)
             .catch(error => console.error('Error:', error));
     });
 }
+
+async function handle_response(r) {
+    // r is a promise
+    // await it
+    if (r.ok) {
+        console.log("ok");
+
+    } else {
+        console.error(r.statusText);
+        // write the texst
+        let text = await r.text();
+
+        console.error(text);
+
+    }
+
+}
+
 function subscribeWebSocket(url, fieldId) {
     // Initialize a new WebSocket connection
     let socket = new WebSocket(url);

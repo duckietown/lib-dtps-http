@@ -28,11 +28,12 @@ use crate::utils_headers::get_accept_header;
 use crate::websocket_abstractions::open_websocket_connection;
 use crate::websocket_signals::MsgClientToServer;
 use crate::{
-    do_receiving, error_with_info, get_metadata, handle_topic_post, handle_websocket_queue,
-    handler_topic_generic, not_implemented, object_queues, put_alternative_locations,
-    receive_from_websocket, root_handler, serve_static_file_path, utils_headers, utils_mime,
-    HandlersResponse, ObjectQueue, ServerStateAccess, TopicName, TopicsIndexInternal, DTPSR,
-    JAVASCRIPT_SEND,
+    construct_response_cbor, do_receiving, error_with_info, get_header_with_default, get_metadata,
+    handle_topic_post, handle_websocket_queue, handler_topic_generic, make_request,
+    not_implemented, object_queues, post_data, put_alternative_locations, receive_from_websocket,
+    root_handler, serve_static_file_path, utils_headers, utils_mime, HandlersResponse, ObjectQueue,
+    RawData, ServerStateAccess, TopicName, TopicsIndexInternal, CONTENT_TYPE, DTPSR,
+    JAVASCRIPT_SEND, OCTET_STREAM,
 };
 
 pub async fn serve_master_post(
@@ -44,7 +45,15 @@ pub async fn serve_master_post(
 ) -> HandlersResponse {
     let path_str = path_normalize(&path);
     let referrer = get_referrer(&headers);
-    let matched = interpret_path(&path_str, &query, &referrer, ss_mutex.clone()).await;
+
+    let matched: DTPSR<TypeOFSource> = {
+        let ss = ss_mutex.lock().await;
+        interpret_path(&path_str, &query, &referrer, &ss).await
+    };
+
+    let content_type = get_header_with_default(&headers, CONTENT_TYPE, OCTET_STREAM);
+    let byte_vector: Vec<u8> = data.to_vec().clone();
+    let rd = RawData::new(byte_vector, content_type);
 
     let ds = match matched {
         Ok(ds) => ds,
@@ -61,9 +70,11 @@ pub async fn serve_master_post(
 
     let p = ds.get_properties();
     if !p.pushable {
+        let s = format!("Cannot push to {path_str:?} because the topic is not pushable:\n{ds:?}");
+        error!(" {s}");
         let res = http::Response::builder()
             .status(StatusCode::METHOD_NOT_ALLOWED)
-            .body(Body::from("Cannot push to this topic"))
+            .body(Body::from(s.to_string()))
             .unwrap();
         return Ok(res);
     }
@@ -71,12 +82,35 @@ pub async fn serve_master_post(
     return match ds {
         TypeOFSource::OurQueue(topic_name, _, _) => {
             debug!("Pushing to topic {:?}", topic_name);
-            handle_topic_post(&topic_name, ss_mutex, headers, data).await
+            handle_topic_post(&topic_name, ss_mutex, &rd).await
+        }
+        TypeOFSource::ForwardedQueue(fq) => {
+            let con = {
+                let ss = ss_mutex.lock().await;
+                let sub = ss.proxied.get(&fq.subscription).unwrap();
+                sub.url.join(fq.his_topic_name.as_relative_url())?
+            };
+            let resp = make_request(
+                &con,
+                hyper::Method::POST,
+                &rd.content,
+                Some(&rd.content_type),
+                None,
+            )
+            .await?;
+            if !resp.status().is_success() {
+                let s = format!("The proxied request did not succeed. con ={con} ");
+                error_with_info!("{s}");
+            }
+
+            Ok(resp)
         }
         _ => {
+            let s = format!("We do not support POST to {path_str}: {ds:?}");
+            error_with_info!("{s}");
             let res = http::Response::builder()
                 .status(StatusCode::METHOD_NOT_ALLOWED)
-                .body(Body::from("We dont support push to this"))
+                .body(Body::from(s.to_string()))
                 .unwrap();
             Ok(res)
         }
@@ -92,8 +126,10 @@ pub async fn serve_master_head(
     let path_str = path_normalize(&path);
     // debug!("serve_master_head: path_str: {}", path_str);
     let referrer = get_referrer(&headers);
-
-    let matched = interpret_path(&path_str, &query, &referrer, ss_mutex.clone()).await;
+    let matched: DTPSR<TypeOFSource> = {
+        let ss = ss_mutex.lock().await;
+        interpret_path(&path_str, &query, &referrer, &ss).await
+    };
 
     let ds = match matched {
         Ok(ds) => ds,
@@ -183,6 +219,7 @@ pub async fn serve_master_head(
         TypeOFSource::Deref(_) => {}
         TypeOFSource::OtherProxied(_) => {}
         TypeOFSource::Index(_) => {}
+        TypeOFSource::Aliased(..) => {}
     }
 
     serve_master_get(path, query, ss_mutex, headers).await
@@ -302,33 +339,28 @@ pub async fn serve_master_get(
             }
         }
     }
-
-    // let ds = context!(
-    let ds = interpret_path(&path_str, &query, &referrer, ss_mutex.clone()).await?;
+    let ds = {
+        let ss = ss_mutex.lock().await;
+        interpret_path(&path_str, &query, &referrer, &ss).await
+    }?;
 
     debug!("serve_master: ds={:?} ", ds);
-    //     "Cannot interpret the path {:?}:\n",
-    //     path_components,
-    // );
-    // .map_err(todtpserror)?;
 
-    let ds_props = ds.get_properties();
+    // let ds_props = ds.get_properties();
 
-    match ds {
-        TypeOFSource::OurQueue(topic_name, _, _) => {
-            return if true || topic_name.is_root() {
-                handler_topic_generic(&topic_name, ss_mutex.clone(), headers).await
-            } else {
-                root_handler(ss_mutex.clone(), headers).await
-            };
-        }
-        _ => {}
-    }
-    let presented_as = TopicName::from_components(&path_components0);
+    // match ds {
+    //     TypeOFSource::OurQueue(topic_name, _, _) => {
+    //         return if true || topic_name.is_root() {
+    //             handler_topic_generic(&topic_name, ss_mutex.clone(), headers).await
+    //         } else {
+    //             root_handler(ss_mutex.clone(), headers).await
+    //         };
+    //     }
+    //     _ => {}
+    // }
+    // let presented_as = TopicName::from_components(&path_components0);
 
-    let resd0 = ds
-        .resolve_data_single(&presented_as, ss_mutex.clone())
-        .await;
+    let resd0 = ds.resolve_data_single(&path_str, ss_mutex.clone()).await;
 
     let resd = match resd0 {
         Ok(x) => x,
@@ -365,7 +397,7 @@ pub async fn serve_master_get(
     };
     let extra_html = match ds {
         TypeOFSource::Compose(_) | TypeOFSource::MountedDir(..) => {
-            match ds.get_meta_index(&presented_as, ss_mutex.clone()).await {
+            match ds.get_meta_index(&path_str, ss_mutex.clone()).await {
                 Ok(index) => make_index_html(&index),
                 Err(err) => {
                     let s = format!("Cannot make index html: {}", err);
@@ -378,6 +410,10 @@ pub async fn serve_master_get(
         }
     };
 
+    // let x = ds.get_meta_index(&path_str, ss_mutex.clone()).await?;
+    // let ds_props = &(x.topics.get(&TopicName::root()).unwrap().properties);
+
+    let ds_props = ds.get_properties();
     return visualize_data(
         &ds_props,
         path_str.to_string(),
@@ -480,6 +516,7 @@ pub async fn visualize_data(
             let ss = ssa.lock().await;
             utils_headers::put_common_headers(&ss, h);
         }
+        // debug!("the response is {resp:?}");
         Ok(resp.into())
     }
 }
@@ -523,7 +560,12 @@ pub async fn handle_websocket_generic2_(
     let referrer = None;
     let query = HashMap::new();
 
-    let ds = interpret_path(&path, &query, &referrer, state.clone()).await?;
+    let ds = {
+        let ss = state.lock().await;
+        interpret_path(&path, &query, &referrer, &ss).await
+    }?;
+
+    // let ds = interpret_path(&path, &query, &referrer, state.clone()).await?;
 
     return match ds {
         TypeOFSource::Compose(sc) => {
@@ -572,6 +614,9 @@ pub async fn handle_websocket_generic2_(
             not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
         }
         TypeOFSource::Index(..) => {
+            not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
+        }
+        TypeOFSource::Aliased(..) => {
             not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
         }
     };

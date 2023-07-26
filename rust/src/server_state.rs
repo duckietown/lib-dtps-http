@@ -14,7 +14,7 @@ use path_clean::PathClean;
 use schemars::schema::RootSchema;
 use schemars::{schema_for, JsonSchema};
 use serde::{Deserialize, Serialize};
-use strum_macros::{EnumString, ToString};
+use strum_macros::{Display, EnumString, ToString};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
@@ -91,14 +91,17 @@ pub struct ServerState {
     /// The proxied other resources
     pub proxied_other: HashMap<TopicName, OtherProxyInfo>,
     pub blobs: HashMap<String, Vec<u8>>,
+
     advertise_urls: Vec<String>,
 
     status_tx: mpsc::UnboundedSender<ComponentStatusNotification>,
     status_rx: mpsc::UnboundedReceiver<ComponentStatusNotification>,
+
+    pub aliases: HashMap<TopicName, TopicName>,
 }
 
 /// Taken from this: http://supervisord.org/subprocess.html
-#[derive(EnumString, Serialize, Deserialize, ToString, Debug, Clone, JsonSchema)]
+#[derive(EnumString, Serialize, Deserialize, Display, Debug, Clone, JsonSchema)]
 pub enum Status {
     /// The process has been stopped due to a stop request or has never been started.
     STOPPED,
@@ -211,6 +214,7 @@ impl ServerState {
             local_dirs: HashMap::new(),
             status_tx,
             status_rx,
+            aliases: HashMap::new(),
         };
         let p = TopicProperties {
             streamable: true,
@@ -266,7 +270,10 @@ impl ServerState {
 
         Ok(ss)
     }
-
+    pub fn add_alias(&mut self, new: &TopicName, existing: &TopicName) {
+        // TODO: check for errors
+        self.aliases.insert(new.clone(), existing.clone());
+    }
     pub fn add_advertise_url(&mut self, url: &str) -> DTPSR<()> {
         if self.advertise_urls.contains(&url.to_string()) {
             return Ok(());
@@ -568,8 +575,6 @@ impl ServerState {
         let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
 
         for (topic_name, oq) in self.oqs.iter() {
-            // debug!("topics_index: topic_name: {:#?}", topic_name);
-            // let url = topic_name.as_relative_url();
             let mut tr = oq.tr.clone();
 
             tr.reachability.push(TopicReachabilityInternal {
@@ -583,10 +588,6 @@ impl ServerState {
             topics.insert(topic_name.clone(), tr);
         }
         for (topic_name, oq) in self.proxied_topics.iter() {
-            // debug!("topics_index: topic_name: {:#?}", topic_name);
-            // let url = topic_name.as_relative_url();
-            // let tr = oq.tr.add_path(&url);
-
             let mut tr = oq.tr_original.clone();
 
             let mut forwarders = oq.reachability_we_used.forwarders.clone();
@@ -693,16 +694,31 @@ impl ServerState {
 
             topics.insert(topic_name.clone(), tr);
         }
-        // let node_app_data = self.node_app_data.clone();
+        for (alias, original) in &self.aliases {
+            let tr = TopicRefInternal {
+                unique_id: "".to_string(),
+                origin_node: "".to_string(),
+                app_data: Default::default(),
+                reachability: vec![],
+                created: 0,
+                properties: TopicProperties {
+                    streamable: false,
+                    pushable: false,
+                    readable: false,
+                    immutable: false,
+                },
+                content_info: ContentInfo {
+                    accept_content_type: vec![],
+                    storage_content_type: vec![],
+                    produces_content_type: vec![],
+                    schema_json: None,
+                    examples: vec![],
+                },
+            };
+            topics.insert(alias.clone(), tr);
+        }
 
-        let topics_index = TopicsIndexInternal {
-            // node_app_data,
-            topics,
-        };
-
-        // debug!("topics_index:\n{:#?}", topics_index);
-
-        return topics_index;
+        TopicsIndexInternal { topics }
     }
 
     pub fn subscribe_insert_notification(&self, tn: &TopicName) -> Receiver<InsertNotification> {
@@ -801,14 +817,6 @@ pub async fn observe_proxy(
             }
         }
     };
-    //
-    // let rtype = context!(
-    //     sniff_type_resource(&url).await,
-    //     "Cannot sniff type of resource for subscription {} => {}",
-    //     subcription_name,
-    //     url.to_string()
-    // )?;
-    debug!("observe_proxy: rtype: {:#?}", rtype);
 
     match rtype {
         TypeOfResource::Other => {
@@ -903,7 +911,7 @@ pub async fn observe_node_proxy(
     // let (tx, rx) = mpsc::unbounded_channel();
     let inline_url = md.events_data_inline_url.unwrap().clone();
     //
-    let (_handle, mut stream) = get_events_stream_inline(inline_url).await;
+    let (_handle, mut stream) = get_events_stream_inline(&inline_url).await;
 
     {
         let mut ss = ss_mutex.lock().await;

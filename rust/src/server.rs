@@ -32,7 +32,7 @@ use tokio_stream::wrappers::{UnboundedReceiverStream, UnixListenerStream};
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use warp::hyper::Body;
 use warp::reply::Response;
-use warp::{Filter, Rejection, Server};
+use warp::{Filter, Rejection};
 
 use crate::cloudflare::open_cloudflare;
 use crate::constants::*;
@@ -67,6 +67,7 @@ pub struct DTPSServer {
     pub unix_path: Option<String>,
     initial_proxy: HashMap<String, TypeOfConnection>,
     topic_connections: Vec<TopicConnection>,
+    // aliases: Vec<TopicAlias>,
 }
 
 impl DTPSServer {
@@ -77,8 +78,12 @@ impl DTPSServer {
         unix_path: Option<String>,
         initial_proxy: HashMap<String, TypeOfConnection>,
         topic_connections: Vec<TopicConnection>,
+        aliases: Vec<TopicAlias>,
     ) -> DTPSR<Self> {
-        let ss = ServerState::new(None)?;
+        let mut ss = ServerState::new(None)?;
+        for alias in &aliases {
+            ss.add_alias(&alias.new, &alias.existing);
+        }
 
         let mutex: ServerStateAccess = StdArc::new(TokioMutex::new(ss));
 
@@ -288,12 +293,20 @@ impl DTPSServer {
                 indent_all_with(" ", ss.get_advertise_urls().join("\n"))
             );
         }
-        for con in &self.topic_connections {
-            let fut = start_connection(ssa.clone(), con.source.clone(), con.target.clone());
+        for (i, con) in self.topic_connections.iter().enumerate() {
+            let component_name =
+                TopicName::from_components(&vec!["connections".to_string(), format!("{i}")]);
+
+            let fut = start_connection(
+                ssa.clone(),
+                component_name.clone(),
+                con.source.clone(),
+                con.target.clone(),
+            );
 
             let handle = tokio::spawn(show_errors(
                 Some(ssa.clone()),
-                "connection".to_string(),
+                component_name.to_dash_sep(),
                 fut,
             ));
             handles.push(handle);
@@ -397,13 +410,24 @@ impl DTPSServer {
 
 pub async fn start_connection(
     ssa: ServerStateAccess,
+    component_name: TopicName,
     source: TopicName,
     target: TopicName,
 ) -> DTPSR<()> {
-    let source = interpret_path(source.as_relative_url(), &hashmap! {}, &None, ssa.clone()).await?;
-    let target = interpret_path(target.as_relative_url(), &hashmap! {}, &None, ssa.clone()).await?;
+    let (source, target) = {
+        let mut ss = ssa.lock().await;
+        ss.send_status_notification(&component_name, Status::STARTING, None)?;
 
+        let source = interpret_path(source.as_relative_url(), &hashmap! {}, &None, &ss).await?;
+        let target = interpret_path(target.as_relative_url(), &hashmap! {}, &None, &ss).await?;
+        (source, target)
+    };
     debug!("Connecting source {source:?} with {target:?}");
+
+    {
+        let mut ss = ssa.lock().await;
+        ss.send_status_notification(&component_name, Status::STOPPED, None)?;
+    }
 
     Ok(())
 }
@@ -496,18 +520,91 @@ pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> Ha
     }
 }
 
+fn get_channel_info_message(oq: &ObjectQueue) -> MsgServerToClient {
+    let num_total;
+    let newest;
+    let oldest;
+    match oq.sequence.first() {
+        None => {
+            oldest = None;
+        }
+        Some(first) => {
+            oldest = Some(ChannelInfoDesc::new(first.index, first.time_inserted));
+        }
+    }
+
+    match oq.sequence.last() {
+        None => {
+            num_total = 0;
+            newest = None;
+        }
+        Some(last) => {
+            num_total = last.index + 1;
+            newest = Some(ChannelInfoDesc::new(last.index, last.time_inserted));
+        }
+    }
+
+    let c = ChannelInfo {
+        queue_created: oq.tr.created,
+        num_total,
+        newest,
+        oldest,
+    };
+    MsgServerToClient::ChannelInfo(c)
+}
+
+async fn get_series_of_messages_for_notification(
+    send_data: bool,
+    ss: &ServerState,
+    oq: &ObjectQueue,
+    this_one: &DataSaved,
+) -> Vec<MsgServerToClient> {
+    let mut out = vec![];
+    let the_availability = vec![ResourceAvailabilityWire {
+        url: format_digest_path(&this_one.digest, &this_one.content_type),
+        available_until: utils::epoch() + 60.0,
+    }];
+    let nchunks = if send_data { 1 } else { 0 };
+    let dr2 = DataReady {
+        origin_node: oq.tr.origin_node.clone(),
+        unique_id: oq.tr.unique_id.clone(),
+        sequence: this_one.index,
+        time_inserted: this_one.time_inserted,
+        digest: this_one.digest.clone(),
+        content_type: this_one.content_type.clone(),
+        content_length: this_one.content_length,
+        clocks: this_one.clocks.clone(),
+        availability: the_availability,
+        chunks_arriving: nchunks,
+    };
+
+    let out_message: MsgServerToClient = MsgServerToClient::DataReady(dr2);
+    out.push(out_message);
+
+    if send_data {
+        let content = ss.get_blob(&this_one.digest).unwrap();
+        let chunk = MsgServerToClient::Chunk(Chunk {
+            digest: this_one.digest.clone(),
+            i: 0,
+            n: nchunks,
+            index: 0,
+            data: Bytes::from(content.clone()),
+        });
+        out.push(chunk);
+    }
+    out
+}
+
 pub async fn handle_websocket_queue(
     ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
-    // ws_rx: SplitStream<warp::ws::WebSocket>,
     state: ServerStateAccess,
     topic_name: TopicName,
     send_data: bool,
 ) -> DTPSR<()> {
-    // debug!("handle_websocket_queue: {}", topic_name);
-
-    let channel_info_message: MsgServerToClient;
     let mut rx2: Receiver<usize>;
     {
+        let mut starting_messaging = vec![];
+
         // important: release the lock
         let ss0 = state.lock().await;
 
@@ -520,86 +617,23 @@ pub async fn handle_websocket_queue(
             }
             Some(y) => oq = y,
         }
-        let num_total;
-        let newest;
-        let oldest;
+
+        let channel_info_message = get_channel_info_message(&oq);
+        starting_messaging.push(channel_info_message);
+
         match oq.sequence.last() {
-            None => {
-                num_total = 0;
-                newest = None;
-            }
+            None => {}
             Some(last) => {
-                let the_availability = vec![ResourceAvailabilityWire {
-                    url: format_digest_path(&last.digest, &last.content_type),
-                    available_until: utils::epoch() + 60.0,
-                }];
-                let nchunks = if send_data { 1 } else { 0 };
-                let dr = DataReady {
-                    unique_id: oq.tr.unique_id.clone(),
-                    origin_node: oq.tr.origin_node.clone(),
-                    sequence: last.index,
-                    time_inserted: last.time_inserted,
-                    digest: last.digest.clone(),
-                    content_type: last.content_type.clone(),
-                    content_length: last.content_length.clone(),
-                    clocks: last.clocks.clone(),
-                    availability: the_availability,
-                    chunks_arriving: nchunks,
-                };
-                let m = MsgServerToClient::DataReady(dr);
-                let message = warp::ws::Message::binary(serde_cbor::to_vec(&m).unwrap());
-                ws_tx.send(message).await.unwrap();
-
-                if send_data {
-                    let message_data = ss0.get_blob(&last.digest).unwrap();
-                    let chunk = MsgServerToClient::Chunk(Chunk {
-                        digest: last.digest.clone(),
-                        i: 0,
-                        n: nchunks,
-                        index: 0,
-                        data: Bytes::from(message_data.clone()),
-                    });
-                    let message = warp::ws::Message::binary(serde_cbor::to_vec(&chunk).unwrap());
-
-                    ws_tx.send(message).await.unwrap();
-                }
-                num_total = last.index + 1;
-                newest = Some(ChannelInfoDesc::new(last.index, last.time_inserted));
+                let mut for_this =
+                    get_series_of_messages_for_notification(send_data, &ss0, oq, last).await;
+                starting_messaging.append(&mut for_this);
             }
         }
 
-        match oq.sequence.first() {
-            None => {
-                oldest = None;
-            }
-            Some(first) => {
-                oldest = Some(ChannelInfoDesc::new(first.index, first.time_inserted));
-            }
-        }
-
-        let c = ChannelInfo {
-            queue_created: oq.tr.created,
-            num_total,
-            newest,
-            oldest,
-        };
-        channel_info_message = MsgServerToClient::ChannelInfo(c);
+        send_as_ws_cbor(&starting_messaging, ws_tx).await?;
 
         rx2 = oq.tx.subscribe();
     }
-    // let state2_for_receive = state.clone();
-    // let topic_name2 = topic_name.clone();
-
-    let message = warp::ws::Message::binary(serde_cbor::to_vec(&channel_info_message).unwrap());
-    match ws_tx.send(message).await {
-        Ok(_) => {}
-        Err(e) => {
-            debug!("Error sending ChannelInfo message: {}", e);
-        }
-    }
-
-    // now wait for one message at least
-
     loop {
         let r = rx2.recv().await;
         let message;
@@ -611,60 +645,26 @@ pub async fn handle_websocket_queue(
                 continue;
             }
         }
-
         let ss2 = state.lock().await;
         let oq2 = ss2.oqs.get(&topic_name).unwrap();
         let this_one: &DataSaved = oq2.sequence.get(message).unwrap();
-        let the_availability = vec![ResourceAvailabilityWire {
-            url: format_digest_path(&this_one.digest, &this_one.content_type),
-            available_until: utils::epoch() + 60.0,
-        }];
-        let nchunks = if send_data { 1 } else { 0 };
-        let dr2 = DataReady {
-            origin_node: oq2.tr.origin_node.clone(),
-            unique_id: oq2.tr.unique_id.clone(),
-            sequence: this_one.index,
-            time_inserted: this_one.time_inserted,
-            digest: this_one.digest.clone(),
-            content_type: this_one.content_type.clone(),
-            content_length: this_one.content_length,
-            clocks: this_one.clocks.clone(),
-            availability: the_availability,
-            chunks_arriving: nchunks,
-        };
 
-        let out_message: MsgServerToClient = MsgServerToClient::DataReady(dr2);
-
-        let message = warp::ws::Message::binary(serde_cbor::to_vec(&out_message).unwrap());
-        match ws_tx.send(message).await {
-            Ok(_) => {}
-            Err(e) => {
-                debug!("Error sending DataReady message: {}", e);
-                break; // TODO: do better handling
-            }
-        }
-        if send_data {
-            let content = ss2.get_blob(&this_one.digest).unwrap();
-            let chunk = MsgServerToClient::Chunk(Chunk {
-                digest: this_one.digest.clone(),
-                i: 0,
-                n: nchunks,
-                index: 0,
-                data: Bytes::from(content.clone()),
-            });
-            let message = warp::ws::Message::binary(serde_cbor::to_vec(&chunk).unwrap());
-            // let message = warp::ws::Message::binary(content.clone());
-            match ws_tx.send(message).await {
-                Ok(_) => {}
-                Err(e) => {
-                    debug!("Error sending binary data message: {}", e);
-                    break; // TODO: do better handling
-                }
-            }
-        }
+        let for_this =
+            get_series_of_messages_for_notification(send_data, &ss2, &oq2, this_one).await;
+        send_as_ws_cbor(&for_this, ws_tx).await?;
     }
     Ok(())
-    // debug!("handle_websocket_queue: {} - done", topic_name);
+}
+
+async fn send_as_ws_cbor<T: Serialize>(
+    data: &Vec<T>,
+    ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
+) -> DTPSR<()> {
+    for x in data {
+        let message = warp::ws::Message::binary(serde_cbor::to_vec(&x).unwrap());
+        ws_tx.send(message).await?;
+    }
+    Ok(())
 }
 
 pub fn get_header_with_default(headers: &HeaderMap, key: &str, default: &str) -> String {
@@ -677,34 +677,30 @@ pub fn get_header_with_default(headers: &HeaderMap, key: &str, default: &str) ->
 pub async fn handle_topic_post(
     topic_name: &TopicName,
     ss_mutex: ServerStateAccess,
-    headers: HeaderMap,
-    data: hyper::body::Bytes,
+    rd: &RawData,
+    // headers: HeaderMap,
+    // data: hyper::body::Bytes,
 ) -> HandlersResponse {
     let mut ss = ss_mutex.lock().await;
-    // let topic_name= TopicName::from_dotted(topic_name);
 
-    let content_type = get_header_with_default(&headers, CONTENT_TYPE, OCTET_STREAM);
+    // let content_type = get_header_with_default(&headers, CONTENT_TYPE, OCTET_STREAM);
+    //
+    //
+    // let byte_vector: Vec<u8> = data.to_vec().clone();
 
-    // let x: &mut ObjectQueue;
-    // match ss.oqs.get_mut(topic_name.as_str()) {
-    //     None => {
-    //         return Err(warp::reject::not_found());
-    //     }
-    //     Some(y) => x = y,
-    // };
+    let ds = ss.publish(&topic_name, &rd.content, &rd.content_type, None)?;
 
-    let byte_vector: Vec<u8> = data.to_vec().clone();
+    return Ok(construct_response_cbor(&ds));
+}
 
-    let ds = ss.publish(&topic_name, &byte_vector, &content_type, None)?;
-
-    // convert to cbor
-    let ds_cbor = serde_cbor::to_vec(&ds).unwrap();
+pub fn construct_response_cbor<T: Serialize>(ob: &T) -> http::Response<Body> {
+    let ds_cbor = serde_cbor::to_vec(&ob).unwrap();
     let res = http::Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "application/cbor")
         .body(Body::from(ds_cbor))
         .unwrap();
-    return Ok(res);
+    res
 }
 
 async fn handler_topic_html_summary(
@@ -1030,6 +1026,9 @@ pub struct ServerArgs {
 
     #[arg(long)]
     connect: Vec<String>,
+
+    #[arg(long)]
+    alias: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1053,6 +1052,32 @@ impl TopicConnection {
                 let target = TopicName::from_dash_sep(after)?;
 
                 Ok(Self { source, target })
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TopicAlias {
+    pub new: TopicName,
+    pub existing: TopicName,
+}
+
+impl TopicAlias {
+    /// Parses a string of the form `a/b -> c/d`
+    pub fn from_string(s: &str) -> DTPSR<Self> {
+        match s.find("=") {
+            None => {
+                return invalid_input!("Cannot find -> in string {s:?}");
+            }
+            Some(i) => {
+                // divide in 2
+                let before = s[..i].trim();
+                let after = s[i + "=".len()..].trim();
+                let new = TopicName::from_dash_sep(before)?;
+                let existing = TopicName::from_dash_sep(after)?;
+
+                Ok(Self { new, existing })
             }
         }
     }
@@ -1103,6 +1128,11 @@ pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {
         .iter()
         .map(|x| TopicConnection::from_string(&x).unwrap())
         .collect::<Vec<TopicConnection>>();
+    let aliases = args
+        .alias
+        .iter()
+        .map(|x| TopicAlias::from_string(&x).unwrap())
+        .collect::<Vec<TopicAlias>>();
     DTPSServer::new(
         listen_address,
         args.tunnel.clone(),
@@ -1110,6 +1140,7 @@ pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {
         args.unix_path,
         proxy,
         topic_connections,
+        aliases,
     )
     .await
 }

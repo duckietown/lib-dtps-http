@@ -10,7 +10,7 @@ use tokio::sync::broadcast;
 use crate::structures::TopicRefInternal;
 use crate::{merge_clocks, Clocks, DataReady, MinMax, Notification, DTPSR};
 
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, PartialEq)]
 pub struct RawData {
     pub content: Bytes,
     pub content_type: String,

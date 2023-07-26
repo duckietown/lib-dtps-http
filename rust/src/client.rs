@@ -1,10 +1,10 @@
 use std::any::Any;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::os::unix::fs::FileTypeExt;
 use std::time::Duration;
 
 use anyhow::Context;
-
 use bytes::Bytes;
 use futures::StreamExt;
 use hex;
@@ -14,12 +14,13 @@ use hyper_tls::HttpsConnector;
 use hyperlocal::UnixClientExt;
 use log::{debug, error, info};
 use maplit::hashmap;
-use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use tungstenite::Message as TM;
 use warp::reply::Response;
 
 use crate::constants::{
@@ -37,13 +38,14 @@ use crate::TypeOfConnection::Same;
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
 use crate::{
     context, error_with_info, internal_assertion, not_available, not_implemented, not_reachable,
-    DTPSError, RawData, TopicName, CONTENT_TYPE_DTPS_INDEX, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
+    put_header_accept, put_header_content_type, DTPSError, DataSaved, RawData, TopicName,
+    CONTENT_TYPE_DTPS_INDEX, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
 };
 use crate::{LinkBenchmark, LinkHeader, REL_EVENTS_DATA, REL_EVENTS_NODATA, REL_META};
 
 /// Note: need to have use futures::{StreamExt} in scope to use this
 pub async fn get_events_stream_inline(
-    url: TypeOfConnection,
+    url: &TypeOfConnection,
 ) -> (JoinHandle<DTPSR<()>>, UnboundedReceiverStream<Notification>) {
     let (tx, rx) = mpsc::unbounded_channel();
     let inline_url = url.clone();
@@ -56,7 +58,7 @@ pub async fn estimate_latencies(which: TopicName, md: FoundMetadata) {
     // let (tx, rx) = mpsc::unbounded_channel();
     let inline_url = md.events_data_inline_url.unwrap().clone();
 
-    let (handle, mut stream) = get_events_stream_inline(inline_url).await;
+    let (handle, mut stream) = get_events_stream_inline(&inline_url).await;
 
     // keep track of the latencies in a vector and compute the mean
 
@@ -117,6 +119,34 @@ pub struct Notification {
     pub rd: RawData,
 }
 
+pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<MsgServerToClient> {
+    let msg = rx.recv().await?;
+    if !msg.is_binary() {
+        let s = format!("unexpected message, expected binary {msg:#?}");
+        return DTPSError::other(s);
+    }
+    let data = msg.clone().into_data();
+
+    let msg_from_server: MsgServerToClient;
+    match serde_cbor::from_slice::<MsgServerToClient>(&data) {
+        Ok(dr_) => {
+            // debug!("dr: {:#?}", dr_);
+            msg_from_server = dr_;
+        }
+        Err(e) => {
+            let rawvalue = serde_cbor::from_slice::<serde_cbor::Value>(&data);
+            let s = format!(
+                " cannot parse cbor as MsgServerToClient: {:#?}\n{:#?}\n{:#?}",
+                e,
+                msg.type_id(),
+                rawvalue,
+            );
+            return DTPSError::other(s);
+        }
+    };
+    Ok(msg_from_server)
+}
+
 pub async fn listen_events_url_inline(
     con: TypeOfConnection,
     tx: UnboundedSender<Notification>,
@@ -126,135 +156,74 @@ pub async fn listen_events_url_inline(
     // debug!("starting to listen to events for {} on {:?}", con, read);
     let mut index: u32 = 0;
     let mut rx = wsc.get_incoming().await;
+
+    let first = receive_from_server(&mut rx).await?;
+    match first {
+        MsgServerToClient::ChannelInfo(..) => {}
+        _ => {
+            let s = format!("Expected ChannelInfo, got {first:?}");
+            return DTPSError::other(s);
+        }
+    }
+
     loop {
-        let msg = match rx.recv().await {
-            Ok(msg) => msg,
-            Err(e) => match e {
-                RecvError::Closed => {
-                    break;
-                }
-                RecvError::Lagged(_) => {
-                    error_with_info!("lagged");
-                    continue;
-                }
-            },
+        let msg_from_server = receive_from_server(&mut rx).await?;
+        let dr = match msg_from_server {
+            MsgServerToClient::DataReady(dr_) => dr_,
+
+            _ => {
+                error_with_info!(
+                    "{prefix}: message #{index}: unexpected message: {msg_from_server:#?}"
+                );
+                continue;
+            }
         };
-
-        if !msg.is_binary() {
-            debug!("unexpected message, expected binary #{}: {:#?}", index, msg);
+        if dr.chunks_arriving == 0 {
+            error_with_info!(
+                "{prefix}: message #{}: no chunks arriving. listening to {}",
+                index,
+                con
+            );
             continue;
-        } else {
-            let data = msg.clone().into_data();
-            // parse as cbor
-            // let dr: DataReady;
-            let msg_from_server: MsgServerToClient;
-            match serde_cbor::from_slice::<MsgServerToClient>(&data) {
-                Ok(dr_) => {
-                    // debug!("dr: {:#?}", dr_);
-                    msg_from_server = dr_;
-                }
-                Err(e) => {
-                    let rawvalue = serde_cbor::from_slice::<serde_cbor::Value>(&data);
-                    error_with_info!(
-                        "{prefix}: message #{}: cannot parse cbor as MsgServerToClient: {:#?}\n{:#?}\n{:#?}",
-                        index,
-                        e,
-                        msg.type_id(),
-                        rawvalue,
-                    );
+        }
+        // debug!("message #{}: {:#?}", index, dr);
+        index += 1;
+        let mut content: Vec<u8> = Vec::with_capacity(dr.content_length);
+        for _ in 0..(dr.chunks_arriving) {
+            let msg_from_server = receive_from_server(&mut rx).await?;
+
+            let chunk = match msg_from_server {
+                MsgServerToClient::DataReady(..) | MsgServerToClient::ChannelInfo(..) => {
+                    error_with_info!("{prefix}: unexpected message : {msg_from_server:#?}");
                     continue;
                 }
-            }
-            let dr = match msg_from_server {
-                MsgServerToClient::DataReady(dr_) => dr_,
-                _ => {
-                    error_with_info!(
-                        "{prefix}: message #{}: unexpected message: {:#?}",
-                        index,
-                        msg_from_server
-                    );
-                    continue;
-                }
+                MsgServerToClient::Chunk(chunk) => chunk,
             };
-            if dr.chunks_arriving == 0 {
-                error_with_info!(
-                    "{prefix}: message #{}: no chunks arriving. listening to {}",
-                    index,
-                    con
-                );
-                continue;
-            }
-            // debug!("message #{}: {:#?}", index, dr);
+
+            let data = chunk.data;
+            content.extend_from_slice(&data);
+
             index += 1;
-            let mut content: Vec<u8> = Vec::with_capacity(dr.content_length);
-            for _ in 0..(dr.chunks_arriving) {
-                let msg = match rx.recv().await {
-                    Ok(msg) => msg,
-                    Err(e) => match e {
-                        RecvError::Closed => {
-                            break;
-                        }
-                        RecvError::Lagged(_) => {
-                            error_with_info!("lagged");
-                            continue;
-                        }
-                    },
-                };
-
-                let chunk_from_server: MsgServerToClient;
-                let data = msg.clone().into_data();
-
-                match serde_cbor::from_slice::<MsgServerToClient>(&data) {
-                    Ok(dr_) => {
-                        // debug!("dr: {:#?}", dr_);
-                        chunk_from_server = dr_;
-                    }
-                    Err(e) => {
-                        let rawvalue = serde_cbor::from_slice::<serde_cbor::Value>(&data);
-                        error_with_info!(
-                        "{prefix}: message #{}: cannot parse cbor as MsgServerToClient: {:#?}\n{:#?}\n{:#?}",
-                        index,
-                        e,
-                        msg.type_id(),
-                        rawvalue,
-                    );
-                        continue;
-                    }
-                }
-
-                let chunk = match chunk_from_server {
-                    MsgServerToClient::DataReady(..) | MsgServerToClient::ChannelInfo(..) => {
-                        error_with_info!("{prefix}: unexpected message #{}: {:#?}", index, msg);
-                        continue;
-                    }
-                    MsgServerToClient::Chunk(chunk) => chunk,
-                };
-
-                let data = chunk.data;
-                content.extend_from_slice(&data);
-
-                index += 1;
-            }
-            if content.len() != dr.content_length {
-                error_with_info!(
-                    "{prefix}: unexpected content length: {} != {}",
-                    content.len(),
-                    dr.content_length
-                );
-                continue;
-            }
-            let content_type = dr.content_type.clone();
-            let rd = RawData {
-                content: Bytes::from(content),
-                content_type,
-            };
-            let notification = Notification { dr, rd };
-            match tx.send(notification) {
-                Ok(_) => {}
-                Err(e) => {
-                    error_with_info!("cannot send data: {}", e);
-                    break;
-                }
+        }
+        if content.len() != dr.content_length {
+            error_with_info!(
+                "{prefix}: unexpected content length: {} != {}",
+                content.len(),
+                dr.content_length
+            );
+            continue;
+        }
+        let content_type = dr.content_type.clone();
+        let rd = RawData {
+            content: Bytes::from(content),
+            content_type,
+        };
+        let notification = Notification { dr, rd };
+        match tx.send(notification) {
+            Ok(_) => {}
+            Err(e) => {
+                error_with_info!("cannot send data: {}", e);
+                break;
             }
         }
     }
@@ -262,16 +231,27 @@ pub async fn listen_events_url_inline(
 }
 
 pub async fn get_rawdata(con: &TypeOfConnection) -> DTPSR<RawData> {
-    let resp = make_request(con, hyper::Method::GET).await?;
+    let resp = make_request(con, hyper::Method::GET, b"", None, None).await?;
     // TODO: send more headers
+    interpret_resp(resp).await
+}
 
-    let content_type = get_content_type(&resp);
-    // Get the response body bytes.
-    let content = hyper::body::to_bytes(resp.into_body()).await?;
-    Ok(RawData {
-        content,
-        content_type,
-    })
+async fn interpret_resp(resp: Response) -> DTPSR<RawData> {
+    if resp.status().is_success() {
+        let content_type = get_content_type(&resp);
+        // Get the response body bytes.
+        let content = hyper::body::to_bytes(resp.into_body()).await?;
+        Ok(RawData {
+            content,
+            content_type,
+        })
+    } else {
+        let code = resp.status().as_u16();
+        let as_s = resp.status().as_str().to_string();
+        let content = hyper::body::to_bytes(resp.into_body()).await?;
+        let string = String::from_utf8(content.to_vec()).unwrap();
+        return Err(DTPSError::FailedRequest("".to_string(), code, as_s, string));
+    }
 }
 
 #[derive(Debug)]
@@ -291,12 +271,13 @@ pub fn get_content_type<T>(resp: &http::Response<T>) -> String {
 }
 
 pub async fn sniff_type_resource(con: &TypeOfConnection) -> DTPSR<TypeOfResource> {
-    let resp = context!(
-        make_request(con, hyper::Method::GET).await,
-        "Cannot make request to {}",
-        con.to_string(),
-    )?;
-    let content_type = get_content_type(&resp);
+    let rd = get_rawdata(con).await?;
+    // let resp = context!(
+    //     make_request(con, hyper::Method::GET, b"", None, None).await,
+    //     "Cannot make request to {}",
+    //     con.to_string(),
+    // )?;
+    let content_type = rd.content_type;
     debug!("content_type: {:#?}", content_type);
 
     if content_type.contains(CONTENT_TYPE_DTPS_INDEX) {
@@ -306,29 +287,45 @@ pub async fn sniff_type_resource(con: &TypeOfConnection) -> DTPSR<TypeOfResource
     }
 }
 
-pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
+pub async fn post_data(con: &TypeOfConnection, rd: &RawData) -> DTPSR<DataSaved> {
     let resp = context!(
-        make_request(con, hyper::Method::GET).await,
-        "Cannot make request to {:?}",
-        con
+        make_request(
+            con,
+            hyper::Method::POST,
+            &rd.content,
+            Some(&rd.content_type),
+            None
+        )
+        .await,
+        "Cannot make request to {}",
+        con.to_string(),
     )?;
-    let content_type = get_content_type(&resp);
 
     let (is_success, as_string) = (resp.status().is_success(), resp.status().to_string());
-
     let body_bytes = context!(
         hyper::body::to_bytes(resp.into_body()).await,
         "Cannot get body bytes"
     )?;
-
     if !is_success {
         let body_text = String::from_utf8_lossy(&body_bytes);
         return not_available!("Request is not a success: for {con}\n{as_string:?}\n{body_text}");
     }
+    let x0: DataSaved = context!(
+        serde_cbor::from_slice(&body_bytes),
+        "Cannot interpret as CBOR"
+    )?;
+
+    Ok(x0)
+}
+
+pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
+    let rd = get_rawdata(con).await?;
+
     // let h = resp.headers();
     // debug!("headers: {h:?}");
 
     // debug!("{con:?}: content type {content_type}");
+    let content_type = rd.content_type;
     if content_type != CONTENT_TYPE_DTPS_INDEX_CBOR {
         return not_available!(
             "Expected content type {CONTENT_TYPE_DTPS_INDEX_CBOR}, obtained {content_type} "
@@ -336,7 +333,7 @@ pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
     }
 
     let x0: TopicsIndexWire = context!(
-        serde_cbor::from_slice(&body_bytes),
+        serde_cbor::from_slice(&rd.content),
         "Cannot interpret as CBOR"
     )?;
 
@@ -410,7 +407,7 @@ pub async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResul
 }
 
 pub async fn compute_best_alternative(
-    alternatives: &Vec<TypeOfConnection>,
+    alternatives: &HashSet<TypeOfConnection>,
     expect_node_id: &str,
 ) -> DTPSR<TypeOfConnection> {
     let mut possible_urls: Vec<TypeOfConnection> = Vec::new();
@@ -468,7 +465,7 @@ pub async fn compute_best_alternative(
 
 fn check_unix_socket(file_path: &str) -> DTPSR<()> {
     if let Ok(metadata) = std::fs::metadata(file_path) {
-        debug!("metadata for {}: {:?}", file_path, metadata);
+        // debug!("metadata for {}: {:?}", file_path, metadata);
         let is_socket = metadata.file_type().is_socket();
         if is_socket {
             Ok(())
@@ -482,7 +479,13 @@ fn check_unix_socket(file_path: &str) -> DTPSR<()> {
     }
 }
 
-pub async fn make_request(conbase: &TypeOfConnection, method: hyper::Method) -> DTPSR<Response> {
+pub async fn make_request(
+    conbase: &TypeOfConnection,
+    method: hyper::Method,
+    body: &[u8],
+    content_type: Option<&str>,
+    accept: Option<&str>,
+) -> DTPSR<Response> {
     let use_url = match conbase {
         TCP(url) => url.clone().to_string(),
         UNIX(uc) => {
@@ -513,16 +516,23 @@ pub async fn make_request(conbase: &TypeOfConnection, method: hyper::Method) -> 
         }
     };
 
-    let req0 = context!(
+    let mut req0 = context!(
         hyper::Request::builder()
             .method(&method)
             .uri(use_url.as_str())
             // .header("user-agent", "the-awesome-agent/007")
-            .body(hyper::Body::from("")),
-        "cannot build request for {} {}",
-        method,
-        use_url.as_str()
+            .body(hyper::Body::from(body.to_vec())),
+        "cannot build request for {method} {use_url}",
     )?;
+    if let Some(x) = accept {
+        let h = req0.headers_mut();
+        put_header_accept(h, x);
+    }
+
+    if let Some(x) = content_type {
+        let h = req0.headers_mut();
+        put_header_content_type(h, x);
+    }
 
     let resp = context!(
         match conbase {
@@ -565,7 +575,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     // current time in nano seconds
     let start = time_nanos();
 
-    let resp = make_request(conbase, hyper::Method::HEAD).await?;
+    let resp = make_request(conbase, hyper::Method::HEAD, b"", None, None).await?;
     let end = time_nanos();
 
     let latency_ns = end - start;
@@ -579,6 +589,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     // convert into a vector of strings
     let alternative_urls: Vec<String> =
         alternatives0.iter().map(string_from_header_value).collect();
+
     // convert into a vector of URLs
     let mut alternative_urls: Vec<TypeOfConnection> = alternative_urls
         .iter()
@@ -605,7 +616,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     for v in headers.get_all("link") {
         let link = LinkHeader::from_header_value(&string_from_header_value(v));
 
-        debug!("Link = {link:?}");
+        // debug!("Link = {link:?}");
 
         let rel = match link.get("rel") {
             None => {
@@ -615,6 +626,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
         };
         links.insert(rel, link);
     }
+    let alternative_urls: HashSet<_> = alternative_urls.iter().cloned().collect();
     let mut md = FoundMetadata {
         alternative_urls,
         events_url,

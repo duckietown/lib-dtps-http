@@ -27,7 +27,7 @@ pub fn get_id_string() -> String {
     format!("{exec_name} ({pkg_name} {git_version})  {family}/{os} {arch} ({git_branch} {git_commit_hash} {profile})")
 }
 
-pub fn init_logging() {
+fn init_logging_() {
     eprintln!("{}", get_id_string());
 
     if env::var("RUST_LOG").is_err() {
@@ -37,4 +37,14 @@ pub fn init_logging() {
         eprintln!("RUST_LOG is set to {:?}", env::var("RUST_LOG"));
     }
     env_logger::init();
+}
+
+use std::sync::Once;
+
+// Wrap the function call with the Once type
+pub fn init_logging() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        init_logging_();
+    });
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Display;
 use std::ops::Add;
@@ -173,7 +173,7 @@ pub struct ForwardingStep {
     pub performance: LinkBenchmark,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub struct UnixCon {
     pub scheme: String,
     pub socket_name: String,
@@ -194,7 +194,7 @@ impl Display for UnixCon {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub enum FilePaths {
     Absolute(String),
     Relative(String),
@@ -248,7 +248,7 @@ impl Display for FilePaths {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub enum TypeOfConnection {
     /// TCP Connection
     TCP(Url),
@@ -437,7 +437,7 @@ pub struct DataReady {
 
 #[derive(Debug, Clone)]
 pub struct FoundMetadata {
-    pub alternative_urls: Vec<TypeOfConnection>,
+    pub alternative_urls: HashSet<TypeOfConnection>,
     pub answering: Option<String>,
     pub events_url: Option<TypeOfConnection>,
     pub events_data_inline_url: Option<TypeOfConnection>,

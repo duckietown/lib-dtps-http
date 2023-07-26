@@ -55,8 +55,16 @@ pub enum DTPSError {
 
     #[error(transparent)]
     CBORError(#[from] serde_cbor::Error),
+
+    #[error(transparent)]
+    WarpError(#[from] warp::Error),
     // #[error(transparent)]
     // SendError(#[from] SendError),
+    #[error("DTPSError: Error {1} - {2} for url {0} \n{}", indent_inside(.3))]
+    FailedRequest(String, u16, String, String),
+
+    #[error(transparent)]
+    TokioRecvError(#[from] tokio::sync::broadcast::error::RecvError),
 }
 
 impl DTPSError {

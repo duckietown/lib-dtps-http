@@ -41,7 +41,7 @@ run-connections-2:
 	cd ../dtps-example-agents && cargo watch -c  -x 'run --bin dtps-nodes-all -- AddToInt --unix-path /tmp/demo1/node2/_node --tcp-port 12002'
 
 run-connections-3:
-	cargo watch -c    -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rs-server-example-clock -- --tcp-port 12000 --unix-path /tmp/demo1/_node --proxy node/node1=http+unix://[/tmp/demo1/node1/_node]/node  --proxy node/node2=http+unix://[/tmp/demo1/node2/_node]/node'
+	cargo watch -c -w rust/src   -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rs-server-example-clock -- --tcp-port 12000 --unix-path /tmp/demo1/_node --proxy node/node1=http+unix://[/tmp/demo1/node1/_node]/node  --proxy node/node2=http+unix://[/tmp/demo1/node2/_node]/node --alias "node/in= node/node1/in" --connect "node/node1/out->node/node2/in" --alias "node/out=node/node2/out" '
 
 docker-build-debug:
 	docker buildx build --build-arg CARGO_PROFILE=dev --build-arg DEST=debug --progress plain --platform linux/arm64,linux/amd64 --push --tag $(tag) .
@@ -61,3 +61,7 @@ run-demo-nosocket:
 	# --init: do not give pid 1 - which makes it hard to kill
 	docker run  -d --init  -v /tmp/run:/tmp/run -v $(creds):/creds:ro  -p 8000:8000 \
  		$(tag) --tunnel /creds/test-dtps1-tunnel.json
+
+
+test-coverage:
+	cargo llvm-cov --open

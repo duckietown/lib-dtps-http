@@ -104,6 +104,10 @@ pub fn put_header_content_type(h: &mut HeaderMap<HeaderValue>, content_type: &st
     );
 }
 
+pub fn put_header_accept(h: &mut HeaderMap<HeaderValue>, content_type: &str) {
+    h.append(header::ACCEPT, HeaderValue::from_str(content_type).unwrap());
+}
+
 pub fn put_common_headers(ss: &ServerState, headers: &mut HeaderMap<HeaderValue>) {
     headers.append(
         header::SERVER,
