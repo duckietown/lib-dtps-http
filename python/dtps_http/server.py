@@ -3,8 +3,8 @@ import json
 import time
 import traceback
 import uuid
-from dataclasses import asdict
-from typing import Any, Awaitable, Callable, Optional, Sequence
+from dataclasses import asdict, field
+from typing import Any, Awaitable, Callable, cast, Optional, Sequence
 
 import cbor2
 import yaml
@@ -14,9 +14,10 @@ from multidict import CIMultiDict
 from pydantic.dataclasses import dataclass
 
 from . import __version__, logger
-from .components import join_topic_names
 from .constants import (
+    CONTENT_TYPE_DTPS_INDEX_CBOR,
     CONTENT_TYPE_TOPIC_DIRECTORY,
+    EVENTS_SUFFIX,
     HEADER_CONTENT_LOCATION,
     HEADER_DATA_ORIGIN_NODE_ID,
     HEADER_DATA_UNIQUE_ID,
@@ -24,27 +25,38 @@ from .constants import (
     HEADER_NO_CACHE,
     HEADER_NODE_ID,
     HEADER_NODE_PASSED_THROUGH,
-    HEADER_SEE_EVENTS,
-    HEADER_SEE_EVENTS_INLINE_DATA,
+    REL_EVENTS_DATA,
+    REL_EVENTS_NODATA,
+    REL_META,
+    REL_URL_META,
+    TOPIC_AVAILABILITY,
+    TOPIC_CLOCK,
     TOPIC_LIST,
+    TOPIC_LOGS,
+    TOPIC_STATE_NOTIFICATION,
+    TOPIC_STATE_SUMMARY,
 )
 from .structures import (
+    ContentInfo,
     DataReady,
     LinkBenchmark,
     RawData,
     ResourceAvailability,
+    TopicProperties,
     TopicReachability,
     TopicRef,
     TopicsIndex,
 )
-from .types import NodeID, SourceID, TopicName, URLString
+from .types import NodeID, SourceID, TopicNameV, URLString
 from .urls import join, parse_url_unescape, URL, url_to_string
 from .utils import async_error_catcher, multidict_update
 
 SEND_DATA_ARGNAME = "send_data"
+
 __all__ = [
     "DTPSServer",
     "ForwardedTopic",
+    "get_link_headers",
 ]
 
 
@@ -65,16 +77,16 @@ class ObjectQueue:
     sequence: list[DataSaved]
     _data: dict[str, RawData]
     _seq: int
-    _name: TopicName
+    _name: TopicNameV
     _hub: Hub
     _pub: Publisher
     _sub: Subscriber
     tr: TopicRef
 
-    def __init__(self, hub: Hub, name: TopicName, tr: TopicRef):
+    def __init__(self, hub: Hub, name: TopicNameV, tr: TopicRef):
         self._hub = hub
         self._pub = Publisher(self._hub, Key())
-        self._sub = Subscriber(self._hub, name)
+        self._sub = Subscriber(self._hub, name.as_relative_url())
         self._seq = 0
         self.sequence = []
         self._data = {}
@@ -105,8 +117,9 @@ class ObjectQueue:
         ds = DataSaved(use_seq, time.time_ns(), digest, obj.content_type, len(obj.content))
         self._data[digest] = obj
         self.sequence.append(ds)
-        self._pub.publish(Key(self._name, K_INDEX), use_seq)
-        # logger.debug(f"published #{self._seq} {self._name}: {obj!r}")
+        self._pub.publish(
+            Key(self._name.as_relative_url(), K_INDEX), use_seq
+        )  # logger.debug(f"published #{self._seq} {self._name}: {obj!r}")
 
     def last(self) -> DataSaved:
         if self.sequence:
@@ -123,7 +136,7 @@ class ObjectQueue:
 
     def subscribe(self, callback: "Callable[[ObjectQueue, int], Awaitable[None]]") -> SUB_ID:
         wrap_callback = lambda key, msg: callback(self, msg)
-        self._sub.add_async_listener(Key(self._name, K_INDEX), wrap_callback)
+        self._sub.add_async_listener(Key(self._name.as_relative_url(), K_INDEX), wrap_callback)
         # last_used = list(self._sub._listeners)[-1]
         return ""  # TODO
 
@@ -140,22 +153,25 @@ class ForwardedTopic:
     forward_url_events: Optional[URL]
     forward_url_events_inline_data: Optional[URL]
     reachability: list[TopicReachability]
+    properties: TopicProperties
+    content_info: ContentInfo
 
 
 class DTPSServer:
     node_id: NodeID
 
-    _oqs: dict[TopicName, ObjectQueue]
-    _forwarded: dict[TopicName, ForwardedTopic]
+    _oqs: dict[TopicNameV, ObjectQueue]
+    _forwarded: dict[TopicNameV, ForwardedTopic]
 
     tasks: "list[asyncio.Task[Any]]"
     digest_to_urls: dict[str, list[URL]]
     node_app_data: dict[str, bytes]
+    topic_prefix: TopicNameV
 
     def __init__(
         self,
         *,
-        topics_prefix: str | tuple[str, ...] = (),
+        topics_prefix: TopicNameV,
         on_startup: "Sequence[Callable[[DTPSServer], Awaitable[None]]]" = (),
     ) -> None:
         self.app = web.Application()
@@ -169,14 +185,14 @@ class DTPSServer:
         self.app.on_startup.append(self.on_startup)
         self.app.on_shutdown.append(self.on_shutdown)
         routes.get("/")(self.serve_index)
-        routes.post("/topics/{topic}/")(self.serve_post)
-        routes.get("/topics/{topic}/")(self.serve_get)
-        routes.get("/topics/{topic}/events/")(self.serve_events)
-        routes.get("/topics/{topic}/data/{digest}/")(self.serve_data_get)
+        routes.get("/{topic:.*}/events/")(self.serve_events)
+        routes.get("/{topic:.*}/data/{digest}/")(self.serve_data_get)
+        routes.post("/{topic:.*}/")(self.serve_post)
+        routes.get("/{topic:.*}/")(self.serve_get)
         self.app.add_routes(routes)
 
         self.hub = Hub()
-        self._oqs = {}  # 'clock': ObjectQueue(self.hub, 'clock')}
+        self._oqs = {}
         self._forwarded = {}
         self.tasks = []
         self.logger = logger
@@ -184,8 +200,25 @@ class DTPSServer:
         self.node_id = NodeID(str(uuid.uuid4()))
 
         self.digest_to_urls = {}
+        content_info = ContentInfo(
+            accept_content_type=[CONTENT_TYPE_TOPIC_DIRECTORY],
+            storage_content_type=[CONTENT_TYPE_TOPIC_DIRECTORY],
+            produces_content_type=[CONTENT_TYPE_TOPIC_DIRECTORY],
+            jschema=None,
+            examples=[],
+        )
+        tr = TopicRef(
+            get_unique_id(self.node_id, TOPIC_LIST),
+            self.node_id,
+            {},
+            [],
+            content_info=content_info,
+            properties=TopicProperties.streamable_readonly(),
+            created=time.time_ns(),
+        )
+        self._oqs[TOPIC_LIST] = ObjectQueue(self.hub, TOPIC_LIST, tr)
 
-    def has_forwarded(self, topic_name: TopicName) -> bool:
+    def has_forwarded(self, topic_name: TopicNameV) -> bool:
         return topic_name in self._forwarded
 
     def get_headers_alternatives(self, request: web.Request) -> CIMultiDict[str]:
@@ -242,48 +275,73 @@ class DTPSServer:
         """Add a task to the list of tasks to be cancelled on shutdown"""
         self.tasks.append(task)
 
-    async def remove_oq(self, name: TopicName) -> None:
+    def _update_lists(self):
+        self._oqs[TOPIC_LIST].publish_json(sorted([_.as_relative_url() for _ in self._oqs]))
+
+    async def remove_oq(self, name: TopicNameV) -> None:
         if name in self._oqs:
             self._oqs.pop(name)
-            if TOPIC_LIST in self._oqs:
-                self._oqs[TOPIC_LIST].publish_json(sorted(list(self._oqs)))
+            self._update_lists()
 
-    async def remove_forward(self, name: TopicName) -> None:
+    async def remove_forward(self, name: TopicNameV) -> None:
         if name in self._forwarded:
             self._forwarded.pop(name)
-            if TOPIC_LIST in self._oqs:
-                self._oqs[TOPIC_LIST].publish_json(sorted(list(self._oqs)))
+            self._update_lists()
 
-    async def add_forwarded(self, name: TopicName, forwarded: ForwardedTopic) -> None:
+    async def add_forwarded(self, name: TopicNameV, forwarded: ForwardedTopic) -> None:
         if name in self._forwarded or name in self._oqs:
             raise ValueError(f"Topic {name} already exists")
         self._forwarded[name] = forwarded
 
-    async def get_oq(self, name: TopicName, tr: Optional[TopicRef] = None) -> ObjectQueue:
+    async def get_oq(self, name: TopicNameV) -> ObjectQueue:
         if name in self._forwarded:
             raise ValueError(f"Topic {name} is a forwarded one")
 
-        if name not in self._oqs:
-            if tr is None:
-                unique_id = SourceID(f"{name}@{self.node_id}")
+        # if name not in self._oqs:
+        #     raise KeyError(f"Topic {name.as_relative_url()} not found")
+        #     if tr is None:
+        #         unique_id = get_unique_id(self.node_id, name)
+        #
+        #         tr = TopicReachability(URLString(f"topics/{name}/"), self.node_id, forwarders=[],
+        #                                benchmark=LinkBenchmark.identity(), )
+        #         reachability: list[TopicReachability] = [tr]
+        #         tr = TopicRef(unique_id=unique_id, origin_node=self.node_id, app_data={},
+        #                       reachability=reachability, )
+        #     self._oqs[name] = ObjectQueue(self.hub, name, tr)
+        #
+        #     self._update_lists()
+        return self._oqs[name]
 
-                tr = TopicReachability(
-                    URLString(f"topics/{name}/"),
-                    self.node_id,
-                    forwarders=[],
-                    benchmark=LinkBenchmark.identity(),
-                )
-                reachability: list[TopicReachability] = [tr]
-                tr = TopicRef(
-                    unique_id=unique_id,
-                    origin_node=self.node_id,
-                    app_data={},
-                    reachability=reachability,
-                )
-            self._oqs[name] = ObjectQueue(self.hub, name, tr)
+    async def create_oq(self, name: TopicNameV, tp: Optional[TopicProperties] = None) -> ObjectQueue:
+        if name in self._forwarded:
+            raise ValueError(f"Topic {name} is a forwarded one")
+        if name in self._oqs:
+            raise ValueError(f"Topic {name} is a forwarded one")
 
-            if TOPIC_LIST in self._oqs:
-                self._oqs[TOPIC_LIST].publish_json(sorted(list(self._oqs)))
+        unique_id = get_unique_id(self.node_id, name)
+
+        treach = TopicReachability(
+            URLString(name.as_relative_url()),
+            self.node_id,
+            forwarders=[],
+            benchmark=LinkBenchmark.identity(),
+        )
+        reachability: list[TopicReachability] = [treach]
+        if tp is None:
+            tp = TopicProperties.streamable_readonly()
+
+        tr = TopicRef(
+            unique_id=unique_id,
+            origin_node=self.node_id,
+            app_data={},
+            reachability=reachability,
+            created=time.time_ns(),
+            properties=tp,
+            content_info=ContentInfo.simple(CONTENT_TYPE_TOPIC_DIRECTORY),
+        )
+
+        self._oqs[name] = ObjectQueue(self.hub, name, tr)
+        self._update_lists()
         return self._oqs[name]
 
     @async_error_catcher
@@ -292,7 +350,11 @@ class DTPSServer:
         for f in self._more_on_startup:
             await f(self)
 
-        await self.get_oq(TOPIC_LIST)
+        await self.create_oq(TOPIC_LOGS)
+        await self.create_oq(TOPIC_CLOCK)
+        await self.create_oq(TOPIC_AVAILABILITY)
+        await self.create_oq(TOPIC_STATE_SUMMARY)
+        await self.create_oq(TOPIC_STATE_NOTIFICATION)
 
     @async_error_catcher
     async def on_shutdown(self, _: web.Application) -> None:
@@ -302,57 +364,30 @@ class DTPSServer:
 
     @async_error_catcher
     async def serve_index(self, request: web.Request) -> web.Response:
-        topics: dict[TopicName, TopicRef] = {}
+        topics: dict[TopicNameV, TopicRef] = {}
         headers_s = "".join(f"{k}: {v}\n" for k, v in request.headers.items())
         self.logger.debug(f"serve_index: {request.url} \n {headers_s}")
         for topic_name, oqs in self._oqs.items():
-            qual_topic_name = join_topic_names(self.topics_prefix, topic_name)
+            qual_topic_name = self.topics_prefix + topic_name
 
             topic_ref: TopicRef = oqs.tr
             topics[qual_topic_name] = topic_ref
+
         for topic_name, fd in self._forwarded.items():
-            qual_topic_name = join_topic_names(self.topics_prefix, topic_name)
+            qual_topic_name = self.topics_prefix + topic_name
             tr = TopicRef(
                 fd.unique_id,
                 fd.origin_node,
-                fd.app_static_data,
+                {},
                 fd.reachability,
+                properties=fd.properties,
+                created=time.time_ns(),
+                content_info=fd.content_info,
             )
             topics[qual_topic_name] = tr
 
-            # print(json.dumps(asdict(topic_ref), indent=3))
-            # current_reachability = topic_ref.reachability
-            # all_reachability = []
-            # all_reachability.extend(current_reachability)
-            #
-            # # for reach in current_reachability:
-            # #     if '://' not in reach.url and reach.answering == self.node_id:  # relative
-            # #
-            # #         for a in self.available_urls:
-            # #             new_url = a + reach.url
-            # #
-            # #             reach_new = TopicReachability(
-            # #                 url=URLString(new_url),
-            # #                 answering=self.node_id,
-            # #                 forwarders=reach.forwarders
-            # #             )
-            # #             all_reachability.append(reach_new)
-            # #
-            # # reach2 = TopicReachability(
-            # #     url=URLString(f"topics/{topic_name}/"),
-            # #     forwarders=[]
-            # # )
-            # # reachability2 = oqs.tr.reachability + [reach2]
-            # # urls = [f"topics/{topic_name}/"] + oqs.tr.urls
-
-            # topic_ref2 = replace(topic_ref, reachability=all_reachability)
-
-        index = TopicsIndex(
-            node_id=self.node_id,
-            topics=topics,
-            node_app_data=self.node_app_data,
-            node_started=self.node_started,
-        )
+        index_internal = TopicsIndex(topics=topics)
+        index_wire = index_internal.to_wire()
 
         # print(yaml.dump(asdict(index), indent=3))
         headers: CIMultiDict[str] = CIMultiDict()
@@ -360,8 +395,8 @@ class DTPSServer:
         add_nocache_headers(headers)
         multidict_update(headers, self.get_headers_alternatives(request))
         self._add_own_headers(headers)
-        json_data = asdict(index)
-        json_data["debug-available"] = self.available_urls
+        json_data = asdict(index_wire)
+        # json_data["debug-available"] = self.available_urls
 
         # get all the accept headers
         accept = []
@@ -372,7 +407,7 @@ class DTPSServer:
             if "text/html" in accept:
                 topics_html = "<ul>"
                 for topic_name, topic_ref in topics.items():
-                    topics_html += f"<li><a href='topics/{topic_name}/'><code>{topic_name}</code></a></li>\n"
+                    topics_html += f"<li><a href='topics/{topic_name.as_relative_url()}/'><code>{topic_name.as_relative_url()}</code></a></li>\n"
                 topics_html += "</ul>"
 
                 html_index = f"""
@@ -400,7 +435,7 @@ class DTPSServer:
                 <h2>Topics</h2>
                 {topics_html}
                 <h2>Index answer presented in YAML</h2>
-                <pre><code>{yaml.dump(asdict(index), indent=3)}</code></pre>
+                <pre><code>{yaml.dump(json_data, indent=3)}</code></pre>
                 
                 
                 <h2>Your request headers</h2>
@@ -411,16 +446,19 @@ class DTPSServer:
                 return web.Response(body=html_index, content_type="text/html", headers=headers)
 
         as_cbor = cbor2.dumps(json_data)
-        return web.Response(body=as_cbor, content_type="application/cbor", headers=headers)
-        return web.json_response(json_data, content_type=CONTENT_TYPE_TOPIC_DIRECTORY, headers=headers)
+
+        return web.Response(
+            body=as_cbor, content_type=CONTENT_TYPE_DTPS_INDEX_CBOR, headers=headers
+        )  # return web.json_response(json_data, content_type=CONTENT_TYPE_TOPIC_DIRECTORY, headers=headers)
 
     @async_error_catcher
     async def serve_get(self, request: web.Request) -> web.StreamResponse:
-        topic_name = request.match_info["topic"]
+        topic_name_s = request.match_info["topic"]
         headers: CIMultiDict[str] = CIMultiDict()
         self._add_own_headers(headers)
         add_nocache_headers(headers)
 
+        topic_name = TopicNameV.from_relative_url(topic_name_s)
         if topic_name in self._forwarded:
             return await self.serve_get_proxied(request, self._forwarded[topic_name])
 
@@ -428,12 +466,18 @@ class DTPSServer:
             raise web.HTTPNotFound(headers=headers)
 
         oq = self._oqs[topic_name]
-        data = oq.last_data()
-        headers[HEADER_SEE_EVENTS] = f"events/"
-        headers[HEADER_SEE_EVENTS_INLINE_DATA] = f"events/?{SEND_DATA_ARGNAME}"
+        put_meta_headers(headers)
+        # headers[HEADER_SEE_EVENTS] = f"events/"
+        # headers[HEADER_SEE_EVENTS_INLINE_DATA] = f"events/?{SEND_DATA_ARGNAME}"
         multidict_update(headers, self.get_headers_alternatives(request))
         headers[HEADER_DATA_UNIQUE_ID] = oq.tr.unique_id
         headers[HEADER_DATA_ORIGIN_NODE_ID] = oq.tr.origin_node
+        headers[HEADER_NODE_ID] = self.node_id
+
+        try:
+            data = oq.last_data()
+        except KeyError:
+            return web.Response(body=None, headers=headers, status=209)  # 209 = no content
 
         lb = LinkBenchmark.identity()
         lb.fill_headers(headers)
@@ -497,7 +541,8 @@ class DTPSServer:
 
     @async_error_catcher
     async def serve_post(self, request: web.Request) -> web.Response:
-        topic_name = request.match_info["topic"]
+        topic_name_s: str = request.match_info["topic"]
+        topic_name = TopicNameV.from_relative_url(topic_name_s)
 
         content_type = request.headers.get("Content-Type", "application/octet-stream")
         data = await request.read()
@@ -524,7 +569,7 @@ class DTPSServer:
             raise web.HTTPNotFound(headers=headers)
         oq = self._oqs[topic_name]
         data = oq.get(digest)
-        headers[HEADER_SEE_EVENTS] = f"../events/"
+        # headers[HEADER_SEE_EVENTS] = f"../events/"
         headers[HEADER_DATA_UNIQUE_ID] = oq.tr.unique_id
         headers[HEADER_DATA_ORIGIN_NODE_ID] = oq.tr.origin_node
 
@@ -720,3 +765,65 @@ class DTPSServer:
 def add_nocache_headers(h: CIMultiDict[str]) -> None:
     h.update(HEADER_NO_CACHE)
     h["Cookie"] = f"help-no-cache={time.monotonic_ns()}"
+
+
+def get_unique_id(node_id: NodeID, topic_name: TopicNameV) -> SourceID:
+    return cast(SourceID, f"{node_id}:{topic_name.as_relative_url()}")
+
+
+def put_meta_headers(h: CIMultiDict[str]):
+    put_link_header(h, f"{EVENTS_SUFFIX}/", REL_EVENTS_NODATA, "websocket")
+    put_link_header(h, f"{EVENTS_SUFFIX}/?send_data=1", REL_EVENTS_DATA, "websocket")
+    put_link_header(
+        h, f"{REL_URL_META}/", REL_META, CONTENT_TYPE_DTPS_INDEX_CBOR
+    )  # put_link_header(  #     h,  #     f"{URL_HISTORY}/",  #     REL_HISTORY,  #     CONTENT_TYPE_DTPS_INDEX_CBOR  # )
+
+
+def put_link_header(h: CIMultiDict[str], url: str, rel: str, content_type: Optional[str]):
+    l = LinkHeader(url, rel, attributes={"rel": rel})
+    if content_type is not None:
+        l.attributes["type"] = content_type
+
+    h.add("Link", l.to_header())
+
+
+@dataclass
+class LinkHeader:
+    url: str
+    rel: str
+    attributes: dict[str, str] = field(default_factory=dict)
+
+    def to_header(self) -> str:
+        s = f"<{self.url}>; rel={self.rel}"
+        for k, v in self.attributes.items():
+            s += f"; {k}={v}"
+        return s
+
+    @classmethod
+    def parse(cls, header: str) -> "LinkHeader":
+        pairs = header.split(";")
+        if not pairs:
+            raise ValueError
+        first = pairs[0]
+        if not first.startswith("<") or not first.endswith(">"):
+            raise ValueError
+        url = first[1:-1]
+
+        attributes: dict[str, str] = {}
+        for p in pairs[1:]:
+            p = p.strip()
+            k, _, v = p.partition("=")
+            k = k.strip()
+            v = v.strip()
+            attributes[k] = v
+
+        rel = attributes.pop("rel", "")
+        return cls(url, rel, attributes)
+
+
+def get_link_headers(h: CIMultiDict[str]) -> dict[str, LinkHeader]:
+    res: dict[str, LinkHeader] = {}
+    for l in h.getall("Link", []):
+        lh = LinkHeader.parse(l)
+        res[lh.rel] = lh
+    return res

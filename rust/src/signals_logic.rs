@@ -700,7 +700,7 @@ impl TypeOFSource {
                             accept_content_type: vec![],
                             produces_content_type: vec![],
                             storage_content_type: vec![],
-                            schema_json: None,
+                            jschema: None,
                             examples: vec![],
                         },
                     };
@@ -796,7 +796,7 @@ async fn get_sc_meta(
                 accept_content_type: vec![],
                 storage_content_type: vec![],
                 produces_content_type: vec![],
-                schema_json: None,
+                jschema: None,
                 examples: vec![],
             },
         },

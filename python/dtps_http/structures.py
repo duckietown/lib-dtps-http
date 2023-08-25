@@ -1,6 +1,6 @@
 import json
 from dataclasses import asdict
-from typing import Optional
+from typing import Optional, Sequence
 
 import cbor2
 from multidict import CIMultiDict
@@ -8,23 +8,38 @@ from pydantic import parse_obj_as
 from pydantic.dataclasses import dataclass
 
 from .constants import HEADER_LINK_BENCHMARK
-from .types import NodeID, SourceID, TopicName, URLString
+from .types import NodeID, SourceID, TopicNameS, TopicNameV, URLString
 
-__all__ = ["DataReady", "ForwardingStep", "LinkBenchmark", "RawData", "ResourceAvailability",
-    "TopicReachability", "channel_msgs_parse", "TopicRef", "TopicsIndex", ]
+__all__ = [
+    "ChannelInfo",
+    "Chunk",
+    "ContentInfo",
+    "DataReady",
+    "ForwardingStep",
+    "LinkBenchmark",
+    "Metadata",
+    "RawData",
+    "ResourceAvailability",
+    "TopicProperties",
+    "TopicReachability",
+    "TopicRef",
+    "TopicsIndex",
+    "TransportData",
+    "channel_msgs_parse",
+]
 
 
 @dataclass
 class LinkBenchmark:
     complexity: int  # 0 for local, 1 for using named, +2 for each network hop
-    bandwidth: float  # B/s
+    bandwidth: int  # B/s
     latency: float  # seconds
     reliability: float  # 0..1
     hops: int
 
     @classmethod
     def identity(cls) -> "LinkBenchmark":
-        return LinkBenchmark(complexity=0, bandwidth=float(1_000_000_000), latency=0.0, reliability=1.0, hops=1)
+        return LinkBenchmark(complexity=0, bandwidth=1_000_000_000, latency=0.0, reliability=1.0, hops=1)
 
     def __or__(self, other: "LinkBenchmark") -> "LinkBenchmark":
         complexity = self.complexity + other.complexity
@@ -67,25 +82,95 @@ class TopicReachability:
 
 
 @dataclass
+class TopicProperties:
+    streamable: bool
+    pushable: bool
+    readable: bool
+    immutable: bool
+
+    @classmethod
+    def streamable_readonly(cls) -> "TopicProperties":
+        return TopicProperties(streamable=True, pushable=False, readable=True, immutable=False)
+
+
+ContentType = str
+
+
+@dataclass
+class RawData:
+    content: bytes
+    content_type: str
+
+    @classmethod
+    def simple_string(cls, s: str) -> "RawData":
+        return cls(s.encode("utf-8"), "text/plain")
+
+    def digest(self) -> str:
+        import hashlib
+
+        s = hashlib.sha256(self.content).hexdigest()
+        return f"sha256:{s}"
+
+
+@dataclass
+class ContentInfo:
+    accept_content_type: list[ContentType]
+    storage_content_type: list[ContentType]
+    produces_content_type: list[ContentType]
+    jschema: Optional[object]
+    examples: list[RawData]
+
+    @classmethod
+    def simple(cls, ct: ContentType, jschema: Optional[object] = None, examples: Sequence[RawData] = ()):
+        return ContentInfo(
+            accept_content_type=[ct],
+            storage_content_type=[ct],
+            produces_content_type=[ct],
+            jschema=jschema,
+            examples=list(examples),
+        )
+
+
+@dataclass
 class TopicRef:
     unique_id: SourceID  # unique id for the stream
     origin_node: NodeID  # unique id of the node that created the stream
     app_data: dict[str, bytes]
     reachability: list[TopicReachability]
-
+    created: int
+    properties: TopicProperties
+    content_info: ContentInfo
 
 
 @dataclass
 class TopicsIndex:
-    node_id: NodeID
-    node_started: int
-    node_app_data: dict[str, bytes]
-
-    topics: dict[TopicName, TopicRef]
+    topics: dict[TopicNameV, TopicRef]
 
     @classmethod
     def from_json(cls, s: object) -> "TopicsIndex":
-        return parse_obj_as(TopicsIndex, s)
+        wire = TopicsIndexWire.from_json(s)
+        return wire.to_topics_index()
+
+    def to_wire(self) -> "TopicsIndexWire":
+        res = {}
+        for k, v in self.topics.items():
+            res[k.as_relative_url()] = v
+        return TopicsIndexWire(res)
+
+
+@dataclass
+class TopicsIndexWire:
+    topics: dict[TopicNameS, TopicRef]
+
+    @classmethod
+    def from_json(cls, s: object) -> "TopicsIndexWire":
+        return parse_obj_as(TopicsIndexWire, s)
+
+    def to_topics_index(self) -> "TopicsIndex":
+        topics: dict[TopicNameV, TopicRef] = {}
+        for k, v in self.topics.items():
+            topics[TopicNameV.from_relative_url(k)] = v
+        return TopicsIndex(topics)
 
 
 # used in websockets
@@ -97,18 +182,18 @@ class ResourceAvailability:
     available_until: float  # timestamp
 
 
-
 @dataclass
 class ChannelInfoDesc:
     sequence: int
     time_inserted: int
+
 
 @dataclass
 class ChannelInfo:
     queue_created: int
     num_total: int
     newest: Optional[ChannelInfoDesc]
-    oldest:  Optional[ChannelInfoDesc]
+    oldest: Optional[ChannelInfoDesc]
 
     @classmethod
     def from_cbor(cls, s: bytes) -> "ChannelInfo":
@@ -129,6 +214,7 @@ class Chunk:
         struct = cbor2.loads(s)
         return parse_obj_as(Chunk, struct)
 
+
 @dataclass
 class DataReady:
     sequence: int
@@ -148,23 +234,23 @@ class DataReady:
         struct = cbor2.loads(s)
         return parse_obj_as(DataReady, struct)
 
+
 def channel_msgs_parse(d: bytes) -> ChannelInfo | DataReady | Chunk:
     struct = cbor2.loads(d)
     if not isinstance(struct, dict):
-        msg = 'Expected a dictionary here'
-        raise ValueError(f'{msg}: {d} {struct}')
+        msg = "Expected a dictionary here"
+        raise ValueError(f"{msg}: {d} {struct}")
     if DataReady.__name__ in struct:
-        dr = parse_obj_as(DataReady, struct['DataReady'])
+        dr = parse_obj_as(DataReady, struct["DataReady"])
         return dr
     elif ChannelInfo.__name__ in struct:
-        dr = parse_obj_as(ChannelInfo, struct['ChannelInfo'])
+        dr = parse_obj_as(ChannelInfo, struct["ChannelInfo"])
         return dr
     elif Chunk.__name__ in struct:
-        dr = parse_obj_as(Chunk, struct['Chunk'])
+        dr = parse_obj_as(Chunk, struct["Chunk"])
         return dr
     else:
         raise ValueError(f"unexpected value {struct}")
-
 
 
 @dataclass
@@ -177,19 +263,3 @@ class TransportData:
 class Metadata:
     sequence: int
     generated_ns: int
-
-
-@dataclass
-class RawData:
-    content: bytes
-    content_type: str
-
-    @classmethod
-    def simple_string(cls, s: str) -> "RawData":
-        return cls(s.encode("utf-8"), "text/plain")
-
-    def digest(self) -> str:
-        import hashlib
-
-        s = hashlib.sha256(self.content).hexdigest()
-        return f"sha256:{s}"

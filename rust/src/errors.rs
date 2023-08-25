@@ -89,6 +89,17 @@ impl DTPSError {
     }
 }
 
+impl From<&str> for DTPSError {
+    fn from(item: &str) -> Self {
+        DTPSError::Other(item.to_string())
+    }
+}
+impl From<&String> for DTPSError {
+    fn from(item: &String) -> Self {
+        DTPSError::Other(item.to_string())
+    }
+}
+
 pub type DTPSR<T> = anyhow::Result<T, DTPSError>;
 
 pub fn not_available<T, S: AsRef<str>>(s: S) -> Result<T, DTPSError> {

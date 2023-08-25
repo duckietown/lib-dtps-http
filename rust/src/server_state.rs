@@ -191,7 +191,7 @@ impl ServerState {
                 accept_content_type: vec![],
                 produces_content_type: vec![CONTENT_TYPE_DTPS_INDEX_CBOR.to_string()],
                 storage_content_type: vec![],
-                schema_json: Some(schema_for!(TopicsIndexWire)),
+                jschema: Some(schema_for!(TopicsIndexWire)),
                 examples: vec![],
             },
         };
@@ -427,7 +427,7 @@ impl ServerState {
                 accept_content_type: vec![content_type.to_string()],
                 produces_content_type: vec![content_type.to_string()],
                 storage_content_type: vec![content_type.to_string()],
-                schema_json: schema,
+                jschema: schema,
                 examples: vec![],
             },
         };
@@ -644,7 +644,7 @@ impl ServerState {
                     produces_content_type: vec![],
                     storage_content_type: vec![],
                     examples: vec![],
-                    schema_json: None,
+                    jschema: None,
                 },
             };
 
@@ -681,7 +681,7 @@ impl ServerState {
                     produces_content_type: vec![],
                     storage_content_type: vec![],
                     examples: vec![],
-                    schema_json: None,
+                    jschema: None,
                 },
             };
 
@@ -711,7 +711,7 @@ impl ServerState {
                     accept_content_type: vec![],
                     storage_content_type: vec![],
                     produces_content_type: vec![],
-                    schema_json: None,
+                    jschema: None,
                     examples: vec![],
                 },
             };

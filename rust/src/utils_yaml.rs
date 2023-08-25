@@ -1,53 +1,53 @@
 use maud::{html, Markup, Render};
 use serde_cbor::Value;
-
-pub fn generate_html_tree(input: &serde_yaml::Value) -> Markup {
-    match input {
-        serde_yaml::Value::String(s) => html! { (s) },
-        serde_yaml::Value::Number(n) => html! { (n.to_string()) },
-        serde_yaml::Value::Bool(b) => html! { (b) },
-        serde_yaml::Value::Null => html! { code {"null"} },
-        serde_yaml::Value::Sequence(seq) => {
-            html! {
-                // details {
-                //     summary { "Array" }
-                    ol {
-                        @for value in seq {
-                            li {
-                                (generate_html_tree(value))
-                            }
-                        }
-                    }
-                // }
-            }
-        }
-        serde_yaml::Value::Mapping(map) => {
-            html! {
-                details {
-                    summary { "Object" }
-                    ul {
-                        @for (key, value) in map {
-                            li {
-                                details {
-                                    summary { b { (key.as_str().unwrap_or("")) } }
-                                    (generate_html_tree(value))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        serde_yaml::Value::Tagged(tagged) => {
-            html! {
-                dl {
-                    dt { (tagged.tag)}
-                    dd { (generate_html_tree(&tagged.value))}
-                }
-            }
-        }
-    }
-}
+//
+// pub fn generate_html_tree(input: &serde_yaml::Value) -> Markup {
+//     match input {
+//         serde_yaml::Value::String(s) => html! { (s) },
+//         serde_yaml::Value::Number(n) => html! { (n.to_string()) },
+//         serde_yaml::Value::Bool(b) => html! { (b) },
+//         serde_yaml::Value::Null => html! { code {"null"} },
+//         serde_yaml::Value::Sequence(seq) => {
+//             html! {
+//                 // details {
+//                 //     summary { "Array" }
+//                     ol {
+//                         @for value in seq {
+//                             li {
+//                                 (generate_html_tree(value))
+//                             }
+//                         }
+//                     }
+//                 // }
+//             }
+//         }
+//         serde_yaml::Value::Mapping(map) => {
+//             html! {
+//                 details {
+//                     summary { "Object" }
+//                     ul {
+//                         @for (key, value) in map {
+//                             li {
+//                                 details {
+//                                     summary { b { (key.as_str().unwrap_or("")) } }
+//                                     (generate_html_tree(value))
+//                                 }
+//                             }
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//         serde_yaml::Value::Tagged(tagged) => {
+//             html! {
+//                 dl {
+//                     dt { (tagged.tag)}
+//                     dd { (generate_html_tree(&tagged.value))}
+//                 }
+//             }
+//         }
+//     }
+// }
 
 pub fn generate_html_from_cbor(input: &serde_cbor::Value, max_level_open: i32) -> Markup {
     match input {

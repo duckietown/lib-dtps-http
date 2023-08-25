@@ -331,11 +331,19 @@ pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
             "Expected content type {CONTENT_TYPE_DTPS_INDEX_CBOR}, obtained {content_type} "
         );
     }
-
-    let x0: TopicsIndexWire = context!(
-        serde_cbor::from_slice(&rd.content),
-        "Cannot interpret as CBOR"
-    )?;
+    let x = serde_cbor::from_slice::<TopicsIndexWire>(&rd.content);
+    if x.is_err() {
+        let value: serde_cbor::Value = serde_cbor::from_slice(&rd.content)?;
+        let s = format!("cannot parse as CBOR:\n{:#?}", value);
+        log::error!("{}", s);
+        log::error!("content: {:#?}", x);
+        return DTPSError::other(s);
+    }
+    let x0 = x.unwrap();
+    // let x0: TopicsIndexWire = context!(
+    //     serde_cbor::from_slice(&rd.content),
+    //     "Cannot interpret as CBOR"
+    // )?;
 
     let ti = TopicsIndexInternal::from_wire(x0, con);
 

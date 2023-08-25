@@ -4,7 +4,7 @@ from typing import Optional
 
 from aiohttp import web
 
-from dtps_http import async_error_catcher, DTPSServer, interpret_command_line_and_start, RawData, TopicName
+from dtps_http import async_error_catcher, DTPSServer, interpret_command_line_and_start, RawData, TopicNameV
 from . import logger
 
 __all__ = [
@@ -14,10 +14,10 @@ __all__ = [
 
 
 @async_error_catcher
-async def run_clock(s: DTPSServer, topic_name: TopicName, interval: float, initial_delay: float) -> None:
+async def run_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, initial_delay: float) -> None:
     await asyncio.sleep(initial_delay)
-    logger.info(f"Starting clock {topic_name} with interval {interval}")
-    oq = await s.get_oq(topic_name)
+    logger.info(f"Starting clock {topic_name.as_relative_url()} with interval {interval}")
+    oq = await s.create_oq(topic_name)
     while True:
         t = time.time_ns()
         data = str(t).encode()
@@ -26,14 +26,14 @@ async def run_clock(s: DTPSServer, topic_name: TopicName, interval: float, initi
 
 
 async def on_clock_startup(s: DTPSServer) -> None:
-    s.remember_task(asyncio.create_task(run_clock(s, TopicName("clock"), 1.0, 0.0)))
-    s.remember_task(asyncio.create_task(run_clock(s, TopicName("clock5"), 5.0, 0.0)))
-    s.remember_task(asyncio.create_task(run_clock(s, TopicName("clock7"), 7.0, 7.0)))
-    s.remember_task(asyncio.create_task(run_clock(s, TopicName("clock11"), 11.0, 20.0)))
+    s.remember_task(asyncio.create_task(run_clock(s, TopicNameV.from_relative_url("clock"), 1.0, 0.0)))
+    s.remember_task(asyncio.create_task(run_clock(s, TopicNameV.from_relative_url("clock5"), 5.0, 0.0)))
+    s.remember_task(asyncio.create_task(run_clock(s, TopicNameV.from_relative_url("clock7"), 7.0, 7.0)))
+    s.remember_task(asyncio.create_task(run_clock(s, TopicNameV.from_relative_url("clock11"), 11.0, 20.0)))
 
 
 def get_clock_dtps() -> DTPSServer:
-    s = DTPSServer(topics_prefix=(), on_startup=[on_clock_startup])
+    s = DTPSServer(topics_prefix=TopicNameV.root(), on_startup=[on_clock_startup])
     return s
 
 

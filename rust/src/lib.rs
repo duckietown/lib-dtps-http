@@ -20,6 +20,7 @@ pub mod signals_logic;
 pub mod static_files;
 pub mod structures;
 mod structures_linkproperties;
+mod test_python;
 mod test_range;
 pub mod types;
 pub mod urls;
@@ -29,6 +30,7 @@ pub mod utils_mime;
 mod utils_yaml;
 pub mod websocket_abstractions;
 pub mod websocket_signals;
+
 pub use client::*;
 pub use constants::*;
 pub use errors::*;

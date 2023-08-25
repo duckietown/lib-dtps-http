@@ -87,7 +87,7 @@ pub struct ContentInfo {
     pub accept_content_type: Vec<ContentType>,
     pub storage_content_type: Vec<ContentType>,
     pub produces_content_type: Vec<ContentType>,
-    pub schema_json: Option<RootSchema>,
+    pub jschema: Option<RootSchema>,
     pub examples: Vec<RawData>,
 }
 
@@ -180,7 +180,16 @@ pub struct UnixCon {
     pub path: String,
     pub query: Option<String>,
 }
-
+impl UnixCon {
+    pub fn from_path(path: &str) -> Self {
+        Self {
+            scheme: "unix+http".to_string(),
+            socket_name: path.to_string(),
+            path: "/".to_string(),
+            query: None,
+        }
+    }
+}
 impl Display for UnixCon {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "UnixCon(")?;
@@ -265,6 +274,9 @@ pub enum TypeOfConnection {
 }
 
 impl TypeOfConnection {
+    pub fn unix_socket(path: &str) -> Self {
+        return Self::UNIX(UnixCon::from_path(path));
+    }
     pub fn to_string(&self) -> String {
         match self {
             TypeOfConnection::TCP(url) => url.to_string(),

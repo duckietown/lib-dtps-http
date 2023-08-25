@@ -7,7 +7,7 @@ import time
 from dataclasses import asdict
 from typing import cast, Optional
 
-from dtps_http import DTPSClient, parse_url_unescape, RawData, URLString
+from dtps_http import DTPSClient, parse_url_unescape, RawData, TopicNameV, URLString
 from dtps_http.urls import URLIndexer, URLTopic
 from . import logger
 
@@ -20,12 +20,13 @@ async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> Non
     url = cast(URLIndexer, parse_url_unescape(urlbase0))
     last = []
     i = 0
-    def new_observation(topic_name: str, data: RawData) -> None:
+
+    def new_observation(topic_name: TopicNameV, data: RawData) -> None:
         nonlocal i
 
         current = time.time_ns()
-        if  not  "clock" in topic_name:
-            return
+        # if  not  "clock" in topic_name:
+        #     return
 
         j = int(data.content.decode())
         # j = json.loads(data.content.decode())
@@ -43,8 +44,10 @@ async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> Non
             max_ = max(last)
             avg = sum(last) / len(last)
 
-            logger.info(f"{topic_name=}: latency {diff_ms:.3f}ms  [last {len(last)}  mean: {avg:.3f}ms"
-                        +f" min: {min_:.3f}ms max: {max_:.3f}ms]")
+            logger.info(
+                f"{topic_name=}: latency {diff_ms:.3f}ms  [last {len(last)}  mean: {avg:.3f}ms"
+                + f" min: {min_:.3f}ms max: {max_:.3f}ms]"
+            )
 
     subcriptions: list[asyncio.Task[None]] = []
     async with DTPSClient.create() as dtpsclient:

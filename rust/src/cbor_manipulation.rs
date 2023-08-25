@@ -1,4 +1,4 @@
-use crate::utils_yaml::{generate_html_from_cbor, generate_html_tree};
+use crate::utils_yaml::generate_html_from_cbor;
 use crate::{utils_mime, DTPSError, RawData, DTPSR};
 use log::debug;
 use maud::{html, PreEscaped};
