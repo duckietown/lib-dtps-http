@@ -185,10 +185,10 @@ class DTPSServer:
         self.app.on_startup.append(self.on_startup)
         self.app.on_shutdown.append(self.on_shutdown)
         routes.get("/")(self.serve_index)
-        routes.get("/{topic:.*}/events/")(self.serve_events)
+        routes.get("/{topic:.*}/:events/")(self.serve_events)
         routes.get("/{topic:.*}/data/{digest}/")(self.serve_data_get)
-        routes.post("/{topic:.*}/")(self.serve_post)
-        routes.get("/{topic:.*}/")(self.serve_get)
+        routes.post("/{topic:.*}")(self.serve_post)
+        routes.get("/{topic:.*}")(self.serve_get)
         self.app.add_routes(routes)
 
         self.hub = Hub()
@@ -467,8 +467,7 @@ class DTPSServer:
 
         oq = self._oqs[topic_name]
         put_meta_headers(headers)
-        # headers[HEADER_SEE_EVENTS] = f"events/"
-        # headers[HEADER_SEE_EVENTS_INLINE_DATA] = f"events/?{SEND_DATA_ARGNAME}"
+
         multidict_update(headers, self.get_headers_alternatives(request))
         headers[HEADER_DATA_UNIQUE_ID] = oq.tr.unique_id
         headers[HEADER_DATA_ORIGIN_NODE_ID] = oq.tr.origin_node

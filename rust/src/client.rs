@@ -584,6 +584,17 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     let start = time_nanos();
 
     let resp = make_request(conbase, hyper::Method::HEAD, b"", None, None).await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let desc = status.as_str();
+        let msg = format!("cannot get metadata for {conbase}: {desc}");
+        return Err(DTPSError::FailedRequest(
+            msg,
+            status.as_u16(),
+            conbase.to_string(),
+            desc.to_string(),
+        ));
+    }
     let end = time_nanos();
 
     let latency_ns = end - start;
@@ -653,6 +664,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     if let Some(l) = links.get(REL_META) {
         md.index = join_ext(&conbase, &l.url).ok();
     }
+    info!("Logging metadata: {md:#?} headers {headers:#?}");
 
     Ok(md)
 }

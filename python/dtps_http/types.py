@@ -15,7 +15,6 @@ URLString = NewType("URLString", str)
 NodeID = NewType("NodeID", str)
 SourceID = NewType("SourceID", str)
 
-
 TopicNameS = NewType("TopicNameS", str)
 
 
@@ -24,7 +23,18 @@ class TopicNameV:
     components: tuple[str, ...]
 
     def as_relative_url(self) -> TopicNameS:
-        return TopicNameS("/".join(self.components))
+        """returns either "" or a/b/c/ (with ending /)"""
+        if not self.components:
+            return TopicNameS("")
+        else:
+            return TopicNameS("/".join(self.components) + "/")
+
+    def as_dash_sep(self) -> TopicNameS:
+        """returns either "" or a/b/c (without ending /)"""
+        if not self.components:
+            return TopicNameS("")
+        else:
+            return TopicNameS("/".join(self.components))
 
     def __str__(self) -> str:
         raise AssertionError("use as_relative_url()")
@@ -34,16 +44,27 @@ class TopicNameV:
         return cls(())
 
     @classmethod
-    def from_relative_url(cls, s: str) -> "TopicNameV":
+    def from_dash_sep(cls, s: str) -> "TopicNameV":
         if s.endswith("/"):
-            s = s[:-1]
-        if s.startswith("/"):
-            s = s[1:]
+            raise ValueError(f"{s!r} ends with /")
+        return cls(tuple(s.split("/")))
 
+    @classmethod
+    def from_relative_url(cls, s: str) -> "TopicNameV":
+        """s is either "" or a/b/c/ (with ending /)"""
         if not s or s == "/":
-            components = ()
-        else:
-            components = tuple(s.split("/"))
+            return cls.root()
+
+        if s.startswith("/"):
+            raise ValueError(f"{s!r} starts with /")
+
+        if not s.endswith("/"):
+            msg = f"{s!r} does not end with /"
+            raise ValueError(msg)
+
+        s = s[:-1]
+
+        components = tuple(s.split("/"))
 
         return cls(components)
 

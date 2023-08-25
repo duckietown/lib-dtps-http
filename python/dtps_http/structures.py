@@ -154,7 +154,7 @@ class TopicsIndex:
     def to_wire(self) -> "TopicsIndexWire":
         res = {}
         for k, v in self.topics.items():
-            res[k.as_relative_url()] = v
+            res[k.as_dash_sep()] = v
         return TopicsIndexWire(res)
 
 
@@ -169,7 +169,7 @@ class TopicsIndexWire:
     def to_topics_index(self) -> "TopicsIndex":
         topics: dict[TopicNameV, TopicRef] = {}
         for k, v in self.topics.items():
-            topics[TopicNameV.from_relative_url(k)] = v
+            topics[TopicNameV.from_dash_sep(k)] = v
         return TopicsIndex(topics)
 
 

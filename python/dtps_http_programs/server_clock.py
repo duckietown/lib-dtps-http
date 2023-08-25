@@ -26,10 +26,10 @@ async def run_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, init
 
 
 async def on_clock_startup(s: DTPSServer) -> None:
-    s.remember_task(asyncio.create_task(run_clock(s, TopicNameV.from_relative_url("clock"), 1.0, 0.0)))
-    s.remember_task(asyncio.create_task(run_clock(s, TopicNameV.from_relative_url("clock5"), 5.0, 0.0)))
-    s.remember_task(asyncio.create_task(run_clock(s, TopicNameV.from_relative_url("clock7"), 7.0, 7.0)))
-    s.remember_task(asyncio.create_task(run_clock(s, TopicNameV.from_relative_url("clock11"), 11.0, 20.0)))
+    s.remember_task(asyncio.create_task(run_clock(s, TopicNameV.from_dash_sep("clock"), 1.0, 0.0)))
+    s.remember_task(asyncio.create_task(run_clock(s, TopicNameV.from_dash_sep("clock5"), 5.0, 0.0)))
+    s.remember_task(asyncio.create_task(run_clock(s, TopicNameV.from_dash_sep("clock7"), 7.0, 7.0)))
+    s.remember_task(asyncio.create_task(run_clock(s, TopicNameV.from_dash_sep("clock11"), 11.0, 20.0)))
 
 
 def get_clock_dtps() -> DTPSServer:
