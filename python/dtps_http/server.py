@@ -3,7 +3,7 @@ import json
 import time
 import traceback
 import uuid
-from dataclasses import asdict, field
+from dataclasses import asdict, field, replace
 from typing import Any, Awaitable, Callable, cast, Optional, Sequence
 
 import cbor2
@@ -37,9 +37,14 @@ from .constants import (
     TOPIC_STATE_SUMMARY,
 )
 from .structures import (
+    ChannelInfo,
+    ChannelInfoDesc,
+    Chunk,
+    Clocks,
     ContentInfo,
     DataReady,
     LinkBenchmark,
+    MinMax,
     RawData,
     ResourceAvailability,
     TopicProperties,
@@ -67,6 +72,7 @@ class DataSaved:
     digest: str
     content_type: str
     content_length: int
+    clocks: Clocks
 
 
 SUB_ID = str
@@ -93,6 +99,17 @@ class ObjectQueue:
         self._name = name
         self.tr = tr
 
+    def get_channel_info(self) -> ChannelInfo:
+        if not self.sequence:
+            newest = None
+            oldest = None
+        else:
+            newest = ChannelInfoDesc(self.sequence[-1].index, self.sequence[-1].time_inserted)
+            oldest = ChannelInfoDesc(self.sequence[0].index, self.sequence[0].time_inserted)
+
+        ci = ChannelInfo(queue_created=self.tr.created, num_total=self._seq, newest=newest, oldest=oldest)
+        return ci
+
     def publish_text(self, text: str) -> None:
         data = text.encode("utf-8")
         content_type = "text/plain"
@@ -114,12 +131,22 @@ class ObjectQueue:
         use_seq = self._seq
         self._seq += 1
         digest = obj.digest()
-        ds = DataSaved(use_seq, time.time_ns(), digest, obj.content_type, len(obj.content))
+        clocks = self.current_clocks()
+        ds = DataSaved(use_seq, time.time_ns(), digest, obj.content_type, len(obj.content), clocks=clocks)
         self._data[digest] = obj
         self.sequence.append(ds)
         self._pub.publish(
             Key(self._name.as_relative_url(), K_INDEX), use_seq
         )  # logger.debug(f"published #{self._seq} {self._name}: {obj!r}")
+
+    def current_clocks(self) -> Clocks:
+        clocks = Clocks.empty()
+        if self._seq > 0:
+            based_on = self._seq - 1
+            clocks.logical[self.tr.unique_id] = MinMax(based_on, based_on)
+        now = time.time_ns()
+        clocks.wall[self.tr.unique_id] = MinMax(now, now)
+        return clocks
 
     def last(self) -> DataSaved:
         if self.sequence:
@@ -347,14 +374,18 @@ class DTPSServer:
     @async_error_catcher
     async def on_startup(self, _: web.Application) -> None:
         self.logger.info("on_startup")
-        for f in self._more_on_startup:
-            await f(self)
 
         await self.create_oq(TOPIC_LOGS)
         await self.create_oq(TOPIC_CLOCK)
         await self.create_oq(TOPIC_AVAILABILITY)
         await self.create_oq(TOPIC_STATE_SUMMARY)
         await self.create_oq(TOPIC_STATE_NOTIFICATION)
+
+        # clock_topic = TopicNameV.from_dash_sep(TOPIC_CLOCK)
+        self.remember_task(asyncio.create_task(update_clock(self, TOPIC_CLOCK, 1.0, 0.0)))
+
+        for f in self._more_on_startup:
+            await f(self)
 
     @async_error_catcher
     async def on_shutdown(self, _: web.Application) -> None:
@@ -369,12 +400,18 @@ class DTPSServer:
         self.logger.debug(f"serve_index: {request.url} \n {headers_s}")
         for topic_name, oqs in self._oqs.items():
             qual_topic_name = self.topics_prefix + topic_name
-
-            topic_ref: TopicRef = oqs.tr
+            reach = TopicReachability(
+                URLString(qual_topic_name.as_relative_url()),
+                self.node_id,
+                forwarders=[],
+                benchmark=LinkBenchmark.identity(),
+            )
+            topic_ref = replace(oqs.tr, reachability=[reach])
             topics[qual_topic_name] = topic_ref
 
         for topic_name, fd in self._forwarded.items():
             qual_topic_name = self.topics_prefix + topic_name
+
             tr = TopicRef(
                 fd.unique_id,
                 fd.origin_node,
@@ -407,7 +444,7 @@ class DTPSServer:
             if "text/html" in accept:
                 topics_html = "<ul>"
                 for topic_name, topic_ref in topics.items():
-                    topics_html += f"<li><a href='topics/{topic_name.as_relative_url()}/'><code>{topic_name.as_relative_url()}</code></a></li>\n"
+                    topics_html += f"<li><a href='{topic_name.as_relative_url()}'><code>{topic_name.as_relative_url()}</code></a></li>\n"
                 topics_html += "</ul>"
 
                 html_index = f"""
@@ -561,8 +598,8 @@ class DTPSServer:
         headers: CIMultiDict[str] = CIMultiDict()
         multidict_update(headers, self.get_headers_alternatives(request))
         self._add_own_headers(headers)
-
-        topic_name = request.match_info["topic"]
+        topic_name_s = request.match_info["topic"] + "/"
+        topic_name = TopicNameV.from_relative_url(topic_name_s)
         digest = request.match_info["digest"]
         if topic_name not in self._oqs:
             raise web.HTTPNotFound(headers=headers)
@@ -576,20 +613,24 @@ class DTPSServer:
 
     @async_error_catcher
     async def serve_events(self, request: web.Request) -> web.WebSocketResponse:
-        logger.info(f"serve_events: {request}")
         if SEND_DATA_ARGNAME in request.query:
             send_data = True
         else:
             send_data = False
 
-        topic_name = request.match_info["topic"]
+        topic_name_s = request.match_info["topic"] + "/"
+
+        logger.info(f"serve_events: {request} topic_name={topic_name_s} send_data={send_data}")
+        topic_name = TopicNameV.from_relative_url(topic_name_s)
         if topic_name not in self._oqs and topic_name not in self._forwarded:
             headers: CIMultiDict[str] = CIMultiDict()
 
             self._add_own_headers(headers)
             raise web.HTTPNotFound(headers=headers)
 
-        logger.info(f"serve_events: {topic_name} send_data={send_data} headers={request.headers}")
+        logger.info(
+            f"serve_events: {topic_name.as_dash_sep()} send_data={send_data} headers={request.headers}"
+        )
         ws = web.WebSocketResponse()
         multidict_update(ws.headers, self.get_headers_alternatives(request))
         self._add_own_headers(ws.headers)
@@ -616,6 +657,11 @@ class DTPSServer:
         await ws.prepare(request)
 
         exit_event = asyncio.Event()
+        ci = oq_.get_channel_info()
+
+        as_struct = {ChannelInfo.__name__: asdict(ci)}
+        as_cbor = cbor2.dumps(as_struct)
+        await ws.send_bytes(as_cbor)
 
         async def send_message(_: ObjectQueue, i: int) -> None:
             mdata = oq_.sequence[i]
@@ -640,12 +686,16 @@ class DTPSServer:
                 content_length=mdata.content_length,
                 availability=availability_,
                 chunks_arriving=nchunks,
+                clocks=mdata.clocks,
+                unique_id=oq_.tr.unique_id,
+                origin_node=oq_.tr.origin_node,
             )
             if ws.closed:
                 exit_event.set()
                 return
             try:
-                as_struct = asdict(data)
+                as_struct = {DataReady.__name__: asdict(data)}
+                logger.info(f"as_struct = {as_struct}")
                 as_cbor = cbor2.dumps(as_struct)
                 await ws.send_bytes(as_cbor)
             except ConnectionResetError:
@@ -654,8 +704,13 @@ class DTPSServer:
 
             if send_data:
                 the_bytes = oq_.get(digest).content
+                chunk = Chunk(digest, 0, 1, 0, the_bytes)
+                as_struct = {Chunk.__name__: asdict(chunk)}
+                logger.info(f"as_struct = {as_struct}")
+                as_cbor = cbor2.dumps(as_struct)
+
                 try:
-                    await ws.send_bytes(the_bytes)
+                    await ws.send_bytes(as_cbor)
                 except ConnectionResetError:
                     exit_event.set()
                     pass
@@ -753,6 +808,9 @@ class DTPSServer:
                     content_length=dr.content_length,
                     availability=availability,
                     chunks_arriving=chunks_arriving,
+                    clocks=dr.clocks,
+                    origin_node=dr.origin_node,
+                    unique_id=dr.unique_id,
                 )
                 # logger.debug(f"Forwarding {dr} -> {dr2}")
                 await ws.send_json(asdict(dr2))
@@ -826,3 +884,15 @@ def get_link_headers(h: CIMultiDict[str]) -> dict[str, LinkHeader]:
         lh = LinkHeader.parse(l)
         res[lh.rel] = lh
     return res
+
+
+@async_error_catcher
+async def update_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, initial_delay: float) -> None:
+    await asyncio.sleep(initial_delay)
+    logger.info(f"Starting clock {topic_name.as_relative_url()} with interval {interval}")
+    oq = await s.get_oq(topic_name)
+    while True:
+        t = time.time_ns()
+        data = str(t).encode()
+        oq.publish(RawData(data, "application/json"))
+        await asyncio.sleep(interval)

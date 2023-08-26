@@ -12,12 +12,15 @@ from .types import NodeID, SourceID, TopicNameS, TopicNameV, URLString
 
 __all__ = [
     "ChannelInfo",
+    "ChannelInfoDesc",
     "Chunk",
+    "Clocks",
     "ContentInfo",
     "DataReady",
     "ForwardingStep",
     "LinkBenchmark",
     "Metadata",
+    "MinMax",
     "RawData",
     "ResourceAvailability",
     "TopicProperties",
@@ -216,12 +219,31 @@ class Chunk:
 
 
 @dataclass
+class MinMax:
+    min: int
+    max: int
+
+
+@dataclass
+class Clocks:
+    logical: dict[str, MinMax]
+    wall: dict[str, MinMax]
+
+    @classmethod
+    def empty(cls) -> "Clocks":
+        return Clocks(logical={}, wall={})
+
+
+@dataclass
 class DataReady:
+    origin_node: NodeID
+    unique_id: SourceID
     sequence: int
     time_inserted: int
+    digest: str
     content_type: str
     content_length: int
-    digest: str
+    clocks: Clocks
     availability: list[ResourceAvailability]
     chunks_arriving: int
 
@@ -239,7 +261,7 @@ def channel_msgs_parse(d: bytes) -> ChannelInfo | DataReady | Chunk:
     struct = cbor2.loads(d)
     if not isinstance(struct, dict):
         msg = "Expected a dictionary here"
-        raise ValueError(f"{msg}: {d} {struct}")
+        raise ValueError(f"{msg}: {d}\n{struct}")
     if DataReady.__name__ in struct:
         dr = parse_obj_as(DataReady, struct["DataReady"])
         return dr

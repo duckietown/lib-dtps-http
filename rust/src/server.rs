@@ -676,7 +676,11 @@ pub async fn send_as_ws_cbor<T: Serialize>(
     ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
 ) -> DTPSR<()> {
     for x in data {
-        let message = warp::ws::Message::binary(serde_cbor::to_vec(&x).unwrap());
+        let bytes = serde_cbor::to_vec(&x).unwrap();
+        let value2: serde_cbor::Value = serde_cbor::from_slice(&bytes).unwrap();
+        debug!("send_as_ws_cbor: {:?}", value2);
+        let message = warp::ws::Message::binary(bytes);
+
         ws_tx.send(message).await?;
     }
     Ok(())

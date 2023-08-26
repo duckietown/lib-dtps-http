@@ -25,8 +25,8 @@ async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> Non
         nonlocal i
 
         current = time.time_ns()
-        # if  not  "clock" in topic_name:
-        #     return
+        if "clock" not in topic_name.as_relative_url():
+            return
 
         j = int(data.content.decode())
         # j = json.loads(data.content.decode())
@@ -45,7 +45,7 @@ async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> Non
             avg = sum(last) / len(last)
 
             logger.info(
-                f"{topic_name=}: latency {diff_ms:.3f}ms  [last {len(last)}  mean: {avg:.3f}ms"
+                f"{topic_name.as_dash_sep():24}: latency {diff_ms:.3f}ms  [last {len(last)}  mean: {avg:.3f}ms"
                 + f" min: {min_:.3f}ms max: {max_:.3f}ms]"
             )
 

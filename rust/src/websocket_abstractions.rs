@@ -5,23 +5,23 @@ use base64;
 use base64::{engine::general_purpose, Engine as _};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
-
-use log::{debug, error};
+use log::info;
 use rand::Rng;
 use tokio::net::{TcpStream, UnixStream};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::{client_async_with_config, connect_async, MaybeTlsStream, WebSocketStream};
+use tungstenite::error::ProtocolError;
 use tungstenite::handshake::client::Request;
-use tungstenite::Message as TM;
+use tungstenite::{Error, Message as TM};
 use url::Url;
 
 use crate::structures::TypeOfConnection;
 use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
 use crate::TypeOfConnection::Same;
 use crate::{
-    error_with_info, not_implemented, not_reachable, show_errors, DTPSError, ServerState,
+    debug_with_info, error_with_info, not_implemented, not_reachable, show_errors, DTPSError,
     ServerStateAccess, UnixCon, DTPSR,
 };
 
@@ -38,6 +38,7 @@ pub trait GenericSocketConnection: Send + Sync {
 pub async fn open_websocket_connection(
     con: &TypeOfConnection,
 ) -> DTPSR<Box<dyn GenericSocketConnection>> {
+    info!("open_websocket_connection: {:#?}", con);
     match con {
         TCP(url) => open_websocket_connection_tcp(url).await,
         TypeOfConnection::File(_, _) => {
@@ -145,6 +146,7 @@ impl AnySocketConnection {
         }
     }
 }
+
 async fn read_websocket_stream<S: Debug, T: StreamExt<Item = Result<S, tungstenite::Error>>>(
     mut source: SplitStream<T>,
     incoming_sender: broadcast::Sender<S>,
@@ -166,13 +168,56 @@ async fn read_websocket_stream<S: Debug, T: StreamExt<Item = Result<S, tungsteni
                         }
                     }
                     Err(e) => {
+                        match &e {
+                            Error::ConnectionClosed | Error::AlreadyClosed => {
+                                break;
+                            }
+                            Error::Io(_) => {}
+                            Error::Tls(_) => {}
+                            Error::Capacity(_) => {}
+                            Error::Protocol(p) => match &p {
+                                ProtocolError::WrongHttpMethod => {}
+                                ProtocolError::WrongHttpVersion => {}
+                                ProtocolError::MissingConnectionUpgradeHeader => {}
+                                ProtocolError::MissingUpgradeWebSocketHeader => {}
+                                ProtocolError::MissingSecWebSocketVersionHeader => {}
+                                ProtocolError::MissingSecWebSocketKey => {}
+                                ProtocolError::SecWebSocketAcceptKeyMismatch => {}
+                                ProtocolError::JunkAfterRequest => {}
+                                ProtocolError::CustomResponseSuccessful => {}
+                                ProtocolError::InvalidHeader(_) => {}
+                                ProtocolError::HandshakeIncomplete => {}
+                                ProtocolError::HttparseError(_) => {}
+                                ProtocolError::SendAfterClosing => {}
+                                ProtocolError::ReceivedAfterClosing => {}
+                                ProtocolError::NonZeroReservedBits => {}
+                                ProtocolError::UnmaskedFrameFromClient => {}
+                                ProtocolError::MaskedFrameFromServer => {}
+                                ProtocolError::FragmentedControlFrame => {}
+                                ProtocolError::ControlFrameTooBig => {}
+                                ProtocolError::UnknownControlFrameType(_) => {}
+                                ProtocolError::UnknownDataFrameType(_) => {}
+                                ProtocolError::UnexpectedContinueFrame => {}
+                                ProtocolError::ExpectedFragment(_) => {}
+                                ProtocolError::ResetWithoutClosingHandshake => {
+                                    break;
+                                }
+                                ProtocolError::InvalidOpcode(_) => {}
+                                ProtocolError::InvalidCloseSequence => {}
+                            },
+                            Error::SendQueueFull(_) => {}
+                            Error::Utf8 => {}
+                            Error::Url(_) => {}
+                            Error::Http(_) => {}
+                            Error::HttpFormat(_) => {}
+                        }
                         error_with_info!("error in read_websocket_stream: {:?}", e);
                         break;
                     }
                 }
             }
             None => {
-                error_with_info!("read_websocket_stream: None");
+                debug_with_info!("read_websocket_stream: None");
                 break;
             }
         }
@@ -317,5 +362,9 @@ pub async fn open_websocket_connection_unix(
 fn generate_websocket_key() -> String {
     let mut rng = rand::thread_rng();
     let random_bytes: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
-    general_purpose::URL_SAFE_NO_PAD.encode(&random_bytes)
+    assert_eq!(random_bytes.len(), 16);
+    let x = general_purpose::STANDARD.encode(&random_bytes);
+    let y = general_purpose::STANDARD.decode(&x).unwrap();
+    assert_eq!(y, random_bytes);
+    x
 }

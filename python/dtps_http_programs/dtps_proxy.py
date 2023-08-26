@@ -96,7 +96,7 @@ async def go_proxy(args: Optional[list[str]] = None) -> None:
 
                 possible: list[tuple[URL, TopicReachability]] = []
                 for reachability in tr.reachability:
-                    urlhere = URLString(f"topics/{new_topic}/")
+                    urlhere = URLString(new_topic.as_relative_url())
                     rurl = parse_url_unescape(reachability.url)
                     metadata = await dtpsclient.get_metadata(rurl)
                     for m in metadata.alternative_urls + [rurl]:
@@ -139,6 +139,8 @@ async def go_proxy(args: Optional[list[str]] = None) -> None:
                     forward_url_data=url_to_use,
                     forward_url_events=metadata_to_use.events_url,
                     forward_url_events_inline_data=metadata_to_use.events_data_inline_url,
+                    content_info=None,
+                    properties=None,
                 )
 
                 logger.info(

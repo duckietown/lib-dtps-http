@@ -13,8 +13,8 @@ use url::Url;
 use crate::signals_logic::TopicProperties;
 use crate::urls::join_ext;
 use crate::utils::divide_in_components;
-use crate::LinkBenchmark;
 use crate::{join_con, RawData, TopicName};
+use crate::{parse_url_ext, LinkBenchmark, DTPSR};
 
 pub type NodeAppData = String;
 
@@ -274,6 +274,10 @@ pub enum TypeOfConnection {
 }
 
 impl TypeOfConnection {
+    pub fn from_string(s: &str) -> DTPSR<Self> {
+        parse_url_ext(s)
+    }
+
     pub fn unix_socket(path: &str) -> Self {
         return Self::UNIX(UnixCon::from_path(path));
     }
@@ -378,14 +382,14 @@ impl TopicReachabilityInternal {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ResourceAvailabilityWire {
     pub url: String,
     pub available_until: f64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Constructor)]
-pub struct MinMax<T: Ord + Clone> {
+#[derive(Serialize, Deserialize, Debug, Clone, Constructor, PartialEq)]
+pub struct MinMax<T: Ord + Clone + PartialEq> {
     pub min: T,
     pub max: T,
 }
@@ -402,7 +406,7 @@ pub fn merge_minmax<T: Ord + Clone>(minmax1: &MinMax<T>, minmax2: &MinMax<T>) ->
     MinMax::new(min, max)
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, Constructor)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, Constructor, PartialEq)]
 pub struct Clocks {
     pub logical: HashMap<String, MinMax<usize>>,
     pub wall: HashMap<String, MinMax<i64>>,
@@ -433,7 +437,7 @@ pub fn merge_clocks(clock1: &Clocks, clock2: &Clocks) -> Clocks {
     Clocks::new(logical, wall)
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct DataReady {
     pub origin_node: String,
     pub unique_id: String,

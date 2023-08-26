@@ -65,6 +65,8 @@ pub enum DTPSError {
 
     #[error(transparent)]
     TokioRecvError(#[from] tokio::sync::broadcast::error::RecvError),
+    #[error(transparent)]
+    TokioJoinError(#[from] tokio::task::JoinError),
 }
 
 impl DTPSError {
@@ -169,7 +171,16 @@ macro_rules! add_info {
 #[macro_export]
 macro_rules! error_with_info {
     ($($u:expr),* $(,)?) => {{
-        error!("{}:{}:\n{}", file!(), line!(),
+        log::error!("{}:{}:\n{}", file!(), line!(),
+            indent::indent_all_with("| ", format!($($u),*))
+        )
+    }};
+}
+
+#[macro_export]
+macro_rules! debug_with_info {
+    ($($u:expr),* $(,)?) => {{
+        log::debug!("{}:{}:\n{}", file!(), line!(),
             indent::indent_all_with("| ", format!($($u),*))
         )
     }};

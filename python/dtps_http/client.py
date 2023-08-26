@@ -393,7 +393,7 @@ class DTPSClient:
                     #     return FoundMetadata([], None, None, None)
                     logger.info(f"headers {url0}: {resp.headers}")
                     resp.raise_for_status()
-                    assert resp.status == 200, resp
+                    # assert resp.status == 200, resp
                     # logger.info(f"headers : {resp.headers}")
                     if HEADER_CONTENT_LOCATION in resp.headers:
                         alternatives0 = cast(list[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION))
@@ -505,7 +505,9 @@ class DTPSClient:
                         try:
                             cm = channel_msgs_parse(msg.data)
                         except Exception as e:
-                            logger.error(f"error in parsing {msg.data!r}: {e.__class__.__name__} {e!r}")
+                            logger.error(
+                                f"error in parsing\n{msg.data!r}\nerror:\n{e.__class__.__name__} {e!r}"
+                            )
                             continue
 
                         match cm:

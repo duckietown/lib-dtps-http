@@ -14,8 +14,10 @@ use hyper_tls::HttpsConnector;
 use hyperlocal::UnixClientExt;
 use log::{debug, error, info};
 use maplit::hashmap;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -49,7 +51,7 @@ pub async fn get_events_stream_inline(
 ) -> (JoinHandle<DTPSR<()>>, UnboundedReceiverStream<Notification>) {
     let (tx, rx) = mpsc::unbounded_channel();
     let inline_url = url.clone();
-    let handle = tokio::spawn(listen_events_url_inline(inline_url, tx));
+    let handle = tokio::spawn(listen_events_websocket(inline_url, tx));
     let stream = UnboundedReceiverStream::new(rx);
     (handle, stream)
 }
@@ -113,14 +115,25 @@ pub fn ms_from_ns(ns: u128) -> f64 {
     (ns as f64) / 1_000_000.0
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Notification {
     pub dr: DataReady,
     pub rd: RawData,
 }
 
-pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<MsgServerToClient> {
-    let msg = rx.recv().await?;
+pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<Option<MsgServerToClient>> {
+    let msg = match rx.recv().await {
+        Ok(msg) => msg,
+        Err(e) => {
+            return match e {
+                RecvError::Closed => Ok(None),
+                RecvError::Lagged(_) => {
+                    let s = format!("lagged");
+                    DTPSError::other(s)
+                }
+            };
+        }
+    };
     if !msg.is_binary() {
         let s = format!("unexpected message, expected binary {msg:#?}");
         return DTPSError::other(s);
@@ -141,27 +154,29 @@ pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<MsgServerToClie
                 msg.type_id(),
                 rawvalue,
             );
+            error!("{}", s);
             return DTPSError::other(s);
         }
     };
-    Ok(msg_from_server)
+    Ok(Some(msg_from_server))
 }
 
-pub async fn listen_events_url_inline(
+pub async fn listen_events_websocket(
     con: TypeOfConnection,
     tx: UnboundedSender<Notification>,
 ) -> DTPSR<()> {
     let wsc = open_websocket_connection(&con).await?;
-    let prefix = format!("listen_events_url_inline({con})");
+    let prefix = format!("listen_events_websocket({con})");
     // debug!("starting to listen to events for {} on {:?}", con, read);
     let mut index: u32 = 0;
     let mut rx = wsc.get_incoming().await;
 
     let first = receive_from_server(&mut rx).await?;
     match first {
-        MsgServerToClient::ChannelInfo(..) => {}
+        Some(MsgServerToClient::ChannelInfo(..)) => {}
         _ => {
             let s = format!("Expected ChannelInfo, got {first:?}");
+            log::error!("{}", s);
             return DTPSError::other(s);
         }
     }
@@ -169,49 +184,67 @@ pub async fn listen_events_url_inline(
     loop {
         let msg_from_server = receive_from_server(&mut rx).await?;
         let dr = match msg_from_server {
-            MsgServerToClient::DataReady(dr_) => dr_,
+            None => {
+                // debug!("end of stream");
+                break;
+            }
+            Some(MsgServerToClient::DataReady(dr_)) => dr_,
 
             _ => {
-                error_with_info!(
-                    "{prefix}: message #{index}: unexpected message: {msg_from_server:#?}"
-                );
-                continue;
+                let s =
+                    format!("{prefix}: message #{index}: unexpected message: {msg_from_server:#?}");
+                log::error!("{}", s);
+                return DTPSError::other(s);
             }
         };
-        if dr.chunks_arriving == 0 {
-            error_with_info!(
-                "{prefix}: message #{}: no chunks arriving. listening to {}",
-                index,
-                con
-            );
-            continue;
-        }
-        // debug!("message #{}: {:#?}", index, dr);
         index += 1;
-        let mut content: Vec<u8> = Vec::with_capacity(dr.content_length);
-        for _ in 0..(dr.chunks_arriving) {
-            let msg_from_server = receive_from_server(&mut rx).await?;
 
-            let chunk = match msg_from_server {
-                MsgServerToClient::DataReady(..) | MsgServerToClient::ChannelInfo(..) => {
-                    error_with_info!("{prefix}: unexpected message : {msg_from_server:#?}");
-                    continue;
-                }
-                MsgServerToClient::Chunk(chunk) => chunk,
-            };
+        let content: Vec<u8> = if dr.chunks_arriving == 0 {
+            // error_with_info!(
+            //     "{prefix}: message #{}: no chunks arriving. listening to {}",
+            //     index,
+            //     con
+            // );
+            if dr.availability.is_empty() {
+                let s = format!(
+                    "{prefix}: message #{}: availability is empty. listening to {}",
+                    index, con
+                );
+                return DTPSError::other(s);
+            }
+            let avail = dr.availability.get(0).unwrap();
+            let url = con.join(&avail.url)?;
 
-            let data = chunk.data;
-            content.extend_from_slice(&data);
+            get_rawdata(&url).await?.content.to_vec()
+        } else {
+            let mut content: Vec<u8> = Vec::with_capacity(dr.content_length);
+            for _ in 0..(dr.chunks_arriving) {
+                let msg_from_server = receive_from_server(&mut rx).await?;
 
-            index += 1;
-        }
+                let chunk = match msg_from_server {
+                    Some(MsgServerToClient::DataReady(..) | MsgServerToClient::ChannelInfo(..))
+                    | None => {
+                        let s = format!("{prefix}: unexpected message : {msg_from_server:#?}");
+                        return DTPSError::other(s);
+                    }
+                    Some(MsgServerToClient::Chunk(chunk)) => chunk,
+                };
+
+                let data = chunk.data;
+                content.extend_from_slice(&data);
+
+                index += 1;
+            }
+            content
+        };
+
         if content.len() != dr.content_length {
-            error_with_info!(
+            let s = format!(
                 "{prefix}: unexpected content length: {} != {}",
                 content.len(),
                 dr.content_length
             );
-            continue;
+            return DTPSError::other(s);
         }
         let content_type = dr.content_type.clone();
         let rd = RawData {
@@ -219,11 +252,14 @@ pub async fn listen_events_url_inline(
             content_type,
         };
         let notification = Notification { dr, rd };
+
         match tx.send(notification) {
             Ok(_) => {}
             Err(e) => {
-                error_with_info!("cannot send data: {}", e);
+                // this is not an error, it just means that the receiver has been dropped
                 break;
+                // let s = format!("cannot send data: {}", e);
+                // return DTPSError::other(s);
             }
         }
     }
