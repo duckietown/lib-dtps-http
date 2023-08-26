@@ -235,11 +235,11 @@ mod tests {
     #[awt]
     #[tokio::test]
     async fn check_proxy(
-        #[future] mut instance: TestFixture,
+        #[future] instance: TestFixture,
         #[future] mut instance2: TestFixture,
     ) -> DTPSR<()> {
         init_logging();
-        let mut instance = instance;
+        let instance = instance;
         let mut instance2 = instance2;
 
         let topic_name = TopicName::from_dash_sep("a/b")?;
@@ -277,17 +277,21 @@ mod tests {
 
         let con_proxied = instance2.con.join(mounted_at.as_relative_url())?;
 
+        debug!("ask metadata for con_original {con_original:#?}");
         let md_original = get_metadata(&con_original).await;
+        debug!("ask metadata for con_proxied {con_proxied:#?}");
         let md_proxied = get_metadata(&con_proxied).await;
 
-        eprintln!("md_original {md_original:#?}");
-        eprintln!("md_proxied {md_proxied:#?}");
+        debug!("md_original {md_original:#?}");
+        debug!("md_proxied {md_proxied:#?}");
 
+        debug!("get data for con_original {con_original:#?}");
         let data_original = get_rawdata(&con_original).await?;
+        debug!("get data for con_proxied {con_proxied:#?}");
         let data_proxied = get_rawdata(&con_proxied).await?;
 
-        eprintln!("data_original {data_original:#?}");
-        eprintln!("data_proxied {data_proxied:#?}");
+        debug!("data_original {con_original:#} {data_original:#?}");
+        debug!("data_proxied {con_proxied:#} {data_proxied:#?}");
 
         assert_eq!(data_original.content_type, "application/cbor");
         assert_eq!(data_original, data_proxied);

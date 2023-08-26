@@ -663,7 +663,18 @@ pub async fn handle_websocket_queue(
         oq.subscribe_insert_notification()
     };
     loop {
-        let r = rx2.recv().await?;
+        let r = match rx2.recv().await {
+            Ok(x) => x,
+            Err(e) => match e {
+                RecvError::Closed => {
+                    break;
+                }
+                RecvError::Lagged(_) => {
+                    warn!("Lagged");
+                    continue;
+                }
+            },
+        };
 
         let for_this = get_series_of_messages_for_notification_(send_data, &r).await;
         send_as_ws_cbor(&for_this, ws_tx).await?;

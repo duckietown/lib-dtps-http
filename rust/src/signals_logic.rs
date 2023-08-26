@@ -969,9 +969,9 @@ pub async fn interpret_path(
         for (mounted_at, info) in &ss.proxied_other {
             if let Some((_, b)) = is_prefix_of(mounted_at.as_components(), &path_components) {
                 let mut path_and_query = b.join("/");
-                if ends_with_dash {
-                    path_and_query.push('/');
-                }
+                // if ends_with_dash {
+                //     path_and_query.push('/');
+                // }
                 path_and_query.push_str(&utils::format_query(&query));
 
                 let other = OtherProxied {
