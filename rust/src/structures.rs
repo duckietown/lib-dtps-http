@@ -451,15 +451,22 @@ pub struct DataReady {
     pub chunks_arriving: usize,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct History {
+    pub available: HashMap<usize, DataReady>,
+}
+
 #[derive(Debug, Clone)]
 pub struct FoundMetadata {
     pub alternative_urls: HashSet<TypeOfConnection>,
     pub answering: Option<String>,
+
     pub events_url: Option<TypeOfConnection>,
     pub events_data_inline_url: Option<TypeOfConnection>,
+    pub meta_url: Option<TypeOfConnection>,
+    pub history_url: Option<TypeOfConnection>,
+    /// nanoseconds
     pub latency_ns: u128,
-    // nanoseconds
-    pub index: Option<TypeOfConnection>,
 }
 
 pub fn get_url_from_topic_name(topic_name: &str) -> String {

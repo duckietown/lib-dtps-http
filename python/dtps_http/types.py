@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import NewType, Self
+from typing import NewType, Optional, Self, Sequence
 
 __all__ = [
     "NodeID",
@@ -43,11 +43,18 @@ class TopicNameV:
     def root(cls) -> "TopicNameV":
         return cls(())
 
+    def is_root(self) -> bool:
+        return not self.components
+
     @classmethod
     def from_dash_sep(cls, s: str) -> "TopicNameV":
         if s.endswith("/"):
             raise ValueError(f"{s!r} ends with /")
         return cls(tuple(s.split("/")))
+
+    @classmethod
+    def from_components(cls, c: Sequence[str], /) -> "TopicNameV":
+        return cls(tuple(c))
 
     @classmethod
     def from_relative_url(cls, s: str) -> "TopicNameV":
@@ -68,5 +75,19 @@ class TopicNameV:
 
         return cls(components)
 
+    def is_prefix_of(self, other: Self) -> Optional[tuple[tuple[str, ...], tuple[str, ...]]]:
+        """returns (prefix, rest)"""
+        if len(self.components) > len(other.components):
+            return None
+
+        for i in range(len(self.components)):
+            if self.components[i] != other.components[i]:
+                return None
+
+        return self.components, other.components[len(self.components) :]
+
     def __add__(self, other: Self) -> Self:
         return TopicNameV(self.components + other.components)
+
+    def nontrivial_prefixes(self) -> Sequence[Self]:
+        return [TopicNameV(self.components[:i]) for i in range(1, len(self.components))]

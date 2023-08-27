@@ -157,7 +157,7 @@ pub async fn serve_master_head(
             let mut resp = Response::new(Body::from(empty_vec));
             let h = resp.headers_mut();
             utils_headers::put_common_headers(&ss, h);
-            utils_headers::put_meta_headers(h);
+            utils_headers::put_meta_headers(h, &ds.get_properties());
             utils_headers::put_source_headers(h, &x.tr.origin_node, &x.tr.unique_id);
 
             let suffix = topic_name.as_relative_url();
@@ -174,7 +174,7 @@ pub async fn serve_master_head(
             let mut resp = Response::new(Body::from(empty_vec));
             let h = resp.headers_mut();
             utils_headers::put_source_headers(h, &tr.origin_node, &tr.unique_id);
-            utils_headers::put_meta_headers(h);
+            utils_headers::put_meta_headers(h, &ds.get_properties());
             // let suffix = topic_name.as_relative_url();
             // put_alternative_locations(&ss, h, &suffix);
             {
@@ -206,7 +206,7 @@ pub async fn serve_master_head(
                 let h = resp.headers_mut();
                 utils_headers::put_source_headers(h, &x.tr.origin_node, &x.tr.unique_id);
 
-                utils_headers::put_meta_headers(h);
+                utils_headers::put_meta_headers(h, &ds.get_properties());
                 let suffix = topic_name.as_relative_url();
                 put_alternative_locations(&ss, h, &suffix);
                 utils_headers::put_common_headers(&ss, h);
@@ -214,12 +214,17 @@ pub async fn serve_master_head(
             } else {
             }
         }
-        TypeOFSource::Transformed(_, _) => {}
-        TypeOFSource::Digest(_, _) => {}
-        TypeOFSource::Deref(_) => {}
+        TypeOFSource::Transformed(..) => {}
+        TypeOFSource::Digest(..) => {}
+        TypeOFSource::Deref(..) => {}
         TypeOFSource::OtherProxied(_) => {}
-        TypeOFSource::Index(_) => {}
+        TypeOFSource::Index(..) => {}
         TypeOFSource::Aliased(..) => {}
+        TypeOFSource::History(..) => {
+            // error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
+
+            // not_supported
+        }
     }
 
     serve_master_get(path, query, ss_mutex, headers).await
@@ -511,7 +516,7 @@ pub async fn visualize_data(
         let h = resp.headers_mut();
 
         utils_headers::put_header_content_type(h, content_type);
-        utils_headers::put_meta_headers(h);
+        utils_headers::put_meta_headers(h, properties);
         {
             let ss = ssa.lock().await;
             utils_headers::put_common_headers(&ss, h);

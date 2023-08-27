@@ -36,26 +36,29 @@ __all__ = [
 class LinkBenchmark:
     complexity: int  # 0 for local, 1 for using named, +2 for each network hop
     bandwidth: int  # B/s
-    latency: float  # seconds
-    reliability: float  # 0..1
+    latency_ns: int  # seconds
+    reliability_percent: int  # 0..100
     hops: int
 
     @classmethod
     def identity(cls) -> "LinkBenchmark":
-        return LinkBenchmark(complexity=0, bandwidth=1_000_000_000, latency=0.0, reliability=1.0, hops=1)
+        return LinkBenchmark(
+            complexity=0, bandwidth=1_000_000_000, latency_ns=0, reliability_percent=100, hops=1
+        )
 
     def __or__(self, other: "LinkBenchmark") -> "LinkBenchmark":
         complexity = self.complexity + other.complexity
         bandwidth = min(self.bandwidth, other.bandwidth)
-        latency = self.latency + other.latency
-        reliability = self.reliability * other.reliability
+        latency = self.latency_ns + other.latency_ns
+        reliability = int(self.reliability_percent * other.reliability_percent / (100 * 100))
         hops = self.hops + other.hops
         return LinkBenchmark(complexity, bandwidth, latency, reliability, hops)
 
     def fill_headers(self, headers: CIMultiDict[str]) -> None:
         # RTT = 2 * latency - in mseconds
         # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/RTT
-        rtt_ms = (self.latency * 2) * 1000
+        rtt_ns = self.latency_ns * 2
+        rtt_ms = rtt_ns / 1_000_000.0
         headers["RTT"] = f"{rtt_ms:.2f}"
         # Downlink = bandwidth in Mbits/s
         # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Downlink
@@ -90,10 +93,13 @@ class TopicProperties:
     pushable: bool
     readable: bool
     immutable: bool
+    has_history: bool
 
     @classmethod
     def streamable_readonly(cls) -> "TopicProperties":
-        return TopicProperties(streamable=True, pushable=False, readable=True, immutable=False)
+        return TopicProperties(
+            streamable=True, pushable=False, readable=True, immutable=False, has_history=True
+        )
 
 
 ContentType = str
@@ -113,6 +119,48 @@ class RawData:
 
         s = hashlib.sha256(self.content).hexdigest()
         return f"sha256:{s}"
+
+    def get_as_yaml(self) -> str:
+        ob = self.get_as_native_object()
+        import yaml
+
+        return yaml.safe_dump(ob)
+
+    def get_as_native_object(self) -> object:
+        if not is_structure(self.content_type):
+            msg = (
+                f"Cannot convert non-structure content to native object (content_type={self.content_type!r})"
+            )
+            raise ValueError(msg)
+        if is_yaml(self.content_type):
+            import yaml
+
+            return yaml.safe_load(self.content)
+        if is_json(self.content_type):
+            import json
+
+            return json.loads(self.content)
+        if is_cbor(self.content_type):
+            import cbor2
+
+            return cbor2.loads(self.content)
+        raise ValueError(f"cannot convert {self.content_type!r} to native object")
+
+
+def is_structure(content_type: str) -> bool:
+    return is_yaml(content_type) or is_json(content_type) or is_cbor(content_type)
+
+
+def is_yaml(content_type: str) -> bool:
+    return "yaml" in content_type
+
+
+def is_json(content_type: str) -> bool:
+    return "json" in content_type
+
+
+def is_cbor(content_type: str) -> bool:
+    return "cbor" in content_type
 
 
 @dataclass
@@ -148,6 +196,12 @@ class TopicRef:
 @dataclass
 class TopicsIndex:
     topics: dict[TopicNameV, TopicRef]
+
+    def __post_init__(self):
+        for k, v in self.topics.items():
+            if not v.reachability:
+                msg = f"Topic {k.as_dash_sep()!r} has no reachability"
+                raise AssertionError(msg)
 
     @classmethod
     def from_json(cls, s: object) -> "TopicsIndex":
@@ -255,6 +309,11 @@ class DataReady:
     def from_cbor(cls, s: bytes) -> "DataReady":
         struct = cbor2.loads(s)
         return parse_obj_as(DataReady, struct)
+
+
+@dataclass
+class History:
+    available: dict[int, DataReady]
 
 
 def channel_msgs_parse(d: bytes) -> ChannelInfo | DataReady | Chunk:

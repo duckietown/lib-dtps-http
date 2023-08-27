@@ -1,11 +1,13 @@
+import functools
 import os
+import posixpath
 from typing import cast, NamedTuple, NewType, Optional, TYPE_CHECKING
 from urllib.parse import unquote
 
 from urllib3.util import parse_url, Url
 
-from .types import URLString
 from . import logger
+from .types import URLString
 
 __all__ = [
     "URL",
@@ -48,7 +50,7 @@ def parse_url_unescape(s: URLString) -> URL:
     parsed = parse_url(s)
     if parsed.path is None:
         logger.warning(f"parse_url_unescape: path is None: {s!r}")
-        path = "/"
+        path = ""
     else:
         path = parsed.path
     res = Url(
@@ -86,3 +88,42 @@ def join(url: URL, path0: str) -> URL:
     res = url._replace(path=path, query=query)
     # print(f'join {url!r} {path0!r} -> {res!r}')
     return res
+
+
+@functools.lru_cache(maxsize=None)
+def _norm_parts(path: str) -> list[str]:
+    if not path.startswith("/"):
+        path = "/" + path
+    path = posixpath.normpath(path)[1:]
+    return path.split("/") if path else []
+
+
+def get_relative_url(url: str, other: str) -> URLString:
+    """
+    Return given url relative to other.
+
+    Both are operated as slash-separated paths, similarly to the 'path' part of a URL.
+    The last component of `other` is skipped if it contains a dot (considered a file).
+    Actual URLs (with schemas etc.) aren't supported. The leading slash is ignored.
+    Paths are normalized ('..' works as parent directory), but going higher than the
+    root has no effect ('foo/../../bar' ends up just as 'bar').
+    """
+    # Remove filename from other url if it has one.
+    dirname, _, basename = other.rpartition("/")
+    if "." in basename:
+        other = dirname
+
+    other_parts = _norm_parts(other)
+    dest_parts = _norm_parts(url)
+    common = 0
+    for a, b in zip(other_parts, dest_parts):
+        if a != b:
+            break
+        common += 1
+
+    rel_parts = [".."] * (len(other_parts) - common) + dest_parts[common:]
+    relurl = "/".join(rel_parts) or "."
+    res = relurl + "/" if url.endswith("/") else relurl
+    if res == "./":
+        res = ""
+    return URLString(res)

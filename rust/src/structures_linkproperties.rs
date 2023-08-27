@@ -1,26 +1,24 @@
 use std::cmp::{min, Ordering};
-use std::collections::HashMap;
-use std::fmt;
 use std::fmt::Display;
 use std::ops::Add;
-use std::path::PathBuf;
 
-use derive_more::Constructor;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use url::Url;
 
-use crate::signals_logic::TopicProperties;
-use crate::urls::join_ext;
-use crate::utils::divide_in_components;
-use crate::{join_con, RawData, TopicName};
-
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, PartialEq, Eq)]
 pub struct LinkBenchmark {
+    /// integer (complexity sums)
     pub complexity: u32,
+
+    /// bytes/s
     pub bandwidth: u32,
-    pub latency: f32,
-    pub reliability: f32,
+
+    /// nanoseconds
+    pub latency_ns: u128,
+
+    /// 0...100; multiplied together
+    pub reliability_percent: u8,
+
     pub hops: i32,
 }
 
@@ -29,14 +27,12 @@ impl LinkBenchmark {
         Self {
             complexity: 0,
             bandwidth: 1_000_000_000,
-            latency: 0.0,
-            reliability: 1.0,
+            latency_ns: 0,
+            reliability_percent: 100,
             hops: 0,
         }
     }
 }
-
-impl Eq for LinkBenchmark {}
 
 impl Add for LinkBenchmark {
     type Output = LinkBenchmark;
@@ -45,20 +41,12 @@ impl Add for LinkBenchmark {
         LinkBenchmark {
             complexity: self.complexity + rhs.complexity,
             bandwidth: min(self.bandwidth, rhs.bandwidth),
-            latency: self.latency + rhs.latency,
-            reliability: self.reliability * rhs.reliability,
+            latency_ns: self.latency_ns + rhs.latency_ns,
+            reliability_percent: ((self.reliability_percent as u32)
+                * (rhs.reliability_percent as u32)
+                / (100 * 100)) as u8,
             hops: self.hops + rhs.hops,
         }
-    }
-}
-
-impl PartialEq<Self> for LinkBenchmark {
-    fn eq(&self, other: &Self) -> bool {
-        return self.complexity == other.complexity
-            && self.bandwidth == other.bandwidth
-            && self.latency == other.latency
-            && self.reliability == other.reliability
-            && self.hops == other.hops;
     }
 }
 
@@ -78,13 +66,13 @@ impl Ord for LinkBenchmark {
                     .unwrap_or(Ordering::Equal)
             })
             .then_with(|| {
-                self.latency
-                    .partial_cmp(&other.latency)
+                self.latency_ns
+                    .partial_cmp(&other.latency_ns)
                     .unwrap_or(Ordering::Equal)
             })
             .then_with(|| {
-                self.reliability
-                    .partial_cmp(&other.reliability)
+                self.reliability_percent
+                    .partial_cmp(&other.reliability_percent)
                     .unwrap_or(Ordering::Equal)
             })
             .then_with(|| self.hops.cmp(&other.hops))

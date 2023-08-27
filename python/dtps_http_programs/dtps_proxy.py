@@ -118,7 +118,7 @@ async def go_proxy(args: Optional[list[str]] = None) -> None:
                     raise ValueError(f"Topic {topic_name} not available at {urlbase}")
 
                 def choose_key(x: TopicReachability) -> tuple[int, float, float]:
-                    return x.benchmark.complexity, x.benchmark.latency, -x.benchmark.bandwidth
+                    return x.benchmark.complexity, x.benchmark.latency_ns, -x.benchmark.bandwidth
 
                 possible.sort(key=lambda _: choose_key(_[1]))
                 url_to_use, r = possible[0]
@@ -139,8 +139,8 @@ async def go_proxy(args: Optional[list[str]] = None) -> None:
                     forward_url_data=url_to_use,
                     forward_url_events=metadata_to_use.events_url,
                     forward_url_events_inline_data=metadata_to_use.events_data_inline_url,
-                    content_info=None,
-                    properties=None,
+                    content_info=tr2.content_info,  # FIXME: content info
+                    properties=tr2.properties,
                 )
 
                 logger.info(

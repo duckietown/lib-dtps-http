@@ -1,6 +1,3 @@
-pub static HEADER_SEE_EVENTS: &'static str = "x-dtps-events";
-pub static HEADER_SEE_EVENTS_INLINE_DATA: &'static str = "x-dtps-events-inline-data";
-
 pub static HEADER_NODE_ID: &'static str = "x-dtps-node-id";
 pub static HEADER_NODE_PASSED_THROUGH: &'static str = "X-dtps-Node-ID-Passed-Through"; // should be Via
 pub static HEADER_LINK_BENCHMARK: &'static str = "x-dtps-link-benchmark";
@@ -23,8 +20,8 @@ pub static CONTENT_TYPE_DTPS_INDEX: &'static str = "application/vnd.dt.dtps-inde
 pub static CONTENT_TYPE_DTPS_INDEX_CBOR: &'static str = "application/vnd.dt.dtps-index+cbor";
 pub static CONTENT_TYPE_TOPIC_HISTORY_CBOR: &'static str = "application/vnd.dt.dtps-history+cbor";
 pub static EVENTS_SUFFIX: &'static str = ":events";
-// pub static EVENTS_SUFFIX_DATA: &'static str = ":events/?send_data=1";
-pub static REL_URL_META: &'static str = ":index";
+pub static REL_URL_META: &'static str = ":meta";
+pub static REL_URL_DEREF: &'static str = ":deref";
 
 pub static REL_HISTORY: &'static str = "dtps-history";
 pub static URL_HISTORY: &'static str = ":history";

@@ -17,6 +17,8 @@ from .constants import (
     HEADER_NODE_ID,
     REL_EVENTS_DATA,
     REL_EVENTS_NODATA,
+    REL_HISTORY,
+    REL_META,
 )
 from .exceptions import EventListeningNotAvailable
 from .server import get_link_headers
@@ -52,12 +54,6 @@ __all__ = [
 
 U = TypeVar("U", bound=URL)
 
-#
-# @dataclass
-# class AskTopicResult:
-#     alternative_urls: list[URLString]
-#     available: dict[TopicName, TopicRef]
-
 
 @dataclass
 class FoundMetadata:
@@ -65,6 +61,8 @@ class FoundMetadata:
     answering: Optional[NodeID]
     events_url: Optional[URLWSOffline]
     events_data_inline_url: Optional[URLWSInline]
+    meta_url: Optional[URLString]
+    history_url: Optional[URLString]
 
 
 class DTPSClient:
@@ -115,13 +113,14 @@ class DTPSClient:
             async with session.get(use_url) as resp:
                 resp.raise_for_status()
                 answering = resp.headers.get(HEADER_NODE_ID)
-                # logger.debug(f"ask topics {resp.headers}")
+
+                #  logger.debug(f"ask topics {resp.headers}")
                 if (preferred := await self.prefer_alternative(url, resp)) is not None:
                     logger.info(f"Using preferred alternative to {url} -> {repr(preferred)}")
                     return await self.ask_topics(preferred)
                 assert resp.status == 200, resp.status
                 res_bytes: bytes = await resp.read()
-                res = cbor2.loads(res_bytes)  # .decode("utf-8")
+                res = cbor2.loads(res_bytes)  #  .decode("utf-8")
 
             alternatives0 = cast(list[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION, []))
             where_this_available = [url] + [parse_url_unescape(_) for _ in alternatives0]
@@ -132,15 +131,18 @@ class DTPSClient:
                 reachability: list[TopicReachability] = []
                 for r in tr0.reachability:
                     if "://" in r.url:
-                        reachability.append(r)  # r2 = replace(r, url=url2)  # reachability.append(r2)
+                        reachability.append(r)  #  r2 = replace(r, url=url2)
+                    #  reachability.append(r2)
                     else:
                         for w in where_this_available:
                             url2 = url_to_string(join(w, r.url))
 
                             r2 = replace(r, url=url2)
                             reachability.append(r2)
-                # print(f"reachability {reachability}")
-                # urls: list[URLString] = [url_to_string(join(url, _)) for _ in tr0.urls]
+
+                #  print(f"reachability {reachability}")
+
+                #  urls: list[URLString] = [url_to_string(join(url, _)) for _ in tr0.urls]
 
                 tr2 = replace(tr0, reachability=reachability)
                 available[k] = tr2
@@ -160,7 +162,7 @@ class DTPSClient:
             async with session.post(use_url, data=rd.content, headers=headers) as resp:
                 resp.raise_for_status()
                 assert resp.status == 200, resp
-                await self.prefer_alternative(url, resp)  # just memorize
+                await self.prefer_alternative(url, resp)  #  just memorize
 
     async def prefer_alternative(self, current: U, resp: aiohttp.ClientResponse) -> Optional[U]:
         assert isinstance(current, URL), current
@@ -175,7 +177,7 @@ class DTPSClient:
         alternatives = [current] + [parse_url_unescape(a) for a in alternatives0]
         answering = cast(NodeID, resp.headers.get(HEADER_NODE_ID))
 
-        # noinspection PyTypeChecker
+        #  noinspection PyTypeChecker
         best = await self.find_best_alternative([(_, answering) for _ in alternatives])
         if best is None:
             best = current
@@ -196,9 +198,9 @@ class DTPSClient:
             return None
 
         me = ForwardingStep(
-            this_node_id,  # complexity=benchmark.complexity,
-            # estimated_latency=benchmark.latency,
-            # estimated_bandwidth=benchmark.bandwidth,
+            this_node_id,  #  complexity=benchmark.complexity,
+            #  estimated_latency=benchmark.latency,
+            #  estimated_bandwidth=benchmark.bandwidth,
             forwarding_node_connects_to=url_to_string(connects_to),
             performance=benchmark,
         )
@@ -217,7 +219,7 @@ class DTPSClient:
         possible: list[tuple[float, float, float, U]] = []
         for a, expects_answer_from in us:
             if (score := await self.can_use_url(a, expects_answer_from)) is not None:
-                possible.append((score.complexity, score.latency, -score.bandwidth, a))
+                possible.append((score.complexity, score.latency_ns, -score.bandwidth, a))
                 results.append(f"✓ {str(a):<60} -> {score}")
             else:
                 results.append(f"✗ {a} ")
@@ -287,16 +289,22 @@ class DTPSClient:
                 if who_answers != expects_answer_from:
                     msg = f"wrong {who_answers=} header in {url}, expected {expects_answer_from}"
                     logger.error(msg)
+
                     #
-                    # self.obtained_answer[blacklist_key] = resp.headers[HEADER_NODE_ID]
+
+                    #  self.obtained_answer[blacklist_key] = resp.headers[HEADER_NODE_ID]
+
                     #
-                    # self.blacklist_protocol_host_port.add(blacklist_key)
+
+                    #  self.blacklist_protocol_host_port.add(blacklist_key)
                     return None
 
-            return LinkBenchmark(complexity, bandwidth, latency, reliability, hops)
+            latency_ns = int(latency * 1_000_000_000)
+            reliability_percent = int(reliability * 100)
+            return LinkBenchmark(complexity, bandwidth, latency_ns, reliability_percent, hops)
         if url.scheme == "http+unix":
             complexity = 1
-            reliability = 1
+            reliability_percent = 100
             hops = 1
             bandwidth = 100_000_000
             latency = 0.001
@@ -310,21 +318,39 @@ class DTPSClient:
             if who_answers != expects_answer_from:
                 msg = f"wrong {who_answers=} header in {url}, expected {expects_answer_from}"
                 logger.error(msg)
+
                 #
-                # self.obtained_answer[blacklist_key] = resp.headers[HEADER_NODE_ID]
+
+                #  self.obtained_answer[blacklist_key] = resp.headers[HEADER_NODE_ID]
+
                 #
-                # self.blacklist_protocol_host_port.add(blacklist_key)
+
+                #  self.blacklist_protocol_host_port.add(blacklist_key)
                 return None
 
-            return LinkBenchmark(
-                complexity, bandwidth, latency, reliability, hops
-            )  # # if path is None:  #     raise ValueError(f"no host in {repr(url)}")  # if os.path.exists(path):  #  # else:  #     logger.warning(f"unix socket {path!r} does not exist")  #     self.blacklist_protocol_host_port.add(blacklist_key)  #     return None
+            latency_ns = int(latency * 1_000_000_000)
+
+            return LinkBenchmark(complexity, bandwidth, latency_ns, reliability_percent, hops)
+
+            #
+        #  if path is None:
+        #      raise ValueError(f"no host in {repr(url)}")
+        #  if os.path.exists(path):
+        #
+        #  else:
+        #      logger.warning(f"unix socket {path!r} does not exist")
+        #      self.blacklist_protocol_host_port.add(blacklist_key)
+        #      return None
         if url.scheme == "http+ether":
-            # path = url.host
-            # if os.path.exists(path):
-            #     return 2
-            # else:
-            #     logger.warning(f"unix socket {path!r} does not exist")
+            #  path = url.host
+
+            #  if os.path.exists(path):
+
+            #      return 2
+
+            #  else:
+
+            #      logger.warning(f"unix socket {path!r} does not exist")
             return None
 
         logger.warning(f"unknown scheme {url.scheme!r} for {url}")
@@ -337,11 +363,22 @@ class DTPSClient:
                 md = await self.get_metadata(url)
                 logger.warn(f"checking {url} -> {md}")
                 return md.answering
-                self.obtained_answer[
-                    key
-                ] = (
-                    md.answering
-                )  # # async with self.my_session(url, conn_timeout=1) as (session, url_to_use):  #     logger.debug(f"checking {url}...")  #     async with session.head(url_to_use) as resp:  #         if HEADER_NODE_ID not in resp.headers:  #             msg = f"no {HEADER_NODE_ID} header in {url}"  #             logger.error(msg)  #             self.obtained_answer[key] = None  #         else:  #             self.obtained_answer[key] = NodeID(resp.headers[HEADER_NODE_ID])
+
+                #   self.obtained_answer[
+            #       key
+            #   ] = (
+            #       md.answering
+            #   )
+            #
+            #   async with self.my_session(url, conn_timeout=1) as (session, url_to_use):
+            #       logger.debug(f"checking {url}...")
+            #       async with session.head(url_to_use) as resp:
+            #           if HEADER_NODE_ID not in resp.headers:
+            #               msg = f"no {HEADER_NODE_ID} header in {url}"
+            #               logger.error(msg)
+            #               self.obtained_answer[key] = None
+            #           else:
+            #               self.obtained_answer[key] = NodeID(resp.headers[HEADER_NODE_ID])
 
             except:
                 logger.exception(f"error checking {url} {traceback.format_exc()}")
@@ -372,7 +409,8 @@ class DTPSClient:
             assert isinstance(url, URL)
             if url.scheme == "http+unix":
                 connector = UnixConnector(path=url.host)
-                # noinspection PyProtectedMember
+
+                #  noinspection PyProtectedMember
                 use_url = str(url._replace(scheme="http", host="localhost"))
             elif url.scheme in ("http", "https"):
                 connector = TCPConnector()
@@ -389,12 +427,15 @@ class DTPSClient:
         try:
             async with self.my_session(url, conn_timeout=2) as (session, use_url):
                 async with session.head(use_url) as resp:
-                    # if resp.status == 404:
-                    #     return FoundMetadata([], None, None, None)
+                    #  if resp.status == 404:
+
+                    #      return FoundMetadata([], None, None, None)
                     logger.info(f"headers {url0}: {resp.headers}")
                     resp.raise_for_status()
-                    # assert resp.status == 200, resp
-                    # logger.info(f"headers : {resp.headers}")
+
+                    #  assert resp.status == 200, resp
+
+                    #  logger.info(f"headers : {resp.headers}")
                     if HEADER_CONTENT_LOCATION in resp.headers:
                         alternatives0 = cast(list[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION))
                     else:
@@ -414,13 +455,29 @@ class DTPSClient:
                         answering = None
                     else:
                         answering = NodeID(resp.headers[HEADER_NODE_ID])
-        except:  # (TimeoutError, ClientConnectorError):
+
+                    if REL_HISTORY not in resp.headers:
+                        history_url = None
+                    else:
+                        history_url = join(url, resp.headers[REL_HISTORY])
+                    if REL_META not in resp.headers:
+                        meta_url = None
+                    else:
+                        meta_url = join(url, resp.headers[REL_META])
+        except:
+            #  (TimeoutError, ClientConnectorError):
             logger.error(f"cannot connect to {url0=!r} {use_url=!r} \n{traceback.format_exc()}")
-            # return FoundMetadata([], None, None, None)
+
+            #  return FoundMetadata([], None, None, None)
             raise
         urls = [cast(URLTopic, join(url, _)) for _ in alternatives0]
         return FoundMetadata(
-            urls, answering=answering, events_url=events_url, events_data_inline_url=events_url_data
+            urls,
+            answering=answering,
+            events_url=events_url,
+            events_data_inline_url=events_url_data,
+            meta_url=meta_url,
+            history_url=history_url,
         )
 
     async def choose_best(self, reachability: list[TopicReachability]) -> URL:
@@ -493,7 +550,7 @@ class DTPSClient:
         async with self.my_session(url_websockets) as (session, use_url):
             ws: ClientWebSocketResponse
             async with session.ws_connect(use_url) as ws:
-                # noinspection PyProtectedMember
+                #  noinspection PyProtectedMember
                 headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())
                 logger.info(f"websocket to {url_websockets} ready\n{headers}")
 
@@ -523,13 +580,16 @@ class DTPSClient:
 
     async def _download_from_urls(self, urlbase: URL, dr: DataReady) -> RawData:
         url_datas = [join(urlbase, _.url) for _ in dr.availability]
-        # logger.info(f"url_datas {url_datas}")
+
+        #  logger.info(f"url_datas {url_datas}")
         if not url_datas:
             logger.error(f"no url_datas in {dr}")
             raise AssertionError(f"no url_datas in {dr}")
 
-        url_data = url_datas[0]  # TODO: try multiple urls
-        # logger.info(f"downloading {url_data!r}")
+        url_data = url_datas[0]
+        #  TODO: try multiple urls
+
+        #  logger.info(f"downloading {url_data!r}")
         async with self.my_session(url_data) as (session2, use_url2):
             async with session2.get(use_url2) as resp_data:
                 resp_data.raise_for_status()
@@ -547,7 +607,7 @@ class DTPSClient:
         async with self.my_session(url_websockets) as (session, use_url):
             ws: ClientWebSocketResponse
             async with session.ws_connect(use_url) as ws:
-                # noinspection PyProtectedMember
+                #  noinspection PyProtectedMember
                 headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())
                 logger.info(f"websocket to {url_websockets} ready\n{headers}")
 
@@ -576,7 +636,7 @@ class DTPSClient:
                                     f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}"
                                 )
 
-                            # create a byte array initialized at
+                            #  create a byte array initialized at
 
                             data = b""
                             for _ in range(dr.chunks_arriving):

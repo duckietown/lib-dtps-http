@@ -205,7 +205,8 @@ async def app_start(
         sys.exit(msg)
 
     if not no_alternatives:
-        s.set_available_urls(available_urls)
+        for url in available_urls:
+            s.add_available_url(url)
         logger.info("available URLs\n" + "".join("* " + _ + "\n" for _ in available_urls))
     # wait for finish signal
     try:

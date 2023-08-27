@@ -58,7 +58,8 @@ HEADER_CONTENT_LOCATION = "Content-Location"
 REL_EVENTS_NODATA = "dtps-events"
 REL_EVENTS_DATA = "dtps-events-inline-data"
 REL_META = "dtps-meta"
+REL_HISTORY = "dtps-history"
 
 EVENTS_SUFFIX = ":events"
-
-REL_URL_META = ":index"
+REL_URL_META = ":meta"
+REL_URL_HISTORY = ":history"

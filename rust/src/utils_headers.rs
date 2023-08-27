@@ -4,10 +4,9 @@ use http::{header, HeaderMap, HeaderValue};
 use maplit::hashmap;
 
 use crate::{
-    get_id_string, ServerState, CONTENT_TYPE_DTPS_INDEX_CBOR, EVENTS_SUFFIX,
-    HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID, HEADER_NODE_ID, HEADER_SEE_EVENTS,
-    HEADER_SEE_EVENTS_INLINE_DATA, REL_EVENTS_DATA, REL_EVENTS_NODATA, REL_HISTORY, REL_META,
-    REL_URL_META, URL_HISTORY,
+    get_id_string, ServerState, TopicProperties, CONTENT_TYPE_DTPS_INDEX_CBOR, EVENTS_SUFFIX,
+    HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID, HEADER_NODE_ID, REL_EVENTS_DATA,
+    REL_EVENTS_NODATA, REL_HISTORY, REL_META, REL_URL_META, URL_HISTORY,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -119,37 +118,41 @@ pub fn put_common_headers(ss: &ServerState, headers: &mut HeaderMap<HeaderValue>
     );
 }
 
-pub fn put_meta_headers(h: &mut HeaderMap<HeaderValue>) {
+pub fn put_meta_headers(h: &mut HeaderMap<HeaderValue>, tp: &TopicProperties) {
     // h.append(HEADER_SEE_EVENTS, HeaderValue::from_static(EVENTS_SUFFIX));
     // h.append(
     //     HEADER_SEE_EVENTS_INLINE_DATA,
     //     HeaderValue::from_static(EVENTS_SUFFIX_DATA),
     // );
+    if tp.streamable {
+        put_link_header(
+            h,
+            &format!("{EVENTS_SUFFIX}/"),
+            REL_EVENTS_NODATA,
+            Some("websocket"),
+        );
+        put_link_header(
+            h,
+            &format!("{EVENTS_SUFFIX}/?send_data=1"),
+            REL_EVENTS_DATA,
+            Some("websocket"),
+        );
+    }
 
-    put_link_header(
-        h,
-        &format!("{EVENTS_SUFFIX}/"),
-        REL_EVENTS_NODATA,
-        Some("websocket"),
-    );
-    put_link_header(
-        h,
-        &format!("{EVENTS_SUFFIX}/?send_data=1"),
-        REL_EVENTS_DATA,
-        Some("websocket"),
-    );
     put_link_header(
         h,
         &format!("{REL_URL_META}/"),
         REL_META,
         Some(CONTENT_TYPE_DTPS_INDEX_CBOR),
     );
-    put_link_header(
-        h,
-        &format!("{URL_HISTORY}/"),
-        REL_HISTORY,
-        Some(CONTENT_TYPE_DTPS_INDEX_CBOR),
-    );
+    if tp.has_history {
+        put_link_header(
+            h,
+            &format!("{URL_HISTORY}/"),
+            REL_HISTORY,
+            Some(CONTENT_TYPE_DTPS_INDEX_CBOR),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -162,7 +165,6 @@ mod tests {
     use crate::utils_headers::LinkHeader;
 
     #[test]
-
     fn link_parse_1() {
         let s = "<:events?send_data=1>; rel=dtps-events-inline-data; type=websocket";
         let found = LinkHeader::from_header_value(s);

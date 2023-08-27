@@ -50,15 +50,12 @@ pub struct DataSaved {
 #[derive(Debug)]
 pub struct ObjectQueue {
     pub sequence: Vec<DataSaved>,
-    // pub data: HashMap<String, RawData>,
     pub tx: broadcast::Sender<usize>,
     pub seq: usize,
     pub tr: TopicRefInternal,
+    pub max_history: Option<usize>,
 
     pub tx_notification: broadcast::Sender<InsertNotification>,
-    //
-    // pub origin_node: String,
-    // pub unique_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -68,7 +65,7 @@ pub struct InsertNotification {
 }
 
 impl ObjectQueue {
-    pub fn new(tr: TopicRefInternal) -> Self {
+    pub fn new(tr: TopicRefInternal, max_history: Option<usize>) -> Self {
         let (tx, _rx) = broadcast::channel(1024);
         let (tx_notification, _rx) = broadcast::channel(1024);
         ObjectQueue {
@@ -78,6 +75,7 @@ impl ObjectQueue {
             tx,
             tr,
             tx_notification,
+            max_history,
         }
     }
 

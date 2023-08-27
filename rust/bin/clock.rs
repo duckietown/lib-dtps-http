@@ -22,7 +22,8 @@ async fn clock_go(state: ServerStateAccess, topic_name: &str, interval_s: f32) -
             streamable: true,
             pushable: false,
             readable: true,
-            immutable: false, //
+            immutable: false,
+            has_history: false,
         };
         // let data = HashMap::new();
         ss.new_topic(
@@ -31,6 +32,7 @@ async fn clock_go(state: ServerStateAccess, topic_name: &str, interval_s: f32) -
             "application/json",
             &props,
             Some(schema_for!(i64)),
+            None,
         )?;
     }
     loop {

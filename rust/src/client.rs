@@ -17,7 +17,6 @@ use maplit::hashmap;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -25,9 +24,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tungstenite::Message as TM;
 use warp::reply::Response;
 
-use crate::constants::{
-    HEADER_CONTENT_LOCATION, HEADER_NODE_ID, HEADER_SEE_EVENTS, HEADER_SEE_EVENTS_INLINE_DATA,
-};
+use crate::constants::{HEADER_CONTENT_LOCATION, HEADER_NODE_ID};
 use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
 use crate::structures::{
     DataReady, FoundMetadata, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection,
@@ -40,8 +37,9 @@ use crate::TypeOfConnection::Same;
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
 use crate::{
     context, error_with_info, internal_assertion, not_available, not_implemented, not_reachable,
-    put_header_accept, put_header_content_type, DTPSError, DataSaved, RawData, TopicName,
-    CONTENT_TYPE_DTPS_INDEX, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
+    put_header_accept, put_header_content_type, DTPSError, DataSaved, History, RawData, TopicName,
+    CONTENT_TYPE_DTPS_INDEX, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR,
+    REL_HISTORY,
 };
 use crate::{LinkBenchmark, LinkHeader, REL_EVENTS_DATA, REL_EVENTS_NODATA, REL_META};
 
@@ -135,6 +133,7 @@ pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<Option<MsgServe
         }
     };
     if !msg.is_binary() {
+        // pragma: no cover
         let s = format!("unexpected message, expected binary {msg:#?}");
         return DTPSError::other(s);
     }
@@ -147,6 +146,7 @@ pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<Option<MsgServe
             msg_from_server = dr_;
         }
         Err(e) => {
+            // pragma: no cover
             let rawvalue = serde_cbor::from_slice::<serde_cbor::Value>(&data);
             let s = format!(
                 " cannot parse cbor as MsgServerToClient: {:#?}\n{:#?}\n{:#?}",
@@ -175,6 +175,7 @@ pub async fn listen_events_websocket(
     match first {
         Some(MsgServerToClient::ChannelInfo(..)) => {}
         _ => {
+            // pragma: no cover
             let s = format!("Expected ChannelInfo, got {first:?}");
             log::error!("{}", s);
             return DTPSError::other(s);
@@ -191,6 +192,7 @@ pub async fn listen_events_websocket(
             Some(MsgServerToClient::DataReady(dr_)) => dr_,
 
             _ => {
+                // pragma: no cover
                 let s =
                     format!("{prefix}: message #{index}: unexpected message: {msg_from_server:#?}");
                 log::error!("{}", s);
@@ -224,6 +226,7 @@ pub async fn listen_events_websocket(
                 let chunk = match msg_from_server {
                     Some(MsgServerToClient::DataReady(..) | MsgServerToClient::ChannelInfo(..))
                     | None => {
+                        // pragma: no cover
                         let s = format!("{prefix}: unexpected message : {msg_from_server:#?}");
                         return DTPSError::other(s);
                     }
@@ -239,6 +242,7 @@ pub async fn listen_events_websocket(
         };
 
         if content.len() != dr.content_length {
+            // pragma: no cover
             let s = format!(
                 "{prefix}: unexpected content length: {} != {}",
                 content.len(),
@@ -255,11 +259,9 @@ pub async fn listen_events_websocket(
 
         match tx.send(notification) {
             Ok(_) => {}
-            Err(e) => {
+            Err(_) => {
                 // this is not an error, it just means that the receiver has been dropped
                 break;
-                // let s = format!("cannot send data: {}", e);
-                // return DTPSError::other(s);
             }
         }
     }
@@ -269,10 +271,10 @@ pub async fn listen_events_websocket(
 pub async fn get_rawdata(con: &TypeOfConnection) -> DTPSR<RawData> {
     let resp = make_request(con, hyper::Method::GET, b"", None, None).await?;
     // TODO: send more headers
-    interpret_resp(resp).await
+    interpret_resp(con, resp).await
 }
 
-async fn interpret_resp(resp: Response) -> DTPSR<RawData> {
+pub async fn interpret_resp(con: &TypeOfConnection, resp: Response) -> DTPSR<RawData> {
     if resp.status().is_success() {
         let content_type = get_content_type(&resp);
         // Get the response body bytes.
@@ -282,11 +284,12 @@ async fn interpret_resp(resp: Response) -> DTPSR<RawData> {
             content_type,
         })
     } else {
+        let url = con.to_string();
         let code = resp.status().as_u16();
         let as_s = resp.status().as_str().to_string();
         let content = hyper::body::to_bytes(resp.into_body()).await?;
         let string = String::from_utf8(content.to_vec()).unwrap();
-        return Err(DTPSError::FailedRequest("".to_string(), code, as_s, string));
+        return Err(DTPSError::FailedRequest(url, code, as_s, string));
     }
 }
 
@@ -343,6 +346,7 @@ pub async fn post_data(con: &TypeOfConnection, rd: &RawData) -> DTPSR<DataSaved>
         "Cannot get body bytes"
     )?;
     if !is_success {
+        // pragma: no cover
         let body_text = String::from_utf8_lossy(&body_bytes);
         return not_available!("Request is not a success: for {con}\n{as_string:?}\n{body_text}");
     }
@@ -351,6 +355,28 @@ pub async fn post_data(con: &TypeOfConnection, rd: &RawData) -> DTPSR<DataSaved>
         "Cannot interpret as CBOR"
     )?;
 
+    Ok(x0)
+}
+
+pub async fn get_history(con: &TypeOfConnection) -> DTPSR<History> {
+    let rd = get_rawdata(con).await?;
+    let content_type = rd.content_type;
+    if content_type != CONTENT_TYPE_TOPIC_HISTORY_CBOR {
+        // pragma: no cover
+        return not_available!(
+            "Expected content type {CONTENT_TYPE_TOPIC_HISTORY_CBOR}, obtained {content_type} "
+        );
+    }
+    let x = serde_cbor::from_slice::<History>(&rd.content);
+    if x.is_err() {
+        // pragma: no cover
+        let value: serde_cbor::Value = serde_cbor::from_slice(&rd.content)?;
+        let s = format!("cannot parse as CBOR:\n{:#?}", value);
+        log::error!("{}", s);
+        log::error!("content: {:#?}", x);
+        return DTPSError::other(s);
+    }
+    let x0 = x.unwrap();
     Ok(x0)
 }
 
@@ -363,12 +389,14 @@ pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
     // debug!("{con:?}: content type {content_type}");
     let content_type = rd.content_type;
     if content_type != CONTENT_TYPE_DTPS_INDEX_CBOR {
+        // pragma: no cover
         return not_available!(
             "Expected content type {CONTENT_TYPE_DTPS_INDEX_CBOR}, obtained {content_type} "
         );
     }
     let x = serde_cbor::from_slice::<TopicsIndexWire>(&rd.content);
     if x.is_err() {
+        // pragma: no cover
         let value: serde_cbor::Value = serde_cbor::from_slice(&rd.content)?;
         let s = format!("cannot parse as CBOR:\n{:#?}", value);
         log::error!("{}", s);
@@ -410,16 +438,16 @@ pub async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResul
         }
         TypeOfConnection::File(..) => 0,
     };
-    let reliability = match con {
-        TCP(_) => 0.7,
-        UNIX(_) => 0.9,
+    let reliability_percent = match con {
+        TCP(_) => 70,
+        UNIX(_) => 90,
         Relative(_, _) => {
             panic!("unexpected relative url here: {}", con);
         }
         Same() => {
             panic!("not expected here {}", con);
         }
-        TypeOfConnection::File(..) => 1.0,
+        TypeOfConnection::File(..) => 100,
     };
     match md {
         Err(err) => {
@@ -434,12 +462,12 @@ pub async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResul
                     if answering != expect_node_id {
                         WrongNodeAnswering
                     } else {
-                        let latency = (md_.latency_ns as f32) / 1_000_000_000.0;
+                        let latency_ns = md_.latency_ns;
                         let lb = LinkBenchmark {
                             complexity,
                             bandwidth: 100_000_000,
-                            latency,
-                            reliability,
+                            latency_ns,
+                            reliability_percent,
                             hops: 1,
                         };
                         Accessible(lb)
@@ -651,17 +679,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
         .map(|x| parse_url_ext(x).unwrap())
         .collect();
     alternative_urls.push(conbase.clone());
-    let events_url = headers
-        .get(HEADER_SEE_EVENTS)
-        .map(string_from_header_value)
-        .map(|x| join_ext(&conbase, &x).ok())
-        .flatten();
 
-    let events_data_inline_url = headers
-        .get(HEADER_SEE_EVENTS_INLINE_DATA)
-        .map(string_from_header_value)
-        .map(|x| join_ext(&conbase, &x).ok())
-        .flatten();
     let answering = headers.get(HEADER_NODE_ID).map(string_from_header_value);
     //
     // if answering == None {
@@ -682,24 +700,31 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
         links.insert(rel, link);
     }
     let alternative_urls: HashSet<_> = alternative_urls.iter().cloned().collect();
-    let mut md = FoundMetadata {
+
+    let get_if_exists = |w: &str| -> Option<TypeOfConnection> {
+        if let Some(l) = links.get(w) {
+            let url = l.url.clone();
+            let url = join_ext(&conbase, &url).ok()?;
+            Some(url)
+        } else {
+            None
+        }
+    };
+
+    let events_url = get_if_exists(REL_EVENTS_NODATA);
+    let events_data_inline_url = get_if_exists(REL_EVENTS_DATA);
+    let meta_url = get_if_exists(REL_META);
+    let history_url = get_if_exists(REL_HISTORY);
+
+    let md = FoundMetadata {
         alternative_urls,
         events_url,
         answering,
         events_data_inline_url,
         latency_ns,
-        index: None,
+        meta_url,
+        history_url,
     };
-
-    if let Some(l) = links.get(REL_EVENTS_NODATA) {
-        md.events_url = join_ext(&conbase, &l.url).ok();
-    }
-    if let Some(l) = links.get(REL_EVENTS_DATA) {
-        md.events_data_inline_url = join_ext(&conbase, &l.url).ok();
-    }
-    if let Some(l) = links.get(REL_META) {
-        md.index = join_ext(&conbase, &l.url).ok();
-    }
     info!("Logging metadata: {md:#?} headers {headers:#?}");
 
     Ok(md)

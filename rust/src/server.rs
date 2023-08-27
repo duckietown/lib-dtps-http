@@ -11,7 +11,7 @@ use clap::Parser;
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use indent::indent_all_with;
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use maplit::hashmap;
 use maud::PreEscaped;
 use maud::{html, DOCTYPE};
@@ -44,16 +44,13 @@ use crate::object_queues::*;
 use crate::server_state::*;
 use crate::structures::*;
 use crate::utils::divide_in_components;
-use crate::utils_headers::{
-    put_common_headers, put_header_content_type, put_header_location, put_meta_headers,
-    put_source_headers,
-};
+use crate::utils_headers::{put_common_headers, put_header_content_type, put_header_location};
 use crate::websocket_signals::{
     ChannelInfo, ChannelInfoDesc, Chunk, MsgClientToServer, MsgServerToClient,
 };
 use crate::{
     error_other, error_with_info, format_digest_path, handle_rejection, interpret_path,
-    invalid_input, not_available, parse_url_ext, utils, utils_headers, DTPSError, TopicName, DTPSR,
+    invalid_input, parse_url_ext, utils, utils_headers, DTPSError, TopicName, DTPSR,
 };
 
 pub type HandlersResponse = Result<http::Response<hyper::Body>, Rejection>;
@@ -549,48 +546,28 @@ pub fn get_channel_info_message(oq: &ObjectQueue) -> ChannelInfo {
         oldest,
     }
 }
-//
-// async fn get_series_of_messages_for_notification(
-//     send_data: bool,
-//     ss: &ServerState,
-//     oq: &ObjectQueue,
-//     this_one: &DataSaved,
-// ) -> Vec<MsgServerToClient> {
-//     let mut out = vec![];
-//     let the_availability = vec![ResourceAvailabilityWire {
-//         url: format_digest_path(&this_one.digest, &this_one.content_type),
-//         available_until: utils::epoch() + 60.0,
-//     }];
-//     let nchunks = if send_data { 1 } else { 0 };
-//     let dr2 = DataReady {
-//         origin_node: oq.tr.origin_node.clone(),
-//         unique_id: oq.tr.unique_id.clone(),
-//         sequence: this_one.index,
-//         time_inserted: this_one.time_inserted,
-//         digest: this_one.digest.clone(),
-//         content_type: this_one.content_type.clone(),
-//         content_length: this_one.content_length,
-//         clocks: this_one.clocks.clone(),
-//         availability: the_availability,
-//         chunks_arriving: nchunks,
-//     };
-//
-//     let out_message: MsgServerToClient = MsgServerToClient::DataReady(dr2);
-//     out.push(out_message);
-//
-//     if send_data {
-//         let content = ss.get_blob(&this_one.digest).unwrap();
-//         let chunk = MsgServerToClient::Chunk(Chunk {
-//             digest: this_one.digest.clone(),
-//             i: 0,
-//             n: nchunks,
-//             index: 0,
-//             data: Bytes::from(content.clone()),
-//         });
-//         out.push(chunk);
-//     }
-//     out
-// }
+
+pub fn get_dataready(this_one: &DataSaved) -> DataReady {
+    let availability = vec![ResourceAvailabilityWire {
+        url: format_digest_path(&this_one.digest, &this_one.content_type),
+        available_until: utils::epoch() + 60.0,
+    }];
+
+    let nchunks = 0;
+    let dr2 = DataReady {
+        origin_node: this_one.origin_node.clone(),
+        unique_id: this_one.unique_id.clone(),
+        sequence: this_one.index,
+        time_inserted: this_one.time_inserted,
+        digest: this_one.digest.clone(),
+        content_type: this_one.content_type.clone(),
+        content_length: this_one.content_length,
+        clocks: this_one.clocks.clone(),
+        availability,
+        chunks_arriving: nchunks,
+    };
+    dr2
+}
 
 pub async fn get_series_of_messages_for_notification_(
     send_data: bool,
@@ -872,139 +849,6 @@ pub const JAVASCRIPT_SEND: &str = r##"
 
 
 "##;
-
-pub async fn handler_topic_generic(
-    topic_name: &TopicName,
-    ss_mutex: ServerStateAccess,
-    headers: HeaderMap,
-) -> Result<http::Response<Body>, Rejection> {
-    let accept_headers: Vec<String> = utils_headers::get_accept_header(&headers);
-
-    if accept_headers.contains(&"text/html".to_string()) {
-        return handler_topic_html_summary(topic_name, ss_mutex).await;
-    };
-
-    // check if the client is requesting an HTML page
-
-    let digest: String;
-    let content_type: String;
-    {
-        let ss = ss_mutex.lock().await;
-
-        let x: &ObjectQueue;
-        match ss.oqs.get(topic_name) {
-            None => return Err(warp::reject::not_found()),
-
-            Some(y) => x = y,
-        }
-
-        // get the last element in the vector
-        match x.sequence.last() {
-            None => {
-                let mut res = http::Response::builder()
-                    .status(StatusCode::NO_CONTENT)
-                    .body(Body::from(""))
-                    .unwrap();
-                let h = res.headers_mut();
-
-                // let suffix = format!("{}/", topic_name);
-                put_alternative_locations(&ss, h, &topic_name.as_relative_url());
-                put_common_headers(&ss, h);
-
-                return Ok(res);
-            }
-
-            Some(y) => {
-                digest = y.digest.clone();
-                content_type = y.content_type.clone();
-            }
-        }
-    }
-    return handler_topic_generic_data(topic_name, content_type, digest, ss_mutex.clone(), headers)
-        .await;
-}
-
-async fn handler_topic_generic_data(
-    topic_name: &TopicName,
-    content_type: String,
-    digest: String,
-    ss_mutex: ServerStateAccess,
-    headers: HeaderMap,
-) -> Result<Response, Rejection> {
-    let accept_headers: Vec<String> = utils_headers::get_accept_header(&headers);
-
-    let ss = ss_mutex.lock().await;
-
-    let x: &ObjectQueue;
-    match ss.oqs.get(topic_name) {
-        None => return Err(warp::reject::not_found()),
-        Some(y) => x = y,
-    }
-
-    let content = match ss.get_blob(&digest) {
-        None => return Err(warp::reject::not_found()),
-        Some(y) => y,
-    };
-    let data_bytes = content.clone();
-
-    if accept_headers.contains(&"text/html".to_string()) {
-        let display = match content_type.as_str() {
-            "application/yaml" => String::from_utf8(data_bytes).unwrap().to_string(),
-            "application/json" => {
-                let val: serde_json::Value = serde_json::from_slice(&data_bytes).unwrap();
-                let pretty = serde_json::to_string_pretty(&val).unwrap();
-                pretty
-            }
-            "application/cbor" => {
-                let val: serde_cbor::Value = serde_cbor::from_slice(&data_bytes).unwrap();
-                match serde_yaml::to_string(&val) {
-                    Ok(x) => format!("CBOR displayed as YAML:\n\n{}", x),
-                    Err(e) => format!("Cannot format CBOR as YAML: {}\nRaw CBOR:\n{:?}", e, val),
-                }
-            }
-            _ => format!("Cannot display content type {}", content_type).to_string(),
-        };
-        let x = html! {
-            (DOCTYPE)
-
-            html {
-                head {
-                    link rel="icon" type="image/png" href="!/static/favicon.png" ;
-                    link rel="stylesheet" href="!/static/style.css" ;
-                    title { (digest) }
-                }
-                body {
-                    p { "This data is presented as HTML because you requested it as such."}
-                    p { "Content type: " code { (content_type) } }
-                    p { "Content length: " (content.len()) }
-
-                    pre {
-                        code {
-                             (display)
-                        }
-                    }
-                }
-            }
-        };
-
-        let markup = x.into_string();
-        let mut resp = Response::new(Body::from(markup));
-        let headers = resp.headers_mut();
-        put_header_content_type(headers, "text/html");
-        put_alternative_locations(&ss, headers, "");
-        Ok(resp)
-        // return Ok(with_status(resp, StatusCode::OK));
-    } else {
-        let mut resp = Response::new(Body::from(data_bytes));
-        let h = resp.headers_mut();
-        put_alternative_locations(&ss, h, &topic_name.as_relative_url());
-        put_source_headers(h, &x.tr.origin_node, &x.tr.unique_id);
-        put_meta_headers(h);
-        put_common_headers(&ss, h);
-        put_header_content_type(h, &content_type);
-        Ok(resp.into())
-    }
-}
 
 pub fn put_alternative_locations(
     ss: &ServerState,

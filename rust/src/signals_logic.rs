@@ -21,11 +21,12 @@ use crate::utils::{divide_in_components, is_prefix_of};
 use crate::websocket_signals::ChannelInfo;
 use crate::TypeOfConnection::Relative;
 use crate::{
-    context, error_with_info, get_channel_info_message, get_rawdata, not_implemented, utils,
-    ContentInfo, DTPSError, ForwardingStep, InsertNotification, LinkBenchmark, OtherProxyInfo,
-    RawData, ServerState, ServerStateAccess, TopicName, TopicReachabilityInternal,
-    TopicRefInternal, TopicsIndexInternal, TypeOfConnection, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
-    REL_URL_META,
+    context, error_with_info, get_channel_info_message, get_dataready, get_rawdata,
+    not_implemented, utils, ContentInfo, DTPSError, DataReady, ForwardingStep, History,
+    InsertNotification, LinkBenchmark, OtherProxyInfo, RawData, ServerState, ServerStateAccess,
+    TopicName, TopicReachabilityInternal, TopicRefInternal, TopicsIndexInternal, TypeOfConnection,
+    CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR, REL_URL_META,
+    URL_HISTORY,
 };
 
 #[derive(Debug, Clone)]
@@ -60,6 +61,7 @@ impl DataProps for SourceComposition {
         let mut streamable = false;
         let pushable = false;
         let mut readable = true;
+        let mut has_history = false;
 
         for (_k, v) in self.compose.iter() {
             let p = v.get_properties();
@@ -77,6 +79,7 @@ impl DataProps for SourceComposition {
             pushable,
             readable,
             immutable,
+            has_history,
         }
     }
 }
@@ -101,6 +104,7 @@ pub enum TypeOFSource {
     Deref(SourceComposition),
     Index(Box<TypeOFSource>),
     Aliased(TopicName, Option<Box<TypeOFSource>>),
+    History(Box<TypeOFSource>),
 
     OtherProxied(OtherProxied),
 }
@@ -179,6 +183,9 @@ impl TypeOFSource {
             TypeOFSource::Aliased(_, _) => {
                 not_implemented!("get_inside for {self:#?} with {s:?}")
             }
+            TypeOFSource::History(_) => {
+                not_implemented!("get_inside for {self:#?} with {s:?}")
+            }
         }
     }
 }
@@ -203,6 +210,7 @@ pub struct TopicProperties {
     pub pushable: bool,
     pub readable: bool,
     pub immutable: bool,
+    pub has_history: bool,
 }
 
 impl TopicProperties {
@@ -212,6 +220,7 @@ impl TopicProperties {
             pushable: true,
             readable: true,
             immutable: false,
+            has_history: true,
         }
     }
 }
@@ -330,6 +339,30 @@ impl ResolveDataSingle for TypeOFSource {
             TypeOFSource::Aliased(_, _) => {
                 not_implemented!("resolve_data_single for {self:#?} with {self:?}")
             }
+            TypeOFSource::History(s) => {
+                let x: &TypeOFSource = s;
+                match x {
+                    TypeOFSource::OurQueue(topic, _, _) => {
+                        let ss = ss_mutex.lock().await;
+                        let q = ss.get_queue(topic)?;
+                        let mut available: HashMap<usize, DataReady> = HashMap::new();
+                        for s in q.sequence.iter() {
+                            available.insert(s.index, get_dataready(s));
+                        }
+                        let history = History { available };
+                        let bytes = serde_cbor::to_vec(&history).unwrap();
+                        return Ok(ResolvedData::RawData(RawData::new(
+                            bytes,
+                            CONTENT_TYPE_TOPIC_HISTORY_CBOR,
+                        )));
+                    }
+                    _ => {
+                        not_implemented!("resolve_data_single for {self:#?} with {self:?}")
+                    }
+                }
+
+                // not_implemented!("resolve_data_single for {self:#?} with {self:?}")
+            }
         }
     }
 }
@@ -368,6 +401,7 @@ impl DataProps for TypeOFSource {
                 pushable: false,
                 readable: true,
                 immutable: true,
+                has_history: false,
             },
             TypeOFSource::ForwardedQueue(q) => q.properties.clone(),
             TypeOFSource::OurQueue(_, _, props) => props.clone(),
@@ -381,6 +415,7 @@ impl DataProps for TypeOFSource {
                     pushable: false,
                     readable: true,
                     immutable: false, // maybe we can say it true sometime
+                    has_history: false,
                 }
             }
             TypeOFSource::MountedDir(_, _, props) => props.clone(),
@@ -388,6 +423,15 @@ impl DataProps for TypeOFSource {
             TypeOFSource::Index(s) => s.get_properties(),
             TypeOFSource::Aliased(_, _) => {
                 todo!("get_properties for {self:#?} with {self:?}")
+            }
+            TypeOFSource::History(_) => {
+                TopicProperties {
+                    streamable: false,
+                    pushable: false,
+                    readable: true,
+                    immutable: false, // maybe we can say it true sometime
+                    has_history: false,
+                }
             }
         }
     }
@@ -462,6 +506,9 @@ impl TypeOFSource {
                 todo!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::Aliased(_, _) => {
+                todo!("get_stream for {self:#?} with {self:?}")
+            }
+            TypeOFSource::History(_) => {
                 todo!("get_stream for {self:#?} with {self:?}")
             }
         }
@@ -573,8 +620,8 @@ mod test {
 
     #[test]
     fn t1() {
-        assert_eq!(make_relative("clock5/:index/", "clock5/"), "../");
-        assert_eq!(make_relative("clock5/", "clock5/:index/"), ":index/");
+        assert_eq!(make_relative("clock5/:meta/", "clock5/"), "../");
+        assert_eq!(make_relative("clock5/", "clock5/:meta/"), ":meta/");
     }
 }
 
@@ -732,6 +779,9 @@ impl TypeOFSource {
             TypeOFSource::Aliased(_, _) => {
                 not_implemented!("get_meta_index: {self:?}")
             }
+            TypeOFSource::History(_) => {
+                not_implemented!("get_meta_index: {self:?}")
+            }
         };
     }
 }
@@ -883,42 +933,65 @@ pub async fn interpret_path(
             path_components
         ));
     }
-    let deref: String = ":deref".to_string();
+    {
+        let deref: String = ":deref".to_string();
 
-    if path_components.contains(&deref) {
-        let i = path_components.iter().position(|x| x == &deref).unwrap();
-        let before = path_components.get(0..i).unwrap().to_vec();
-        let after = path_components.get(i + 1..).unwrap().to_vec();
-        debug!("interpret_path: before: {:?} after: {:?}", before, after);
+        if path_components.contains(&deref) {
+            let i = path_components.iter().position(|x| x == &deref).unwrap();
+            let before = path_components.get(0..i).unwrap().to_vec();
+            let after = path_components.get(i + 1..).unwrap().to_vec();
+            debug!("interpret_path: before: {:?} after: {:?}", before, after);
 
-        let before2 = before.join("/") + "/";
-        let interpret_before = interpret_path(&before2, query, referrer, ss).await?;
+            let before2 = before.join("/") + "/";
+            let interpret_before = interpret_path(&before2, query, referrer, ss).await?;
 
-        let first_part = match interpret_before {
-            TypeOFSource::Compose(sc) => TypeOFSource::Deref(sc),
-            _ => {
-                return DTPSError::other(format!(
-                    "interpret_path: deref: before is not Compose: {:?}",
-                    interpret_before
-                ));
-            }
-        };
-        return resolve_extra_components(&first_part, &after);
+            let first_part = match interpret_before {
+                TypeOFSource::Compose(sc) => TypeOFSource::Deref(sc),
+                _ => {
+                    return DTPSError::other(format!(
+                        "interpret_path: deref: before is not Compose: {:?}",
+                        interpret_before
+                    ));
+                }
+            };
+            return resolve_extra_components(&first_part, &after);
+        }
     }
-    let index_marker = REL_URL_META.to_string();
-    if path_components.contains(&index_marker) {
-        let i = path_components
-            .iter()
-            .position(|x| x == &index_marker)
-            .unwrap();
-        let before = path_components.get(0..i).unwrap().to_vec();
-        let after = path_components.get(i + 1..).unwrap().to_vec();
+    {
+        let history_marker: String = URL_HISTORY.to_string();
 
-        let before2 = before.join("/") + "/";
-        let interpret_before = interpret_path(&before2, query, referrer, ss).await?;
+        if path_components.contains(&history_marker) {
+            let i = path_components
+                .iter()
+                .position(|x| x == &history_marker)
+                .unwrap();
+            let before = path_components.get(0..i).unwrap().to_vec();
+            let after = path_components.get(i + 1..).unwrap().to_vec();
+            debug!("interpret_path: before: {:?} after: {:?}", before, after);
 
-        let first_part = TypeOFSource::Index(Box::new(interpret_before));
-        return resolve_extra_components(&first_part, &after);
+            let before2 = before.join("/") + "/";
+            let interpret_before = interpret_path(&before2, query, referrer, ss).await?;
+
+            let first_part = TypeOFSource::History(Box::new(interpret_before));
+            return resolve_extra_components(&first_part, &after);
+        }
+    }
+    {
+        let index_marker = REL_URL_META.to_string();
+        if path_components.contains(&index_marker) {
+            let i = path_components
+                .iter()
+                .position(|x| x == &index_marker)
+                .unwrap();
+            let before = path_components.get(0..i).unwrap().to_vec();
+            let after = path_components.get(i + 1..).unwrap().to_vec();
+
+            let before2 = before.join("/") + "/";
+            let interpret_before = interpret_path(&before2, query, referrer, ss).await?;
+
+            let first_part = TypeOFSource::Index(Box::new(interpret_before));
+            return resolve_extra_components(&first_part, &after);
+        }
     }
 
     if path_components.len() > 1 {
@@ -938,40 +1011,13 @@ pub async fn interpret_path(
             ));
         }
     }
-    //
-    //
-    // if path_components.len() == 0 {
-    //     // let ss = ss_mutex.lock().await;
-    //     // let q = ss.oqs.get("").unwrap();
-    //     let mut topics = hashmap! {};
-    //     for (topic_name, oq) in &ss.oqs {
-    //         if topic_name.is_root() {
-    //             continue;
-    //         }
-    //         let prefix = topic_name.as_components();
-    //         // let rurl = make_rel_url(&prefix.clone());
-    //         let val = TypeOFSource::OurQueue(
-    //             topic_name.clone(),
-    //             prefix.clone(),
-    //             oq.tr.properties.clone(),
-    //         );
-    //
-    //         topics.insert(prefix.clone(), Box::new(val));
-    //     }
-    //     let sc0 = TypeOFSource::Compose(SourceComposition {
-    //         is_root: true,
-    //         compose: topics,
-    //     });
-    //     return Ok(sc0);
-    // }
-
     {
         for (mounted_at, info) in &ss.proxied_other {
             if let Some((_, b)) = is_prefix_of(mounted_at.as_components(), &path_components) {
                 let mut path_and_query = b.join("/");
-                // if ends_with_dash {
-                //     path_and_query.push('/');
-                // }
+                if ends_with_dash && b.len() > 0 {
+                    path_and_query.push('/');
+                }
                 path_and_query.push_str(&utils::format_query(&query));
 
                 let other = OtherProxied {
@@ -1104,6 +1150,7 @@ pub fn iterate_type_of_sources(
             pushable: false,
             readable: true,
             immutable: false,
+            has_history: false,
         };
         res.push((
             topic_name.clone(),

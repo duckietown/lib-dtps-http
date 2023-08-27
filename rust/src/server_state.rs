@@ -186,6 +186,7 @@ impl ServerState {
                 pushable: false,
                 readable: true,
                 immutable: false,
+                has_history: true,
             },
             content_info: ContentInfo {
                 accept_content_type: vec![],
@@ -195,7 +196,7 @@ impl ServerState {
                 examples: vec![],
             },
         };
-        oqs.insert(TopicName::root(), ObjectQueue::new(tr));
+        oqs.insert(TopicName::root(), ObjectQueue::new(tr, Some(10)));
 
         let node_started = Local::now().timestamp_nanos();
 
@@ -221,6 +222,7 @@ impl ServerState {
             pushable: false,
             readable: true,
             immutable: false,
+            has_history: true,
         };
 
         ss.new_topic(
@@ -229,6 +231,7 @@ impl ServerState {
             "application/json",
             &p,
             None,
+            Some(10),
         )?;
         ss.new_topic(
             &TopicName::from_relative_url(TOPIC_LIST_CLOCK)?,
@@ -236,6 +239,7 @@ impl ServerState {
             "application/json",
             &p,
             Some(schema_for!(i64)),
+            Some(10),
         )?;
         ss.new_topic(
             &TopicName::from_relative_url(TOPIC_LIST_AVAILABILITY)?,
@@ -243,6 +247,7 @@ impl ServerState {
             "application/json",
             &p,
             None,
+            Some(10),
         )?;
         ss.new_topic(
             &TopicName::from_relative_url(TOPIC_LOGS)?,
@@ -250,6 +255,7 @@ impl ServerState {
             "application/yaml",
             &p,
             None,
+            Some(10),
         )?;
 
         ss.new_topic(
@@ -258,6 +264,7 @@ impl ServerState {
             "application/yaml",
             &p,
             Some(schema_for!(ComponentStatusNotification)),
+            Some(10),
         )?;
 
         ss.new_topic(
@@ -266,6 +273,7 @@ impl ServerState {
             "application/yaml",
             &p,
             None,
+            Some(10),
         )?;
 
         Ok(ss)
@@ -396,6 +404,7 @@ impl ServerState {
         content_type: &str,
         properties: &TopicProperties,
         schema: Option<RootSchema>,
+        max_history: Option<usize>,
     ) -> DTPSR<()> {
         if self.oqs.contains_key(topic_name) {
             return Err(DTPSError::TopicAlreadyExists(topic_name.to_relative_url()));
@@ -433,7 +442,7 @@ impl ServerState {
         };
         let oqs = &mut self.oqs;
 
-        oqs.insert(topic_name.clone(), ObjectQueue::new(tr));
+        oqs.insert(topic_name.clone(), ObjectQueue::new(tr, max_history));
         info!("New topic: {:?}", topic_name);
 
         self.update_my_topic()
@@ -630,6 +639,7 @@ impl ServerState {
                 pushable: false,
                 readable: true,
                 immutable: false,
+                has_history: false,
             };
 
             let mut tr = TopicRefInternal {
@@ -664,6 +674,7 @@ impl ServerState {
                 pushable: false,
                 readable: true,
                 immutable: true,
+                has_history: false,
             };
 
             let app_data = hashmap! {
@@ -706,6 +717,7 @@ impl ServerState {
                     pushable: false,
                     readable: false,
                     immutable: false,
+                    has_history: false,
                 },
                 content_info: ContentInfo {
                     accept_content_type: vec![],
@@ -778,15 +790,15 @@ async fn get_proxy_info(url: &TypeOfConnection) -> DTPSR<(FoundMetadata, TopicsI
         url,
     )?;
 
-    let index_url = match &md.index {
+    let meta_url = match &md.meta_url {
         None => {
             return not_reachable!("Cannot find index url for proxy at {url}:\n{md:?}");
         }
         Some(u) => u.clone(),
     };
     let index_internal = context!(
-        get_index(&index_url).await,
-        "Error getting the index for {url} index {index_url}"
+        get_index(&meta_url).await,
+        "Error getting the index for {url} index {meta_url}"
     )?;
     Ok((md, index_internal))
 }

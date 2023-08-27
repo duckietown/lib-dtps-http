@@ -96,6 +96,12 @@ impl From<&str> for DTPSError {
         DTPSError::Other(item.to_string())
     }
 }
+
+impl From<String> for DTPSError {
+    fn from(item: String) -> Self {
+        DTPSError::Other(item)
+    }
+}
 impl From<&String> for DTPSError {
     fn from(item: &String) -> Self {
         DTPSError::Other(item.to_string())

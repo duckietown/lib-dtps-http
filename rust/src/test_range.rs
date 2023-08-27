@@ -8,6 +8,7 @@ mod tests {
     use rstest::*;
     use tokio::task::JoinHandle;
 
+    use crate::test_python::check_server;
     use crate::{
         get_events_stream_inline, get_rawdata, init_logging, parse_url_ext, post_data, RawData,
     };
@@ -77,6 +78,17 @@ mod tests {
     #[rstest]
     #[awt]
     #[tokio::test]
+    async fn check_server_answers(#[future] instance: TestFixture) -> DTPSR<()> {
+        let x = check_server(&instance.con).await;
+        if let Err(ei) = &x {
+            log::error!("check_server failed:\n{}", ei);
+        }
+        x
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
     async fn another(#[future] instance: TestFixture) -> DTPSR<()> {
         let _md = get_metadata(&instance.con).await;
 
@@ -88,6 +100,7 @@ mod tests {
                 None,
                 "application/cbor",
                 &TopicProperties::rw(),
+                None,
                 None,
             )?;
             for i in 0..10 {
@@ -115,6 +128,7 @@ mod tests {
                 None,
                 "application/cbor",
                 &TopicProperties::rw(),
+                None,
                 None,
             )?;
             for i in 0..10 {
@@ -165,6 +179,7 @@ mod tests {
                 "application/cbor",
                 &TopicProperties::rw(),
                 None,
+                None,
             )?;
         }
         let con_original = instance.con.join("a/b/")?;
@@ -202,6 +217,7 @@ mod tests {
                 None,
                 "application/cbor",
                 &TopicProperties::rw(),
+                None,
                 None,
             )?;
         }
@@ -243,6 +259,7 @@ mod tests {
         let mut instance2 = instance2;
 
         let topic_name = TopicName::from_dash_sep("a/b")?;
+        let n = 10;
 
         {
             let mut ss = instance.ssa.lock().await;
@@ -252,8 +269,9 @@ mod tests {
                 "application/cbor",
                 &TopicProperties::rw(),
                 None,
+                None,
             )?;
-            for i in 0..10 {
+            for i in 0..n {
                 let h = hashmap! {"value" => i};
                 ss.publish_object_as_cbor(&topic_name, &h, None)?;
             }
@@ -295,6 +313,17 @@ mod tests {
 
         assert_eq!(data_original.content_type, "application/cbor");
         assert_eq!(data_original, data_proxied);
+
+        // now let's get the value inside
+        let con_original_inside = con_original.join("value/")?;
+        let con_proxied_inside = con_proxied.join("value/")?;
+        debug!("get data for con_original_inside {con_original_inside:#?}");
+        let inside_original = get_rawdata(&con_original_inside).await?;
+        debug!("get data for con_proxied_inside {con_proxied_inside:#?}");
+        let inside_proxied = get_rawdata(&con_proxied_inside).await?;
+        assert_eq!(inside_original, inside_proxied);
+        let i: i64 = serde_cbor::from_slice(&inside_original.content)?;
+        assert_eq!(i, n - 1);
         instance.finish()?;
         instance2.finish()?;
         Ok(())
