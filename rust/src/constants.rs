@@ -1,5 +1,5 @@
 pub static HEADER_NODE_ID: &'static str = "x-dtps-node-id";
-pub static HEADER_NODE_PASSED_THROUGH: &'static str = "X-dtps-Node-ID-Passed-Through"; // should be Via
+pub static HEADER_NODE_PASSED_THROUGH: &'static str = "x-dtps-node-id-passed-through"; // should be Via
 pub static HEADER_LINK_BENCHMARK: &'static str = "x-dtps-link-benchmark";
 pub static HEADER_DATA_UNIQUE_ID: &'static str = "x-dtps-data-unique-id";
 pub static HEADER_DATA_ORIGIN_NODE_ID: &'static str = "x-dtps-data-origin-node";

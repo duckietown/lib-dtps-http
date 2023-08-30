@@ -4,7 +4,14 @@ from typing import Optional
 
 from aiohttp import web
 
-from dtps_http import async_error_catcher, DTPSServer, interpret_command_line_and_start, RawData, TopicNameV
+from dtps_http import (
+    async_error_catcher,
+    ContentInfo,
+    DTPSServer,
+    interpret_command_line_and_start,
+    TopicNameV,
+)
+from dtps_http.constants import MIME_JSON
 from . import logger
 
 __all__ = [
@@ -17,11 +24,10 @@ __all__ = [
 async def run_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, initial_delay: float) -> None:
     await asyncio.sleep(initial_delay)
     logger.info(f"Starting clock {topic_name.as_relative_url()} with interval {interval}")
-    oq = await s.create_oq(topic_name)
+    oq = await s.create_oq(topic_name, content_info=ContentInfo.simple(MIME_JSON))
     while True:
         t = time.time_ns()
-        data = str(t).encode()
-        oq.publish(RawData(data, "application/json"))
+        oq.publish_json(t)
         await asyncio.sleep(interval)
 
 

@@ -65,9 +65,6 @@ pub async fn serve_static_file_path(path: &str) -> HandlersResponse {
     if path == "" {
         return reply_for_dir(path).await;
     }
-    // if path == "" {
-    //     return Ok(warp::redirect::redirect("/index.html"));
-    // }
     let _dir = match STATIC_FILES.get_dir(path) {
         Some(_dir) => {
             return reply_for_dir(path).await;

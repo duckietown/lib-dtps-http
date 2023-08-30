@@ -14,7 +14,7 @@ use path_clean::PathClean;
 use schemars::schema::RootSchema;
 use schemars::{schema_for, JsonSchema};
 use serde::{Deserialize, Serialize};
-use strum_macros::{Display, EnumString, ToString};
+use strum_macros::{Display, EnumString};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
@@ -188,13 +188,10 @@ impl ServerState {
                 immutable: false,
                 has_history: true,
             },
-            content_info: ContentInfo {
-                accept_content_type: vec![],
-                produces_content_type: vec![CONTENT_TYPE_DTPS_INDEX_CBOR.to_string()],
-                storage_content_type: vec![],
-                jschema: Some(schema_for!(TopicsIndexWire)),
-                examples: vec![],
-            },
+            content_info: ContentInfo::simple(
+                CONTENT_TYPE_DTPS_INDEX_CBOR,
+                Some(schema_for!(TopicsIndexWire)),
+            ),
         };
         oqs.insert(TopicName::root(), ObjectQueue::new(tr, Some(10)));
 
@@ -422,23 +419,9 @@ impl ServerState {
             origin_node,
             app_data,
             created: now,
-            reachability: vec![
-                // TopicReachabilityInternal {
-                // con: Same(),
-                // // con: Relative(format!("{}/", topic_name), None),
-                // answering: self.node_id.clone(),
-                // forwarders: vec![],
-                // benchmark: link_benchmark,
-                // }
-            ],
+            reachability: vec![],
             properties: properties.clone(),
-            content_info: ContentInfo {
-                accept_content_type: vec![content_type.to_string()],
-                produces_content_type: vec![content_type.to_string()],
-                storage_content_type: vec![content_type.to_string()],
-                jschema: schema,
-                examples: vec![],
-            },
+            content_info: ContentInfo::simple(content_type, schema),
         };
         let oqs = &mut self.oqs;
 
@@ -649,13 +632,7 @@ impl ServerState {
                 reachability: vec![],
                 created: 0,
                 properties: prop,
-                content_info: ContentInfo {
-                    accept_content_type: vec![],
-                    produces_content_type: vec![],
-                    storage_content_type: vec![],
-                    examples: vec![],
-                    jschema: None,
-                },
+                content_info: ContentInfo::generic(),
             };
 
             tr.reachability.push(TopicReachabilityInternal {
@@ -687,13 +664,7 @@ impl ServerState {
                 reachability: vec![],
                 created: 0,
                 properties: prop,
-                content_info: ContentInfo {
-                    accept_content_type: vec![],
-                    produces_content_type: vec![],
-                    storage_content_type: vec![],
-                    examples: vec![],
-                    jschema: None,
-                },
+                content_info: ContentInfo::generic(),
             };
 
             tr.reachability.push(TopicReachabilityInternal {
@@ -719,13 +690,7 @@ impl ServerState {
                     immutable: false,
                     has_history: false,
                 },
-                content_info: ContentInfo {
-                    accept_content_type: vec![],
-                    storage_content_type: vec![],
-                    produces_content_type: vec![],
-                    jschema: None,
-                    examples: vec![],
-                },
+                content_info: ContentInfo::generic(), // TODO: we should put content info of original
             };
             topics.insert(alias.clone(), tr);
         }
@@ -740,9 +705,10 @@ impl ServerState {
 
     pub fn get_last_insert(&self, tn: &TopicName) -> DTPSR<Option<InsertNotification>> {
         let q = self.get_queue(tn)?;
-        match q.sequence.last() {
+        match q.stored.last() {
             None => Ok(None),
-            Some(data_saved) => {
+            Some(index) => {
+                let data_saved = q.saved.get(index).unwrap();
                 let content = self.get_blob_bytes(&data_saved.digest)?;
 
                 Ok(Some(InsertNotification {

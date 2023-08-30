@@ -16,7 +16,6 @@ from pydantic.dataclasses import dataclass
 from . import __version__, logger
 from .constants import (
     CONTENT_TYPE_DTPS_INDEX_CBOR,
-    CONTENT_TYPE_TOPIC_DIRECTORY,
     CONTENT_TYPE_TOPIC_HISTORY_CBOR,
     EVENTS_SUFFIX,
     HEADER_CONTENT_LOCATION,
@@ -26,6 +25,9 @@ from .constants import (
     HEADER_NO_CACHE,
     HEADER_NODE_ID,
     HEADER_NODE_PASSED_THROUGH,
+    MIME_CBOR,
+    MIME_JSON,
+    MIME_TEXT,
     REL_EVENTS_DATA,
     REL_EVENTS_NODATA,
     REL_HISTORY,
@@ -57,7 +59,7 @@ from .structures import (
     TopicRef,
     TopicsIndex,
 )
-from .types import NodeID, SourceID, TopicNameV, URLString
+from .types import ContentType, NodeID, SourceID, TopicNameV, URLString
 from .types_of_source import (
     ForwardedQueue,
     Native,
@@ -75,6 +77,7 @@ ROOT = TopicNameV.root()
 __all__ = [
     "DTPSServer",
     "ForwardedTopic",
+    "ObjectQueue",
     "get_link_headers",
 ]
 
@@ -94,7 +97,8 @@ K_INDEX = "index"
 
 
 class ObjectQueue:
-    sequence: list[DataSaved]
+    stored: list[int]
+    saved: dict[int, DataSaved]
     _data: dict[str, RawData]
     _seq: int
     _name: TopicNameV
@@ -109,29 +113,31 @@ class ObjectQueue:
         self._pub = Publisher(self._hub, Key())
         self._sub = Subscriber(self._hub, name.as_relative_url())
         self._seq = 0
-        self.sequence = []
         self._data = {}
         self._name = name
         self.tr = tr
         self.max_history = max_history
+        self.stored = []
+        self.saved = {}
 
     def get_channel_info(self) -> ChannelInfo:
-        if not self.sequence:
+        if not self.stored:
             newest = None
             oldest = None
         else:
-            newest = ChannelInfoDesc(self.sequence[-1].index, self.sequence[-1].time_inserted)
-            oldest = ChannelInfoDesc(self.sequence[0].index, self.sequence[0].time_inserted)
+            ds_oldest = self.saved[self.stored[0]]
+            ds_newest = self.saved[self.stored[-1]]
+            oldest = ChannelInfoDesc(ds_oldest.index, ds_oldest.time_inserted)
+            newest = ChannelInfoDesc(ds_newest.index, ds_newest.time_inserted)
 
         ci = ChannelInfo(queue_created=self.tr.created, num_total=self._seq, newest=newest, oldest=oldest)
         return ci
 
     def publish_text(self, text: str) -> None:
         data = text.encode("utf-8")
-        content_type = "text/plain"
-        self.publish(RawData(data, content_type))
+        self.publish(RawData(data, MIME_TEXT))
 
-    def publish_cbor(self, obj: object, content_type: str = "application/cbor") -> None:
+    def publish_cbor(self, obj: object, content_type: ContentType = MIME_CBOR) -> None:
         """Publish a python object as a cbor2 encoded object."""
         data = cbor2.dumps(obj)
         self.publish(RawData(data, content_type))
@@ -139,8 +145,7 @@ class ObjectQueue:
     def publish_json(self, obj: object) -> None:
         """Publish a python object as a cbor2 encoded object."""
         data = json.dumps(obj)
-        content_type = "application/json"
-        self.publish(RawData(data.encode(), content_type))
+        self.publish(RawData(data.encode(), MIME_JSON))
 
     def publish(self, obj: RawData) -> None:
         use_seq = self._seq
@@ -149,10 +154,12 @@ class ObjectQueue:
         clocks = self.current_clocks()
         ds = DataSaved(use_seq, time.time_ns(), digest, obj.content_type, len(obj.content), clocks=clocks)
         self._data[digest] = obj
-        self.sequence.append(ds)
+        self.stored.append(use_seq)
+        self.saved[use_seq] = ds
         if self.max_history:
-            if len(self.sequence) > self.max_history:
-                self.sequence.pop(0)
+            if len(self.stored) > self.max_history:
+                x = self.stored.pop(0)
+                self.saved.pop(x, None)
         self._pub.publish(
             Key(self._name.as_relative_url(), K_INDEX), use_seq
         )  # logger.debug(f"published #{self._seq} {self._name}: {obj!r}")
@@ -167,9 +174,9 @@ class ObjectQueue:
         return clocks
 
     def last(self) -> DataSaved:
-        if self.sequence:
-            ds = self.sequence[-1]
-            return ds
+        if self.stored:
+            last = self.stored[-1]
+            return self.saved[last]
         else:
             raise KeyError("No data in queue")
 
@@ -274,13 +281,7 @@ class DTPSServer:
 
         self.digest_to_urls = {}
 
-        content_info = ContentInfo(
-            accept_content_type=[CONTENT_TYPE_TOPIC_DIRECTORY],
-            storage_content_type=[CONTENT_TYPE_TOPIC_DIRECTORY],
-            produces_content_type=[CONTENT_TYPE_TOPIC_DIRECTORY],
-            jschema=None,
-            examples=[],
-        )
+        content_info = ContentInfo.simple(CONTENT_TYPE_DTPS_INDEX_CBOR)
 
         tr = TopicRef(
             get_unique_id(self.node_id, ROOT),
@@ -391,7 +392,11 @@ class DTPSServer:
         return self._oqs[name]
 
     async def create_oq(
-        self, name: TopicNameV, tp: Optional[TopicProperties] = None, max_history: Optional[int] = None
+        self,
+        name: TopicNameV,
+        content_info: ContentInfo,
+        tp: Optional[TopicProperties] = None,
+        max_history: Optional[int] = None,
     ) -> ObjectQueue:
         if name in self._forwarded:
             raise ValueError(f"Topic {name} is a forwarded one")
@@ -417,7 +422,7 @@ class DTPSServer:
             reachability=reachability,
             created=time.time_ns(),
             properties=tp,
-            content_info=ContentInfo.simple(CONTENT_TYPE_TOPIC_DIRECTORY),
+            content_info=content_info,
         )
 
         self._oqs[name] = ObjectQueue(self.hub, name, tr, max_history=max_history)
@@ -428,13 +433,7 @@ class DTPSServer:
     async def on_startup(self, _: web.Application) -> None:
         # self.logger.info("on_startup")
 
-        content_info = ContentInfo(
-            accept_content_type=[CONTENT_TYPE_TOPIC_DIRECTORY],
-            storage_content_type=[CONTENT_TYPE_TOPIC_DIRECTORY],
-            produces_content_type=[CONTENT_TYPE_TOPIC_DIRECTORY],
-            jschema=None,
-            examples=[],
-        )
+        content_info = ContentInfo.simple(MIME_JSON)
         tr = TopicRef(
             get_unique_id(self.node_id, TOPIC_LIST),
             self.node_id,
@@ -446,11 +445,13 @@ class DTPSServer:
         )
         self._oqs[TOPIC_LIST] = ObjectQueue(self.hub, TOPIC_LIST, tr, max_history=100)
 
-        await self.create_oq(TOPIC_LOGS, max_history=100)
-        await self.create_oq(TOPIC_CLOCK, max_history=10)
-        await self.create_oq(TOPIC_AVAILABILITY, max_history=10)
-        await self.create_oq(TOPIC_STATE_SUMMARY, max_history=10)
-        await self.create_oq(TOPIC_STATE_NOTIFICATION, max_history=10)
+        await self.create_oq(TOPIC_LOGS, content_info=ContentInfo.simple(MIME_JSON), max_history=100)
+        await self.create_oq(TOPIC_CLOCK, content_info=ContentInfo.simple(MIME_JSON), max_history=10)
+        await self.create_oq(TOPIC_AVAILABILITY, content_info=ContentInfo.simple(MIME_JSON), max_history=10)
+        await self.create_oq(TOPIC_STATE_SUMMARY, content_info=ContentInfo.simple(MIME_JSON), max_history=10)
+        await self.create_oq(
+            TOPIC_STATE_NOTIFICATION, content_info=ContentInfo.simple(MIME_CBOR), max_history=10
+        )
 
         self.remember_task(asyncio.create_task(update_clock(self, TOPIC_CLOCK, 1.0, 0.0)))
 
@@ -601,8 +602,9 @@ class DTPSServer:
         oq = self.get_oq(source.topic_name)
         presented_as = request.url.path
         history = {}
-        for s in oq.sequence:
-            a = oq.get_data_ready(s, presented_as, inline_data=False)
+        for i in oq.stored:
+            ds = oq.saved[i]
+            a = oq.get_data_ready(ds, presented_as, inline_data=False)
             history[a.sequence] = a
 
         hist = History(history)
@@ -826,11 +828,9 @@ class DTPSServer:
             case Native(ob):
                 logger.info(f"Native: {ob}")
                 cbor_data = cbor2.dumps(ob)
-                rd = RawData(
-                    cbor_data, "application/cbor"
-                )  # return web.Response(body=cbor_data, headers=headers, content_type="application/cbor")
+                rd = RawData(cbor_data, MIME_CBOR)
             case NotAvailableYet() as r:
-                rd = r  # return web.Response(body=None, headers=headers, status=209)
+                rd = r
             case NotFound():
                 raise NotImplementedError(f"Cannot handle {rs!r}")
             case _:
@@ -1074,7 +1074,7 @@ pre {{
         await ws.send_bytes(get_tagged_cbor(ci))
 
         async def send_message(_: ObjectQueue, i: int) -> None:
-            mdata = oq_.sequence[i]
+            mdata = oq_.saved[i]
             digest = mdata.digest
 
             # if send_data:
@@ -1113,7 +1113,7 @@ pre {{
                     exit_event.set()
                     pass
 
-        if oq_.sequence:
+        if oq_.stored:
             last = oq_.last()
 
             await send_message(oq_, last.index)
@@ -1299,7 +1299,7 @@ async def update_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, i
     while True:
         t = time.time_ns()
         data = str(t).encode()
-        oq.publish(RawData(data, "application/json"))
+        oq.publish(RawData(data, MIME_JSON))
         await asyncio.sleep(interval)
 
 

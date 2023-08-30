@@ -64,7 +64,6 @@ pub struct DTPSServer {
     pub unix_path: Option<String>,
     initial_proxy: HashMap<String, TypeOfConnection>,
     topic_connections: Vec<TopicConnection>,
-    // aliases: Vec<TopicAlias>,
 }
 
 impl DTPSServer {
@@ -519,23 +518,27 @@ pub fn get_channel_info_message(oq: &ObjectQueue) -> ChannelInfo {
     let num_total;
     let newest;
     let oldest;
-    match oq.sequence.first() {
+    match oq.stored.first() {
         None => {
             oldest = None;
         }
         Some(first) => {
-            oldest = Some(ChannelInfoDesc::new(first.index, first.time_inserted));
+            let d = oq.saved.get(first).unwrap();
+            oldest = Some(ChannelInfoDesc::new(d.index, d.time_inserted));
         }
     }
 
-    match oq.sequence.last() {
+    match oq.stored.last() {
         None => {
             num_total = 0;
             newest = None;
         }
         Some(last) => {
-            num_total = last.index + 1;
-            newest = Some(ChannelInfoDesc::new(last.index, last.time_inserted));
+            let d = oq.saved.get(last).unwrap();
+
+            num_total = d.index + 1;
+
+            newest = Some(ChannelInfoDesc::new(d.index, d.time_inserted));
         }
     }
 
@@ -723,9 +726,10 @@ async fn handler_topic_html_summary(
         Some(y) => x = y,
     }
 
-    let (default_content_type, initial_value) = match x.sequence.last() {
+    let (default_content_type, initial_value) = match x.stored.last() {
         None => ("application/yaml".to_string(), "{}".to_string()),
-        Some(l) => {
+        Some(index) => {
+            let l = x.saved.get(index).unwrap();
             let digest = &l.digest;
             let content = match ss.get_blob(digest) {
                 None => {
@@ -770,9 +774,11 @@ async fn handler_topic_html_summary(
         }
     };
     let mut latencies: Vec<i64> = vec![];
-    for (i, data) in x.sequence.iter().enumerate() {
-        if i > 0 {
-            latencies.push(data.time_inserted - x.sequence[i - 1].time_inserted);
+    for i in &x.stored {
+        let data = x.saved.get(&i).unwrap();
+        if x.saved.contains_key(&(i - 1)) {
+            let data_prev = x.saved.get(&(i - 1)).unwrap();
+            latencies.push(data.time_inserted - data_prev.time_inserted);
         } else {
             latencies.push(0);
         }
@@ -820,7 +826,7 @@ async fn handler_topic_html_summary(
                     }
                 }
                 tbody {
-                    @for (i, data) in x.sequence.iter().enumerate().rev().take(100) {
+                    @for (i, data) in x.all_data().iter().enumerate().rev().take(100) {
                         tr {
                             td { (data.index) }
                             td { (format_elapsed(data.time_inserted)) }

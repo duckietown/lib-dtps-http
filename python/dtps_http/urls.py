@@ -16,6 +16,7 @@ __all__ = [
     "URLWS",
     "URLWSInline",
     "URLWSOffline",
+    "get_relative_url",
     "join",
     "parse_url_unescape",
     "url_to_string",

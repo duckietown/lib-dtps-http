@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use std::collections::HashMap;
 
 use chrono::Local;
 use schemars::JsonSchema;
@@ -24,12 +25,6 @@ impl RawData {
         }
     }
     pub fn digest(&self) -> String {
-        // if self.content.len() < 16 {
-        //     return self.content.clone();
-        // }
-        // let md5s = md5::compute(&self.content);
-        // return format!("md5:{:x}", md5s);
-
         let d = digest(self.content.as_ref());
         format!("sha256:{}", d)
     }
@@ -49,7 +44,9 @@ pub struct DataSaved {
 
 #[derive(Debug)]
 pub struct ObjectQueue {
-    pub sequence: Vec<DataSaved>,
+    pub stored: Vec<usize>,
+    pub saved: HashMap<usize, DataSaved>,
+
     pub tx: broadcast::Sender<usize>,
     pub seq: usize,
     pub tr: TopicRefInternal,
@@ -68,15 +65,28 @@ impl ObjectQueue {
     pub fn new(tr: TopicRefInternal, max_history: Option<usize>) -> Self {
         let (tx, _rx) = broadcast::channel(1024);
         let (tx_notification, _rx) = broadcast::channel(1024);
+        if let Some(max_history) = max_history {
+            assert!(max_history > 0);
+        }
         ObjectQueue {
             seq: 0,
-            sequence: Vec::new(),
+            stored: Vec::new(),
+            saved: HashMap::new(),
             // data: HashMap::new(),
             tx,
             tr,
             tx_notification,
             max_history,
         }
+    }
+
+    pub fn all_data(&self) -> Vec<DataSaved> {
+        let mut v = Vec::new();
+        for index in &self.stored {
+            let data = self.saved.get(index).unwrap();
+            v.push(data.clone());
+        }
+        v
     }
 
     pub fn push(&mut self, data: &RawData, previous_clocks: Option<Clocks>) -> DTPSR<DataSaved> {
@@ -102,9 +112,17 @@ impl ObjectQueue {
             content_type: data.content_type.clone(),
             content_length: data.content.len(),
         };
-        self.sequence.push(saved_data.clone());
+        self.saved.insert(saved_data.index, saved_data.clone());
+        self.stored.push(saved_data.index);
+        if let Some(max_history) = self.max_history {
+            while self.stored.len() > max_history {
+                let index = self.stored.remove(0);
+                self.saved.remove(&index);
+            }
+        }
+
         if self.tx.receiver_count() > 0 {
-            self.tx.send(this_seq).unwrap(); // can only fail if there are no receivers
+            self.tx.send(saved_data.index).unwrap(); // can only fail if there are no receivers
         }
         if self.tx_notification.receiver_count() > 0 {
             let notification = InsertNotification {

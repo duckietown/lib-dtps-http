@@ -197,7 +197,7 @@ class OurQueue(Source):
         self, request: web.Request, presented_as: str, server: "DTPSServer"
     ) -> "ResolvedData":
         oq = server.get_oq(self.topic_name)
-        if not oq.sequence:
+        if not oq.stored:
             return NotAvailableYet(f"no data yet for {self.topic_name.as_dash_sep()}")
         return oq.last_data()
 

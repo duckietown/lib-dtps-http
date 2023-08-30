@@ -5,6 +5,7 @@ use std::ops::Add;
 use std::path::PathBuf;
 
 use derive_more::Constructor;
+use maplit::hashmap;
 use schemars::schema::RootSchema;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -20,17 +21,11 @@ pub type NodeAppData = String;
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 pub struct TopicsIndexWire {
-    // pub node_id: String,
-    // pub node_started: i64,
-    // pub node_app_data: HashMap<String, NodeAppData>,
     pub topics: HashMap<String, TopicRefWire>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TopicsIndexInternal {
-    // pub node_id: String,
-    // pub node_started: i64,
-    // pub node_app_data: HashMap<String, NodeAppData>,
     pub topics: HashMap<TopicName, TopicRefInternal>,
 }
 
@@ -41,12 +36,7 @@ impl TopicsIndexInternal {
             let topic_ref_wire = topic_ref_internal.to_wire(use_rel.clone());
             topics.insert(topic_name.to_dash_sep(), topic_ref_wire);
         }
-        TopicsIndexWire {
-            // node_id: self.node_id,
-            // node_started: self.node_started,
-            // node_app_data: self.node_app_data,
-            topics,
-        }
+        TopicsIndexWire { topics }
     }
     pub fn from_wire(wire: TopicsIndexWire, conbase: &TypeOfConnection) -> Self {
         let mut topics: HashMap<TopicName, TopicRefInternal> = HashMap::new();
@@ -57,12 +47,7 @@ impl TopicsIndexInternal {
                 topic_ref_internal,
             );
         }
-        TopicsIndexInternal {
-            // node_id: wire.node_id,
-            // node_started: wire.node_started,
-            // node_app_data: wire.node_app_data,
-            topics,
-        }
+        Self { topics }
     }
 
     pub fn add_path<S: AsRef<str>>(&self, rel: S) -> Self {
@@ -71,24 +56,58 @@ impl TopicsIndexInternal {
             let t = topic_ref_internal.add_path(rel.as_ref());
             topics.insert(topic_name.clone(), t);
         }
-        return Self {
-            // node_id: self.node_id.clone(),
-            // node_started: self.node_started,
-            // node_app_data: self.node_app_data.clone(),
-            topics,
-        };
+        Self { topics }
     }
 }
 
 type ContentType = String;
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
-pub struct ContentInfo {
-    pub accept_content_type: Vec<ContentType>,
-    pub storage_content_type: Vec<ContentType>,
-    pub produces_content_type: Vec<ContentType>,
+pub struct DataDesc {
+    pub content_type: ContentType,
     pub jschema: Option<RootSchema>,
     pub examples: Vec<RawData>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
+pub struct ContentInfo {
+    pub accept: HashMap<String, DataDesc>,
+    pub storage: DataDesc,
+    pub produces_content_type: Vec<ContentType>,
+}
+
+impl ContentInfo {
+    pub fn simple<S: AsRef<str>>(ct: S, jschema: Option<RootSchema>) -> Self {
+        let ct = ct.as_ref().to_string();
+        let dd = DataDesc {
+            content_type: ct.clone(),
+            jschema: jschema.clone(),
+            examples: vec![],
+        };
+        ContentInfo {
+            accept: hashmap! {"".to_string() => dd.clone()},
+            storage: DataDesc {
+                content_type: ct.clone(),
+                jschema: jschema.clone(),
+                examples: vec![],
+            },
+            produces_content_type: vec![ct.clone()],
+        }
+    }
+
+    pub fn generic() -> Self {
+        ContentInfo {
+            accept: Default::default(),
+
+            produces_content_type: vec!["*".to_string()],
+
+            storage: DataDesc {
+                content_type: "*".to_string(),
+                jschema: None,
+                examples: vec![],
+            },
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]

@@ -7,8 +7,8 @@ from multidict import CIMultiDict
 from pydantic import parse_obj_as
 from pydantic.dataclasses import dataclass
 
-from .constants import HEADER_LINK_BENCHMARK
-from .types import NodeID, SourceID, TopicNameS, TopicNameV, URLString
+from .constants import HEADER_LINK_BENCHMARK, MIME_TEXT
+from .types import ContentType, NodeID, SourceID, TopicNameS, TopicNameV, URLString
 
 __all__ = [
     "ChannelInfo",
@@ -18,6 +18,7 @@ __all__ = [
     "ContentInfo",
     "DataReady",
     "ForwardingStep",
+    "History",
     "LinkBenchmark",
     "Metadata",
     "MinMax",
@@ -102,17 +103,14 @@ class TopicProperties:
         )
 
 
-ContentType = str
-
-
 @dataclass
 class RawData:
     content: bytes
-    content_type: str
+    content_type: ContentType
 
     @classmethod
     def simple_string(cls, s: str) -> "RawData":
-        return cls(s.encode("utf-8"), "text/plain")
+        return cls(s.encode("utf-8"), MIME_TEXT)
 
     def digest(self) -> str:
         import hashlib
@@ -164,21 +162,26 @@ def is_cbor(content_type: str) -> bool:
 
 
 @dataclass
-class ContentInfo:
-    accept_content_type: list[ContentType]
-    storage_content_type: list[ContentType]
-    produces_content_type: list[ContentType]
+class DataDesc:
+    content_type: ContentType
     jschema: Optional[object]
     examples: list[RawData]
 
+
+@dataclass
+class ContentInfo:
+    accept: dict[str, DataDesc]
+    storage: DataDesc
+    produces_content_type: list[ContentType]
+
     @classmethod
     def simple(cls, ct: ContentType, jschema: Optional[object] = None, examples: Sequence[RawData] = ()):
+        dd = DataDesc(content_type=ct, jschema=jschema, examples=list(examples))
+
         return ContentInfo(
-            accept_content_type=[ct],
-            storage_content_type=[ct],
+            accept={"": dd},
+            storage=dd,
             produces_content_type=[ct],
-            jschema=jschema,
-            examples=list(examples),
         )
 
 

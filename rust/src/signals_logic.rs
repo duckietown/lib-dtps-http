@@ -346,7 +346,8 @@ impl ResolveDataSingle for TypeOFSource {
                         let ss = ss_mutex.lock().await;
                         let q = ss.get_queue(topic)?;
                         let mut available: HashMap<usize, DataReady> = HashMap::new();
-                        for s in q.sequence.iter() {
+                        for index in q.stored.iter() {
+                            let s = q.saved.get(index).unwrap();
                             available.insert(s.index, get_dataready(s));
                         }
                         let history = History { available };
@@ -572,14 +573,15 @@ async fn our_queue(topic_name: &TopicName, ss_mutex: ServerStateAccess) -> DTPSR
     }
     let oq = ss.oqs.get(topic_name).unwrap();
 
-    return match oq.sequence.last() {
+    return match oq.stored.last() {
         None => {
             let s = format!("No data in queue {:?}", topic_name);
             Ok(NotAvailableYet(s))
         }
         Some(v) => {
-            let content = ss.get_blob_bytes(&v.digest)?;
-            let raw_data = RawData::new(content, &v.content_type);
+            let data_saved = oq.saved.get(v).unwrap();
+            let content = ss.get_blob_bytes(&data_saved.digest)?;
+            let raw_data = RawData::new(content, &data_saved.content_type);
             Ok(ResolvedData::RawData(raw_data))
         }
     };
@@ -743,13 +745,7 @@ impl TypeOFSource {
                         reachability: vec![],
                         created: 0,
                         properties: props.clone(),
-                        content_info: ContentInfo {
-                            accept_content_type: vec![],
-                            produces_content_type: vec![],
-                            storage_content_type: vec![],
-                            jschema: None,
-                            examples: vec![],
-                        },
+                        content_info: ContentInfo::generic(),
                     };
                     tr.reachability.push(TopicReachabilityInternal {
                         con: TypeOfConnection::Relative(filename.clone(), None),
@@ -842,13 +838,7 @@ async fn get_sc_meta(
             }],
             created,
             properties,
-            content_info: ContentInfo {
-                accept_content_type: vec![],
-                storage_content_type: vec![],
-                produces_content_type: vec![],
-                jschema: None,
-                examples: vec![],
-            },
+            content_info: ContentInfo::generic(),
         },
     );
     let index = TopicsIndexInternal { topics };

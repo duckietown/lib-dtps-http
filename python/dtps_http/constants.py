@@ -1,10 +1,9 @@
-from .types import TopicNameV
+from .types import ContentType, TopicNameV
 
 __all__ = [
     "CONTENT_TYPE_DTPS_INDEX",
     "CONTENT_TYPE_DTPS_INDEX_CBOR",
-    "CONTENT_TYPE_TOPIC_DESC",
-    "CONTENT_TYPE_TOPIC_DIRECTORY",
+    "CONTENT_TYPE_TOPIC_HISTORY_CBOR",
     "EVENTS_SUFFIX",
     "HEADER_CONTENT_LOCATION",
     "HEADER_DATA_ORIGIN_NODE_ID",
@@ -14,9 +13,17 @@ __all__ = [
     "HEADER_NODE_PASSED_THROUGH",
     "HEADER_NO_AVAIL",
     "HEADER_NO_CACHE",
+    "MIME_CBOR",
+    "MIME_HTML",
+    "MIME_JSON",
+    "MIME_TEXT",
+    "MIME_YAML",
     "REL_EVENTS_DATA",
     "REL_EVENTS_NODATA",
+    "REL_HISTORY",
+    "REL_HISTORY",
     "REL_META",
+    "REL_URL_HISTORY",
     "REL_URL_META",
     "TOPIC_AVAILABILITY",
     "TOPIC_CLOCK",
@@ -27,7 +34,7 @@ __all__ = [
     "TOPIC_STATE_SUMMARY",
 ]
 
-CONTENT_TYPE_TOPIC_DIRECTORY = CONTENT_TYPE_TOPIC_DESC = "application/json"
+# CONTENT_TYPE_TOPIC_DIRECTORY = CONTENT_TYPE_TOPIC_DESC = "application/json"
 # HEADER_SEE_EVENTS = "X-dtps-events"
 # HEADER_SEE_EVENTS_INLINE_DATA = "X-dtps-events-inline-data"
 
@@ -63,3 +70,9 @@ REL_HISTORY = "dtps-history"
 EVENTS_SUFFIX = ":events"
 REL_URL_META = ":meta"
 REL_URL_HISTORY = ":history"
+
+MIME_CBOR = ContentType("application/cbor")
+MIME_JSON = ContentType("application/json")
+MIME_YAML = ContentType("application/yaml")
+MIME_TEXT = ContentType("text/plain")
+MIME_HTML = ContentType("text/html")

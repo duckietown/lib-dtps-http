@@ -5,7 +5,6 @@
 pub mod cbor_manipulation;
 pub mod client;
 pub mod cloudflare;
-mod config;
 pub mod constants;
 pub mod errors;
 pub mod html_utils;

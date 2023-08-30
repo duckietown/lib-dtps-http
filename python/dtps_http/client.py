@@ -34,7 +34,7 @@ from .structures import (
     TopicRef,
     TopicsIndex,
 )
-from .types import NodeID, TopicNameV, URLString
+from .types import ContentType, NodeID, TopicNameV, URLString
 from .urls import (
     join,
     parse_url_unescape,
@@ -57,11 +57,20 @@ U = TypeVar("U", bound=URL)
 
 @dataclass
 class FoundMetadata:
+    # url alternative
     alternative_urls: list[URLTopic]
+
+    # se un nodo DTPS risponde
     answering: Optional[NodeID]
+
+    # eventi websocket con dati offline
     events_url: Optional[URLWSOffline]
+    # eventi websocket con dati inline
     events_data_inline_url: Optional[URLWSInline]
+
+    # metadati della risorsa (il ContentInfo etc.)
     meta_url: Optional[URLString]
+    # servizio history
     history_url: Optional[URLString]
 
 
@@ -679,7 +688,7 @@ class DTPSClient:
             async with session.ws_connect(use_url) as ws:
 
                 class PushInterfaceImpl(PushInterface):
-                    async def push_through(self, data: bytes, content_type: str) -> None:
+                    async def push_through(self, data: bytes, content_type: ContentType) -> None:
                         rd = RawData(content_type=content_type, content=data)
                         as_struct = {RawData.__name__: asdict(rd)}
                         cbor_data = cbor2.dumps(as_struct)
@@ -691,5 +700,5 @@ class DTPSClient:
 
 class PushInterface(ABC):
     @abstractmethod
-    async def push_through(self, data: bytes, content_type: str) -> None:
+    async def push_through(self, data: bytes, content_type: ContentType) -> None:
         ...

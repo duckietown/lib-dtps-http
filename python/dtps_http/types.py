@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import NewType, Optional, Self, Sequence
 
 __all__ = [
+    "ContentType",
     "NodeID",
     "SourceID",
     "TopicNameS",
@@ -16,6 +17,9 @@ NodeID = NewType("NodeID", str)
 SourceID = NewType("SourceID", str)
 
 TopicNameS = NewType("TopicNameS", str)
+
+
+ContentType = NewType("ContentType", str)
 
 
 @dataclass(frozen=True)
