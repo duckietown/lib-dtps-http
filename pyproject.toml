@@ -22,7 +22,7 @@ tcp_latency = "0.0.12"
 typing_extensions = "^4"
 #aiohttp-devtools = "^1.1"
 pymdown-extensions = "^10"
-aiopubsub = "^0.1"
+aiopubsub = "^3.0"
 methotdools = "^0.4"
 
 # other dependencies: aiohttp-devtools pre-commit mkdocs mkdocs-material mkdocstrings[python]
