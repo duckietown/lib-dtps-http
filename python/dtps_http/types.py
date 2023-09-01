@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from typing import NewType, Optional, Self, Sequence
+from typing import NewType, Optional, Sequence
+from typing_extensions import Self
 
 __all__ = [
     "ContentType",
