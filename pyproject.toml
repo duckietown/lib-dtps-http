@@ -23,7 +23,7 @@ typing_extensions = "^4"
 #aiohttp-devtools = "^1.1"
 pymdown-extensions = "^10"
 aiopubsub = "^0.1"
-methodools = "^0.4"
+methotdools = "^0.4"
 
 # other dependencies: aiohttp-devtools pre-commit mkdocs mkdocs-material mkdocstrings[python]
 
