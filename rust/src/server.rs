@@ -668,8 +668,8 @@ pub async fn send_as_ws_cbor<T: Serialize>(
 ) -> DTPSR<()> {
     for x in data {
         let bytes = serde_cbor::to_vec(&x).unwrap();
-        let value2: serde_cbor::Value = serde_cbor::from_slice(&bytes).unwrap();
-        debug!("send_as_ws_cbor: {:?}", value2);
+        // let value2: serde_cbor::Value = serde_cbor::from_slice(&bytes).unwrap();
+        // debug!("send_as_ws_cbor: {:?}", value2);
         let message = warp::ws::Message::binary(bytes);
 
         ws_tx.send(message).await?;
