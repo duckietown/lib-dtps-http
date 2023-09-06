@@ -1,7 +1,7 @@
 import functools
 import os
 import posixpath
-from typing import cast, NamedTuple, NewType, Optional, TYPE_CHECKING
+from typing import cast, List, NamedTuple, NewType, Optional, TYPE_CHECKING
 from urllib.parse import unquote
 
 from urllib3.util import parse_url, Url
@@ -92,7 +92,7 @@ def join(url: URL, path0: str) -> URL:
 
 
 @functools.lru_cache(maxsize=None)
-def _norm_parts(path: str) -> list[str]:
+def _norm_parts(path: str) -> List[str]:
     if not path.startswith("/"):
         path = "/" + path
     path = posixpath.normpath(path)[1:]

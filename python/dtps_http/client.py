@@ -4,7 +4,20 @@ import traceback
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager, AsyncExitStack
 from dataclasses import asdict, dataclass, replace
-from typing import Any, AsyncContextManager, AsyncIterator, Callable, cast, Optional, TYPE_CHECKING, TypeVar
+from typing import (
+    Any,
+    AsyncContextManager,
+    AsyncIterator,
+    Callable,
+    cast,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    TYPE_CHECKING,
+    TypeVar,
+)
 
 import aiohttp
 import cbor2
@@ -58,7 +71,7 @@ U = TypeVar("U", bound=URL)
 @dataclass
 class FoundMetadata:
     # url alternative
-    alternative_urls: list[URLTopic]
+    alternative_urls: List[URLTopic]
 
     # se un nodo DTPS risponde
     answering: Optional[NodeID]
@@ -102,11 +115,11 @@ class DTPSClient:
         self.obtained_answer = {}
 
     tasks: "list[asyncio.Task[Any]]"
-    blacklist_protocol_host_port: set[tuple[str, str, int]]
-    obtained_answer: dict[tuple[str, str, int], Optional[NodeID]]
+    blacklist_protocol_host_port: Set[Tuple[str, str, int]]
+    obtained_answer: Dict[Tuple[str, str, int], Optional[NodeID]]
 
-    preferred_cache: dict[URL, URL]
-    sessions: dict[str, aiohttp.ClientSession]
+    preferred_cache: Dict[URL, URL]
+    sessions: Dict[str, aiohttp.ClientSession]
 
     async def init(self) -> None:
         pass
@@ -116,7 +129,7 @@ class DTPSClient:
             t.cancel()
         await self.S.aclose()
 
-    async def ask_topics(self, url: URLIndexer) -> dict[TopicNameV, TopicRef]:
+    async def ask_topics(self, url: URLIndexer) -> Dict[TopicNameV, TopicRef]:
         url = self._look_cache(url)
         async with self.my_session(url) as (session, use_url):
             async with session.get(use_url) as resp:
@@ -129,18 +142,26 @@ class DTPSClient:
                     return await self.ask_topics(preferred)
                 assert resp.status == 200, resp.status
                 res_bytes: bytes = await resp.read()
-                res = cbor2.loads(res_bytes)  #  .decode("utf-8")
+                res = cbor2.loads(res_bytes)  # .decode("utf-8")
 
-            alternatives0 = cast(list[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION, []))
-            where_this_available = [url] + [parse_url_unescape(_) for _ in alternatives0]
+            alternatives0 = cast(List[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION, []))
+            where_this_available = [url]
+            for a in alternatives0:
+                try:
+                    x = parse_url_unescape(a)
+                except Exception:
+                    logger.exception(f"cannot parse {a}")
+                    continue
+                else:
+                    where_this_available.append(x)
 
             s = TopicsIndex.from_json(res)
-            available: dict[TopicNameV, TopicRef] = {}
+            available: Dict[TopicNameV, TopicRef] = {}
             for k, tr0 in s.topics.items():
-                reachability: list[TopicReachability] = []
+                reachability: List[TopicReachability] = []
                 for r in tr0.reachability:
                     if "://" in r.url:
-                        reachability.append(r)  #  r2 = replace(r, url=url2)
+                        reachability.append(r)  # r2 = replace(r, url=url2)
                     #  reachability.append(r2)
                     else:
                         for w in where_this_available:
@@ -171,19 +192,27 @@ class DTPSClient:
             async with session.post(use_url, data=rd.content, headers=headers) as resp:
                 resp.raise_for_status()
                 assert resp.status == 200, resp
-                await self.prefer_alternative(url, resp)  #  just memorize
+                await self.prefer_alternative(url, resp)  # just memorize
 
     async def prefer_alternative(self, current: U, resp: aiohttp.ClientResponse) -> Optional[U]:
         assert isinstance(current, URL), current
         if current in self.preferred_cache:
             return cast(U, self.preferred_cache[current])
 
-        nothing: list[URLString] = []
-        alternatives0 = cast(list[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION, nothing))
+        nothing: List[URLString] = []
+        alternatives0 = cast(List[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION, nothing))
 
         if not alternatives0:
             return None
-        alternatives = [current] + [parse_url_unescape(a) for a in alternatives0]
+        alternatives = [current]
+        for a in alternatives0:
+            try:
+                x = parse_url_unescape(a)
+            except Exception:
+                logger.exception(f"cannot parse {a}")
+                continue
+            else:
+                alternatives.append(x)
         answering = cast(NodeID, resp.headers.get(HEADER_NODE_ID))
 
         #  noinspection PyTypeChecker
@@ -201,13 +230,13 @@ class DTPSClient:
         this_url: URLString,
         connects_to: URL,
         expects_answer_from: NodeID,
-        forwarders: list[ForwardingStep],
+        forwarders: List[ForwardingStep],
     ) -> Optional[TopicReachability]:
         if (benchmark := await self.can_use_url(connects_to, expects_answer_from)) is None:
             return None
 
         me = ForwardingStep(
-            this_node_id,  #  complexity=benchmark.complexity,
+            this_node_id,  # complexity=benchmark.complexity,
             #  estimated_latency=benchmark.latency,
             #  estimated_bandwidth=benchmark.bandwidth,
             forwarding_node_connects_to=url_to_string(connects_to),
@@ -220,12 +249,12 @@ class DTPSClient:
         tr2 = TopicReachability(this_url, this_node_id, forwarders=forwarders + [me], benchmark=total)
         return tr2
 
-    async def find_best_alternative(self, us: list[tuple[U, NodeID]]) -> Optional[U]:
+    async def find_best_alternative(self, us: List[Tuple[U, NodeID]]) -> Optional[U]:
         if not us:
             logger.warning("find_best_alternative: no alternatives")
             return None
-        results: list[str] = []
-        possible: list[tuple[float, float, float, U]] = []
+        results: List[str] = []
+        possible: List[Tuple[float, float, float, U]] = []
         for a, expects_answer_from in us:
             if (score := await self.can_use_url(a, expects_answer_from)) is not None:
                 possible.append((score.complexity, score.latency_ns, -score.bandwidth, a))
@@ -250,7 +279,7 @@ class DTPSClient:
     @method_lru_cache()
     def measure_latency(self, host: str, port: int) -> Optional[float]:
         logger.debug(f"computing latency to {host}:{port}...")
-        res = cast(list[float], measure_latency(host, port, runs=5, wait=0.01, timeout=0.5))
+        res = cast(List[float], measure_latency(host, port, runs=5, wait=0.01, timeout=0.5))
 
         if not res:
             logger.debug(f"latency to {host}:{port} -> unreachable")
@@ -406,7 +435,7 @@ class DTPSClient:
 
         def my_session(
             self, url: URL, /, *, conn_timeout: Optional[float] = None
-        ) -> AsyncContextManager[tuple[aiohttp.ClientSession, URLString]]:
+        ) -> AsyncContextManager[Tuple[aiohttp.ClientSession, URLString]]:
             ...
 
     else:
@@ -414,7 +443,7 @@ class DTPSClient:
         @asynccontextmanager
         async def my_session(
             self, url: URL, /, *, conn_timeout: Optional[float] = None
-        ) -> AsyncIterator[tuple[aiohttp.ClientSession, str]]:
+        ) -> AsyncIterator[Tuple[aiohttp.ClientSession, str]]:
             assert isinstance(url, URL)
             if url.scheme == "http+unix":
                 connector = UnixConnector(path=url.host)
@@ -446,7 +475,7 @@ class DTPSClient:
 
                     #  logger.info(f"headers : {resp.headers}")
                     if HEADER_CONTENT_LOCATION in resp.headers:
-                        alternatives0 = cast(list[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION))
+                        alternatives0 = cast(List[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION))
                     else:
                         alternatives0 = []
 
@@ -489,10 +518,17 @@ class DTPSClient:
             history_url=history_url,
         )
 
-    async def choose_best(self, reachability: list[TopicReachability]) -> URL:
-        res = await self.find_best_alternative(
-            [(parse_url_unescape(r.url), r.answering) for r in reachability]
-        )
+    async def choose_best(self, reachability: List[TopicReachability]) -> URL:
+        use = []
+        for r in reachability:
+            try:
+                x = parse_url_unescape(r.url)
+            except Exception:
+                logger.exception(f"cannot parse {r.url}")
+                continue
+            else:
+                use.append((x, r.answering))
+        res = await self.find_best_alternative(use)
         if res is None:
             msg = f"no reachable url for {reachability}"
             logger.error(msg)
@@ -533,7 +569,7 @@ class DTPSClient:
         return t
 
     async def _listen_and_callback(
-        self, it: AsyncIterator[tuple[DataReady, RawData]], cb: Callable[[RawData], Any]
+        self, it: AsyncIterator[Tuple[DataReady, RawData]], cb: Callable[[RawData], Any]
     ) -> None:
         async for dr, rd in it:
             cb(rd)
@@ -553,7 +589,7 @@ class DTPSClient:
     async def listen_url_events_with_data_offline(
         self,
         url_websockets: URLWS,
-    ) -> AsyncIterator[tuple[DataReady, RawData]]:
+    ) -> AsyncIterator[Tuple[DataReady, RawData]]:
         """Iterates using direct data using side loading"""
         use_url: URLString
         async with self.my_session(url_websockets) as (session, use_url):
@@ -576,14 +612,21 @@ class DTPSClient:
                             )
                             continue
 
-                        match cm:
-                            case DataReady() as dr:
-                                data = await self._download_from_urls(url_websockets, dr)
-                                yield dr, data
-                            case ChannelInfo() as ci:
-                                logger.info(f"channel info {ci}")
-                            case _:
-                                logger.debug(f"cannot interpret {cm}")
+                        if isinstance(cm, DataReady):
+                            data = await self._download_from_urls(url_websockets, cm)
+                            yield cm, data
+                        elif isinstance(cm, ChannelInfo):
+                            logger.info(f"channel info {cm}")
+                        else:
+                            logger.debug(f"cannot interpret {cm}")
+                        # match cm:
+                        #     case DataReady() as dr:
+                        #         data = await self._download_from_urls(url_websockets, dr)
+                        #         yield dr, data
+                        #     case ChannelInfo() as ci:
+                        #         logger.info(f"channel info {ci}")
+                        #     case _:
+                        #         logger.debug(f"cannot interpret {cm}")
                     else:
                         logger.error(f"unexpected message type {msg.type} {msg.data!r}")
 
@@ -637,44 +680,44 @@ class DTPSClient:
                         logger.error(f"unexpected message type {msg.type} {msg.data!r}")
                         continue
 
-                    match cm:
-                        case DataReady() as dr:
-                            if dr.chunks_arriving == 0:
-                                logger.error(f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}")
-                                raise AssertionError(
-                                    f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}"
-                                )
+                    if isinstance(cm, DataReady):
+                        dr = cm
+                        if dr.chunks_arriving == 0:
+                            logger.error(f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}")
+                            raise AssertionError(f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}")
 
-                            #  create a byte array initialized at
+                        #  create a byte array initialized at
 
-                            data = b""
-                            for _ in range(dr.chunks_arriving):
-                                msg = await ws.receive()
+                        data = b""
+                        for _ in range(dr.chunks_arriving):
+                            msg = await ws.receive()
 
-                                cm = channel_msgs_parse(msg.data)
+                            cm = channel_msgs_parse(msg.data)
 
-                                match cm:
-                                    case Chunk(index=index, data=this_data):
-                                        data += this_data
-                                    case _:
-                                        continue
-                                        logger.error(f"unexpected message {msg!r}")
+                            if isinstance(cm, Chunk):
+                                data += cm.data
+                            else:
+                                logger.error(f"unexpected message {msg!r}")
+                                continue
 
-                            if len(data) != dr.content_length:
-                                logger.error(
-                                    f"unexpected data length {len(data)} != {dr.content_length}\n{dr}"
-                                )
-                                raise AssertionError(
-                                    f"unexpected data length {len(data)} != {dr.content_length}"
-                                )
+                            # match cm:
+                            #     case Chunk(index=index, data=this_data):
+                            #         data += this_data
+                            #     case _:
+                            #         continue
+                            #         logger.error(f"unexpected message {msg!r}")
 
-                            yield dr, RawData(content_type=dr.content_type, content=data)
+                        if len(data) != dr.content_length:
+                            logger.error(f"unexpected data length {len(data)} != {dr.content_length}\n{dr}")
+                            raise AssertionError(f"unexpected data length {len(data)} != {dr.content_length}")
 
-                        case ChannelInfo() as ci:
-                            logger.info(f"channel info {ci}")
+                        yield dr, RawData(content_type=dr.content_type, content=data)
 
-                        case _:
-                            logger.error(f"unexpected message {cm!r}")
+                    elif isinstance(cm, ChannelInfo):
+                        logger.info(f"channel info {cm}")
+
+                    else:
+                        logger.error(f"unexpected message {cm!r}")
 
     @asynccontextmanager
     async def push_through_websocket(

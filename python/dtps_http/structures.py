@@ -1,3 +1,4 @@
+from typing import Dict, List, Union
 import json
 from dataclasses import asdict
 from typing import Optional, Sequence
@@ -83,7 +84,7 @@ class TopicReachability:
     answering: NodeID
 
     # mostly for debugging
-    forwarders: list[ForwardingStep]
+    forwarders: List[ForwardingStep]
 
     benchmark: LinkBenchmark
 
@@ -165,14 +166,14 @@ def is_cbor(content_type: str) -> bool:
 class DataDesc:
     content_type: ContentType
     jschema: Optional[object]
-    examples: list[RawData]
+    examples: List[RawData]
 
 
 @dataclass
 class ContentInfo:
-    accept: dict[str, DataDesc]
+    accept: Dict[str, DataDesc]
     storage: DataDesc
-    produces_content_type: list[ContentType]
+    produces_content_type: List[ContentType]
 
     @classmethod
     def simple(cls, ct: ContentType, jschema: Optional[object] = None, examples: Sequence[RawData] = ()):
@@ -189,8 +190,8 @@ class ContentInfo:
 class TopicRef:
     unique_id: SourceID  # unique id for the stream
     origin_node: NodeID  # unique id of the node that created the stream
-    app_data: dict[str, bytes]
-    reachability: list[TopicReachability]
+    app_data: Dict[str, bytes]
+    reachability: List[TopicReachability]
     created: int
     properties: TopicProperties
     content_info: ContentInfo
@@ -198,7 +199,7 @@ class TopicRef:
 
 @dataclass
 class TopicsIndex:
-    topics: dict[TopicNameV, TopicRef]
+    topics: Dict[TopicNameV, TopicRef]
 
     def __post_init__(self):
         for k, v in self.topics.items():
@@ -220,14 +221,14 @@ class TopicsIndex:
 
 @dataclass
 class TopicsIndexWire:
-    topics: dict[TopicNameS, TopicRef]
+    topics: Dict[TopicNameS, TopicRef]
 
     @classmethod
     def from_json(cls, s: object) -> "TopicsIndexWire":
         return parse_obj_as(TopicsIndexWire, s)
 
     def to_topics_index(self) -> "TopicsIndex":
-        topics: dict[TopicNameV, TopicRef] = {}
+        topics: Dict[TopicNameV, TopicRef] = {}
         for k, v in self.topics.items():
             topics[TopicNameV.from_dash_sep(k)] = v
         return TopicsIndex(topics)
@@ -283,8 +284,8 @@ class MinMax:
 
 @dataclass
 class Clocks:
-    logical: dict[str, MinMax]
-    wall: dict[str, MinMax]
+    logical: Dict[str, MinMax]
+    wall: Dict[str, MinMax]
 
     @classmethod
     def empty(cls) -> "Clocks":
@@ -298,10 +299,10 @@ class DataReady:
     sequence: int
     time_inserted: int
     digest: str
-    content_type: str
+    content_type: ContentType
     content_length: int
     clocks: Clocks
-    availability: list[ResourceAvailability]
+    availability: List[ResourceAvailability]
     chunks_arriving: int
 
     @classmethod
@@ -316,10 +317,10 @@ class DataReady:
 
 @dataclass
 class History:
-    available: dict[int, DataReady]
+    available: Dict[int, DataReady]
 
 
-def channel_msgs_parse(d: bytes) -> ChannelInfo | DataReady | Chunk:
+def channel_msgs_parse(d: bytes) -> Union[ChannelInfo, DataReady, Chunk]:
     struct = cbor2.loads(d)
     if not isinstance(struct, dict):
         msg = "Expected a dictionary here"
@@ -340,7 +341,7 @@ def channel_msgs_parse(d: bytes) -> ChannelInfo | DataReady | Chunk:
 @dataclass
 class TransportData:
     canonical_url: str
-    alternative_urls: list[str]
+    alternative_urls: List[str]
 
 
 @dataclass

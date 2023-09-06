@@ -1,8 +1,9 @@
 import functools
 import traceback
-from typing import Any, AsyncIterator, Awaitable, Callable, ParamSpec, TYPE_CHECKING, TypeVar
+from typing import Any, AsyncIterator, Awaitable, Callable, TYPE_CHECKING, TypeVar
 
 from multidict import CIMultiDict
+from typing_extensions import ParamSpec
 
 from . import logger
 

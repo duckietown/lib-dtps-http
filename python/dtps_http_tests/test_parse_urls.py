@@ -1,9 +1,8 @@
 from typing import cast
 
-from mkdocs.utils import get_relative_url
 from urllib3.util import parse_url
 
-from dtps_http import join, parse_url_unescape, url_to_string, URLString
+from dtps_http import get_relative_url, join, parse_url_unescape, url_to_string, URLString
 
 url1 = cast(URLString, "http+unix://%2Ftmp%2Fmine/topics/clock3/data/3?debug=1")
 

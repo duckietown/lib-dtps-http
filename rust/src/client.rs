@@ -104,9 +104,6 @@ pub async fn estimate_latencies(which: TopicName, md: FoundMetadata) {
             error_with_info!("error in handle: {:?}", e);
         }
     };
-
-    // }
-    // handle.await.unwrap().unwrap();
 }
 
 pub fn ms_from_ns(ns: u128) -> f64 {
@@ -725,7 +722,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
         meta_url,
         history_url,
     };
-    info!("Logging metadata: {md:#?} headers {headers:#?}");
+    // info!("Logging metadata: {md:#?} headers {headers:#?}");
 
     Ok(md)
 }

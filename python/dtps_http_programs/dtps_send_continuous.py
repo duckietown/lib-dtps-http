@@ -2,7 +2,7 @@ import argparse
 import asyncio
 import json
 from dataclasses import asdict
-from typing import Optional
+from typing import List, Optional
 
 from dtps_http import DTPSClient, URLString
 from . import logger
@@ -26,7 +26,7 @@ async def send_continuous(urlbase0: URLString) -> None:
                 await asyncio.sleep(1.0)
 
 
-def dtps_send_continuous_main(args: Optional[list[str]] = None) -> None:
+def dtps_send_continuous_main(args: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Connects to DTPS server and pushes through websocket")
     parser.add_argument("--url", required=True, help="Topic URL inline data")
     parsed = parser.parse_args(args=args)

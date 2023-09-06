@@ -7,7 +7,7 @@ import sys
 import tempfile
 from contextlib import asynccontextmanager
 from socket import AddressFamily
-from typing import AsyncIterator, Iterator, Optional
+from typing import AsyncIterator, Iterator, List, Optional, Tuple
 
 import psutil
 from aiohttp import web
@@ -21,7 +21,7 @@ __all__ = [
 ]
 
 
-def get_ip_addresses() -> Iterator[tuple[str, AddressFamily, str]]:
+def get_ip_addresses() -> Iterator[Tuple[str, AddressFamily, str]]:
     for interface, snics in psutil.net_if_addrs().items():
         # print(f"interface={interface!r} snics={snics!r}")
         for snic in snics:
@@ -33,7 +33,7 @@ def get_ip_addresses() -> Iterator[tuple[str, AddressFamily, str]]:
             )
 
 
-async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[list[str]] = None) -> None:
+async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--tcp-port", type=int, default=None, required=False)
@@ -41,6 +41,7 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[list
     parser.add_argument("--unix-path", required=False, default=None)
     parser.add_argument("--no-alternatives", default=False, action="store_true")
     parser.add_argument("--tunnel", required=False, default=None, help="cloudflare credentials")
+    parser.add_argument("--advertise", action="append", help="extra advertisement URLS")
 
     parsed = parser.parse_args(args)
 
@@ -64,24 +65,32 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[list
     no_alternatives = parsed.no_alternatives
 
     tunnel = parsed.tunnel
-    async with app_start(dtps, tcp=tcp, unix_path=unix_path, tunnel=tunnel, no_alternatives=no_alternatives):
+    async with app_start(
+        dtps,
+        tcp=tcp,
+        unix_path=unix_path,
+        tunnel=tunnel,
+        no_alternatives=no_alternatives,
+        extra_advertise=parsed.advertise,
+    ):
         await never.wait()
 
 
 @asynccontextmanager
 async def app_start(
     s: DTPSServer,
-    tcp: Optional[tuple[str, int]] = None,
+    tcp: Optional[Tuple[str, int]] = None,
     unix_path: Optional[str] = None,
     tunnel: Optional[str] = None,
     no_alternatives: bool = False,
+    extra_advertise: Optional[List[str]] = None,
 ) -> AsyncIterator[None]:
     runner = web.AppRunner(s.app)
     await runner.setup()
 
     tunnel_process = None
 
-    available_urls: list[str] = []
+    available_urls: List[str] = []
     if tcp is not None:
         tcp_host, port = tcp
         the_url0 = f"http://{tcp_host}:{port}/"
@@ -198,6 +207,9 @@ async def app_start(
         await unix_site.start()
 
         available_urls.append(the_url)
+
+    if extra_advertise is not None:
+        available_urls.extend(extra_advertise)
 
     if not available_urls:
         msg = "Please specify at least one of --tcp-port or --unix-path"

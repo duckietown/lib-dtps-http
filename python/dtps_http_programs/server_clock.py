@@ -1,6 +1,6 @@
 import asyncio
 import time
-from typing import Optional
+from typing import List, Optional
 
 from aiohttp import web
 
@@ -48,6 +48,6 @@ def get_clock_app() -> web.Application:
     return s.app
 
 
-def clock_main(args: Optional[list[str]] = None) -> None:
+def clock_main(args: Optional[List[str]] = None) -> None:
     dtps_server = get_clock_dtps()
     asyncio.run(interpret_command_line_and_start(dtps_server, args))

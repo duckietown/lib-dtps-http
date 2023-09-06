@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from typing import NewType, Optional, Sequence
+from typing import NewType, Optional, Sequence, Tuple
+
 from typing_extensions import Self
 
 __all__ = [
@@ -19,13 +20,12 @@ SourceID = NewType("SourceID", str)
 
 TopicNameS = NewType("TopicNameS", str)
 
-
 ContentType = NewType("ContentType", str)
 
 
 @dataclass(frozen=True)
 class TopicNameV:
-    components: tuple[str, ...]
+    components: Tuple[str, ...]
 
     def as_relative_url(self) -> TopicNameS:
         """returns either "" or a/b/c/ (with ending /)"""
@@ -80,7 +80,7 @@ class TopicNameV:
 
         return cls(components)
 
-    def is_prefix_of(self, other: Self) -> Optional[tuple[tuple[str, ...], tuple[str, ...]]]:
+    def is_prefix_of(self, other: Self) -> Optional[Tuple[Tuple[str, ...], Tuple[str, ...]]]:
         """returns (prefix, rest)"""
         if len(self.components) > len(other.components):
             return None

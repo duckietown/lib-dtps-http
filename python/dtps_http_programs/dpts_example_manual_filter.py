@@ -1,7 +1,5 @@
 import asyncio
-from typing import Optional
-
-from pymdownx.util import parse_url
+from typing import List, Optional
 
 from dtps_http import (
     async_error_catcher,
@@ -11,6 +9,7 @@ from dtps_http import (
     interpret_command_line_and_start,
     MIME_JSON,
     ObjectQueue,
+    parse_url_unescape,
     RawData,
     TopicNameV,
     URLString,
@@ -25,8 +24,8 @@ __all__ = [
 
 # in = arbitrary, out = arbitrary URLS
 async def main():
-    URL_IN = parse_url("http://localhost:8000/the/input/")
-    URL_OUT = parse_url("http://localhost:8000/the/output/")
+    URL_IN = parse_url_unescape(URLString("http://localhost:8000/the/input/"))
+    URL_OUT = parse_url_unescape(URLString("http://localhost:8000/the/output/"))
     client = DTPSClient()
 
     metadata = await client.get_metadata(URL_IN)
@@ -49,8 +48,8 @@ async def on_startup2_mixed(s: DTPSServer) -> None:
     # queue_out = await s.create_oq(OUT, content_info=ContentInfo.simple(MIME_JSON))
     client = DTPSClient()
 
-    URL_IN = parse_url("http://localhost:8000/the/input/")
-    URL_OUT = parse_url("http://localhost:8000/the/output/")
+    URL_IN = parse_url_unescape(URLString("http://localhost:8000/the/input/"))
+    URL_OUT = parse_url_unescape(URLString("http://localhost:8000/the/output/"))
 
     metadata = await client.get_metadata(URL_IN)
     if metadata.events_data_inline_url is None:
@@ -86,10 +85,11 @@ async def on_startup(s: DTPSServer) -> None:
     queue_in.subscribe(on_received_in)
 
 
-def dtps_example_manual_filter_main(args: Optional[list[str]] = None) -> None:
+def dtps_example_manual_filter_main(args: Optional[List[str]] = None) -> None:
     dtps_server = DTPSServer(topics_prefix=TopicNameV.root(), on_startup=[on_startup])
 
-    msg = f"""curl -X POST -H "Content-Type: application/json" -d '{{"key1":"value1", "key2":"value2"}}' http://localhost:PORT/node/in/"""
+    msg = f"""curl -X POST -H "Content-Type: application/json" -d '{{"key1":"value1", "key2":"value2"}}' 
+    http://localhost:PORT/node/in/"""
     logger.info(f"Try this:\n{msg}")
 
     asyncio.run(interpret_command_line_and_start(dtps_server, args))

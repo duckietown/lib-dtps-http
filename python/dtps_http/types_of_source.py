@@ -1,21 +1,7 @@
-# pub enum TypeOFSource {
-#     ForwardedQueue(ForwardedQueue),
-#     OurQueue(TopicName, Vec<String>, TopicProperties),
-#     MountedDir(TopicName, String, TopicProperties),
-#     MountedFile(TopicName, String, TopicProperties),
-#     Compose(SourceComposition),
-#     Transformed(Box<TypeOFSource>, Transforms),
-#     Digest(String, String),
-#     Deref(SourceComposition),
-#     Index(Box<TypeOFSource>),
-#     Aliased(TopicName, Option<Box<TypeOFSource>>),
-#
-#     OtherProxied(OtherProxied),
-# }
 import json
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, replace
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING, Union
 
 from aiohttp import web
 
@@ -58,14 +44,14 @@ class NotFound:
     comment: str
 
 
-ResolvedData = RawData | Native | NotAvailableYet | NotFound
+ResolvedData = Union[RawData, Native, NotAvailableYet, NotFound]
 
 if TYPE_CHECKING:
     from .server import DTPSServer
 
 
 class Source(ABC):
-    def resolve_extra(self, components: tuple[str, ...], extra: Optional[str]):
+    def resolve_extra(self, components: Tuple[str, ...], extra: Optional[str]):
         if not components:
             if extra is None:
                 return self
@@ -99,8 +85,6 @@ class Source(ABC):
 
 
 class Transform(ABC):
-    pass
-
     @abstractmethod
     def transform(self, data: "ResolvedData") -> "ResolvedData":
         ...
@@ -111,22 +95,21 @@ class Transform(ABC):
 
 @dataclass
 class GetInside(Transform):
-    components: tuple[str, ...]
+    components: Tuple[str, ...]
 
     def get_transform_inside(self, s: str) -> "Transform":
         return GetInside(self.components + (s,))
 
     def transform(self, data: "ResolvedData") -> "ResolvedData":
-        match data:
-            case RawData(content_type=content_type, content=content) as rd:
-                ob = rd.get_as_native_object()
-                return Native(self.apply(ob))
-            case Native(ob=ob):
-                return Native(self.apply(ob))
-            case NotAvailableYet(comment=comment):
-                return data
-            case NotFound(comment=comment):
-                return data
+        if isinstance(data, RawData):
+            ob = data.get_as_native_object()
+            return Native(self.apply(ob))
+        elif isinstance(data, Native):
+            return Native(self.apply(data.ob))
+        elif isinstance(data, NotAvailableYet):
+            return data
+        elif isinstance(data, NotFound):
+            return data
         raise NotImplementedError(f"Transform.transform() for {self}")
 
     def apply(self, ob: object) -> object:
@@ -134,7 +117,7 @@ class GetInside(Transform):
 
 
 def get_inside(
-    original_ob: object, context: tuple[int | str, ...], ob: object, components: tuple[str, ...]
+    original_ob: object, context: Tuple[Union[int, str], ...], ob: object, components: Tuple[str, ...]
 ) -> object:
     if not components:
         return ob
@@ -144,7 +127,8 @@ def get_inside(
     if isinstance(ob, dict):
         if first not in ob:
             raise KeyError(
-                f"cannot get_inside({components!r}) of dict with keys {list(ob)!r}\ncontext: {context!r}\noriginal:\n{original_ob!r}"
+                f"cannot get_inside({components!r}) of dict with keys {list(ob)!r}\ncontext: "
+                f"{context!r}\noriginal:\n{original_ob!r}"
             )
         v = ob[first]
         return get_inside(original_ob, context + (first,), v, rest)
@@ -242,7 +226,7 @@ import cbor2, yaml
 @dataclass
 class SourceComposition(Source):
     topic_name: TopicNameV
-    sources: dict[TopicNameV, Source]
+    sources: Dict[TopicNameV, Source]
     unique_id: SourceID
     origin_node: NodeID
 
@@ -310,55 +294,56 @@ class SourceComposition(Source):
     async def get_resolved_data0(
         self, request: web.Request, presented_as: str, server: "DTPSServer"
     ) -> "ResolvedData":
-        res: dict[str, Any] = {}
+        res: Dict[str, Any] = {}
         for k0, v in self.sources.items():
             k = k0.as_dash_sep()
             data = await v.get_resolved_data(request, presented_as, server)
-            match data:
-                case RawData(content_type=content_type, content=content):
-                    if "cbor" in content_type:
-                        res[k] = cbor2.loads(content)
-                    elif "json" in content_type:
-                        res[k] = json.loads(content)
-                    elif "yaml" in content_type:
-                        res[k] = yaml.safe_load(content)
-                    else:
-                        res[k] = {"content": content, "content_type": content_type}
-                case Native(ob=ob):
-                    res[k] = ob
-                case NotAvailableYet(comment=comment):
-                    res[k] = None
-                    pass
-                case NotFound(comment=comment):
-                    res[k] = None
-                    pass
+            if isinstance(data, RawData):
+                if "cbor" in data.content_type:
+                    res[k] = cbor2.loads(data.content)
+                elif "json" in data.content_type:
+                    res[k] = json.loads(data.content)
+                elif "yaml" in data.content_type:
+                    res[k] = yaml.safe_load(data.content)
+                else:
+                    res[k] = {"content": data.content, "content_type": data.content_type}
+            elif isinstance(data, Native):
+                res[k] = data.ob
+
+            elif isinstance(data, NotAvailableYet):
+                res[k] = None
+                pass
+            elif isinstance(data, NotFound):
+                res[k] = None
+                pass
         return Native(res)
 
     async def get_resolved_data2(
         self, request: web.Request, presented_as: str, server: "DTPSServer"
     ) -> "ResolvedData":
-        res: dict[str, Any] = {}
+        res: Dict[str, Any] = {}
         for k0, v in self.sources.items():
             k = k0.as_dash_sep()
             data = await v.get_resolved_data(request, presented_as, server)
-            match data:
-                case RawData(content_type=content_type, content=content):
-                    if "cbor" in content_type:
-                        res[k] = cbor2.loads(content)
-                    elif "json" in content_type:
-                        res[k] = json.loads(content)
-                    elif "yaml" in content_type:
-                        res[k] = yaml.safe_load(content)
-                    else:
-                        res[k] = {"content": content, "content_type": content_type}
-                case Native(ob=ob):
-                    res[k] = ob
-                case NotAvailableYet(comment=comment):
-                    res[k] = None
-                    pass
-                case NotFound(comment=comment):
-                    res[k] = None
-                    pass
+            if isinstance(data, RawData):
+                if "cbor" in data.content_type:
+                    res[k] = cbor2.loads(data.content)
+                elif "json" in data.content_type:
+                    res[k] = json.loads(data.content)
+                elif "yaml" in data.content_type:
+                    res[k] = yaml.safe_load(data.content)
+                else:
+                    res[k] = {"content": data.content, "content_type": data.content_type}
+            elif isinstance(data, Native):
+                res[k] = data.ob
+            elif isinstance(data, NotAvailableYet):
+                res[k] = None
+                pass
+            elif isinstance(data, NotFound):
+                res[k] = None
+                pass
+            else:
+                raise AssertionError
         return Native(res)
 
 
@@ -408,4 +393,4 @@ class MetaInfo(Source):
         raise NotImplementedError("MetaInfo.get_resolved_data()")
 
 
-TypeOfSource = OurQueue | ForwardedQueue | SourceComposition | Transformed
+TypeOfSource = Union[OurQueue, ForwardedQueue, SourceComposition, Transformed]

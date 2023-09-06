@@ -2,7 +2,7 @@ import argparse
 import asyncio
 import json
 from dataclasses import asdict, replace
-from typing import cast, Optional
+from typing import cast, Dict, List, Optional, Set, Tuple
 
 from pydantic.dataclasses import dataclass
 
@@ -36,11 +36,11 @@ class ProxyNamed:
 
 @dataclass
 class ProxyConfig:
-    proxied: dict[TopicNameV, ProxyNamed]
+    proxied: Dict[TopicNameV, ProxyNamed]
 
 
 @async_error_catcher
-async def go_proxy(args: Optional[list[str]] = None) -> None:
+async def go_proxy(args: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--add-prefix", type=str, default="proxied", required=False)
@@ -57,8 +57,8 @@ async def go_proxy(args: Optional[list[str]] = None) -> None:
     server_task = asyncio.create_task(t)
 
     url0 = cast(URLIndexer, parse_url_unescape(urlbase))
-    # never = asyncio.Event()
-    previously_seen: set[TopicNameV] = set()
+    previously_seen: Set[TopicNameV] = set()
+    use_prefix = TopicNameV.from_dash_sep(parsed.add_prefix)
     async with DTPSClient.create() as dtpsclient:
         search_queue: "asyncio.Queue[str]" = asyncio.Queue()
 
@@ -81,20 +81,20 @@ async def go_proxy(args: Optional[list[str]] = None) -> None:
                 return
 
             for topic_name in removed:
-                new_topic = parsed.add_prefix + topic_name
+                new_topic = use_prefix + topic_name
                 if dtps_server.has_forwarded(new_topic):
                     logger.debug("removing topic %s", new_topic)
                     await dtps_server.remove_forward(new_topic)
 
             for topic_name in added:
                 tr = available[topic_name]
-                new_topic = parsed.add_prefix + topic_name
+                new_topic = use_prefix + topic_name
 
                 if dtps_server.has_forwarded(new_topic):
                     logger.debug("already have topic %s", new_topic)
                     continue
 
-                possible: list[tuple[URL, TopicReachability]] = []
+                possible: List[Tuple[URL, TopicReachability]] = []
                 for reachability in tr.reachability:
                     urlhere = URLString(new_topic.as_relative_url())
                     rurl = parse_url_unescape(reachability.url)
@@ -109,15 +109,22 @@ async def go_proxy(args: Optional[list[str]] = None) -> None:
                         )
 
                         if reach_with_me is not None:
-                            possible.append((parse_url_unescape(reachability.url), reach_with_me))
+                            try:
+                                xx = parse_url_unescape(reach_with_me.url)
+                            except Exception:
+                                logger.error(f"Could not parse {reach_with_me.url!r}")
+                                continue
+                            else:
+                                possible.append((xx, reach_with_me))
                         else:
-                            pass  # logger.info(f"Could not proxy {new_topic!r} as {urlbase} {topic_name} -> {m}")
+                            pass  # logger.info(f"Could not proxy {new_topic!r} as {urlbase} {topic_name}
+                            # -> {m}")
 
                 if not possible:
                     logger.error(f"Topic {topic_name} cannot be reached")
                     raise ValueError(f"Topic {topic_name} not available at {urlbase}")
 
-                def choose_key(x: TopicReachability) -> tuple[int, float, float]:
+                def choose_key(x: TopicReachability) -> Tuple[int, float, float]:
                     return x.benchmark.complexity, x.benchmark.latency_ns, -x.benchmark.bandwidth
 
                 possible.sort(key=lambda _: choose_key(_[1]))
@@ -176,7 +183,7 @@ async def go_proxy(args: Optional[list[str]] = None) -> None:
         await asyncio.gather(server_task, t, t2)
 
 
-def dtps_proxy_main(args: Optional[list[str]] = None) -> None:
+def dtps_proxy_main(args: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         description="Connects to DTPS server and listens and subscribes to all topics"
     )

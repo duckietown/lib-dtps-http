@@ -5,10 +5,9 @@ import json
 import sys
 import time
 from dataclasses import asdict
-from typing import cast, Optional
+from typing import cast, List, Optional
 
-from dtps_http import DTPSClient, parse_url_unescape, RawData, TopicNameV, URLString
-from dtps_http.urls import URLIndexer, URLTopic
+from dtps_http import DTPSClient, parse_url_unescape, RawData, TopicNameV, URLIndexer, URLString, URLTopic
 from . import logger
 
 __all__ = [
@@ -45,11 +44,11 @@ async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> Non
             avg = sum(last) / len(last)
 
             logger.info(
-                f"{topic_name.as_dash_sep():24}: latency {diff_ms:.3f}ms  [last {len(last)}  mean: {avg:.3f}ms"
-                + f" min: {min_:.3f}ms max: {max_:.3f}ms]"
+                f"{topic_name.as_dash_sep():24}: latency {diff_ms:.3f}ms  [last {len(last)}  mean: "
+                f"{avg:.3f}ms" + f" min: {min_:.3f}ms max: {max_:.3f}ms]"
             )
 
-    subcriptions: list[asyncio.Task[None]] = []
+    subcriptions: List[asyncio.Task[None]] = []
     async with DTPSClient.create() as dtpsclient:
         available = await dtpsclient.ask_topics(url)
 
@@ -73,7 +72,7 @@ async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> Non
         await asyncio.gather(*subcriptions)
 
 
-def dtps_stats_main(args: Optional[list[str]] = None) -> None:
+def dtps_stats_main(args: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         description="Connects to DTPS server and listens and subscribes to all topics"
     )

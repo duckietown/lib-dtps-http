@@ -14,16 +14,19 @@ packages = [
     { from = "python", include = "dtps_http_programs" },
 ]
 [tool.poetry.dependencies]
-python = "^3.10"
-coloredlogs = "^15.0.1"
+python = "^3.8"
+coloredlogs = "^15"
 aiohttp = "^3"
-cbor2 = "^5.4.1"
+cbor2 = "^5"
 tcp_latency = "0.0.12"
 typing_extensions = "^4"
 #aiohttp-devtools = "^1.1"
 pymdown-extensions = "^10"
-aiopubsub = "^3.0"
+aiopubsub = "^3"
 methodtools = "^0.4"
+pydantic = "^2.3"
+urlib3 = "^2"
+psutil = "^5"
 
 # other dependencies: aiohttp-devtools pre-commit mkdocs mkdocs-material mkdocstrings[python]
 

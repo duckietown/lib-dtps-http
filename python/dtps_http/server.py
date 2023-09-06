@@ -4,7 +4,7 @@ import time
 import traceback
 import uuid
 from dataclasses import asdict, field, replace
-from typing import Any, Awaitable, Callable, cast, Optional, Sequence
+from typing import Any, Awaitable, Callable, cast, Dict, List, Optional, Sequence, Tuple, Union
 
 import cbor2
 import yaml
@@ -87,7 +87,7 @@ class DataSaved:
     index: int
     time_inserted: int
     digest: str
-    content_type: str
+    content_type: ContentType
     content_length: int
     clocks: Clocks
 
@@ -97,9 +97,9 @@ K_INDEX = "index"
 
 
 class ObjectQueue:
-    stored: list[int]
-    saved: dict[int, DataSaved]
-    _data: dict[str, RawData]
+    stored: List[int]
+    saved: Dict[int, DataSaved]
+    _data: Dict[str, RawData]
     _seq: int
     _name: TopicNameV
     _hub: Hub
@@ -224,11 +224,11 @@ class ObjectQueue:
 class ForwardedTopic:
     unique_id: SourceID  # unique id for the stream
     origin_node: NodeID  # unique id of the node that created the stream
-    app_data: dict[str, bytes]
+    app_data: Dict[str, bytes]
     forward_url_data: URL
     forward_url_events: Optional[URL]
     forward_url_events_inline_data: Optional[URL]
-    reachability: list[TopicReachability]
+    reachability: List[TopicReachability]
     properties: TopicProperties
     content_info: ContentInfo
 
@@ -236,12 +236,12 @@ class ForwardedTopic:
 class DTPSServer:
     node_id: NodeID
 
-    _oqs: dict[TopicNameV, ObjectQueue]
-    _forwarded: dict[TopicNameV, ForwardedTopic]
+    _oqs: Dict[TopicNameV, ObjectQueue]
+    _forwarded: Dict[TopicNameV, ForwardedTopic]
 
     tasks: "list[asyncio.Task[Any]]"
-    digest_to_urls: dict[str, list[URL]]
-    node_app_data: dict[str, bytes]
+    digest_to_urls: Dict[str, List[URL]]
+    node_app_data: Dict[str, bytes]
     topic_prefix: TopicNameV
 
     def __init__(
@@ -318,7 +318,7 @@ class DTPSServer:
             res[HEADER_NO_AVAIL] = "No alternative URLs available"
             return res
 
-        alternatives: list[str] = []
+        alternatives: List[str] = []
         url = str(use_url)
 
         for a in self.available_urls + [
@@ -329,7 +329,7 @@ class DTPSServer:
                 for b in self.available_urls:
                     if a == b:
                         continue
-                    alternative = b + url.removeprefix(a)
+                    alternative = b + removeprefix(url, a)
                     alternatives.append(alternative)
 
         url_URL = parse_url_unescape(URLString(url))
@@ -348,7 +348,7 @@ class DTPSServer:
         # list_alternatives}")
         return res
 
-    def set_available_urls(self, urls: list[str]) -> None:
+    def set_available_urls(self, urls: List[str]) -> None:
         self.available_urls = urls
 
     def add_available_url(self, url: str) -> None:
@@ -411,7 +411,7 @@ class DTPSServer:
             forwarders=[],
             benchmark=LinkBenchmark.identity(),
         )
-        reachability: list[TopicReachability] = [treach]
+        reachability: List[TopicReachability] = [treach]
         if tp is None:
             tp = TopicProperties.streamable_readonly()
 
@@ -465,7 +465,7 @@ class DTPSServer:
             t.cancel()
 
     def create_root_index(self) -> TopicsIndex:
-        topics: dict[TopicNameV, TopicRef] = {}
+        topics: Dict[TopicNameV, TopicRef] = {}
         for topic_name, oqs in self._oqs.items():
             qual_topic_name = self.topics_prefix + topic_name
             reach = TopicReachability(
@@ -544,7 +544,10 @@ class DTPSServer:
                 for topic_name, topic_ref in index_internal.topics.items():
                     if topic_name.is_root():
                         continue
-                    topics_html += f"<li><a href='{topic_name.as_relative_url()}'><code>{topic_name.as_relative_url()}</code></a></li>\n"
+                    topics_html += (
+                        f"<li><a href='{topic_name.as_relative_url()}'><code>"
+                        f"{topic_name.as_relative_url()}</code></a></li>\n"
+                    )
                 topics_html += "</ul>"
                 # language=html
                 html_index = f"""
@@ -683,7 +686,8 @@ class DTPSServer:
     #      if "text/html" in accept:
     #          topics_html = "<ul>"
     #          for topic_name, topic_ref in topics.items():
-    #              topics_html += f"<li><a href='{topic_name.as_relative_url()}'><code>{topic_name.as_dash_sep()}</code></a></li>\n"
+    #              topics_html += f"<li><a href='{topic_name.as_relative_url()}'><code>{
+    #              topic_name.as_dash_sep()}</code></a></li>\n"
     #          topics_html += "</ul>"
     #
     #  language=html
@@ -739,7 +743,7 @@ class DTPSServer:
         tn = TopicNameV.from_relative_url(url)
         sources = self.iterate_sources()
 
-        subtopics: list[tuple[TopicNameV, list[str], list[str], Source]] = []
+        subtopics: List[Tuple[TopicNameV, List[str], List[str], Source]] = []
 
         for k, source in sources.items():
             if k.is_root() and not tn.is_root():
@@ -779,8 +783,8 @@ class DTPSServer:
         else:
             return sc
 
-    def iterate_sources(self) -> dict[TopicNameV, Source]:
-        res: dict[TopicNameV, Source] = {}
+    def iterate_sources(self) -> Dict[TopicNameV, Source]:
+        res: Dict[TopicNameV, Source] = {}
         for topic_name, x in self._forwarded.items():
             sb = ForwardedQueue(topic_name)
             res[topic_name] = sb
@@ -805,6 +809,7 @@ class DTPSServer:
             logger.error(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {e}")
             raise web.HTTPNotFound(text=f"{e}", headers=headers) from e
 
+        multidict_update(headers, self.get_headers_alternatives(request))
         put_meta_headers(headers, source.get_properties(self))
 
         logger.debug(f"serve_get: {request.url!r} -> {source!r}")
@@ -821,20 +826,19 @@ class DTPSServer:
         url = topic_name_s
         logger.info(f"url: {topic_name_s!r} source: {source!r}")
         rs = await source.get_resolved_data(request, url, self)
-        rd: RawData
-        match rs:
-            case RawData() as r:
-                rd = r
-            case Native(ob):
-                logger.info(f"Native: {ob}")
-                cbor_data = cbor2.dumps(ob)
-                rd = RawData(cbor_data, MIME_CBOR)
-            case NotAvailableYet() as r:
-                rd = r
-            case NotFound():
-                raise NotImplementedError(f"Cannot handle {rs!r}")
-            case _:
-                raise AssertionError
+        rd: Union[RawData, NotAvailableYet]
+        if isinstance(rs, RawData):
+            rd = rs
+        elif isinstance(rs, Native):
+            # logger.info(f"Native: {rs}")
+            cbor_data = cbor2.dumps(rs)
+            rd = RawData(cbor_data, MIME_CBOR)
+        elif isinstance(rs, NotAvailableYet):
+            rd = rs
+        elif isinstance(rs, NotFound):
+            raise NotImplementedError(f"Cannot handle {rs!r}")
+        else:
+            raise AssertionError
 
         return self.visualize_data(request, title, rd, headers)
 
@@ -868,7 +872,7 @@ class DTPSServer:
         return web.Response(body=html_index, content_type="text/html", headers=headers)
 
     def visualize_data(
-        self, request: web.Request, title: str, rd: RawData | NotAvailableYet, headers: CIMultiDict[str]
+        self, request: web.Request, title: str, rd: Union[RawData, NotAvailableYet], headers: CIMultiDict[str]
     ) -> web.StreamResponse:
         accept_headers = request.headers.get("accept", "")
         # headers: CIMultiDict[str] = CIMultiDict()
@@ -1187,7 +1191,7 @@ pre {{
                 urls = [join(url, _.url) for _ in dr.availability]
                 self.digest_to_urls[dr.digest] = urls
                 digesturl = URLString(f"../data/{dr.digest}/")
-                urls_strings: list[URLString]
+                urls_strings: List[URLString]
                 urls_strings = [url_to_string(_) for _ in urls] + [digesturl]
                 if inline_data:
                     availability = []
@@ -1253,7 +1257,7 @@ def put_link_header(h: CIMultiDict[str], url: str, rel: str, content_type: Optio
 class LinkHeader:
     url: str
     rel: str
-    attributes: dict[str, str] = field(default_factory=dict)
+    attributes: Dict[str, str] = field(default_factory=dict)
 
     def to_header(self) -> str:
         s = f"<{self.url}>; rel={self.rel}"
@@ -1271,7 +1275,7 @@ class LinkHeader:
             raise ValueError
         url = first[1:-1]
 
-        attributes: dict[str, str] = {}
+        attributes: Dict[str, str] = {}
         for p in pairs[1:]:
             p = p.strip()
             k, _, v = p.partition("=")
@@ -1283,8 +1287,8 @@ class LinkHeader:
         return cls(url, rel, attributes)
 
 
-def get_link_headers(h: CIMultiDict[str]) -> dict[str, LinkHeader]:
-    res: dict[str, LinkHeader] = {}
+def get_link_headers(h: CIMultiDict[str]) -> Dict[str, LinkHeader]:
+    res: Dict[str, LinkHeader] = {}
     for l in h.getall("Link", []):
         lh = LinkHeader.parse(l)
         res[lh.rel] = lh
@@ -1306,3 +1310,10 @@ async def update_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, i
 def get_tagged_cbor(ob: dataclass) -> bytes:
     data = {ob.__class__.__name__: asdict(ob)}
     return cbor2.dumps(data)
+
+
+def removeprefix(s: str, prefix: str) -> str:
+    if s.startswith(prefix):
+        return s[len(prefix) :]
+    else:
+        return s[:]
