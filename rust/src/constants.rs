@@ -19,6 +19,9 @@ pub static VENDOR_PREFIX: &'static str = "application/vnd.dt.";
 pub static CONTENT_TYPE_DTPS_INDEX: &'static str = "application/vnd.dt.dtps-index";
 pub static CONTENT_TYPE_DTPS_INDEX_CBOR: &'static str = "application/vnd.dt.dtps-index+cbor";
 pub static CONTENT_TYPE_TOPIC_HISTORY_CBOR: &'static str = "application/vnd.dt.dtps-history+cbor";
+
+pub static CONTENT_TYPE_PATCH_JSON: &'static str = "application/json-patch+json";
+pub static CONTENT_TYPE_PATCH_CBOR: &'static str = "application/cbor-patch+cbor";
 pub static EVENTS_SUFFIX: &'static str = ":events";
 pub static REL_URL_META: &'static str = ":meta";
 pub static REL_URL_DEREF: &'static str = ":deref";

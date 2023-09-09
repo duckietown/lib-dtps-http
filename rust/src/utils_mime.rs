@@ -19,3 +19,25 @@ pub fn identify_content_presentation(content_type: &str) -> Option<&'static str>
         None
     }
 }
+
+pub enum ContentPresentation {
+    CBOR,
+    JSON,
+    YAML,
+    PlainText,
+    Other,
+}
+
+pub fn identify_presentation(content_type: &str) -> ContentPresentation {
+    return if content_type.ends_with("cbor") {
+        ContentPresentation::CBOR
+    } else if content_type.ends_with("json") {
+        ContentPresentation::JSON
+    } else if content_type.ends_with("yaml") {
+        ContentPresentation::YAML
+    } else if content_type.starts_with("text/") {
+        ContentPresentation::PlainText
+    } else {
+        ContentPresentation::Other
+    };
+}

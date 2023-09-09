@@ -38,7 +38,8 @@ use crate::cloudflare::open_cloudflare;
 use crate::constants::*;
 use crate::html_utils::make_html;
 use crate::master::{
-    handle_websocket_generic2, serve_master_get, serve_master_head, serve_master_post,
+    handle_websocket_generic2, serve_master_get, serve_master_head, serve_master_patch,
+    serve_master_post,
 };
 use crate::object_queues::*;
 use crate::server_state::*;
@@ -129,6 +130,14 @@ impl DTPSServer {
             .and(warp::header::headers_cloned())
             .and_then(serve_master_head);
 
+        let master_route_patch = warp::path::full()
+            .and(warp::query::<HashMap<String, String>>())
+            .and(warp::patch())
+            .and(clone_access.clone())
+            .and(warp::header::headers_cloned())
+            .and(warp::body::bytes())
+            .and_then(serve_master_patch);
+
         let topic_generic_events_route2 = warp::path::full()
             .and_then(|path: warp::path::FullPath| async move {
                 let path1 = path.as_str();
@@ -163,6 +172,7 @@ impl DTPSServer {
             .or(master_route_head)
             .or(master_route_get)
             .or(master_route_post)
+            .or(master_route_patch)
             .recover(handle_rejection);
 
         let mut handles = vec![];

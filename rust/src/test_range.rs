@@ -3,14 +3,17 @@ mod tests {
     use std::time::Duration;
 
     use futures::StreamExt;
+    use json_patch::*;
     use log::debug;
     use maplit::hashmap;
     use rstest::*;
+    use serde_json::json;
     use tokio::task::JoinHandle;
 
     use crate::test_python::check_server;
     use crate::{
-        get_events_stream_inline, get_rawdata, init_logging, parse_url_ext, post_data, RawData,
+        get_events_stream_inline, get_rawdata, init_logging, parse_url_ext, patch_data, post_data,
+        RawData,
     };
     use crate::{
         get_metadata, DTPSServer, ServerStateAccess, TopicName, TopicProperties, TypeOfConnection,
@@ -329,6 +332,75 @@ mod tests {
         Ok(())
     }
 
+    #[rstest]
+    #[awt]
     #[tokio::test]
-    async fn test1() {}
+    async fn check_patch(#[future] instance: TestFixture) -> DTPSR<()> {
+        init_logging();
+
+        let topic_name = TopicName::from_dash_sep("a/b")?;
+
+        {
+            let mut ss = instance.ssa.lock().await;
+            ss.new_topic(
+                &topic_name,
+                None,
+                "application/cbor",
+                &TopicProperties::rw(),
+                None,
+                None,
+            )?;
+            let h = hashmap! {"value" => "initial"};
+            ss.publish_object_as_cbor(&topic_name, &h, None)?;
+        }
+
+        let con_original = instance.con.join(topic_name.as_relative_url())?;
+
+        let replace = ReplaceOperation {
+            path: "/value".to_string(),
+            value: serde_json::Value::String("new".to_string()),
+        };
+        let operation = PatchOperation::Replace(replace);
+        let patch = json_patch::Patch(vec![operation]);
+        patch_data(&con_original, &patch).await?;
+
+        // now test something that should fail
+        let replace = ReplaceOperation {
+            path: "/NOTEXISTING".to_string(),
+            value: serde_json::Value::String("new".to_string()),
+        };
+        let operation = PatchOperation::Replace(replace);
+        let patch = json_patch::Patch(vec![operation]);
+        patch_data(&con_original, &patch)
+            .await
+            .expect_err("should fail");
+
+        // now let's see if we can replace entirely
+
+        let replace = ReplaceOperation {
+            path: "".to_string(),
+            value: json!({"A": {"B": ["C", "D"]}}),
+        };
+        let operation = PatchOperation::Replace(replace);
+        let patch = json_patch::Patch(vec![operation]);
+        patch_data(&con_original, &patch).await?;
+
+        // now check the addressing
+        let b_address = con_original.join("A/B/")?;
+        let add_operation1 = AddOperation {
+            path: "/0".to_string(),
+            value: json!("start"),
+        };
+        let add_operation2 = AddOperation {
+            path: "/-".to_string(),
+            value: json!("end"),
+        };
+        let operation1 = PatchOperation::Add(add_operation1);
+        let operation2 = PatchOperation::Add(add_operation2);
+        let patch = json_patch::Patch(vec![operation1, operation2]);
+        patch_data(&b_address, &patch).await?;
+
+        instance.finish()?;
+        Ok(())
+    }
 }

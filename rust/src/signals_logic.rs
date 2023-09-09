@@ -5,6 +5,7 @@ use anyhow::Context;
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use bytes::Bytes;
+use json_patch::PatchOperation;
 use log::{debug, error};
 use maplit::hashmap;
 use schemars::JsonSchema;
@@ -15,7 +16,7 @@ use serde_cbor::Value::Text as CBORText;
 use tokio::sync::broadcast::Receiver;
 use tokio::task::JoinHandle;
 
-use crate::cbor_manipulation::{get_as_cbor, get_inside};
+use crate::cbor_manipulation::get_inside;
 use crate::signals_logic::ResolvedData::{NotAvailableYet, NotFound, Regular};
 use crate::utils::{divide_in_components, is_prefix_of};
 use crate::websocket_signals::ChannelInfo;
@@ -549,10 +550,7 @@ async fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<Resolved
         Regular(d) => d,
         NotAvailableYet(s) => return Ok(NotAvailableYet(s.clone())),
         NotFound(s) => return Ok(NotFound(s.clone())),
-        ResolvedData::RawData(rd) => {
-            let x = get_as_cbor(&rd)?;
-            x
-        }
+        ResolvedData::RawData(rd) => rd.get_as_cbor()?,
     };
     match &transform {
         Transforms::GetInside(path) => {
@@ -896,7 +894,7 @@ async fn single_compose(
             }
             NotFound(_) => {}
             ResolvedData::RawData(rd) => {
-                let x = get_as_cbor(&rd)?;
+                let x = rd.get_as_cbor()?;
                 where_to_put.insert(key_to_put, x);
             }
         }
@@ -1163,4 +1161,187 @@ fn resolve_extra_components(source: &TypeOFSource, rest: &Vec<String>) -> DTPSR<
         )?;
     }
     Ok(cur)
+}
+
+#[async_trait]
+pub trait Patchable {
+    async fn patch(
+        &self,
+        presented_as: &str,
+        ss_mutex: ServerStateAccess,
+        patch: &json_patch::Patch,
+    ) -> DTPSR<()>;
+}
+
+#[async_trait]
+impl Patchable for TypeOFSource {
+    async fn patch(
+        &self,
+        presented_as: &str,
+        ss_mutex: ServerStateAccess,
+        patch: &json_patch::Patch,
+    ) -> DTPSR<()> {
+        match self {
+            TypeOFSource::ForwardedQueue(_) => {
+                todo!("patch for {self:#?} with {self:?}")
+            }
+            TypeOFSource::OurQueue(topic_name, ..) => {
+                patch_our_queue(ss_mutex, presented_as, patch, topic_name).await
+            }
+            TypeOFSource::MountedDir(_, _, _) => {
+                todo!("patch for {self:#?} with {self:?}")
+            }
+            TypeOFSource::MountedFile(_, _, _) => {
+                todo!("patch for {self:#?} with {self:?}")
+            }
+            TypeOFSource::Compose(_) => {
+                todo!("patch for {self:#?} with {self:?}")
+            }
+            TypeOFSource::Transformed(ts_inside, transform) => {
+                patch_transformed(ss_mutex, presented_as, patch, ts_inside, transform).await
+            }
+            TypeOFSource::Digest(_, _) => {
+                todo!("patch for {self:#?} with {self:?}")
+            }
+            TypeOFSource::Deref(_) => {
+                todo!("patch for {self:#?} with {self:?}")
+            }
+            TypeOFSource::Index(_) => {
+                todo!("patch for {self:#?} with {self:?}")
+            }
+            TypeOFSource::Aliased(_, _) => {
+                todo!("patch for {self:#?} with {self:?}")
+            }
+            TypeOFSource::History(_) => {
+                todo!("patch for {self:#?} with {self:?}")
+            }
+            TypeOFSource::OtherProxied(_) => {
+                todo!("patch for {self:#?} with {self:?}")
+            }
+        }
+    }
+}
+
+pub fn add_prefix_to_patch_op(
+    op: &json_patch::PatchOperation,
+    prefix: &str,
+) -> json_patch::PatchOperation {
+    match op {
+        PatchOperation::Add(y) => {
+            let mut y = y.clone();
+            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix);
+            PatchOperation::Add(y)
+        }
+        PatchOperation::Remove(y) => {
+            let mut y = y.clone();
+            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix);
+            PatchOperation::Remove(y)
+        }
+        PatchOperation::Replace(y) => {
+            let mut y = y.clone();
+            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix);
+            PatchOperation::Replace(y)
+        }
+        PatchOperation::Move(y) => {
+            let mut y = y.clone();
+            y.from = format!("{prefix}{from}", from = y.from, prefix = prefix);
+            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix);
+            PatchOperation::Move(y)
+        }
+        PatchOperation::Copy(y) => {
+            let mut y = y.clone();
+            y.from = format!("{prefix}{from}", from = y.from, prefix = prefix);
+            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix);
+            PatchOperation::Copy(y)
+        }
+        PatchOperation::Test(y) => {
+            let mut y = y.clone();
+            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix);
+            PatchOperation::Test(y)
+        }
+    }
+}
+
+pub fn add_prefix_to_patch(patch: &json_patch::Patch, prefix: &str) -> json_patch::Patch {
+    // let mut new_patch = json_patch::Patch::();
+    let mut ops: Vec<PatchOperation> = Vec::new();
+    for op in &patch.0 {
+        let op1 = add_prefix_to_patch_op(op, prefix);
+        ops.push(op1);
+    }
+    json_patch::Patch(ops)
+}
+
+async fn patch_transformed(
+    ss_mutex: ServerStateAccess,
+    presented_as: &str,
+    patch: &json_patch::Patch,
+    ts: &TypeOFSource,
+    transform: &Transforms,
+) -> DTPSR<()> {
+    log::debug!("patch_transformed: {ts:#?} with {transform:?} and patch {patch:?}");
+    match transform {
+        Transforms::GetInside(path) => {
+            let mut prefix = String::new();
+            for p in path {
+                prefix.push('/');
+                prefix.push_str(p);
+            }
+            // prefix.pop();
+            let patch2 = add_prefix_to_patch(patch, &prefix);
+            // log::debug!("redirecting patch:\nbefore: {patch:#?} after: \n{patch2:#?}");
+            return ts.patch(presented_as, ss_mutex, &patch2).await;
+        }
+        _ => {
+            todo!("patch for {ts:#?} with {transform:?}")
+        }
+    }
+}
+
+async fn patch_our_queue(
+    ss_mutex: ServerStateAccess,
+    presented_as: &str,
+    patch: &json_patch::Patch,
+    topic_name: &TopicName,
+) -> DTPSR<()> {
+    let (data_saved, raw_data) = {
+        let ss = ss_mutex.lock().await;
+        let oq = ss.get_queue(topic_name)?;
+        // todo: if EMPTY...
+        let last = oq.stored.last().unwrap();
+        let data_saved = oq.saved.get(last).unwrap();
+        let content = ss.get_blob_bytes(&data_saved.digest)?;
+        let raw_data = RawData::new(content, &data_saved.content_type);
+        (data_saved.clone(), raw_data)
+    };
+    let mut x: serde_json::Value = raw_data.get_as_json()?;
+    let x0 = x.clone();
+
+    debug!("patching: {x:?}");
+    debug!("patch: {patch:?}");
+    context!(json_patch::patch(&mut x, patch), "cannot apply patch")?;
+    debug!("result: {x:?}");
+    if x == x0 {
+        log::debug!("The patch didn't change anything:\n {patch:?}");
+        return Ok(());
+    }
+
+    let new_content: RawData = RawData::encode_from_json(&x, &data_saved.content_type)?;
+    let new_clocks = data_saved.clocks.clone();
+
+    let mut ss = ss_mutex.lock().await;
+
+    // oq.push(&new_content, Some(new_clocks))?;
+    let ds = ss.publish(
+        &topic_name,
+        &new_content.content,
+        &data_saved.content_type,
+        Some(new_clocks),
+    )?;
+
+    if ds.index != data_saved.index + 1 {
+        panic!("there were some modifications inside: {ds:?} != {data_saved:?}");
+    }
+
+    Ok(())
 }

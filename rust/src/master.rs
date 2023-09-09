@@ -32,8 +32,9 @@ use crate::{
     get_series_of_messages_for_notification_, handle_topic_post, handle_websocket_queue,
     make_request, not_implemented, object_queues, put_alternative_locations,
     receive_from_websocket, send_as_ws_cbor, serve_static_file_path, utils_headers, utils_mime,
-    DataStream, HandlersResponse, ObjectQueue, RawData, ServerStateAccess, TopicName,
-    TopicsIndexInternal, CONTENT_TYPE, DTPSR, JAVASCRIPT_SEND, OCTET_STREAM,
+    DataStream, HandlersResponse, ObjectQueue, Patchable, RawData, ServerStateAccess, TopicName,
+    TopicsIndexInternal, CONTENT_TYPE, CONTENT_TYPE_PATCH_CBOR, CONTENT_TYPE_PATCH_JSON, DTPSR,
+    JAVASCRIPT_SEND, OCTET_STREAM,
 };
 
 pub async fn serve_master_post(
@@ -111,6 +112,104 @@ pub async fn serve_master_post(
             let res = http::Response::builder()
                 .status(StatusCode::METHOD_NOT_ALLOWED)
                 .body(Body::from(s.to_string()))
+                .unwrap();
+            Ok(res)
+        }
+    };
+}
+
+pub async fn serve_master_patch(
+    path: warp::path::FullPath,
+    query: HashMap<String, String>,
+    ss_mutex: ServerStateAccess,
+    headers: HeaderMap,
+    data: hyper::body::Bytes,
+) -> HandlersResponse {
+    let path_str = path_normalize(&path);
+    let referrer = get_referrer(&headers);
+
+    let matched: DTPSR<TypeOFSource> = {
+        let ss = ss_mutex.lock().await;
+        interpret_path(&path_str, &query, &referrer, &ss).await
+    };
+
+    let content_type = get_header_with_default(&headers, CONTENT_TYPE, OCTET_STREAM);
+    let result = if content_type == CONTENT_TYPE_PATCH_JSON {
+        let r = serde_json::from_slice::<json_patch::Patch>(&data);
+        match r {
+            Ok(x) => x,
+            Err(_) => {
+                let s = format!("Cannot parse the patch as JSON: {:?}", data);
+                error_with_info!("{s}");
+                let res = http::Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from(s.to_string()))
+                    .unwrap();
+                return Ok(res);
+            }
+        }
+    } else if content_type == CONTENT_TYPE_PATCH_CBOR {
+        let r = serde_cbor::from_slice::<json_patch::Patch>(&data);
+        match r {
+            Ok(x) => x,
+            Err(_) => {
+                let s = format!("Cannot parse the patch as JSON: {:?}", data);
+                error_with_info!("{s}");
+                let res = http::Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from(s.to_string()))
+                    .unwrap();
+                return Ok(res);
+            }
+        }
+    } else {
+        let s = format!("We do not support PATCH with content type {content_type}");
+        error_with_info!("{s}");
+        let res = http::Response::builder()
+            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .body(Body::from(s.to_string()))
+            .unwrap();
+        return Ok(res);
+    };
+
+    let ds = match matched {
+        Ok(ds) => ds,
+        Err(s) => {
+            // return Err<s.into()>;
+            // let s = format!("Cannot resolve the path {:?}:\n{}", path_components, s);
+            let res = http::Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from(s.to_string()))
+                .unwrap();
+            return Ok(res);
+        }
+    };
+
+    let p = ds.get_properties();
+    if !p.pushable {
+        let s = format!("Cannot push to {path_str:?} because the topic is not pushable:\n{ds:?}");
+        error!(" {s}");
+        let res = http::Response::builder()
+            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .body(Body::from(s.to_string()))
+            .unwrap();
+        return Ok(res);
+    }
+
+    let x = ds.patch(&path_str, ss_mutex.clone(), &result).await;
+    return match x {
+        Ok(_) => {
+            let res = http::Response::builder()
+                .status(StatusCode::OK)
+                .body(Body::from("Patch ok1"))
+                .unwrap();
+            Ok(res)
+        }
+        Err(e) => {
+            log::error!("Patch not ok: {e:?}");
+            let res = http::Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from(format!("Patch not ok: {e:?}")))
                 .unwrap();
             Ok(res)
         }

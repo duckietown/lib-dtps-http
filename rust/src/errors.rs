@@ -57,6 +57,15 @@ pub enum DTPSError {
     CBORError(#[from] serde_cbor::Error),
 
     #[error(transparent)]
+    JSONError(#[from] serde_json::Error),
+
+    #[error(transparent)]
+    YAMLError(#[from] serde_yaml::Error),
+
+    #[error(transparent)]
+    PatchError(#[from] json_patch::PatchError),
+
+    #[error(transparent)]
     WarpError(#[from] warp::Error),
     // #[error(transparent)]
     // SendError(#[from] SendError),

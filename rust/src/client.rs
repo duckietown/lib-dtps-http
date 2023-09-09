@@ -12,6 +12,7 @@ use hyper;
 use hyper::Client;
 use hyper_tls::HttpsConnector;
 use hyperlocal::UnixClientExt;
+use json_patch::Patch as JsonPatch;
 use log::{debug, error, info};
 use maplit::hashmap;
 use tokio::sync::broadcast::error::RecvError;
@@ -38,8 +39,8 @@ use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
 use crate::{
     context, error_with_info, internal_assertion, not_available, not_implemented, not_reachable,
     put_header_accept, put_header_content_type, DTPSError, DataSaved, History, RawData, TopicName,
-    CONTENT_TYPE_DTPS_INDEX, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR,
-    REL_HISTORY,
+    CONTENT_TYPE_DTPS_INDEX, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_PATCH_JSON,
+    CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR, REL_HISTORY,
 };
 use crate::{LinkBenchmark, LinkHeader, REL_EVENTS_DATA, REL_EVENTS_NODATA, REL_META};
 
@@ -725,6 +726,31 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     // info!("Logging metadata: {md:#?} headers {headers:#?}");
 
     Ok(md)
+}
+
+pub async fn patch_data(conbase: &TypeOfConnection, patch: &JsonPatch) -> DTPSR<()> {
+    let json_data = serde_json::to_vec(patch)?;
+    let resp = make_request(
+        conbase,
+        hyper::Method::PATCH,
+        &json_data,
+        Some(CONTENT_TYPE_PATCH_JSON),
+        None,
+    )
+    .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let desc = status.as_str();
+        let msg = format!("cannot patch:\nurl: {conbase}\n---\n{desc}");
+        return Err(DTPSError::FailedRequest(
+            msg,
+            status.as_u16(),
+            conbase.to_string(),
+            desc.to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 fn string_from_header_value(header_value: &hyper::header::HeaderValue) -> String {

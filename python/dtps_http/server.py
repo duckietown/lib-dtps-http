@@ -74,6 +74,7 @@ from .utils import async_error_catcher, multidict_update
 
 SEND_DATA_ARGNAME = "send_data"
 ROOT = TopicNameV.root()
+
 __all__ = [
     "DTPSServer",
     "ForwardedTopic",
