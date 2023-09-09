@@ -187,6 +187,7 @@ impl ServerState {
                 readable: true,
                 immutable: false,
                 has_history: true,
+                patchable: true,
             },
             content_info: ContentInfo::simple(
                 CONTENT_TYPE_DTPS_INDEX_CBOR,
@@ -220,12 +221,13 @@ impl ServerState {
             readable: true,
             immutable: false,
             has_history: true,
+            patchable: false,
         };
 
         ss.new_topic(
             &TopicName::from_relative_url(TOPIC_LIST_NAME)?,
             None,
-            "application/json",
+            CONTENT_TYPE_JSON,
             &p,
             None,
             Some(10),
@@ -233,7 +235,7 @@ impl ServerState {
         ss.new_topic(
             &TopicName::from_relative_url(TOPIC_LIST_CLOCK)?,
             None,
-            "application/json",
+            CONTENT_TYPE_JSON,
             &p,
             Some(schema_for!(i64)),
             Some(10),
@@ -241,7 +243,7 @@ impl ServerState {
         ss.new_topic(
             &TopicName::from_relative_url(TOPIC_LIST_AVAILABILITY)?,
             None,
-            "application/json",
+            CONTENT_TYPE_JSON,
             &p,
             None,
             Some(10),
@@ -249,7 +251,7 @@ impl ServerState {
         ss.new_topic(
             &TopicName::from_relative_url(TOPIC_LOGS)?,
             None,
-            "application/yaml",
+            CONTENT_TYPE_JSON,
             &p,
             None,
             Some(10),
@@ -258,7 +260,7 @@ impl ServerState {
         ss.new_topic(
             &TopicName::from_relative_url(TOPIC_STATE_NOTIFICATION)?,
             None,
-            "application/yaml",
+            CONTENT_TYPE_YAML,
             &p,
             Some(schema_for!(ComponentStatusNotification)),
             Some(10),
@@ -267,7 +269,7 @@ impl ServerState {
         ss.new_topic(
             &TopicName::from_relative_url(TOPIC_STATE_SUMMARY)?,
             None,
-            "application/yaml",
+            CONTENT_TYPE_YAML,
             &p,
             None,
             Some(10),
@@ -403,15 +405,23 @@ impl ServerState {
         schema: Option<RootSchema>,
         max_history: Option<usize>,
     ) -> DTPSR<()> {
+        let content_info = ContentInfo::simple(content_type, schema);
+        self.new_topic_ci(topic_name, app_data, properties, &content_info, max_history)
+    }
+    pub fn new_topic_ci(
+        &mut self,
+        topic_name: &TopicName,
+        app_data: Option<HashMap<String, NodeAppData>>,
+        properties: &TopicProperties,
+        content_info: &ContentInfo,
+        max_history: Option<usize>,
+    ) -> DTPSR<()> {
         if self.oqs.contains_key(topic_name) {
             return Err(DTPSError::TopicAlreadyExists(topic_name.to_relative_url()));
         }
-        // let topic_name = topic_name.to_string();
         let uuid = get_queue_id(&self.node_id, &topic_name);
-        // let uuid = Uuid::new_v4();
         let app_data = app_data.unwrap_or_else(HashMap::new);
 
-        // let link_benchmark = LinkBenchmark:: identity();
         let origin_node = self.node_id.clone();
         let now = Local::now().timestamp_nanos();
         let tr = TopicRefInternal {
@@ -421,13 +431,24 @@ impl ServerState {
             created: now,
             reachability: vec![],
             properties: properties.clone(),
-            content_info: ContentInfo::simple(content_type, schema),
+            content_info: content_info.clone(),
         };
         let oqs = &mut self.oqs;
 
         oqs.insert(topic_name.clone(), ObjectQueue::new(tr, max_history));
         info!("New topic: {:?}", topic_name);
 
+        self.update_my_topic()
+    }
+
+    pub fn remove_topic(&mut self, topic_name: &TopicName) -> DTPSR<()> {
+        if !self.oqs.contains_key(topic_name) {
+            return Err(DTPSError::TopicNotFound(topic_name.to_relative_url()));
+        }
+        log::info!("Removing topic {topic_name:?}");
+        let oq = self.oqs.get_mut(topic_name).unwrap();
+        oq.you_are_being_deleted();
+        self.oqs.remove(topic_name);
         self.update_my_topic()
     }
 
@@ -530,7 +551,7 @@ impl ServerState {
         content: &[u8],
         clocks: Option<Clocks>,
     ) -> DTPSR<DataSaved> {
-        self.publish(topic_name, content, "application/cbor", clocks)
+        self.publish(topic_name, content, CONTENT_TYPE_CBOR, clocks)
     }
 
     pub fn publish_json(
@@ -540,7 +561,7 @@ impl ServerState {
         clocks: Option<Clocks>,
     ) -> DTPSR<DataSaved> {
         let bytesdata = json_content.as_bytes().to_vec();
-        self.publish(topic_name, &bytesdata, "application/json", clocks)
+        self.publish(topic_name, &bytesdata, CONTENT_TYPE_JSON, clocks)
     }
 
     pub fn publish_yaml(
@@ -550,7 +571,7 @@ impl ServerState {
         clocks: Option<Clocks>,
     ) -> DTPSR<DataSaved> {
         let bytesdata = yaml_content.as_bytes().to_vec();
-        self.publish(topic_name, &bytesdata, "application/yaml", clocks)
+        self.publish(topic_name, &bytesdata, CONTENT_TYPE_JSON, clocks)
     }
 
     pub fn publish_plain(
@@ -623,6 +644,7 @@ impl ServerState {
                 readable: true,
                 immutable: false,
                 has_history: false,
+                patchable: false,
             };
 
             let mut tr = TopicRefInternal {
@@ -652,6 +674,7 @@ impl ServerState {
                 readable: true,
                 immutable: true,
                 has_history: false,
+                patchable: false,
             };
 
             let app_data = hashmap! {
@@ -689,6 +712,7 @@ impl ServerState {
                     readable: false,
                     immutable: false,
                     has_history: false,
+                    patchable: false,
                 },
                 content_info: ContentInfo::generic(), // TODO: we should put content info of original
             };

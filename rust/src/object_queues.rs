@@ -1,15 +1,14 @@
-use bytes::Bytes;
 use std::collections::HashMap;
 
+use bytes::Bytes;
 use chrono::Local;
 use schemars::JsonSchema;
-
 use serde::{Deserialize, Serialize};
 use sha256::digest;
 use tokio::sync::broadcast;
 
 use crate::structures::TopicRefInternal;
-use crate::{merge_clocks, Clocks, DataReady, MinMax, Notification, DTPSR};
+use crate::{merge_clocks, Clocks, MinMax, CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, DTPSR};
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, PartialEq)]
 pub struct RawData {
@@ -24,9 +23,22 @@ impl RawData {
             content_type: content_type.as_ref().to_string(),
         }
     }
+    pub fn cbor<S: AsRef<[u8]>>(content: S) -> RawData {
+        Self::new(content, CONTENT_TYPE_CBOR)
+    }
+    pub fn json<S: AsRef<[u8]>>(content: S) -> RawData {
+        Self::new(content, CONTENT_TYPE_JSON)
+    }
     pub fn digest(&self) -> String {
         let d = digest(self.content.as_ref());
         format!("sha256:{}", d)
+    }
+
+    pub fn represent_as_json<T: Serialize>(x: T) -> DTPSR<Self> {
+        Ok(RawData::new(serde_json::to_vec(&x)?, CONTENT_TYPE_JSON))
+    }
+    pub fn represent_as_cbor<T: Serialize>(x: T) -> DTPSR<Self> {
+        Ok(RawData::new(serde_cbor::to_vec(&x)?, CONTENT_TYPE_CBOR))
     }
 }
 
@@ -89,6 +101,9 @@ impl ObjectQueue {
         v
     }
 
+    pub fn you_are_being_deleted(&mut self) {
+        // is it all done with the drop?
+    }
     pub fn push(&mut self, data: &RawData, previous_clocks: Option<Clocks>) -> DTPSR<DataSaved> {
         let now = Local::now().timestamp_nanos();
 

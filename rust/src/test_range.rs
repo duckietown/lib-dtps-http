@@ -7,13 +7,16 @@ mod tests {
     use log::debug;
     use maplit::hashmap;
     use rstest::*;
+    use schemars::{schema_for, JsonSchema};
+    use serde::{Deserialize, Serialize};
     use serde_json::json;
     use tokio::task::JoinHandle;
 
     use crate::test_python::check_server;
     use crate::{
-        get_events_stream_inline, get_rawdata, init_logging, parse_url_ext, patch_data, post_data,
-        RawData,
+        create_topic, delete_topic, get_events_stream_inline, get_rawdata, init_logging,
+        parse_url_ext, patch_data, post_data, ContentInfo, RawData, TopicRefAdd, CONTENT_TYPE_CBOR,
+        CONTENT_TYPE_JSON,
     };
     use crate::{
         get_metadata, DTPSServer, ServerStateAccess, TopicName, TopicProperties, TypeOfConnection,
@@ -101,7 +104,7 @@ mod tests {
             ss.new_topic(
                 &topic_name,
                 None,
-                "application/cbor",
+                CONTENT_TYPE_CBOR,
                 &TopicProperties::rw(),
                 None,
                 None,
@@ -118,9 +121,7 @@ mod tests {
     #[awt]
     #[tokio::test]
     async fn check_aliases(#[future] instance: TestFixture) -> DTPSR<()> {
-        // wait for 2 seconds
-
-        let md = get_metadata(&instance.con).await;
+        let _md = get_metadata(&instance.con).await;
         // eprintln!("found {md:?}");
 
         {
@@ -129,7 +130,7 @@ mod tests {
             ss.new_topic(
                 &topic_name,
                 None,
-                "application/cbor",
+                CONTENT_TYPE_CBOR,
                 &TopicProperties::rw(),
                 None,
                 None,
@@ -158,7 +159,7 @@ mod tests {
         eprintln!("data_original {data_original:#?}");
         eprintln!("data_alias {data_alias:#?}");
 
-        assert_eq!(data_original.content_type, "application/cbor");
+        assert_eq!(data_original.content_type, CONTENT_TYPE_CBOR);
         assert_eq!(data_original, data_alias);
         tokio::time::sleep(Duration::from_millis(1000)).await;
 
@@ -179,7 +180,7 @@ mod tests {
             ss.new_topic(
                 &topic_name,
                 None,
-                "application/cbor",
+                CONTENT_TYPE_CBOR,
                 &TopicProperties::rw(),
                 None,
                 None,
@@ -194,7 +195,7 @@ mod tests {
 
         let object = 42;
         let data = serde_cbor::to_vec(&object)?;
-        let rd = RawData::new(data, "application/cbor");
+        let rd = RawData::cbor(data);
         let ds = post_data(&con_original, &rd).await?;
         debug!("post resulted in {ds:?}");
         let notification = receiver.next().await.unwrap();
@@ -218,7 +219,7 @@ mod tests {
             ss.new_topic(
                 &topic_name,
                 None,
-                "application/cbor",
+                CONTENT_TYPE_CBOR,
                 &TopicProperties::rw(),
                 None,
                 None,
@@ -234,7 +235,7 @@ mod tests {
         };
 
         let data = serde_cbor::to_vec(&object)?;
-        let rd = RawData::new(data, "application/cbor");
+        let rd = RawData::cbor(data);
         let ds = post_data(&con_original, &rd).await?;
         debug!("post resulted in {ds:?}");
 
@@ -269,7 +270,7 @@ mod tests {
             ss.new_topic(
                 &topic_name,
                 None,
-                "application/cbor",
+                CONTENT_TYPE_CBOR,
                 &TopicProperties::rw(),
                 None,
                 None,
@@ -314,7 +315,7 @@ mod tests {
         debug!("data_original {con_original:#} {data_original:#?}");
         debug!("data_proxied {con_proxied:#} {data_proxied:#?}");
 
-        assert_eq!(data_original.content_type, "application/cbor");
+        assert_eq!(data_original.content_type, CONTENT_TYPE_CBOR);
         assert_eq!(data_original, data_proxied);
 
         // now let's get the value inside
@@ -345,7 +346,7 @@ mod tests {
             ss.new_topic(
                 &topic_name,
                 None,
-                "application/cbor",
+                CONTENT_TYPE_CBOR,
                 &TopicProperties::rw(),
                 None,
                 None,
@@ -399,6 +400,70 @@ mod tests {
         let operation2 = PatchOperation::Add(add_operation2);
         let patch = json_patch::Patch(vec![operation1, operation2]);
         patch_data(&b_address, &patch).await?;
+
+        instance.finish()?;
+        Ok(())
+    }
+
+    #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, PartialEq)]
+    struct ExampleData {
+        pub a: i64,
+        pub b: Vec<String>,
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_create_topic(#[future] instance: TestFixture) -> DTPSR<()> {
+        init_logging();
+
+        let topic_name = TopicName::from_dash_sep("a/b")?;
+
+        let properties = TopicProperties {
+            streamable: true,
+            pushable: true,
+            readable: true,
+            immutable: false,
+            has_history: true,
+            patchable: true,
+        };
+
+        let content_info = ContentInfo::simple(CONTENT_TYPE_JSON, Some(schema_for!(ExampleData)));
+        let tr = TopicRefAdd {
+            app_data: hashmap! {},
+            properties,
+            content_info,
+        };
+
+        //first time ok
+        create_topic(&instance.con, &topic_name, &tr).await?;
+
+        let address = instance.con.join(topic_name.as_relative_url())?;
+        let data = ExampleData {
+            a: 42,
+            b: vec!["a".to_string(), "b".to_string()],
+        };
+
+        post_data(&address, &RawData::represent_as_json(&data)?).await?;
+
+        // second time should fail
+        create_topic(&instance.con, &topic_name, &tr)
+            .await
+            .expect_err("should fail");
+        // first time ok
+        delete_topic(&instance.con, &topic_name).await?;
+        // second time should fail
+        delete_topic(&instance.con, &topic_name)
+            .await
+            .expect_err("should fail");
+
+        let topic_name = TopicName::root();
+        create_topic(&instance.con, &topic_name, &tr)
+            .await
+            .expect_err("should fail");
+        delete_topic(&instance.con, &topic_name)
+            .await
+            .expect_err("should fail");
 
         instance.finish()?;
         Ok(())

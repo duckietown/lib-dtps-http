@@ -515,7 +515,7 @@ pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> Ha
 
         let mut resp = Response::new(Body::from(data_bytes));
         let headers = resp.headers_mut();
-        put_header_content_type(headers, "application/cbor");
+        put_header_content_type(headers, CONTENT_TYPE_CBOR);
 
         put_common_headers(&ss, headers);
         put_alternative_locations(&ss, headers, "");
@@ -717,7 +717,7 @@ pub fn construct_response_cbor<T: Serialize>(ob: &T) -> http::Response<Body> {
     let ds_cbor = serde_cbor::to_vec(&ob).unwrap();
     let res = http::Response::builder()
         .status(StatusCode::OK)
-        .header(CONTENT_TYPE, "application/cbor")
+        .header(CONTENT_TYPE, CONTENT_TYPE_CBOR)
         .body(Body::from(ds_cbor))
         .unwrap();
     res

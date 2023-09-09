@@ -5,7 +5,7 @@ from typing import Optional, Sequence
 
 import cbor2
 from multidict import CIMultiDict
-from pydantic import parse_obj_as
+from pydantic import TypeAdapter
 from pydantic.dataclasses import dataclass
 
 from .constants import HEADER_LINK_BENCHMARK, MIME_TEXT
@@ -97,10 +97,12 @@ class TopicProperties:
     immutable: bool
     has_history: bool
 
+    patchable: bool
+
     @classmethod
     def streamable_readonly(cls) -> "TopicProperties":
         return TopicProperties(
-            streamable=True, pushable=False, readable=True, immutable=False, has_history=True
+            streamable=True, pushable=False, readable=True, immutable=False, has_history=True, patchable=False
         )
 
 
@@ -225,7 +227,7 @@ class TopicsIndexWire:
 
     @classmethod
     def from_json(cls, s: object) -> "TopicsIndexWire":
-        return parse_obj_as(TopicsIndexWire, s)
+        return TypeAdapter(cls).validate_python(s)
 
     def to_topics_index(self) -> "TopicsIndex":
         topics: Dict[TopicNameV, TopicRef] = {}
@@ -259,7 +261,7 @@ class ChannelInfo:
     @classmethod
     def from_cbor(cls, s: bytes) -> "ChannelInfo":
         struct = cbor2.loads(s)
-        return parse_obj_as(ChannelInfo, struct)
+        return TypeAdapter(cls).validate_python(struct)
 
 
 @dataclass
@@ -273,7 +275,7 @@ class Chunk:
     @classmethod
     def from_cbor(cls, s: bytes) -> "Chunk":
         struct = cbor2.loads(s)
-        return parse_obj_as(Chunk, struct)
+        return TypeAdapter(cls).validate_python(struct)
 
 
 @dataclass
@@ -307,12 +309,13 @@ class DataReady:
 
     @classmethod
     def from_json_string(cls, s: str) -> "DataReady":
-        return parse_obj_as(DataReady, json.loads(s))
+        struct = json.loads(s)
+        return TypeAdapter(cls).validate_python(struct)
 
     @classmethod
     def from_cbor(cls, s: bytes) -> "DataReady":
         struct = cbor2.loads(s)
-        return parse_obj_as(DataReady, struct)
+        return TypeAdapter(cls).validate_python(struct)
 
 
 @dataclass
@@ -325,17 +328,12 @@ def channel_msgs_parse(d: bytes) -> Union[ChannelInfo, DataReady, Chunk]:
     if not isinstance(struct, dict):
         msg = "Expected a dictionary here"
         raise ValueError(f"{msg}: {d}\n{struct}")
-    if DataReady.__name__ in struct:
-        dr = parse_obj_as(DataReady, struct["DataReady"])
-        return dr
-    elif ChannelInfo.__name__ in struct:
-        dr = parse_obj_as(ChannelInfo, struct["ChannelInfo"])
-        return dr
-    elif Chunk.__name__ in struct:
-        dr = parse_obj_as(Chunk, struct["Chunk"])
-        return dr
-    else:
-        raise ValueError(f"unexpected value {struct}")
+
+    for T in (ChannelInfo, DataReady, Chunk):
+        if T.__name__ in struct:
+            return TypeAdapter(T).validate_python(struct[T.__name__])
+
+    raise ValueError(f"unexpected value {struct}")
 
 
 @dataclass

@@ -132,6 +132,13 @@ pub struct TopicRefInternal {
     pub content_info: ContentInfo,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TopicRefAdd {
+    pub app_data: HashMap<String, NodeAppData>,
+    pub properties: TopicProperties,
+    pub content_info: ContentInfo,
+}
+
 impl TopicRefInternal {
     pub fn to_wire(&self, use_rel: Option<String>) -> TopicRefWire {
         let mut reachability = Vec::new();

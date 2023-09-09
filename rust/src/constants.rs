@@ -20,6 +20,11 @@ pub static CONTENT_TYPE_DTPS_INDEX: &'static str = "application/vnd.dt.dtps-inde
 pub static CONTENT_TYPE_DTPS_INDEX_CBOR: &'static str = "application/vnd.dt.dtps-index+cbor";
 pub static CONTENT_TYPE_TOPIC_HISTORY_CBOR: &'static str = "application/vnd.dt.dtps-history+cbor";
 
+pub static CONTENT_TYPE_JSON: &'static str = "application/json";
+pub static CONTENT_TYPE_CBOR: &'static str = "application/cbor";
+pub static CONTENT_TYPE_YAML: &'static str = "application/yaml";
+pub static CONTENT_TYPE_PLAIN: &'static str = "text/plain";
+
 pub static CONTENT_TYPE_PATCH_JSON: &'static str = "application/json-patch+json";
 pub static CONTENT_TYPE_PATCH_CBOR: &'static str = "application/cbor-patch+cbor";
 pub static EVENTS_SUFFIX: &'static str = ":events";

@@ -25,9 +25,9 @@ use crate::{
     context, error_with_info, get_channel_info_message, get_dataready, get_rawdata,
     not_implemented, utils, ContentInfo, DTPSError, DataReady, ForwardingStep, History,
     InsertNotification, LinkBenchmark, OtherProxyInfo, RawData, ServerState, ServerStateAccess,
-    TopicName, TopicReachabilityInternal, TopicRefInternal, TopicsIndexInternal, TypeOfConnection,
-    CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR, REL_URL_META,
-    URL_HISTORY,
+    TopicName, TopicReachabilityInternal, TopicRefAdd, TopicRefInternal, TopicsIndexInternal,
+    TypeOfConnection, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR,
+    REL_URL_META, URL_HISTORY,
 };
 
 #[derive(Debug, Clone)]
@@ -58,11 +58,13 @@ pub struct SourceComposition {
 
 impl DataProps for SourceComposition {
     fn get_properties(&self) -> TopicProperties {
+        let pushable = false;
+
         let mut immutable = true;
         let mut streamable = false;
-        let pushable = false;
         let mut readable = true;
-        let mut has_history = false;
+        let has_history = false;
+        let patchable = true;
 
         for (_k, v) in self.compose.iter() {
             let p = v.get_properties();
@@ -73,6 +75,8 @@ impl DataProps for SourceComposition {
             streamable = streamable || p.streamable;
             // readable: ALL readable
             readable = readable && p.readable;
+            // patchable: ANY patchable
+            // patchable = patchable || p.patchable;
         }
 
         TopicProperties {
@@ -81,6 +85,7 @@ impl DataProps for SourceComposition {
             readable,
             immutable,
             has_history,
+            patchable,
         }
     }
 }
@@ -212,6 +217,7 @@ pub struct TopicProperties {
     pub readable: bool,
     pub immutable: bool,
     pub has_history: bool,
+    pub patchable: bool,
 }
 
 impl TopicProperties {
@@ -222,6 +228,17 @@ impl TopicProperties {
             readable: true,
             immutable: false,
             has_history: true,
+            patchable: true, // XXX
+        }
+    }
+    pub fn ro() -> Self {
+        TopicProperties {
+            streamable: true,
+            pushable: false,
+            readable: true,
+            immutable: false,
+            has_history: false,
+            patchable: false,
         }
     }
 }
@@ -404,6 +421,7 @@ impl DataProps for TypeOFSource {
                 readable: true,
                 immutable: true,
                 has_history: false,
+                patchable: false,
             },
             TypeOFSource::ForwardedQueue(q) => q.properties.clone(),
             TypeOFSource::OurQueue(_, _, props) => props.clone(),
@@ -418,6 +436,7 @@ impl DataProps for TypeOFSource {
                     readable: true,
                     immutable: false, // maybe we can say it true sometime
                     has_history: false,
+                    patchable: false,
                 }
             }
             TypeOFSource::MountedDir(_, _, props) => props.clone(),
@@ -433,6 +452,7 @@ impl DataProps for TypeOFSource {
                     readable: true,
                     immutable: false, // maybe we can say it true sometime
                     has_history: false,
+                    patchable: false,
                 }
             }
         }
@@ -1139,6 +1159,7 @@ pub fn iterate_type_of_sources(
             readable: true,
             immutable: false,
             has_history: false,
+            patchable: false,
         };
         res.push((
             topic_name.clone(),
@@ -1194,9 +1215,7 @@ impl Patchable for TypeOFSource {
             TypeOFSource::MountedFile(_, _, _) => {
                 todo!("patch for {self:#?} with {self:?}")
             }
-            TypeOFSource::Compose(_) => {
-                todo!("patch for {self:#?} with {self:?}")
-            }
+            TypeOFSource::Compose(sc) => patch_composition(ss_mutex, patch, sc).await,
             TypeOFSource::Transformed(ts_inside, transform) => {
                 patch_transformed(ss_mutex, presented_as, patch, ts_inside, transform).await
             }
@@ -1272,6 +1291,57 @@ pub fn add_prefix_to_patch(patch: &json_patch::Patch, prefix: &str) -> json_patc
     json_patch::Patch(ops)
 }
 
+async fn patch_composition(
+    ss_mutex: ServerStateAccess,
+    patch: &json_patch::Patch,
+    sc: &SourceComposition,
+) -> DTPSR<()> {
+    let mut ss = ss_mutex.lock().await;
+
+    for x in &patch.0 {
+        match x {
+            PatchOperation::Add(ao) => {
+                let topic_name = topic_name_from_json_pointer(ao.path.as_str())?;
+                let value = ao.value.clone();
+                let tra: TopicRefAdd = serde_json::from_value(value)?;
+                ss.new_topic_ci(
+                    &topic_name,
+                    Some(tra.app_data),
+                    &tra.properties,
+                    &tra.content_info,
+                    None,
+                )?;
+            }
+            PatchOperation::Remove(ro) => {
+                let topic_name = topic_name_from_json_pointer(ro.path.as_str())?;
+                ss.remove_topic(&topic_name)?;
+            }
+            PatchOperation::Replace(_)
+            | PatchOperation::Move(_)
+            | PatchOperation::Copy(_)
+            | PatchOperation::Test(_) => {
+                return Err(DTPSError::NotImplemented(format!(
+                    "patch_composition: {sc:#?} with {patch:?}"
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub fn topic_name_from_json_pointer(path: &str) -> DTPSR<TopicName> {
+    let mut components = Vec::new();
+    for p in path.split('/') {
+        if p.len() == 0 {
+            continue;
+        }
+        components.push(p.to_string());
+    }
+
+    Ok(TopicName::from_components(&components))
+}
+
 async fn patch_transformed(
     ss_mutex: ServerStateAccess,
     presented_as: &str,
@@ -1279,7 +1349,7 @@ async fn patch_transformed(
     ts: &TypeOFSource,
     transform: &Transforms,
 ) -> DTPSR<()> {
-    log::debug!("patch_transformed: {ts:#?} with {transform:?} and patch {patch:?}");
+    log::debug!("patch_transformed:\n{ts:#?}\n---\n{transform:?}\n---\n{patch:?}");
     match transform {
         Transforms::GetInside(path) => {
             let mut prefix = String::new();

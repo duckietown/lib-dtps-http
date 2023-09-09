@@ -140,18 +140,11 @@ pub fn get_inside(
 }
 
 pub fn display_printable(content_type: &str, content: &[u8]) -> PreEscaped<String> {
-    let identified = utils_mime::identify_content_presentation(content_type);
-    if identified.is_none() {
-        return html! {
-        "Cannot display content type "  code { (content_type) } "."
-        };
-    }
+    let identified = utils_mime::identify_presentation(content_type);
 
-    match identified.unwrap() {
-        "application/yaml" => {
+    match identified {
+        ContentPresentation::YAML => {
             let bytes: Vec<u8> = content.to_vec();
-            // let val = serde_yaml::from_slice(&content).unwrap();
-            // generate_html_tree(&val)
             let s = String::from_utf8(bytes).unwrap().to_string();
             html! {
                 pre {
@@ -159,7 +152,7 @@ pub fn display_printable(content_type: &str, content: &[u8]) -> PreEscaped<Strin
                 }
             }
         }
-        "text/plain" => {
+        ContentPresentation::PlainText => {
             let bytes: Vec<u8> = content.to_vec();
             let s = String::from_utf8(bytes).unwrap().to_string();
             html! {
@@ -170,7 +163,7 @@ pub fn display_printable(content_type: &str, content: &[u8]) -> PreEscaped<Strin
                 }
             }
         }
-        "application/json" => {
+        ContentPresentation::JSON => {
             let val: serde_json::Value = serde_json::from_slice(&content).unwrap();
 
             let pretty = serde_json::to_string_pretty(&val).unwrap();
@@ -182,7 +175,7 @@ pub fn display_printable(content_type: &str, content: &[u8]) -> PreEscaped<Strin
                 }
             }
         }
-        "application/cbor" => {
+        ContentPresentation::CBOR => {
             let val: serde_cbor::Value = serde_cbor::from_slice(&content).unwrap();
 
             generate_html_from_cbor(&val, 3)

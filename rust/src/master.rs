@@ -33,8 +33,8 @@ use crate::{
     make_request, not_implemented, object_queues, put_alternative_locations,
     receive_from_websocket, send_as_ws_cbor, serve_static_file_path, utils_headers, utils_mime,
     DataStream, HandlersResponse, ObjectQueue, Patchable, RawData, ServerStateAccess, TopicName,
-    TopicsIndexInternal, CONTENT_TYPE, CONTENT_TYPE_PATCH_CBOR, CONTENT_TYPE_PATCH_JSON, DTPSR,
-    JAVASCRIPT_SEND, OCTET_STREAM,
+    TopicsIndexInternal, CONTENT_TYPE, CONTENT_TYPE_CBOR, CONTENT_TYPE_PATCH_CBOR,
+    CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_YAML, DTPSR, JAVASCRIPT_SEND, OCTET_STREAM,
 };
 
 pub async fn serve_master_post(
@@ -186,8 +186,9 @@ pub async fn serve_master_patch(
     };
 
     let p = ds.get_properties();
-    if !p.pushable {
-        let s = format!("Cannot push to {path_str:?} because the topic is not pushable:\n{ds:?}");
+    if !p.patchable {
+        let s =
+            format!("Cannot patch to {path_str:?} because the topic is not patchable:\n{ds:#?}");
         error!(" {s}");
         let res = http::Response::builder()
             .status(StatusCode::METHOD_NOT_ALLOWED)
@@ -482,7 +483,7 @@ pub async fn serve_master_get(
         ResolvedData::Regular(reg) => {
             let cbor_bytes = serde_cbor::to_vec(&reg).unwrap();
             let bytes = Bytes::from(cbor_bytes);
-            object_queues::RawData::new(bytes, "application/cbor".to_string())
+            object_queues::RawData::cbor(bytes)
         }
         ResolvedData::NotAvailableYet(s) => {
             let res = http::Response::builder()
@@ -538,7 +539,7 @@ fn make_friendly_visualization(
     content: &[u8],
 ) -> HandlersResponse {
     let display = display_printable(content_type, content);
-    let default_content_type = "application/yaml";
+    let default_content_type = CONTENT_TYPE_YAML;
     let initial_value = "{}";
     let js = PreEscaped(JAVASCRIPT_SEND);
     let x = make_html(

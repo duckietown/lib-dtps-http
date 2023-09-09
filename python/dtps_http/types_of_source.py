@@ -276,6 +276,7 @@ class SourceComposition(Source):
             readable=readable,
             immutable=immutable,
             has_history=False,
+            patchable=False,
         )
 
     def get_inside_after(self, s: str) -> "Source":

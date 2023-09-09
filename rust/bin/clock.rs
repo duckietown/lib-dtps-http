@@ -18,13 +18,7 @@ async fn clock_go(state: ServerStateAccess, topic_name: &str, interval_s: f32) -
     clock.tick().await;
     {
         let mut ss = state.lock().await;
-        let props = TopicProperties {
-            streamable: true,
-            pushable: false,
-            readable: true,
-            immutable: false,
-            has_history: false,
-        };
+        let props = TopicProperties::ro();
         // let data = HashMap::new();
         ss.new_topic(
             &TopicName::from_relative_url(topic_name)?,
