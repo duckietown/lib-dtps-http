@@ -136,6 +136,8 @@ pub async fn serve_master_patch(
     let content_type = get_header_with_default(&headers, CONTENT_TYPE, OCTET_STREAM);
     let result = if content_type == CONTENT_TYPE_PATCH_JSON {
         let r = serde_json::from_slice::<json_patch::Patch>(&data);
+        debug!("orig: {:?}", data);
+        debug!("Parsed patch: {:?}", r);
         match r {
             Ok(x) => x,
             Err(_) => {
@@ -770,7 +772,7 @@ pub async fn handle_websocket_data_stream(
 
 pub async fn handle_websocket_forwarded(
     state: ServerStateAccess,
-    subscription: String,
+    subscription: TopicName,
     its_topic_name: TopicName,
     ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
     receiver: UnboundedReceiverStream<MsgClientToServer>,

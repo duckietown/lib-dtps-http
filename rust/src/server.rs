@@ -284,9 +284,8 @@ impl DTPSServer {
             // let s = ssa.lock().await;
             let mut i = 0;
             for (k, v) in self.initial_proxy.clone() {
-                let subname = format!("proxy-{}", i);
                 let mounted_at = TopicName::from_relative_url(&k)?;
-                self.add_proxied(&subname, &mounted_at, v.clone()).await?;
+                self.add_proxied(&mounted_at, v.clone()).await?;
 
                 i += 1;
             }
@@ -390,21 +389,18 @@ impl DTPSServer {
 
     pub async fn add_proxied(
         &mut self,
-        subscription_name: &String,
         mounted_at: &TopicName,
         url: TypeOfConnection,
     ) -> DTPSR<JoinHandle<()>> {
         let ssa = self.get_lock();
 
-        let future = observe_proxy(
-            subscription_name.clone(),
-            mounted_at.clone(),
-            url.clone(),
-            ssa.clone(),
-        );
+        let future = sniff_and_start_proxy(mounted_at.clone(), url.clone(), ssa.clone());
         let handle = tokio::spawn(show_errors(
             Some(ssa.clone()),
-            format!("proxied/{subscription_name}"),
+            format!(
+                "proxied/{mounted_at}",
+                mounted_at = mounted_at.as_dash_sep()
+            ),
             future,
         ));
 

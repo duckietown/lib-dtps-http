@@ -21,16 +21,23 @@ use tokio::time::sleep;
 
 use crate::constants::*;
 use crate::object_queues::*;
-use crate::signals_logic::TopicProperties;
 use crate::structures::*;
-use crate::structures_linkproperties::LinkBenchmark;
 use crate::types::*;
+use crate::LinkBenchmark;
+use crate::TopicProperties;
 use crate::{
     context, error_with_info, get_events_stream_inline, get_index, get_metadata, get_queue_id,
-    get_random_node_id, get_stats, invalid_input, not_available, not_implemented, not_reachable,
-    sniff_type_resource, DTPSError, ServerStateAccess, TypeOfResource, UrlResult, DTPSR,
-    MASK_ORIGIN,
+    get_random_node_id, get_stats, invalid_input, is_prefix_of, not_available, not_implemented,
+    not_reachable, sniff_type_resource, DTPSError, ServerStateAccess, TypeOfResource, UrlResult,
+    DTPSR, MASK_ORIGIN,
 };
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+pub struct ProxyJob {
+    pub url: String,
+}
+
+type Proxied = HashMap<String, ProxyJob>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LogEntry {
@@ -39,18 +46,24 @@ pub struct LogEntry {
 }
 
 #[derive(Debug)]
-pub struct ForwardInfo {
-    pub url: TypeOfConnection,
+pub struct ForwardInfoEstablished {
     pub md: FoundMetadata,
     pub index_internal: TopicsIndexInternal,
+}
 
+#[derive(Debug)]
+pub struct ForwardInfo {
+    pub url: TypeOfConnection,
+
+    pub handle: Option<tokio::task::JoinHandle<()>>,
+    pub established: Option<ForwardInfoEstablished>,
     pub mounted_at: TopicName,
 }
 
 #[derive(Debug)]
 pub struct ProxiedTopicInfo {
     pub tr_original: TopicRefInternal,
-    pub from_subscription: String,
+    pub from_subscription: TopicName,
     pub its_topic_name: TopicName,
     pub data_url: TypeOfConnection,
 
@@ -67,7 +80,6 @@ pub struct OtherProxyInfo {
 pub struct LocalDirInfo {
     pub unique_id: String,
     pub local_dir: String,
-    pub from_subscription: String,
 }
 
 #[derive(Debug)]
@@ -78,15 +90,14 @@ pub struct ServerState {
 
     /// Our queues
     pub oqs: HashMap<TopicName, ObjectQueue>,
+    /// The subscriptions to other nodes
+    pub proxied: HashMap<TopicName, ForwardInfo>,
 
     /// The topics that we proxy
     pub proxied_topics: HashMap<TopicName, ProxiedTopicInfo>,
 
     /// Filesystem match
     pub local_dirs: HashMap<TopicName, LocalDirInfo>,
-
-    /// The subscriptions to other nodes
-    pub proxied: HashMap<String, ForwardInfo>,
 
     /// The proxied other resources
     pub proxied_other: HashMap<TopicName, OtherProxyInfo>,
@@ -275,6 +286,25 @@ impl ServerState {
             Some(10),
         )?;
 
+        let p = TopicProperties {
+            streamable: true,
+            pushable: false,
+            readable: true,
+            immutable: false,
+            has_history: true,
+            patchable: true,
+        };
+
+        ss.new_topic(
+            &TopicName::from_relative_url(TOPIC_PROXIED)?,
+            None,
+            CONTENT_TYPE_JSON,
+            &p,
+            Some(schema_for!(Proxied)),
+            Some(1),
+        )?;
+        ss.publish_json(&TopicName::from_relative_url(TOPIC_PROXIED)?, "{}", None)?;
+
         Ok(ss)
     }
     pub fn add_alias(&mut self, new: &TopicName, existing: &TopicName) {
@@ -327,10 +357,55 @@ impl ServerState {
         warn!("{}", msg);
         self.log_message(msg, "warn");
     }
+    pub fn add_proxy_connection(
+        &mut self,
+        topic_name: &TopicName,
+        con: &TypeOfConnection,
+        ssa: ServerStateAccess,
+    ) -> DTPSR<()> {
+        if self.proxied.contains_key(topic_name) {
+            return Err(DTPSError::TopicAlreadyExists(topic_name.to_dash_sep()));
+        }
+        let future = observe_node_proxy(topic_name.clone(), con.clone(), ssa.clone());
+
+        let handle = tokio::spawn(show_errors(
+            Some(ssa.clone()),
+            format!(
+                "observe_node_proxy: {topic_name}",
+                topic_name = topic_name.as_dash_sep()
+            ),
+            future,
+        ));
+        let fi = ForwardInfo {
+            url: con.clone(),
+            handle: Some(handle),
+            established: None,
+            mounted_at: topic_name.clone(),
+        };
+        self.proxied.insert(topic_name.clone(), fi);
+
+        return Ok(());
+    }
+    pub fn remove_proxy_connection(&mut self, topic_name: &TopicName) -> DTPSR<()> {
+        if !self.proxied.contains_key(topic_name) {
+            return Err(DTPSError::TopicNotFound(topic_name.to_dash_sep()));
+        }
+        debug!("Removing proxy connection {:?}", topic_name);
+        self.proxied.remove(topic_name);
+        self.proxied_topics.retain(|k, _| {
+            if let Some(_) = is_prefix_of(topic_name.as_components(), k.as_components()) {
+                debug!("Removing proxy topic {:?}", topic_name);
+                false
+            } else {
+                true
+            }
+        });
+        return Ok(());
+    }
 
     pub fn new_proxy_topic(
         &mut self,
-        from_subscription: String,
+        from_subscription: &TopicName,
         its_topic_name: &TopicName,
         topic_name: &TopicName,
         tr_original: &TopicRefInternal,
@@ -338,7 +413,7 @@ impl ServerState {
         link_benchmark_last: LinkBenchmark,
     ) -> DTPSR<()> {
         if self.proxied_topics.contains_key(topic_name) {
-            return Err(DTPSError::TopicAlreadyExists(topic_name.to_relative_url()));
+            return Err(DTPSError::TopicAlreadyExists(topic_name.to_dash_sep()));
         }
 
         let data_url = reachability_we_used.con.clone();
@@ -361,7 +436,7 @@ impl ServerState {
 
     pub fn new_filesystem_mount(
         &mut self,
-        from_subscription: &String,
+        // from_subscription: &String,
         topic_name: &TopicName,
         fp: FilePaths,
     ) -> DTPSR<()> {
@@ -388,7 +463,6 @@ impl ServerState {
             LocalDirInfo {
                 unique_id: uuid,
                 local_dir: local_dir.as_path().to_str().unwrap().to_string(),
-                from_subscription: from_subscription.clone(),
             },
         );
         self.update_my_topic()
@@ -699,7 +773,7 @@ impl ServerState {
 
             topics.insert(topic_name.clone(), tr);
         }
-        for (alias, original) in &self.aliases {
+        for (alias, _original) in &self.aliases {
             let tr = TopicRefInternal {
                 unique_id: "".to_string(),
                 origin_node: "".to_string(),
@@ -824,15 +898,14 @@ pub async fn show_errors<X, F: Future<Output = DTPSR<X>>>(
     }
 }
 
-pub async fn observe_proxy(
-    subcription_name: String,
+pub async fn sniff_and_start_proxy(
     mounted_at: TopicName,
     url: TypeOfConnection,
     ss_mutex: ServerStateAccess,
 ) -> DTPSR<()> {
     if let TypeOfConnection::File(_, fp) = url {
         let mut ss = ss_mutex.lock().await;
-        ss.new_filesystem_mount(&subcription_name, &mounted_at, fp)?;
+        ss.new_filesystem_mount(&mounted_at, fp)?;
         return Ok(());
     }
 
@@ -840,7 +913,7 @@ pub async fn observe_proxy(
         match sniff_type_resource(&url).await {
             Ok(s) => break s,
             Err(e) => {
-                warn!("Cannot sniff {} \n{:?}", subcription_name, e);
+                warn!("Cannot sniff:\n{e:?}");
                 info!("observe_proxy: retrying in 2 seconds");
                 sleep(std::time::Duration::from_secs(2)).await;
                 continue;
@@ -849,20 +922,23 @@ pub async fn observe_proxy(
     };
 
     match rtype {
-        TypeOfResource::Other => {
-            handle_proxy_other(subcription_name, mounted_at, url, ss_mutex).await
-        }
+        TypeOfResource::Other => handle_proxy_other(mounted_at, url, ss_mutex).await,
         TypeOfResource::DTPSTopic => {
             not_implemented!("observe_proxy: TypeOfResource::DTPSTopic")
         }
         TypeOfResource::DTPSIndex => {
-            observe_node_proxy(subcription_name, mounted_at, url, ss_mutex).await
+            let mut ss = ss_mutex.lock().await;
+            ss.add_proxy_connection(&mounted_at, &url, ss_mutex.clone())?;
+            Ok(())
+            // not_implemented!("observe_proxy: TypeOfResource::DTPSIndex")
+            // ss.add_proxy_connection(&subcription_name, &url, ss_mutex).await
+            // observe_node_proxy(subcription_name, mounted_at, url, ss_mutex).await
         }
     }
 }
 
 pub async fn handle_proxy_other(
-    _subcription_name: String,
+    // _subcription_name: String,
     mounted_at: TopicName,
     url: TypeOfConnection,
     ss_mutex: ServerStateAccess,
@@ -876,7 +952,6 @@ pub async fn handle_proxy_other(
 }
 
 pub async fn observe_node_proxy(
-    subcription_name: String,
     mounted_at: TopicName,
     url: TypeOfConnection,
     ss_mutex: ServerStateAccess,
@@ -887,7 +962,7 @@ pub async fn observe_node_proxy(
             Err(e) => {
                 warn!(
                     "observe_proxy: error getting proxy info for proxied {:?}:\n{:?}",
-                    subcription_name, e
+                    mounted_at, e
                 );
                 info!("observe_proxy: retrying in 2 seconds");
                 sleep(std::time::Duration::from_secs(2)).await;
@@ -927,15 +1002,31 @@ pub async fn observe_node_proxy(
 
     {
         let mut ss = ss_mutex.lock().await;
-        ss.proxied.insert(
-            subcription_name.clone(),
-            ForwardInfo {
-                mounted_at: mounted_at.clone(),
-                url: url.clone(),
-                md: md.clone(),
-                index_internal: index_internal_at_t0.clone(),
-            },
-        );
+        let info = ss.proxied.get_mut(&mounted_at).unwrap();
+        info.established = Some(ForwardInfoEstablished {
+            md: md.clone(),
+            index_internal: index_internal_at_t0.clone(),
+        });
+        //
+        //     subcription_name.clone(),
+        //     ForwardInfo {
+        //         mounted_at: mounted_at.clone(),
+        //         url: url.clone(),
+        //         md: md.clone(),
+        //         index_internal: index_internal_at_t0.clone(),
+        //     },
+        // );
+    }
+    {
+        let mut ss = ss_mutex.lock().await;
+        add_from_response(
+            &mut ss,
+            who_answers.clone(),
+            &mounted_at,
+            &index_internal_at_t0,
+            link1.clone(),
+            url.to_string(),
+        )?;
     }
 
     // let (tx, rx) = mpsc::unbounded_channel();
@@ -943,18 +1034,6 @@ pub async fn observe_node_proxy(
     //
     let (_handle, mut stream) = get_events_stream_inline(&inline_url).await;
 
-    {
-        let mut ss = ss_mutex.lock().await;
-        add_from_response(
-            &mut ss,
-            who_answers.clone(),
-            &subcription_name,
-            &mounted_at,
-            &index_internal_at_t0,
-            link1.clone(),
-            url.to_string(),
-        )?;
-    }
     while let Some(notification) = stream.next().await {
         // debug!("observe_proxy: got notification: {:#?}", notification);
         // add_from_response(&mut ss, &subcription_name,
@@ -968,7 +1047,6 @@ pub async fn observe_node_proxy(
             add_from_response(
                 &mut ss,
                 who_answers.clone(),
-                &subcription_name,
                 &mounted_at,
                 &ti,
                 link1.clone(),
@@ -983,7 +1061,6 @@ pub async fn observe_node_proxy(
 pub fn add_from_response(
     s: &mut ServerState,
     _who_answers: String,
-    subscription: &String,
     mounted_at: &TopicName,
     tii: &TopicsIndexInternal,
     link_benchmark1: LinkBenchmark,
@@ -1004,13 +1081,13 @@ pub fn add_from_response(
         if tr.reachability.len() == 0 {
             return DTPSError::not_reachable(format!(
                 "topic {:?} of subscription {:?} is not reachable:\n{:#?}",
-                its_topic_name, subscription, tr
+                its_topic_name, mounted_at, tr
             ));
         }
         let reachability_we_used = tr.reachability.get(0).unwrap();
 
         s.new_proxy_topic(
-            subscription.clone(),
+            mounted_at,
             &its_topic_name,
             &available_as,
             tr,

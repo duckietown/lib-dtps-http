@@ -40,6 +40,12 @@ impl RawData {
     pub fn represent_as_cbor<T: Serialize>(x: T) -> DTPSR<Self> {
         Ok(RawData::new(serde_cbor::to_vec(&x)?, CONTENT_TYPE_CBOR))
     }
+    pub fn from_cbor_value(x: &serde_cbor::Value) -> DTPSR<Self> {
+        Ok(RawData::cbor(serde_cbor::to_vec(x)?))
+    }
+    pub fn from_json_value(x: &serde_json::Value) -> DTPSR<Self> {
+        Ok(RawData::json(serde_json::to_vec(x)?))
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

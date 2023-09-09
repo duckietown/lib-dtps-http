@@ -38,9 +38,9 @@ use crate::TypeOfConnection::Same;
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
 use crate::{
     context, error_with_info, internal_assertion, not_available, not_implemented, not_reachable,
-    put_header_accept, put_header_content_type, DTPSError, DataSaved, History, RawData, TopicName,
-    TopicRefAdd, CONTENT_TYPE_DTPS_INDEX, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_PATCH_JSON,
-    CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR, REL_HISTORY,
+    put_header_accept, put_header_content_type, DTPSError, DataSaved, History, ProxyJob, RawData,
+    TopicName, TopicRefAdd, CONTENT_TYPE_DTPS_INDEX, CONTENT_TYPE_DTPS_INDEX_CBOR,
+    CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR, REL_HISTORY, TOPIC_PROXIED,
 };
 use crate::{LinkBenchmark, LinkHeader, REL_EVENTS_DATA, REL_EVENTS_NODATA, REL_META};
 
@@ -744,29 +744,7 @@ pub async fn create_topic(
     let add_operation = AddOperation { path, value };
     let operation1 = PatchOperation::Add(add_operation);
     let patch = json_patch::Patch(vec![operation1]);
-
-    let json_data = serde_json::to_vec(&patch)?;
-    let resp = make_request(
-        conbase,
-        hyper::Method::PATCH,
-        &json_data,
-        Some(CONTENT_TYPE_PATCH_JSON),
-        None,
-    )
-    .await?;
-    let status = resp.status();
-    if !status.is_success() {
-        let desc = status.as_str();
-        let msg = format!("cannot patch:\nurl: {conbase}\n---\n{desc}");
-        return Err(DTPSError::FailedRequest(
-            msg,
-            status.as_u16(),
-            conbase.to_string(),
-            desc.to_string(),
-        ));
-    }
-
-    Ok(())
+    patch_data(conbase, &patch).await
 }
 
 pub async fn delete_topic(conbase: &TypeOfConnection, topic_name: &TopicName) -> DTPSR<()> {
@@ -780,32 +758,57 @@ pub async fn delete_topic(conbase: &TypeOfConnection, topic_name: &TopicName) ->
     let operation1 = PatchOperation::Remove(remove_operation);
     let patch = json_patch::Patch(vec![operation1]);
 
-    let json_data = serde_json::to_vec(&patch)?;
-    let resp = make_request(
-        conbase,
-        hyper::Method::PATCH,
-        &json_data,
-        Some(CONTENT_TYPE_PATCH_JSON),
-        None,
-    )
-    .await?;
-    let status = resp.status();
-    if !status.is_success() {
-        let desc = status.as_str();
-        let msg = format!("cannot remove topic:\nurl: {conbase}\n---\n{desc}");
-        return Err(DTPSError::FailedRequest(
-            msg,
-            status.as_u16(),
-            conbase.to_string(),
-            desc.to_string(),
-        ));
-    }
+    patch_data(conbase, &patch).await
+}
 
-    Ok(())
+pub fn escape_json_patch(s: &str) -> String {
+    s.replace("~", "~0").replace("/", "~1")
+}
+pub fn unescape_json_patch(s: &str) -> String {
+    s.replace("~1", "/").replace("~0", "~")
+}
+pub async fn add_proxy(
+    conbase: &TypeOfConnection,
+    mountpoint: &TopicName,
+    url: &TypeOfConnection,
+) -> DTPSR<()> {
+    let pj = ProxyJob {
+        // mounted_at: mountpoint.as_dash_sep().to_string(),
+        url: url.to_string(),
+    };
+
+    let mut path: String = String::new();
+    path.push_str("/");
+    path.push_str(escape_json_patch(mountpoint.as_dash_sep()).as_str());
+    debug!("patch path: {}", path);
+    let value = serde_json::to_value(&pj)?;
+
+    let add_operation = AddOperation { path, value };
+    let operation1 = PatchOperation::Add(add_operation);
+    let patch = json_patch::Patch(vec![operation1]);
+    let tn = TopicName::from_dash_sep(TOPIC_PROXIED)?;
+
+    let proxied_topic = conbase.join(tn.as_relative_url())?;
+    patch_data(&proxied_topic, &patch).await
+}
+
+pub async fn remove_proxy(conbase: &TypeOfConnection, mountpoint: &TopicName) -> DTPSR<()> {
+    let mut path: String = String::new();
+    path.push_str("/");
+    path.push_str(escape_json_patch(mountpoint.as_dash_sep()).as_str());
+
+    let remove_operation = RemoveOperation { path };
+    let operation1 = PatchOperation::Remove(remove_operation);
+    let patch = json_patch::Patch(vec![operation1]);
+    let tn = TopicName::from_dash_sep(TOPIC_PROXIED)?;
+
+    let proxied_topic = conbase.join(tn.as_relative_url())?;
+    patch_data(&proxied_topic, &patch).await
 }
 
 pub async fn patch_data(conbase: &TypeOfConnection, patch: &JsonPatch) -> DTPSR<()> {
     let json_data = serde_json::to_vec(patch)?;
+    // debug!("patch_data out: {:#?}", String::from_utf8(json_data.clone()));
     let resp = make_request(
         conbase,
         hyper::Method::PATCH,

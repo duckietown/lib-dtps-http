@@ -1,11 +1,14 @@
-use std::collections::{BTreeMap, HashMap};
+use std::cmp::{max, min};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::Context;
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use bytes::Bytes;
-use json_patch::PatchOperation;
+use chrono::Local;
+use futures::StreamExt;
+use json_patch::{patch, Patch, PatchOperation};
 use log::{debug, error};
 use maplit::hashmap;
 use schemars::JsonSchema;
@@ -13,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_cbor::Value as CBORValue;
 use serde_cbor::Value::Null as CBORNull;
 use serde_cbor::Value::Text as CBORText;
-use tokio::sync::broadcast::Receiver;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 
 use crate::cbor_manipulation::get_inside;
@@ -22,12 +25,13 @@ use crate::utils::{divide_in_components, is_prefix_of};
 use crate::websocket_signals::ChannelInfo;
 use crate::TypeOfConnection::Relative;
 use crate::{
-    context, error_with_info, get_channel_info_message, get_dataready, get_rawdata,
-    not_implemented, utils, ContentInfo, DTPSError, DataReady, ForwardingStep, History,
-    InsertNotification, LinkBenchmark, OtherProxyInfo, RawData, ServerState, ServerStateAccess,
-    TopicName, TopicReachabilityInternal, TopicRefAdd, TopicRefInternal, TopicsIndexInternal,
+    context, error_with_info, get_channel_info_message, get_dataready, get_rawdata, merge_clocks,
+    not_implemented, parse_url_ext, unescape_json_patch, utils, Clocks, ContentInfo, DTPSError,
+    DataReady, DataSaved, ForwardingStep, History, InsertNotification, LinkBenchmark,
+    OtherProxyInfo, ProxyJob, RawData, ServerState, ServerStateAccess, TopicName,
+    TopicReachabilityInternal, TopicRefAdd, TopicRefInternal, TopicsIndexInternal,
     TypeOfConnection, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR,
-    REL_URL_META, URL_HISTORY,
+    REL_URL_META, TOPIC_PROXIED, URL_HISTORY,
 };
 
 #[derive(Debug, Clone)]
@@ -92,7 +96,7 @@ impl DataProps for SourceComposition {
 
 #[derive(Debug, Clone)]
 pub struct ForwardedQueue {
-    pub subscription: String,
+    pub subscription: TopicName,
     pub his_topic_name: TopicName,
     pub my_topic_name: TopicName,
     pub properties: TopicProperties,
@@ -202,7 +206,7 @@ pub struct OtherProxied {
     op: OtherProxyInfo,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ResolvedData {
     RawData(RawData),
     Regular(CBORValue),
@@ -466,10 +470,10 @@ pub struct DataStream {
     pub first: Option<InsertNotification>,
 
     /// The stream (or none if no more data is coming through)
-    pub stream: Option<Receiver<InsertNotification>>,
+    pub stream: Option<tokio::sync::broadcast::Receiver<InsertNotification>>,
 
     /// handles of couroutines needed for making this happen
-    pub handles: Vec<JoinHandle<()>>,
+    pub handles: Vec<JoinHandle<DTPSR<()>>>,
 }
 // use tokio::stream::StreamExt;
 
@@ -508,13 +512,13 @@ impl TypeOFSource {
                 })
             }
 
-            TypeOFSource::Compose(sc) => get_stream_compose(presented_as, ssa, sc).await,
+            TypeOFSource::Compose(sc) => {
+                todo!("get_stream for {self:#?} with {self:?}")
+            }
             TypeOFSource::Transformed(s, _) => {
                 todo!("get_stream for {self:#?} with {self:?}")
             }
-            TypeOFSource::Deref(d) => {
-                todo!("get_stream for {self:#?} with {self:?}")
-            }
+            TypeOFSource::Deref(d) => Ok(get_stream_compose(presented_as, ssa, d).await?),
             TypeOFSource::OtherProxied(_) => {
                 todo!("get_stream for {self:#?} with {self:?}")
             }
@@ -537,30 +541,195 @@ impl TypeOFSource {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ActualUpdate {
+    pub component: Vec<String>,
+    pub data: ResolvedData,
+    pub clocks: Clocks,
+}
+
+#[derive(Debug, Clone)]
+pub enum SingleUpdates {
+    Update(ActualUpdate),
+    Finished(Vec<String>),
+}
+
+async fn put_together(
+    mut first: CBORValue, // BTreeMap<CBORValue, CBORValue>,
+    mut clocks0: Clocks,
+    mut active_components: HashSet<Vec<String>>,
+    mut rx: tokio::sync::broadcast::Receiver<SingleUpdates>,
+    tx_out: tokio::sync::broadcast::Sender<InsertNotification>,
+) -> DTPSR<()> {
+    if let CBORValue::Map(..) = first {
+    } else {
+        return Err(DTPSError::Other(format!("First value is not a map")));
+    };
+    let mut index = 1;
+    loop {
+        let msg = rx.recv().await?;
+        match msg {
+            SingleUpdates::Update(ActualUpdate {
+                component,
+                data,
+                clocks,
+            }) => {
+                if !active_components.contains(&component) {
+                    log::warn!("Received update for inactive component: {:?}", component);
+                    continue;
+                }
+                clocks0 = merge_clocks(&clocks0, &clocks);
+                putinside(&mut first, &component, data)?;
+                let rd = crate::RawData::from_cbor_value(&first)?;
+                let time_inserted = Local::now().timestamp_nanos();
+                let data_saved = DataSaved {
+                    origin_node: "".to_string(),
+                    unique_id: "".to_string(),
+                    index,
+                    time_inserted,
+                    clocks: clocks0.clone(),
+                    content_type: rd.content_type.clone(),
+                    content_length: rd.content.len(),
+                    digest: rd.digest().clone(),
+                };
+                let notification = InsertNotification {
+                    data_saved,
+                    raw_data: rd,
+                };
+                tx_out.send(notification).unwrap();
+                index += 1;
+            }
+            SingleUpdates::Finished(which) => {
+                if !active_components.contains(&which) {
+                    log::warn!("Received update for inactive component: {:?}", which);
+                } else {
+                    log::debug!("Finished  for active component: {:?}", which);
+                    active_components.remove(&which);
+                    if active_components.is_empty() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn listen_to_updates(
+    component: Vec<String>,
+    mut rx: tokio::sync::broadcast::Receiver<InsertNotification>,
+    tx: tokio::sync::broadcast::Sender<SingleUpdates>,
+) -> DTPSR<()> {
+    loop {
+        match rx.recv().await {
+            Ok(m) => {
+                tx.send(SingleUpdates::Update(ActualUpdate {
+                    component: component.clone(),
+                    data: ResolvedData::RawData(m.raw_data),
+                    clocks: m.data_saved.clocks,
+                }))
+                .unwrap();
+            }
+            Err(e) => match e {
+                RecvError::Closed => {
+                    break;
+                }
+                RecvError::Lagged(e) => {
+                    log::warn!("Lagged: {e}");
+                }
+            },
+        }
+    }
+    tx.send(SingleUpdates::Finished(component)).unwrap();
+    Ok(())
+}
+
+#[async_recursion]
 async fn get_stream_compose(
     presented_as: &str,
     ssa: ServerStateAccess,
     sc: &SourceComposition,
 ) -> DTPSR<DataStream> {
-    let mut components = HashMap::new();
+    // let mut components = HashMap::new();
     let mut handles = Vec::new();
+    let mut queue_created: i64 = Local::now().timestamp_nanos();
+    let mut num_total = 0;
+    let mut time_inserted = 0;
+    let mut clocks0 = Clocks::default();
+    let mut first = serde_cbor::value::Value::Map(BTreeMap::new());
+
+    let mut components_active = HashSet::new();
+    let mut components_inactive = HashSet::new();
+    let (tx, rx) = tokio::sync::broadcast::channel(1024);
+    let (out_stream_sender, out_stream_recv) = tokio::sync::broadcast::channel(1024);
 
     for (k, v) in sc.compose.iter() {
-        let mut component_stream = v.get_data_stream(presented_as, ssa.clone()).await?;
-        handles.append(&mut component_stream.handles);
-        components.insert(k.clone(), component_stream);
+        let ts: &TypeOFSource = v;
+        let mut cs = ts.get_data_stream(presented_as, ssa.clone()).await?;
+        queue_created = min(queue_created, cs.channel_info.queue_created);
+        num_total = max(num_total, cs.channel_info.num_total);
+
+        handles.append(&mut cs.handles);
+
+        match cs.stream {
+            None => {
+                components_inactive.insert(k.clone());
+            }
+            Some(st) => {
+                components_active.insert(k.clone());
+                // let mut st = st.clone();
+                let h = tokio::spawn(listen_to_updates(k.clone(), st, tx.clone()));
+                handles.push(h);
+            }
+        }
+
+        match &cs.first {
+            None => {
+                let value = ResolvedData::Regular(CBORNull);
+                putinside(&mut first, k, value)?;
+            }
+            Some(sd) => {
+                time_inserted = max(time_inserted, sd.data_saved.time_inserted);
+                let resolved_data = ResolvedData::RawData(sd.raw_data.clone());
+                putinside(&mut first, k, resolved_data)?;
+            }
+        }
     }
+
+    let first_val = crate::RawData::from_cbor_value(&first)?;
+    let data_saved = DataSaved {
+        origin_node: "".to_string(),
+        unique_id: "".to_string(),
+        index: 0,
+        time_inserted,
+        clocks: clocks0.clone(),
+        content_type: first_val.content_type.clone(),
+        content_length: first_val.content.len(),
+        digest: first_val.digest().clone(),
+    };
+    let handle_merge = tokio::spawn(put_together(
+        first.clone(),
+        clocks0,
+        components_active,
+        rx,
+        out_stream_sender,
+    ));
+    handles.push(handle_merge);
 
     let data_stream = DataStream {
         channel_info: ChannelInfo {
-            queue_created: 0,
-            num_total: 0,
+            queue_created,
+            num_total,
             newest: None,
             oldest: None,
         },
-        first: None,
-        stream: None,
-        handles: vec![],
+        first: Some(InsertNotification {
+            data_saved,
+            raw_data: first_val,
+        }),
+        stream: Some(out_stream_recv),
+        handles,
     };
     Ok(data_stream)
 }
@@ -805,14 +974,8 @@ async fn get_sc_meta(
     presented_as: &str,
     ss_mutex: ServerStateAccess,
 ) -> DTPSR<TopicsIndexInternal> {
-    // if sc.is_root {
-    //     let ss = ss_mutex.lock().await;
-    //     return Ok(ss.create_topic_index());
-    // }
     let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
-    // let mut node_app_data = HashMap::new();
 
-    // let debug_s = String::new();
     for (prefix, inside) in sc.compose.iter() {
         let x = inside
             .get_meta_index(presented_as, ss_mutex.clone())
@@ -863,6 +1026,62 @@ async fn get_sc_meta(
     Ok(index)
 }
 
+fn get_result_to_put(
+    result_dict: &mut serde_cbor::value::Value,
+    prefix: Vec<String>,
+) -> &mut serde_cbor::value::Value {
+    let mut current: &mut serde_cbor::value::Value = result_dict;
+    for component in &prefix[..prefix.len() - 1] {
+        if let serde_cbor::value::Value::Map(inside) = current {
+            let the_key = CBORText(component.clone().into());
+            if !inside.contains_key(&the_key) {
+                inside.insert(
+                    the_key.clone(),
+                    serde_cbor::value::Value::Map(BTreeMap::new()),
+                );
+            }
+            current = inside.get_mut(&the_key).unwrap();
+        } else {
+            panic!("not a map");
+        }
+    }
+    current
+}
+
+fn putinside(
+    result_dict: &mut serde_cbor::value::Value,
+    prefix: &Vec<String>,
+    what: ResolvedData,
+) -> DTPSR<()> {
+    let mut the_result_to_put = get_result_to_put(result_dict, prefix.clone());
+
+    let where_to_put = if let serde_cbor::value::Value::Map(where_to_put) = &mut the_result_to_put {
+        where_to_put
+    } else {
+        panic!("not a map");
+    };
+
+    let key_to_put = CBORText(prefix.last().unwrap().clone().into());
+    let key_to_put2 = CBORText(format!("{}?", prefix.last().unwrap()));
+
+    match what {
+        Regular(x) => {
+            where_to_put.insert(key_to_put, x);
+        }
+        NotAvailableYet(x) => {
+            // TODO: do more here
+            where_to_put.insert(key_to_put, CBORNull);
+            where_to_put.insert(key_to_put2, CBORText(x.into()));
+        }
+        NotFound(_) => {}
+        ResolvedData::RawData(rd) => {
+            let x = rd.get_as_cbor()?;
+            where_to_put.insert(key_to_put, x);
+        }
+    }
+    Ok(())
+}
+
 async fn single_compose(
     sc: &SourceComposition,
     presented_as: &str,
@@ -871,53 +1090,9 @@ async fn single_compose(
     let mut result_dict: serde_cbor::value::Value = serde_cbor::value::Value::Map(BTreeMap::new());
 
     for (prefix, source) in &sc.compose {
-        let mut the_result_to_put: &mut serde_cbor::value::Value = {
-            let mut current: &mut serde_cbor::value::Value = &mut result_dict;
-            for component in &prefix[..prefix.len() - 1] {
-                if let serde_cbor::value::Value::Map(inside) = current {
-                    let the_key = CBORText(component.clone().into());
-                    if !inside.contains_key(&the_key) {
-                        inside.insert(
-                            the_key.clone(),
-                            serde_cbor::value::Value::Map(BTreeMap::new()),
-                        );
-                    }
-                    current = inside.get_mut(&the_key).unwrap();
-                } else {
-                    panic!("not a map");
-                }
-            }
-            current
-        };
-
-        let where_to_put =
-            if let serde_cbor::value::Value::Map(where_to_put) = &mut the_result_to_put {
-                where_to_put
-            } else {
-                panic!("not a map");
-            };
-        let key_to_put = CBORText(prefix.last().unwrap().clone().into());
-        let key_to_put2 = CBORText(format!("{}?", prefix.last().unwrap()));
-
-        let value = source
-            .resolve_data_single(presented_as, ss_mutex.clone())
-            .await?;
-
-        match value {
-            Regular(x) => {
-                where_to_put.insert(key_to_put, x);
-            }
-            NotAvailableYet(x) => {
-                // TODO: do more here
-                where_to_put.insert(key_to_put, CBORNull);
-                where_to_put.insert(key_to_put2, CBORText(x.into()));
-            }
-            NotFound(_) => {}
-            ResolvedData::RawData(rd) => {
-                let x = rd.get_as_cbor()?;
-                where_to_put.insert(key_to_put, x);
-            }
-        }
+        let ss_i = ss_mutex.clone();
+        let value = source.resolve_data_single(presented_as, ss_i).await?;
+        putinside(&mut result_dict, prefix, value)?;
     }
 
     Ok(Regular(result_dict))
@@ -1190,7 +1365,7 @@ pub trait Patchable {
         &self,
         presented_as: &str,
         ss_mutex: ServerStateAccess,
-        patch: &json_patch::Patch,
+        patch: &Patch,
     ) -> DTPSR<()>;
 }
 
@@ -1200,14 +1375,18 @@ impl Patchable for TypeOFSource {
         &self,
         presented_as: &str,
         ss_mutex: ServerStateAccess,
-        patch: &json_patch::Patch,
+        patch: &Patch,
     ) -> DTPSR<()> {
         match self {
             TypeOFSource::ForwardedQueue(_) => {
                 todo!("patch for {self:#?} with {self:?}")
             }
             TypeOFSource::OurQueue(topic_name, ..) => {
-                patch_our_queue(ss_mutex, presented_as, patch, topic_name).await
+                if topic_name.as_dash_sep() == TOPIC_PROXIED {
+                    patch_proxied(ss_mutex, &topic_name, patch).await
+                } else {
+                    patch_our_queue(ss_mutex, presented_as, patch, topic_name).await
+                }
             }
             TypeOFSource::MountedDir(_, _, _) => {
                 todo!("patch for {self:#?} with {self:?}")
@@ -1241,10 +1420,7 @@ impl Patchable for TypeOFSource {
     }
 }
 
-pub fn add_prefix_to_patch_op(
-    op: &json_patch::PatchOperation,
-    prefix: &str,
-) -> json_patch::PatchOperation {
+pub fn add_prefix_to_patch_op(op: &PatchOperation, prefix: &str) -> PatchOperation {
     match op {
         PatchOperation::Add(y) => {
             let mut y = y.clone();
@@ -1281,19 +1457,19 @@ pub fn add_prefix_to_patch_op(
     }
 }
 
-pub fn add_prefix_to_patch(patch: &json_patch::Patch, prefix: &str) -> json_patch::Patch {
-    // let mut new_patch = json_patch::Patch::();
+pub fn add_prefix_to_patch(patch: &Patch, prefix: &str) -> Patch {
+    // let mut new_patch = Patch::();
     let mut ops: Vec<PatchOperation> = Vec::new();
     for op in &patch.0 {
         let op1 = add_prefix_to_patch_op(op, prefix);
         ops.push(op1);
     }
-    json_patch::Patch(ops)
+    Patch(ops)
 }
 
 async fn patch_composition(
     ss_mutex: ServerStateAccess,
-    patch: &json_patch::Patch,
+    patch: &Patch,
     sc: &SourceComposition,
 ) -> DTPSR<()> {
     let mut ss = ss_mutex.lock().await;
@@ -1345,7 +1521,7 @@ pub fn topic_name_from_json_pointer(path: &str) -> DTPSR<TopicName> {
 async fn patch_transformed(
     ss_mutex: ServerStateAccess,
     presented_as: &str,
-    patch: &json_patch::Patch,
+    patch: &Patch,
     ts: &TypeOFSource,
     transform: &Transforms,
 ) -> DTPSR<()> {
@@ -1370,14 +1546,20 @@ async fn patch_transformed(
 
 async fn patch_our_queue(
     ss_mutex: ServerStateAccess,
-    presented_as: &str,
-    patch: &json_patch::Patch,
+    _presented_as: &str,
+    patch: &Patch,
     topic_name: &TopicName,
 ) -> DTPSR<()> {
     let (data_saved, raw_data) = {
         let ss = ss_mutex.lock().await;
         let oq = ss.get_queue(topic_name)?;
         // todo: if EMPTY...
+        if oq.saved.is_empty() {
+            return Err(DTPSError::TopicNotFound(format!(
+                "patch_our_queue: {topic_name:?} is empty",
+                topic_name = topic_name
+            )));
+        }
         let last = oq.stored.last().unwrap();
         let data_saved = oq.saved.get(last).unwrap();
         let content = ss.get_blob_bytes(&data_saved.digest)?;
@@ -1387,10 +1569,10 @@ async fn patch_our_queue(
     let mut x: serde_json::Value = raw_data.get_as_json()?;
     let x0 = x.clone();
 
-    debug!("patching: {x:?}");
-    debug!("patch: {patch:?}");
+    // debug!("patching: {x:?}");
+    // debug!("patch: {patch:?}");
     context!(json_patch::patch(&mut x, patch), "cannot apply patch")?;
-    debug!("result: {x:?}");
+    // debug!("result: {x:?}");
     if x == x0 {
         log::debug!("The patch didn't change anything:\n {patch:?}");
         return Ok(());
@@ -1400,6 +1582,83 @@ async fn patch_our_queue(
     let new_clocks = data_saved.clocks.clone();
 
     let mut ss = ss_mutex.lock().await;
+
+    // oq.push(&new_content, Some(new_clocks))?;
+    let ds = ss.publish(
+        &topic_name,
+        &new_content.content,
+        &data_saved.content_type,
+        Some(new_clocks),
+    )?;
+
+    if ds.index != data_saved.index + 1 {
+        panic!("there were some modifications inside: {ds:?} != {data_saved:?}");
+    }
+
+    Ok(())
+}
+
+async fn patch_proxied(
+    ss_mutex: ServerStateAccess,
+    topic_name: &TopicName,
+    p: &Patch,
+) -> DTPSR<()> {
+    let mut ss = ss_mutex.lock().await;
+
+    let (data_saved, raw_data) = match ss.get_last_insert(&topic_name)? {
+        None => {
+            // should not happen
+            panic!(
+                "patch_proxied: {topic_name:?} is empty",
+                topic_name = topic_name
+            );
+        }
+        Some(s) => (s.data_saved, s.raw_data),
+    };
+
+    let x0: serde_json::Value = raw_data.get_as_json()?;
+    let mut x = x0.clone();
+    debug!("patching:\n---{x0:?}---\n{p:?}\n");
+    patch(&mut x, p)?;
+    if x == x0 {
+        log::debug!("The patch didn't change anything:\n {p:?}");
+        return Ok(());
+    }
+    debug!("patching:\n---\n{x0:?}\n---\n{x:?}");
+
+    for po in &p.0 {
+        match po {
+            PatchOperation::Add(ao) => {
+                let pj: ProxyJob = serde_json::from_value(ao.value.clone())?;
+                let key = unescape_json_patch(&ao.path)[1..].to_string();
+                let topic_name = TopicName::from_dash_sep(key)?;
+                let url = parse_url_ext(&pj.url)?;
+                debug!(
+                    "adding proxy: topic_name = {topic_name:?} url = {url}",
+                    topic_name = topic_name,
+                    url = url
+                );
+                ss.add_proxy_connection(&topic_name, &url, ss_mutex.clone())?;
+            }
+            PatchOperation::Remove(ro) => {
+                let key = unescape_json_patch(&ro.path)[1..].to_string();
+                let topic_name = TopicName::from_dash_sep(key)?;
+                ss.remove_proxy_connection(&topic_name)?;
+            }
+            PatchOperation::Replace(_)
+            | PatchOperation::Move(_)
+            | PatchOperation::Copy(_)
+            | PatchOperation::Test(_) => {
+                return Err(DTPSError::NotImplemented(format!(
+                    "operation invalid with {p:?}"
+                )));
+            }
+        }
+    }
+    let new_content: RawData = RawData::encode_from_json(&x, &data_saved.content_type)?;
+    let new_clocks = data_saved.clocks.clone();
+
+    // let mut ss = ss_mutex.lock().await;
 
     // oq.push(&new_content, Some(new_clocks))?;
     let ds = ss.publish(

@@ -76,6 +76,8 @@ pub enum DTPSError {
     TokioRecvError(#[from] tokio::sync::broadcast::error::RecvError),
     #[error(transparent)]
     TokioJoinError(#[from] tokio::task::JoinError),
+    #[error(transparent)]
+    MPSCError(#[from] std::sync::mpsc::RecvError),
 }
 
 impl DTPSError {

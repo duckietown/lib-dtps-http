@@ -14,8 +14,8 @@ mod tests {
 
     use crate::test_python::check_server;
     use crate::{
-        create_topic, delete_topic, get_events_stream_inline, get_rawdata, init_logging,
-        parse_url_ext, patch_data, post_data, ContentInfo, RawData, TopicRefAdd, CONTENT_TYPE_CBOR,
+        add_proxy, create_topic, delete_topic, get_events_stream_inline, get_rawdata, init_logging,
+        patch_data, post_data, remove_proxy, ContentInfo, RawData, TopicRefAdd, CONTENT_TYPE_CBOR,
         CONTENT_TYPE_JSON,
     };
     use crate::{
@@ -68,7 +68,7 @@ mod tests {
             let ss = ssa.lock().await;
             let advertised_urls = ss.get_advertise_urls();
             let url = advertised_urls.get(0).unwrap();
-            parse_url_ext(url).unwrap()
+            crate::parse_url_ext(url).unwrap()
         };
 
         tokio::time::sleep(Duration::from_millis(1000)).await;
@@ -286,16 +286,11 @@ mod tests {
         let con_original = instance.con.join(topic_name.as_relative_url())?;
 
         let mounted_at = TopicName::from_dash_sep("mounted/here")?;
-        // Now proxy the thing
-        {
-            // let mut ss2 = instance2.ssa.lock().await;
-            let subname = format!("sub1");
 
-            instance2
-                .server
-                .add_proxied(&subname, &mounted_at, con_original.clone())
-                .await?;
-        }
+        instance2
+            .server
+            .add_proxied(&mounted_at, con_original.clone())
+            .await?;
 
         let con_proxied = instance2.con.join(mounted_at.as_relative_url())?;
 
@@ -466,6 +461,53 @@ mod tests {
             .expect_err("should fail");
 
         instance.finish()?;
+        Ok(())
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_proxy_manual(
+        #[future] instance: TestFixture,
+        #[future] mut instance2: TestFixture,
+    ) -> DTPSR<()> {
+        init_logging();
+        let instance = instance;
+        let mut instance2 = instance2;
+
+        let topic_name = TopicName::from_dash_sep("a/b")?;
+        let n = 10;
+
+        {
+            let mut ss = instance.ssa.lock().await;
+            ss.new_topic(
+                &topic_name,
+                None,
+                CONTENT_TYPE_CBOR,
+                &TopicProperties::rw(),
+                None,
+                None,
+            )?;
+            for i in 0..n {
+                let h = hashmap! {"value" => i};
+                ss.publish_object_as_cbor(&topic_name, &h, None)?;
+            }
+        }
+
+        let mounted_at = TopicName::from_dash_sep("mounted/here")?;
+
+        add_proxy(&instance2.con, &mounted_at, &instance.con).await?;
+        add_proxy(&instance2.con, &mounted_at, &instance.con).await?;
+        // sleep 5 seconds
+        tokio::time::sleep(Duration::from_millis(5000)).await;
+
+        let con_proxied = instance2.con.join(mounted_at.as_relative_url())?;
+        let rd = get_rawdata(&con_proxied).await?;
+
+        remove_proxy(&instance2.con, &mounted_at).await?;
+
+        instance.finish()?;
+        instance2.finish()?;
         Ok(())
     }
 }
