@@ -156,11 +156,11 @@ impl DTPSError {
 impl warp::reject::Reject for DTPSError {}
 
 pub async fn handle_rejection(err: Rejection) -> std::result::Result<impl Reply, Rejection> {
-    debug!("handle_rejection: {:?}", err);
+    debug!("handle_rejection: {:#?}", err);
     if let Some(custom_error) = err.find::<DTPSError>() {
         let status_code = custom_error.status_code();
 
-        let error_message = format!("{}\n\n{:?}", status_code, custom_error);
+        let error_message = format!("{}\n\n{:#?}", status_code, custom_error);
 
         if status_code != 404 {
             error!("{}", error_message);

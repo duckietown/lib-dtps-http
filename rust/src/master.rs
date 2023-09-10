@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::string::ToString;
+use strip_ansi_escapes::strip;
 
 use bytes::Bytes;
 use futures::stream::SplitSink;
@@ -81,7 +82,7 @@ pub async fn serve_master_post(
     }
 
     return match ds {
-        TypeOFSource::OurQueue(topic_name, _, _) => {
+        TypeOFSource::OurQueue(topic_name, _) => {
             debug!("Pushing to topic {:?}", topic_name);
             handle_topic_post(&topic_name, ss_mutex, &rd).await
         }
@@ -247,7 +248,7 @@ pub async fn serve_master_head(
     };
     // debug!("serve_master_head: ds: {:?}", ds);
     match &ds {
-        TypeOFSource::OurQueue(topic_name, _, _) => {
+        TypeOFSource::OurQueue(topic_name, _) => {
             let x: &ObjectQueue;
             let ss = ss_mutex.lock().await;
             match ss.oqs.get(&topic_name) {
@@ -298,23 +299,23 @@ pub async fn serve_master_head(
             // not_supported
         }
         TypeOFSource::Compose(c) => {
-            if c.is_root {
-                let ss = ss_mutex.lock().await;
-                let topic_name = TopicName::root();
-                let x: &ObjectQueue = ss.oqs.get(&topic_name).unwrap();
-
-                let empty_vec: Vec<u8> = Vec::new();
-                let mut resp = Response::new(Body::from(empty_vec));
-                let h = resp.headers_mut();
-                utils_headers::put_source_headers(h, &x.tr.origin_node, &x.tr.unique_id);
-
-                utils_headers::put_meta_headers(h, &ds.get_properties());
-                let suffix = topic_name.as_relative_url();
-                put_alternative_locations(&ss, h, &suffix);
-                utils_headers::put_common_headers(&ss, h);
-                return Ok(resp.into());
-            } else {
-            }
+            // if c.topic_name.is_root() {
+            //     let ss = ss_mutex.lock().await;
+            //     let topic_name = TopicName::root();
+            //     let x: &ObjectQueue = ss.oqs.get(&topic_name).unwrap();
+            //
+            //     let empty_vec: Vec<u8> = Vec::new();
+            //     let mut resp = Response::new(Body::from(empty_vec));
+            //     let h = resp.headers_mut();
+            //     utils_headers::put_source_headers(h, &x.tr.origin_node, &x.tr.unique_id);
+            //
+            //     utils_headers::put_meta_headers(h, &ds.get_properties());
+            //     let suffix = topic_name.as_relative_url();
+            //     put_alternative_locations(&ss, h, &suffix);
+            //     utils_headers::put_common_headers(&ss, h);
+            //     return Ok(resp.into());
+            // } else {
+            // }
         }
         TypeOFSource::Transformed(..) => {}
         TypeOFSource::Digest(..) => {}
@@ -472,9 +473,13 @@ pub async fn serve_master_get(
     let resd = match resd0 {
         Ok(x) => x,
         Err(s) => {
+            let desc = format!("Cannot resolve_data_single for:\n{ds:#?}:\n{s:?}");
+            // escape special characters
+            let code = s.status_code();
+            let desc = format!("{code}\n\n{desc}");
             let res = http::Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::from(s.to_string()))
+                .status(s.status_code())
+                .body(Body::from(strip(desc)))
                 .unwrap();
             return Ok(res);
         }
@@ -645,11 +650,11 @@ pub async fn handle_websocket_generic2(
             error_with_info!("{s}");
             let msg = WarpMessage::text("closing with error");
             let _ = ws_tx.send(msg).await.map_err(|e| {
-                error_with_info!("Cnnot send closing error: {:?}", e);
+                error_with_info!("Cannot send closing error: {:?}", e);
             });
             let msg = WarpMessage::close_with(close_code, s);
             let _ = ws_tx.send(msg).await.map_err(|e| {
-                error_with_info!("Cnnot send closing error: {:?}", e);
+                error_with_info!("Cannot send closing error: {:?}", e);
             });
         }
     }
@@ -675,20 +680,20 @@ pub async fn handle_websocket_generic2_(
     // let ds = interpret_path(&path, &query, &referrer, state.clone()).await?;
 
     return match &ds {
-        TypeOFSource::Compose(sc) => {
-            if sc.is_root {
-                let topic_name = TopicName::root();
-                spawn(do_receiving(topic_name.clone(), state.clone(), receiver));
+        TypeOFSource::Compose(_) => {
+            // if sc.is_root {
+            //     let topic_name = TopicName::root();
+            //     spawn(do_receiving(topic_name.clone(), state.clone(), receiver));
+            //
+            //     return handle_websocket_queue(ws_tx, state, topic_name, send_data).await;
+            // } else {
+            let stream = ds.get_data_stream(path.as_str(), state).await?;
 
-                return handle_websocket_queue(ws_tx, state, topic_name, send_data).await;
-            } else {
-                let stream = ds.get_data_stream(path.as_str(), state).await?;
-
-                handle_websocket_data_stream(ws_tx, stream, send_data).await
-                // not_implemented!("handle_websocket_generic2 not implemented TypeOFSource::Compose")
-            }
+            handle_websocket_data_stream(ws_tx, stream, send_data).await
+            // not_implemented!("handle_websocket_generic2 not implemented TypeOFSource::Compose")
+            // }
         }
-        TypeOFSource::OurQueue(topic_name, _, _) => {
+        TypeOFSource::OurQueue(topic_name, _) => {
             spawn(do_receiving(topic_name.clone(), state.clone(), receiver));
 
             return handle_websocket_queue(ws_tx, state, topic_name.clone(), send_data).await;

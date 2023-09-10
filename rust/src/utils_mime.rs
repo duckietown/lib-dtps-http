@@ -22,6 +22,7 @@ pub fn identify_content_presentation(content_type: &str) -> Option<&'static str>
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ContentPresentation {
     CBOR,
     JSON,

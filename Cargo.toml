@@ -50,6 +50,7 @@ tungstenite = "0.19"
 url = "2"
 warp = "0.3.5"
 json-patch = "*"
+strip-ansi-escapes = "0.2.0"
 
 [target.'cfg(target_os = "wasi")'.dependencies]
 js-sys = "0.3"

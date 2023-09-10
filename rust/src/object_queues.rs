@@ -8,7 +8,10 @@ use sha256::digest;
 use tokio::sync::broadcast;
 
 use crate::structures::TopicRefInternal;
-use crate::{merge_clocks, Clocks, MinMax, CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, DTPSR};
+use crate::{
+    identify_presentation, merge_clocks, Clocks, ContentPresentation, DTPSError, MinMax,
+    ServerState, CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, DTPSR,
+};
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, PartialEq)]
 pub struct RawData {
@@ -45,6 +48,56 @@ impl RawData {
     }
     pub fn from_json_value(x: &serde_json::Value) -> DTPSR<Self> {
         Ok(RawData::json(serde_json::to_vec(x)?))
+    }
+    /// Deserializes the content of this object as a given type.
+    /// The type must implement serde::Deserialize.
+    /// It works only for CBOR, JSON and YAML.
+    pub fn interpret<'a, T>(&'a self) -> DTPSR<T>
+    where
+        T: Deserialize<'a> + Clone,
+    {
+        match self.presentation() {
+            ContentPresentation::CBOR => {
+                let v: T = serde_cbor::from_slice::<T>(&self.content)?;
+                Ok(v.clone())
+            }
+            ContentPresentation::JSON => {
+                let v: T = serde_json::from_slice::<T>(&self.content)?;
+                Ok(v.clone())
+            }
+            ContentPresentation::YAML => {
+                let v: T = serde_yaml::from_slice::<T>(&self.content)?;
+                Ok(v.clone())
+            }
+            ContentPresentation::PlainText => DTPSError::other("cannot interpret plain text"),
+            ContentPresentation::Other => DTPSError::other("cannot interpret unknown content type"),
+        }
+    }
+
+    pub fn presentation(&self) -> ContentPresentation {
+        identify_presentation(&self.content_type)
+    }
+
+    pub fn try_translate(&self, ct: &str) -> DTPSR<Self> {
+        if self.content_type == ct {
+            return Ok(self.clone());
+        }
+        let mine = identify_presentation(self.content_type.as_str());
+        let desired = identify_presentation(ct);
+
+        let value = self.get_as_cbor()?;
+        let bytes = match desired {
+            ContentPresentation::CBOR => serde_cbor::to_vec(&value)?,
+            ContentPresentation::JSON => serde_json::to_vec(&value)?,
+            ContentPresentation::YAML => Bytes::from(serde_yaml::to_string(&value)?).to_vec(),
+            ContentPresentation::PlainText | ContentPresentation::Other => {
+                return DTPSError::other(format!(
+                    "cannot translate from {:?} to {:?}",
+                    mine, desired
+                ));
+            }
+        };
+        Ok(RawData::new(bytes, ct))
     }
 }
 
@@ -107,10 +160,29 @@ impl ObjectQueue {
         v
     }
 
-    pub fn you_are_being_deleted(&mut self) {
+    pub fn you_are_being_deleted(&self) {
+
         // is it all done with the drop?
     }
-    pub fn push(&mut self, data: &RawData, previous_clocks: Option<Clocks>) -> DTPSR<DataSaved> {
+    pub fn push(
+        &mut self,
+        data0: &RawData,
+        previous_clocks: Option<Clocks>,
+    ) -> DTPSR<(RawData, DataSaved, Vec<String>)> {
+        let expect = self.tr.content_info.storage.content_type.clone();
+        let obtained = data0.content_type.clone();
+        let same = expect == obtained;
+        let data = if !same {
+            match data0.try_translate(&expect) {
+                Ok(d) => d,
+                Err(e) => {
+                    // panic!("{e}");
+                    return Err(e);
+                }
+            }
+        } else {
+            data0.clone()
+        };
         let now = Local::now().timestamp_nanos();
 
         let mut clocks = self.current_clocks(now);
@@ -135,10 +207,12 @@ impl ObjectQueue {
         };
         self.saved.insert(saved_data.index, saved_data.clone());
         self.stored.push(saved_data.index);
+        let mut dropped = Vec::new();
         if let Some(max_history) = self.max_history {
             while self.stored.len() > max_history {
                 let index = self.stored.remove(0);
-                self.saved.remove(&index);
+                let ds = self.saved.remove(&index).unwrap();
+                dropped.push(ds.digest);
             }
         }
 
@@ -152,7 +226,7 @@ impl ObjectQueue {
             };
             self.tx_notification.send(notification).unwrap(); // can only fail if there are no receivers
         }
-        return Ok(saved_data);
+        return Ok((data, saved_data, dropped));
     }
 
     pub fn subscribe_insert_notification(&self) -> broadcast::Receiver<InsertNotification> {

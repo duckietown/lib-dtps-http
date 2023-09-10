@@ -54,7 +54,7 @@ impl Transforms {
 #[derive(Debug, Clone)]
 pub struct SourceComposition {
     pub topic_name: TopicName,
-    pub is_root: bool,
+    // pub is_root: bool,
     pub compose: HashMap<Vec<String>, Box<TypeOFSource>>,
     pub unique_id: String,
     pub origin_node: String,
@@ -105,7 +105,7 @@ pub struct ForwardedQueue {
 #[derive(Debug, Clone)]
 pub enum TypeOFSource {
     ForwardedQueue(ForwardedQueue),
-    OurQueue(TopicName, Vec<String>, TopicProperties),
+    OurQueue(TopicName, TopicProperties),
     MountedDir(TopicName, String, TopicProperties),
     MountedFile(TopicName, String, TopicProperties),
     Compose(SourceComposition),
@@ -125,7 +125,7 @@ impl TypeOFSource {
             TypeOFSource::ForwardedQueue(_q) => {
                 not_implemented!("get_inside for {self:#?} with {s:?}")
             }
-            TypeOFSource::OurQueue(_, _, _p) => {
+            TypeOFSource::OurQueue(..) => {
                 // TODO: this is where you would check the schema
                 // not_implemented!("get_inside for {self:#?} with {s:?}")
                 Ok(TypeOFSource::Transformed(
@@ -291,7 +291,7 @@ impl ResolveDataSingle for TypeOFSource {
 
                 Ok(ResolvedData::RawData(rd))
             }
-            TypeOFSource::OurQueue(q, _, _) => our_queue(q, ss_mutex).await,
+            TypeOFSource::OurQueue(q, _) => resolve_our_queue(q, ss_mutex).await,
             TypeOFSource::Compose(_sc) => {
                 let index = self.get_meta_index(presented_as, ss_mutex).await?;
                 // debug!("Compose index intenral:\n {:#?}", index);
@@ -364,7 +364,7 @@ impl ResolveDataSingle for TypeOFSource {
             TypeOFSource::History(s) => {
                 let x: &TypeOFSource = s;
                 match x {
-                    TypeOFSource::OurQueue(topic, _, _) => {
+                    TypeOFSource::OurQueue(topic, _) => {
                         let ss = ss_mutex.lock().await;
                         let q = ss.get_queue(topic)?;
                         let mut available: HashMap<usize, DataReady> = HashMap::new();
@@ -428,7 +428,7 @@ impl DataProps for TypeOFSource {
                 patchable: false,
             },
             TypeOFSource::ForwardedQueue(q) => q.properties.clone(),
-            TypeOFSource::OurQueue(_, _, props) => props.clone(),
+            TypeOFSource::OurQueue(_, props) => props.clone(),
 
             TypeOFSource::Compose(sc) => sc.get_properties(),
             TypeOFSource::Transformed(s, _) => s.get_properties(),
@@ -492,7 +492,7 @@ impl TypeOFSource {
             TypeOFSource::ForwardedQueue(q) => {
                 todo!("get_stream for {self:#?} with {self:?}")
             }
-            TypeOFSource::OurQueue(topic_name, _, props) => {
+            TypeOFSource::OurQueue(topic_name, ..) => {
                 let (rx, first, channel_info) = {
                     let ss = ssa.lock().await;
 
@@ -502,7 +502,6 @@ impl TypeOFSource {
                     let channel_info = get_channel_info_message(oq);
                     (rx, first, channel_info)
                 };
-                // let stream = UnboundedReceiverStream::new(rx);
 
                 Ok(DataStream {
                     channel_info,
@@ -513,6 +512,9 @@ impl TypeOFSource {
             }
 
             TypeOFSource::Compose(sc) => {
+                // if sc.topic_name.is_root() {
+                //
+                // }
                 todo!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::Transformed(s, _) => {
@@ -753,7 +755,10 @@ async fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<Resolved
     }
 }
 
-async fn our_queue(topic_name: &TopicName, ss_mutex: ServerStateAccess) -> DTPSR<ResolvedData> {
+async fn resolve_our_queue(
+    topic_name: &TopicName,
+    ss_mutex: ServerStateAccess,
+) -> DTPSR<ResolvedData> {
     let ss = ss_mutex.lock().await;
     if !ss.oqs.contains_key(topic_name) {
         return Ok(NotFound(format!("No queue with name {:?}", topic_name)));
@@ -767,7 +772,10 @@ async fn our_queue(topic_name: &TopicName, ss_mutex: ServerStateAccess) -> DTPSR
         }
         Some(v) => {
             let data_saved = oq.saved.get(v).unwrap();
-            let content = ss.get_blob_bytes(&data_saved.digest)?;
+            let content = context!(
+                ss.get_blob_bytes(&data_saved.digest),
+                "Cannot get blob bytes for topic {topic_name:?}:\n {data_saved:#?}"
+            )?;
             let raw_data = RawData::new(content, &data_saved.content_type);
             Ok(ResolvedData::RawData(raw_data))
         }
@@ -867,10 +875,10 @@ impl TypeOFSource {
 
                 // Err(DTPSError::NotImplemented("get_meta_index for forwarded queue".to_string()))
             }
-            TypeOFSource::OurQueue(topic_name, _, _) => {
-                if topic_name.is_root() {
-                    panic!("get_meta_index for empty topic name");
-                }
+            TypeOFSource::OurQueue(topic_name, _) => {
+                // if topic_name.is_root() {
+                //     panic!("get_meta_index for empty topic name");
+                // }
                 let ss = ss_mutex.lock().await;
                 let node_id = ss.node_id.clone();
 
@@ -1225,6 +1233,11 @@ fn resolve(
 ) -> DTPSR<TypeOFSource> {
     let mut subtopics: Vec<(TopicName, Vec<String>, Vec<String>, TypeOFSource)> = vec![];
     let mut subtopics_vec = vec![];
+
+    // if path_components.len() == 0 && ends_with_dash {
+    //     p =
+    //     return Ok(TypeOFSource::OurQueue(TopicName::root(), p));
+    // }
     // log::debug!(" = all_sources =\n{:#?} ", all_sources);
     for (k, source) in all_sources.iter() {
         // debug!(" = k = {:?} ", k);
@@ -1235,6 +1248,9 @@ fn resolve(
         if topic_components.len() == 0 {
             continue;
         }
+        // if topic_components.len() == 0 {
+        //     continue;
+        // }
 
         match is_prefix_of(&topic_components, &path_components) {
             None => {}
@@ -1270,7 +1286,7 @@ fn resolve(
     let topic_name = TopicName::from_components(path_components);
     let mut sc = SourceComposition {
         topic_name,
-        is_root: false,
+        // is_root: false,
         compose: hashmap! {},
         unique_id,
         origin_node,
@@ -1301,11 +1317,7 @@ pub fn iterate_type_of_sources(
     for (topic_name, oq) in s.oqs.iter() {
         res.push((
             topic_name.clone(),
-            TypeOFSource::OurQueue(
-                topic_name.clone(),
-                topic_name.to_components(),
-                oq.tr.properties.clone(),
-            ),
+            TypeOFSource::OurQueue(topic_name.clone(), oq.tr.properties.clone()),
         ));
     }
 

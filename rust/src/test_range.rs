@@ -499,7 +499,7 @@ mod tests {
         add_proxy(&instance2.con, &mounted_at, &instance.con).await?;
         add_proxy(&instance2.con, &mounted_at, &instance.con).await?;
         // sleep 5 seconds
-        tokio::time::sleep(Duration::from_millis(5000)).await;
+        tokio::time::sleep(Duration::from_millis(2000)).await;
 
         let con_proxied = instance2.con.join(mounted_at.as_relative_url())?;
         let rd = get_rawdata(&con_proxied).await?;

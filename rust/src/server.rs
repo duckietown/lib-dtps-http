@@ -11,7 +11,7 @@ use clap::Parser;
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use indent::indent_all_with;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use maplit::hashmap;
 use maud::PreEscaped;
 use maud::{html, DOCTYPE};
@@ -1146,24 +1146,50 @@ async fn collect_statuses(
 
     {
         let mut ss = ssa.lock().await;
+
         ss.publish_object_as_cbor(&res, &cur, None)?;
     }
     loop {
         let inot = match rx.recv().await {
             Ok(inot) => inot,
             Err(e) => match e {
-                RecvError::Closed => break,
-                RecvError::Lagged(_) => continue,
+                RecvError::Closed => {
+                    debug!("collect_statuses: finished collecting");
+                    break;
+                }
+                RecvError::Lagged(_) => {
+                    error!("collect_statuses: lagged");
+                    continue;
+                }
             },
         };
+        let csn0 = inot.raw_data.interpret::<ComponentStatusNotification>();
 
-        let csn: ComponentStatusNotification =
-            serde_cbor::from_slice(inot.raw_data.content.as_ref()).unwrap();
+        let csn = if let Err(e) = csn0 {
+            error!("Cannot parse status notification: {:?}", e);
+            continue;
+        } else {
+            csn0.unwrap()
+        };
 
         cur.incorporate(csn);
         {
             let mut ss = ssa.lock().await;
-            ss.publish_object_as_cbor(&res, &cur, None)?;
+            let r = ss.publish_object_as_cbor(&res, &cur, None);
+            if let Err(e) = r {
+                error!("Cannot publish status summary: {:?}", e);
+                continue;
+            }
+        }
+
+        {
+            let mut ss = ssa.lock().await;
+            match ss.publish_object_as_cbor(&res, &cur, None) {
+                Ok(_) => {}
+                Err(e) => {
+                    error!("Cannot publish status summary: {:?}", e);
+                }
+            }
         }
     }
 

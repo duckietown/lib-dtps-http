@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -82,6 +82,12 @@ pub struct LocalDirInfo {
     pub local_dir: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct SavedBlob {
+    pub content: Vec<u8>,
+    pub who_needs_it: HashSet<String>,
+}
+
 #[derive(Debug)]
 pub struct ServerState {
     pub node_started: i64,
@@ -101,7 +107,7 @@ pub struct ServerState {
 
     /// The proxied other resources
     pub proxied_other: HashMap<TopicName, OtherProxyInfo>,
-    pub blobs: HashMap<String, Vec<u8>>,
+    pub blobs: HashMap<String, SavedBlob>,
 
     advertise_urls: Vec<String>,
 
@@ -236,7 +242,7 @@ impl ServerState {
         };
 
         ss.new_topic(
-            &TopicName::from_relative_url(TOPIC_LIST_NAME)?,
+            &TopicName::from_dash_sep(TOPIC_LIST_NAME)?,
             None,
             CONTENT_TYPE_JSON,
             &p,
@@ -244,7 +250,7 @@ impl ServerState {
             Some(10),
         )?;
         ss.new_topic(
-            &TopicName::from_relative_url(TOPIC_LIST_CLOCK)?,
+            &TopicName::from_dash_sep(TOPIC_LIST_CLOCK)?,
             None,
             CONTENT_TYPE_JSON,
             &p,
@@ -252,7 +258,7 @@ impl ServerState {
             Some(10),
         )?;
         ss.new_topic(
-            &TopicName::from_relative_url(TOPIC_LIST_AVAILABILITY)?,
+            &TopicName::from_dash_sep(TOPIC_LIST_AVAILABILITY)?,
             None,
             CONTENT_TYPE_JSON,
             &p,
@@ -260,7 +266,7 @@ impl ServerState {
             Some(10),
         )?;
         ss.new_topic(
-            &TopicName::from_relative_url(TOPIC_LOGS)?,
+            &TopicName::from_dash_sep(TOPIC_LOGS)?,
             None,
             CONTENT_TYPE_JSON,
             &p,
@@ -269,7 +275,7 @@ impl ServerState {
         )?;
 
         ss.new_topic(
-            &TopicName::from_relative_url(TOPIC_STATE_NOTIFICATION)?,
+            &TopicName::from_dash_sep(TOPIC_STATE_NOTIFICATION)?,
             None,
             CONTENT_TYPE_YAML,
             &p,
@@ -278,7 +284,7 @@ impl ServerState {
         )?;
 
         ss.new_topic(
-            &TopicName::from_relative_url(TOPIC_STATE_SUMMARY)?,
+            &TopicName::from_dash_sep(TOPIC_STATE_SUMMARY)?,
             None,
             CONTENT_TYPE_YAML,
             &p,
@@ -296,14 +302,14 @@ impl ServerState {
         };
 
         ss.new_topic(
-            &TopicName::from_relative_url(TOPIC_PROXIED)?,
+            &TopicName::from_dash_sep(TOPIC_PROXIED)?,
             None,
             CONTENT_TYPE_JSON,
             &p,
             Some(schema_for!(Proxied)),
             Some(1),
         )?;
-        ss.publish_json(&TopicName::from_relative_url(TOPIC_PROXIED)?, "{}", None)?;
+        ss.publish_json(&TopicName::from_dash_sep(TOPIC_PROXIED)?, "{}", None)?;
 
         Ok(ss)
     }
@@ -394,7 +400,7 @@ impl ServerState {
         self.proxied.remove(topic_name);
         self.proxied_topics.retain(|k, _| {
             if let Some(_) = is_prefix_of(topic_name.as_components(), k.as_components()) {
-                debug!("Removing proxy topic {:?}", topic_name);
+                debug!("Removing proxy topic {:?}", k);
                 false
             } else {
                 true
@@ -520,8 +526,20 @@ impl ServerState {
             return Err(DTPSError::TopicNotFound(topic_name.to_relative_url()));
         }
         log::info!("Removing topic {topic_name:?}");
-        let oq = self.oqs.get_mut(topic_name).unwrap();
-        oq.you_are_being_deleted();
+        let dropped_digests = {
+            let mut todrop = Vec::new();
+            let oq = self.oqs.get_mut(topic_name).unwrap();
+            for data_saved in oq.saved.values() {
+                todrop.push(data_saved.digest.clone());
+            }
+            oq.you_are_being_deleted();
+            todrop
+        };
+
+        for digest in dropped_digests {
+            self.release_blob(&digest, topic_name.as_dash_sep());
+        }
+
         self.oqs.remove(topic_name);
         self.update_my_topic()
     }
@@ -529,7 +547,14 @@ impl ServerState {
     fn update_my_topic(&mut self) -> DTPSR<()> {
         let index_internal = self.create_topic_index();
         let index = index_internal.to_wire(None);
-        self.publish_object_as_cbor(&TopicName::root(), &index, None)?;
+        let data_cbor = serde_cbor::to_vec(&index).unwrap();
+        // self.publish(topic_name, content, CONTENT_TYPE_CBOR, clocks)content_
+        self.publish(
+            &TopicName::root(),
+            &data_cbor,
+            CONTENT_TYPE_DTPS_INDEX_CBOR,
+            None,
+        )?;
 
         let mut topics: Vec<String> = Vec::new();
         let oqs = &mut self.oqs;
@@ -553,33 +578,75 @@ impl ServerState {
         content_type: C,
         clocks: Option<Clocks>,
     ) -> DTPSR<DataSaved> {
-        let content_type = content_type.as_ref();
-        let content = content.as_ref();
-        // self.make_sure_topic_exists(topic_name, &p);
-        let v = content.to_vec();
-        let data = RawData {
-            content: Bytes::from(v),
-            content_type: content_type.to_string(),
-        };
-        self.save_blob(&data.digest(), &data.content);
         if !self.oqs.contains_key(&topic_name) {
             return Err(DTPSError::TopicNotFound(topic_name.to_relative_url()));
         }
-        let oq = self.oqs.get_mut(&topic_name).unwrap();
 
-        oq.push(&data, clocks)
+        let data0 = RawData::new(content, content_type);
+
+        let oq = self.oqs.get_mut(&topic_name).unwrap();
+        let (data, ds, dropped_digests) = oq.push(&data0, clocks)?;
+        // Note: we now transform the data (possibly) to the expected content type
+        let new_digest = ds.digest.clone();
+        let comment = format!("Index = {}", ds.index);
+        if ds.digest != data.digest() {
+            panic!("Internal inconsistency: digest mismatch");
+        }
+        self.save_blob(
+            &new_digest,
+            &data.content,
+            topic_name.as_dash_sep(),
+            &comment,
+        );
+        for digest in dropped_digests {
+            self.release_blob(&digest, topic_name.as_dash_sep());
+        }
+        Ok(ds)
     }
 
-    pub fn save_blob(&mut self, digest: &str, content: &[u8]) {
-        self.blobs.insert(digest.to_string(), content.to_vec());
+    pub fn release_blob(&mut self, digest: &str, who: &str) {
+        log::debug!("Del blob {digest} for {who:?}");
+
+        match self.blobs.get_mut(digest) {
+            None => {
+                log::warn!("Blob {digest} not found");
+            }
+            Some(sb) => {
+                sb.who_needs_it.remove(who);
+                if sb.who_needs_it.is_empty() {
+                    self.blobs.remove(digest);
+                }
+            }
+        }
+    }
+
+    pub fn save_blob(&mut self, digest: &str, content: &[u8], who: &str, comment: &str) {
+        log::debug!("Add blob {digest} for {who:?}: {comment}");
+
+        match self.blobs.get_mut(digest) {
+            None => {
+                let mut sb = SavedBlob {
+                    content: content.to_vec(),
+                    who_needs_it: HashSet::new(),
+                };
+                sb.who_needs_it.insert(who.to_string());
+                self.blobs.insert(digest.to_string(), sb);
+            }
+            Some(sb) => {
+                sb.who_needs_it.insert(who.to_string());
+            }
+        }
     }
 
     pub fn get_blob(&self, digest: &str) -> Option<&Vec<u8>> {
-        return self.blobs.get(digest);
+        return self.blobs.get(digest).map(|v| &v.content);
     }
 
     pub fn get_blob_bytes(&self, digest: &str) -> DTPSR<Bytes> {
-        let x = self.blobs.get(digest).map(|v| Bytes::from(v.clone()));
+        let x = self
+            .blobs
+            .get(digest)
+            .map(|v| Bytes::from(v.content.clone()));
         match x {
             Some(v) => Ok(v),
             None => {
@@ -807,7 +874,11 @@ impl ServerState {
             None => Ok(None),
             Some(index) => {
                 let data_saved = q.saved.get(index).unwrap();
-                let content = self.get_blob_bytes(&data_saved.digest)?;
+                let digest = &data_saved.digest;
+                let content = context!(
+                    self.get_blob_bytes(digest),
+                    "Error getting blob {digest} for topic {tn:?}",
+                )?;
 
                 Ok(Some(InsertNotification {
                     data_saved: data_saved.clone(),
@@ -836,7 +907,7 @@ impl ServerState {
         status: Status,
         message: Option<String>,
     ) -> DTPSR<()> {
-        let tn = TopicName::from_relative_url(TOPIC_STATE_NOTIFICATION)?;
+        let tn = TopicName::from_dash_sep(TOPIC_STATE_NOTIFICATION)?;
         let ob = ComponentStatusNotification {
             component: component.clone(),
             status,
@@ -1069,6 +1140,7 @@ pub fn add_from_response(
     // debug!("topics_index: tii: \n{:#?}", tii);
     for (its_topic_name, tr) in tii.topics.iter() {
         if its_topic_name.is_root() {
+            // ok
             continue; // TODO
         }
 
