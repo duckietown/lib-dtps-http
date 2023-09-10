@@ -5,7 +5,6 @@ use anyhow::Result;
 use http::StatusCode;
 use indent::indent_all_with;
 use log::{debug, error};
-use tokio::sync::broadcast::error::SendError;
 use warp::{Rejection, Reply};
 
 #[derive(thiserror::Error, Debug)]

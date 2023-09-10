@@ -39,9 +39,9 @@ pub static URL_HISTORY: &'static str = ":history";
 #[cfg(test)]
 
 mod test {
-    use super::*;
-
     use mime::Mime;
+
+    use super::*;
 
     #[test]
     fn test_mime_parsing() {

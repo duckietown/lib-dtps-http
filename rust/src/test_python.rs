@@ -147,7 +147,7 @@ async fn read_notifications(
 
 async fn check_topic(topic: TopicName, con: TypeOfConnection) -> DTPSR<()> {
     log::debug!("check_topic {topic:?}...");
-    let data = get_rawdata(&con).await?;
+    let _data = get_rawdata(&con).await?;
 
     let resp = make_request(&con, hyper::Method::GET, b"", None, Some("text/html")).await?;
     let x = interpret_resp(&con, resp).await?;

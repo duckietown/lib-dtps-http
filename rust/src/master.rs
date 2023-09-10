@@ -291,7 +291,7 @@ pub async fn serve_master_head(
 
             // not_supported
         }
-        TypeOFSource::Compose(c) => {
+        TypeOFSource::Compose(_c) => {
             // if c.topic_name.is_root() {
             //     let ss = ss_mutex.lock().await;
             //     let topic_name = TopicName::root();
@@ -478,12 +478,12 @@ pub async fn serve_master_get(
         }
     };
     // debug!("serve_master: resolved: {:#?}", resd);
-    let rd: object_queues::RawData = match resd {
+    let rd: RawData = match resd {
         ResolvedData::RawData(rd) => rd,
         ResolvedData::Regular(reg) => {
             let cbor_bytes = serde_cbor::to_vec(&reg).unwrap();
             let bytes = Bytes::from(cbor_bytes);
-            object_queues::RawData::cbor(bytes)
+            RawData::cbor(bytes)
         }
         ResolvedData::NotAvailableYet(s) => {
             let res = http::Response::builder()
@@ -773,7 +773,7 @@ pub async fn handle_websocket_forwarded(
     subscription: TopicName,
     its_topic_name: TopicName,
     ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
-    receiver: UnboundedReceiverStream<MsgClientToServer>,
+    _receiver: UnboundedReceiverStream<MsgClientToServer>,
     send_data: bool,
 ) -> DTPSR<()> {
     let url = {

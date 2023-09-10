@@ -42,11 +42,13 @@ pub enum MsgServerToClient {
 #[cfg(test)]
 mod test {
     use log::info;
+    use serde_cbor::{from_slice, to_vec};
+
+    use crate::init_logging;
+
     // create a test that checks the serialization of MsgServerToClient to CBOR
     // and back
     use super::*;
-    use crate::init_logging;
-    use serde_cbor::{from_slice, to_vec};
 
     #[test]
     fn test_msg_server_to_client() {

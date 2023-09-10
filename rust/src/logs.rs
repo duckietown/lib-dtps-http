@@ -1,4 +1,5 @@
 use std::env;
+use std::sync::Once;
 
 use crate::built_info;
 
@@ -38,8 +39,6 @@ fn init_logging_() {
     }
     env_logger::init();
 }
-
-use std::sync::Once;
 
 // Wrap the function call with the Once type
 pub fn init_logging() {

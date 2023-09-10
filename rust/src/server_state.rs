@@ -620,7 +620,7 @@ impl ServerState {
         }
     }
 
-    pub fn save_blob(&mut self, digest: &str, content: &[u8], who: &str, comment: &str) {
+    pub fn save_blob(&mut self, digest: &str, content: &[u8], who: &str, _comment: &str) {
         // log::debug!("Add blob {digest} for {who:?}: {comment}");
 
         match self.blobs.get_mut(digest) {

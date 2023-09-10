@@ -1,6 +1,7 @@
+use log::debug;
+
 #[cfg(target_os = "linux")]
 use getaddrs::InterfaceAddrs;
-use log::debug;
 
 #[cfg(target_os = "linux")]
 pub fn get_other_addresses() -> Vec<String> {

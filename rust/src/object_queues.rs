@@ -7,114 +7,11 @@ use serde::{Deserialize, Serialize};
 use sha256::digest;
 use tokio::sync::broadcast;
 
-use crate::structures::TopicRefInternal;
+use crate::TopicRefInternal;
 use crate::{
-    identify_presentation, merge_clocks, Clocks, ContentPresentation, DTPSError, MinMax,
-    CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, DTPSR,
+    identify_presentation, merge_clocks, Clocks, ContentPresentation, DTPSError, DataSaved, MinMax,
+    RawData, CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, DTPSR,
 };
-
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, PartialEq)]
-pub struct RawData {
-    pub content: Bytes,
-    pub content_type: String,
-}
-
-impl RawData {
-    pub fn new<S: AsRef<[u8]>, T: AsRef<str>>(content: S, content_type: T) -> RawData {
-        RawData {
-            content: Bytes::from(content.as_ref().to_vec().clone()).clone(),
-            content_type: content_type.as_ref().to_string().clone(),
-        }
-    }
-    pub fn cbor<S: AsRef<[u8]>>(content: S) -> RawData {
-        Self::new(content, CONTENT_TYPE_CBOR)
-    }
-    pub fn json<S: AsRef<[u8]>>(content: S) -> RawData {
-        Self::new(content, CONTENT_TYPE_JSON)
-    }
-    pub fn digest(&self) -> String {
-        let d = digest(self.content.as_ref());
-        format!("sha256:{}", d)
-    }
-
-    pub fn represent_as_json<T: Serialize>(x: T) -> DTPSR<Self> {
-        Ok(RawData::new(serde_json::to_vec(&x)?, CONTENT_TYPE_JSON))
-    }
-    pub fn represent_as_cbor<T: Serialize>(x: T) -> DTPSR<Self> {
-        Ok(RawData::new(serde_cbor::to_vec(&x)?, CONTENT_TYPE_CBOR))
-    }
-    pub fn represent_as_cbor_ct<T: Serialize>(x: T, ct: &str) -> DTPSR<Self> {
-        Ok(RawData::new(serde_cbor::to_vec(&x)?, ct.to_string()))
-    }
-    pub fn from_cbor_value(x: &serde_cbor::Value) -> DTPSR<Self> {
-        Ok(RawData::cbor(serde_cbor::to_vec(x)?))
-    }
-    pub fn from_json_value(x: &serde_json::Value) -> DTPSR<Self> {
-        Ok(RawData::json(serde_json::to_vec(x)?))
-    }
-    /// Deserializes the content of this object as a given type.
-    /// The type must implement serde::Deserialize.
-    /// It works only for CBOR, JSON and YAML.
-    pub fn interpret<'a, T>(&'a self) -> DTPSR<T>
-    where
-        T: Deserialize<'a> + Clone,
-    {
-        match self.presentation() {
-            ContentPresentation::CBOR => {
-                let v: T = serde_cbor::from_slice::<T>(&self.content)?;
-                Ok(v)
-            }
-            ContentPresentation::JSON => {
-                let v: T = serde_json::from_slice::<T>(&self.content)?;
-                Ok(v)
-            }
-            ContentPresentation::YAML => {
-                let v: T = serde_yaml::from_slice::<T>(&self.content)?;
-                Ok(v)
-            }
-            ContentPresentation::PlainText => DTPSError::other("cannot interpret plain text"),
-            ContentPresentation::Other => DTPSError::other("cannot interpret unknown content type"),
-        }
-    }
-
-    pub fn presentation(&self) -> ContentPresentation {
-        identify_presentation(&self.content_type)
-    }
-
-    pub fn try_translate(&self, ct: &str) -> DTPSR<Self> {
-        if self.content_type == ct {
-            return Ok(self.clone());
-        }
-        let mine = identify_presentation(self.content_type.as_str());
-        let desired = identify_presentation(ct);
-
-        let value = self.get_as_cbor()?;
-        let bytes = match desired {
-            ContentPresentation::CBOR => serde_cbor::to_vec(&value)?,
-            ContentPresentation::JSON => serde_json::to_vec(&value)?,
-            ContentPresentation::YAML => Bytes::from(serde_yaml::to_string(&value)?).to_vec(),
-            ContentPresentation::PlainText | ContentPresentation::Other => {
-                return DTPSError::other(format!(
-                    "cannot translate from {:?} to {:?}",
-                    mine, desired
-                ));
-            }
-        };
-        Ok(RawData::new(bytes, ct))
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct DataSaved {
-    pub origin_node: String,
-    pub unique_id: String,
-    pub index: usize,
-    pub time_inserted: i64,
-    pub clocks: Clocks,
-    pub content_type: String,
-    pub content_length: usize,
-    pub digest: String,
-}
 
 #[derive(Debug)]
 pub struct ObjectQueue {

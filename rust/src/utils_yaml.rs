@@ -1,5 +1,6 @@
 use maud::{html, Markup, Render};
 use serde_cbor::Value;
+
 //
 // pub fn generate_html_tree(input: &serde_yaml::Value) -> Markup {
 //     match input {

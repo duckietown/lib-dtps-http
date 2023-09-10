@@ -26,9 +26,10 @@ use crate::{
     get_inside, get_rawdata, is_prefix_of, merge_clocks, not_implemented, parse_url_ext,
     unescape_json_patch, utils, ChannelInfo, Clocks, ContentInfo, DTPSError, DataReady, DataSaved,
     ForwardingStep, History, InsertNotification, LinkBenchmark, OtherProxyInfo, ProxyJob, RawData,
+    ResolvedData,
     ResolvedData::{NotAvailableYet, NotFound, Regular},
-    ServerState, ServerStateAccess, TopicName, TopicReachabilityInternal, TopicRefAdd,
-    TopicRefInternal, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection,
+    ServerState, ServerStateAccess, TopicName, TopicProperties, TopicReachabilityInternal,
+    TopicRefAdd, TopicRefInternal, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection,
     TypeOfConnection::Relative,
     CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR, REL_URL_META,
     TOPIC_PROXIED, URL_HISTORY,
@@ -204,47 +205,6 @@ impl TypeOFSource {
 pub struct OtherProxied {
     path_and_query: String,
     op: OtherProxyInfo,
-}
-
-#[derive(Debug, Clone)]
-pub enum ResolvedData {
-    RawData(RawData),
-    Regular(CBORValue),
-    NotAvailableYet(String),
-    NotFound(String),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct TopicProperties {
-    pub streamable: bool,
-    pub pushable: bool,
-    pub readable: bool,
-    pub immutable: bool,
-    pub has_history: bool,
-    pub patchable: bool,
-}
-
-impl TopicProperties {
-    pub fn rw() -> Self {
-        TopicProperties {
-            streamable: true,
-            pushable: true,
-            readable: true,
-            immutable: false,
-            has_history: true,
-            patchable: true, // XXX
-        }
-    }
-    pub fn ro() -> Self {
-        TopicProperties {
-            streamable: true,
-            pushable: false,
-            readable: true,
-            immutable: false,
-            has_history: false,
-            patchable: false,
-        }
-    }
 }
 
 #[async_trait]
@@ -497,9 +457,9 @@ impl TypeOFSource {
         match self {
             TypeOFSource::Digest(_, _) => {
                 todo!("get_stream for {self:#?} with {self:?}");
-                let x = self.resolve_data_single(presented_as, ssa).await?;
+                let _x = self.resolve_data_single(presented_as, ssa).await?;
             }
-            TypeOFSource::ForwardedQueue(q) => {
+            TypeOFSource::ForwardedQueue(_q) => {
                 todo!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::OurQueue(topic_name, ..) => {
@@ -522,20 +482,20 @@ impl TypeOFSource {
             }
 
             TypeOFSource::Compose(sc) => get_stream_compose_meta(presented_as, ssa, sc).await,
-            TypeOFSource::Transformed(s, _) => {
+            TypeOFSource::Transformed(_s, _) => {
                 todo!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::Deref(d) => get_stream_compose_data(presented_as, ssa, d).await,
             TypeOFSource::OtherProxied(_) => {
                 todo!("get_stream for {self:#?} with {self:?}")
             }
-            TypeOFSource::MountedDir(_, _, props) => {
+            TypeOFSource::MountedDir(_, _, _props) => {
                 todo!("get_stream for {self:#?} with {self:?}")
             }
-            TypeOFSource::MountedFile(_, _, props) => {
+            TypeOFSource::MountedFile(_, _, _props) => {
                 todo!("get_stream for {self:#?} with {self:?}")
             }
-            TypeOFSource::Index(s) => {
+            TypeOFSource::Index(_s) => {
                 todo!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::Aliased(_, _) => {
@@ -587,7 +547,7 @@ async fn put_together(
                 }
                 clocks0 = merge_clocks(&clocks0, &clocks);
                 putinside(&mut first, &component, data)?;
-                let rd = crate::RawData::from_cbor_value(&first)?;
+                let rd = RawData::from_cbor_value(&first)?;
                 let time_inserted = Local::now().timestamp_nanos();
                 let data_saved = DataSaved {
                     origin_node: "".to_string(),
@@ -850,7 +810,7 @@ async fn get_stream_compose_data(
     let mut queue_created: i64 = Local::now().timestamp_nanos();
     let mut num_total = 0;
     let mut time_inserted = 0;
-    let mut clocks0 = Clocks::default();
+    let clocks0 = Clocks::default();
     let mut first = serde_cbor::value::Value::Map(BTreeMap::new());
 
     let mut components_active = HashSet::new();
@@ -1420,7 +1380,7 @@ pub async fn interpret_path(
 
 fn resolve(
     path_components: &Vec<String>,
-    ends_with_dash: bool,
+    _ends_with_dash: bool,
     all_sources: &Vec<(TopicName, TypeOFSource)>,
 ) -> DTPSR<TypeOFSource> {
     let mut subtopics: Vec<(TopicName, Vec<String>, Vec<String>, TypeOFSource)> = vec![];
