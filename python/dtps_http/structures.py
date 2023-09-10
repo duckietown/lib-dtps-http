@@ -1,7 +1,6 @@
-from typing import Dict, List, Union
 import json
 from dataclasses import asdict
-from typing import Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Union
 
 import cbor2
 from multidict import CIMultiDict
@@ -10,6 +9,8 @@ from pydantic.dataclasses import dataclass
 
 from .constants import HEADER_LINK_BENCHMARK, MIME_TEXT
 from .types import ContentType, NodeID, SourceID, TopicNameS, TopicNameV, URLString
+from .urls import URL
+
 
 __all__ = [
     "ChannelInfo",
@@ -24,6 +25,7 @@ __all__ = [
     "Metadata",
     "MinMax",
     "RawData",
+    "Registration",
     "ResourceAvailability",
     "TopicProperties",
     "TopicReachability",
@@ -346,3 +348,10 @@ class TransportData:
 class Metadata:
     sequence: int
     generated_ns: int
+
+
+@dataclass
+class Registration:
+    switchboard_url: "URL"
+    topic: TopicNameV
+    namespace: TopicNameV

@@ -54,6 +54,8 @@ use crate::{
     invalid_input, parse_url_ext, utils, utils_headers, DTPSError, TopicName, DTPSR,
 };
 
+const AVAILABILITY_LENGTH_SEC: f32 = 60.0;
+
 pub type HandlersResponse = Result<http::Response<hyper::Body>, Rejection>;
 pub type ServerStateAccess = StdArc<TokioMutex<ServerState>>;
 
@@ -625,7 +627,7 @@ pub async fn get_series_of_messages_for_notification_(
 
 pub async fn handle_websocket_queue(
     ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
-    state: ServerStateAccess,
+    ssa: ServerStateAccess,
     topic_name: TopicName,
     send_data: bool,
 ) -> DTPSR<()> {
@@ -633,20 +635,34 @@ pub async fn handle_websocket_queue(
         let mut starting_messaging = vec![];
 
         // important: release the lock
-        let ss0 = state.lock().await;
+        let (rx, inot) = {
+            let ss0 = ssa.lock().await;
 
-        let oq: &ObjectQueue = ss0.get_queue(&topic_name)?;
+            let oq: &ObjectQueue = ss0.get_queue(&topic_name)?;
 
-        let channel_info_message = MsgServerToClient::ChannelInfo(get_channel_info_message(&oq));
-        starting_messaging.push(channel_info_message);
+            let channel_info_message =
+                MsgServerToClient::ChannelInfo(get_channel_info_message(&oq));
+            starting_messaging.push(channel_info_message);
 
-        if let Some(x) = ss0.get_last_insert(&topic_name)? {
-            let mut for_this = get_series_of_messages_for_notification_(send_data, &x).await;
-            starting_messaging.append(&mut for_this);
+            let inot = ss0.get_last_insert(&topic_name)?;
+
+            if let Some(x) = ss0.get_last_insert(&topic_name)?.clone() {
+                let mut for_this = get_series_of_messages_for_notification_(send_data, &x).await;
+                starting_messaging.append(&mut for_this);
+            }
+
+            let rx = oq.subscribe_insert_notification();
+            (rx, inot)
+        };
+        {
+            let mut ss2 = ssa.lock().await;
+            if let Some(x) = inot {
+                ss2.guarantee_blob_exists(&x.data_saved.digest, 2.0 * AVAILABILITY_LENGTH_SEC);
+            }
         }
-        send_as_ws_cbor(&starting_messaging, ws_tx).await?;
 
-        oq.subscribe_insert_notification()
+        send_as_ws_cbor(&starting_messaging, ws_tx).await?;
+        rx
     };
     loop {
         let r = match rx2.recv().await {
@@ -661,7 +677,10 @@ pub async fn handle_websocket_queue(
                 }
             },
         };
-
+        {
+            let mut ss = ssa.lock().await;
+            ss.guarantee_blob_exists(&r.data_saved.digest, 2.0 * AVAILABILITY_LENGTH_SEC);
+        }
         let for_this = get_series_of_messages_for_notification_(send_data, &r).await;
         send_as_ws_cbor(&for_this, ws_tx).await?;
     }

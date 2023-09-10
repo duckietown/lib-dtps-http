@@ -21,6 +21,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::task::JoinHandle;
 
+use crate::client::get_rawdata_status;
 use crate::{
     context, divide_in_components, error_with_info, get_channel_info_message, get_dataready,
     get_inside, get_rawdata, is_prefix_of, merge_clocks, not_implemented, parse_url_ext,
@@ -120,6 +121,25 @@ pub enum TypeOFSource {
     OtherProxied(OtherProxied),
 }
 
+#[async_trait]
+pub trait Patchable {
+    async fn patch(
+        &self,
+        presented_as: &str,
+        ss_mutex: ServerStateAccess,
+        patch: &Patch,
+    ) -> DTPSR<()>;
+}
+
+#[async_trait]
+pub trait ResolveDataSingle {
+    async fn resolve_data_single(
+        &self,
+        presented_as: &str,
+        ss_mutex: ServerStateAccess,
+    ) -> DTPSR<ResolvedData>;
+}
+
 impl TypeOFSource {
     pub fn get_inside(&self, s: &str) -> DTPSR<Self> {
         match self {
@@ -208,15 +228,6 @@ pub struct OtherProxied {
 }
 
 #[async_trait]
-pub trait ResolveDataSingle {
-    async fn resolve_data_single(
-        &self,
-        presented_as: &str,
-        ss_mutex: ServerStateAccess,
-    ) -> DTPSR<ResolvedData>;
-}
-
-#[async_trait]
 pub trait GetMeta {
     async fn get_meta_index(
         &self,
@@ -247,9 +258,12 @@ impl ResolveDataSingle for TypeOFSource {
                 let ss = ss_mutex.lock().await;
                 let use_url = &ss.proxied_topics.get(&q.my_topic_name).unwrap().data_url;
 
-                let rd = get_rawdata(use_url).await?;
-
-                Ok(ResolvedData::RawData(rd))
+                let (status, rd) = get_rawdata_status(use_url).await?;
+                if status == 209 {
+                    Ok(ResolvedData::NotAvailableYet("209".to_string()))
+                } else {
+                    Ok(ResolvedData::RawData(rd))
+                }
             }
             TypeOFSource::OurQueue(q, _) => resolve_our_queue(q, ss_mutex).await,
             TypeOFSource::Compose(_sc) => {
@@ -715,6 +729,7 @@ fn filter_func(
     in1: InsertNotification,
     prefix: TopicName,
     presented_as: String,
+    unique_id: String,
 ) -> DTPSR<InsertNotification> {
     // let f = |x: &TopicsIndexWire| filter_index(x, prefix, presented_as).unwrap();
 
@@ -727,7 +742,7 @@ fn filter_func(
     let ds = &in1.data_saved;
     let data_saved = DataSaved {
         origin_node: ds.origin_node.clone(),
-        unique_id: format!("{}:{}", ds.unique_id, "filtered"),
+        unique_id,
         index: ds.index,
         time_inserted: ds.time_inserted,
         clocks: ds.clocks.clone(),
@@ -746,8 +761,11 @@ async fn transform_for(
     out_stream_sender: Sender<InsertNotification>,
     prefix: TopicName,
     presented_as: String,
+    unique_id: String,
 ) -> DTPSR<()> {
-    let f = |in1: InsertNotification| filter_func(in1, prefix.clone(), presented_as.clone());
+    let f = |in1: InsertNotification| {
+        filter_func(in1, prefix.clone(), presented_as.clone(), unique_id.clone())
+    };
     filter_stream(receiver, out_stream_sender, f).await
 }
 
@@ -764,11 +782,14 @@ async fn get_stream_compose_meta(
     let receiver = stream0.stream.unwrap();
     let (out_stream_sender, out_stream_recv) = tokio::sync::broadcast::channel(1024);
 
+    let unique_id = sc.unique_id.clone();
+
     let future = transform_for(
         receiver,
         out_stream_sender,
         sc.topic_name.clone(),
         presented_as.to_string(),
+        unique_id.clone(),
     );
     // let handle1 = tokio::spawn(show_errors(
     //     Some(ssa.clone()),
@@ -783,6 +804,7 @@ async fn get_stream_compose_meta(
         stream0.first.unwrap(),
         sc.topic_name.clone(),
         presented_as.to_string(),
+        unique_id.clone(),
     )?;
 
     let data_stream = DataStream {
@@ -929,6 +951,7 @@ async fn resolve_our_queue(
                 "Cannot get blob bytes for topic {topic_name:?}:\n {data_saved:#?}"
             )?;
             let raw_data = RawData::new(content, &data_saved.content_type);
+            // debug!(" {topic_name:?} -> {raw_data:?}");
             Ok(ResolvedData::RawData(raw_data))
         }
     };
@@ -1235,7 +1258,11 @@ fn putinside(
         }
         NotFound(_) => {}
         ResolvedData::RawData(rd) => {
-            let x = rd.get_as_cbor()?;
+            let prefix_str = prefix.join("/");
+            let x = context!(
+                rd.get_as_cbor(),
+                "Cannot get data as cbor for component {prefix_str:#?}\n{rd:#?}"
+            )?;
             where_to_put.insert(key_to_put, x);
         }
     }
@@ -1374,11 +1401,11 @@ pub async fn interpret_path(
     }
 
     let all_sources = iterate_type_of_sources(&ss, true);
-
-    resolve(&path_components, ends_with_dash, &all_sources)
+    resolve(&ss.node_id, &path_components, ends_with_dash, &all_sources)
 }
 
 fn resolve(
+    origin_node: &str,
     path_components: &Vec<String>,
     _ends_with_dash: bool,
     all_sources: &Vec<(TopicName, TypeOFSource)>,
@@ -1392,17 +1419,12 @@ fn resolve(
     // }
     // log::debug!(" = all_sources =\n{:#?} ", all_sources);
     for (k, source) in all_sources.iter() {
-        // debug!(" = k = {:?} ", k);
-        // let topic_components = divide_in_components(&k, '.');
         let topic_components = k.as_components();
         subtopics_vec.push(topic_components.clone());
 
         if topic_components.len() == 0 {
             continue;
         }
-        // if topic_components.len() == 0 {
-        //     continue;
-        // }
 
         match is_prefix_of(&topic_components, &path_components) {
             None => {}
@@ -1432,22 +1454,18 @@ fn resolve(
         error!("{}", s);
         return Err(DTPSError::TopicNotFound(s));
     }
-    let origin_node = "self".to_string();
     let y = path_components.join("/");
     let unique_id = format!("{origin_node}:{y}");
     let topic_name = TopicName::from_components(path_components);
     let mut sc = SourceComposition {
         topic_name,
-        // is_root: false,
         compose: hashmap! {},
         unique_id,
-        origin_node,
+        origin_node: origin_node.to_string(),
     };
-    // let ss = ss_mutex.lock().await;
     for (_, _, rest, source) in subtopics {
         sc.compose.insert(rest.clone(), Box::new(source));
     }
-    // log::debug!("  \n{sc:#?} ");
     Ok(TypeOFSource::Compose(sc))
 }
 
@@ -1477,7 +1495,12 @@ pub fn iterate_type_of_sources(
         let sources_no_aliases = iterate_type_of_sources(s, false);
 
         for (topic_name, new_topic) in s.aliases.iter() {
-            let resolved = resolve(new_topic.as_components(), false, &sources_no_aliases);
+            let resolved = resolve(
+                &s.node_id,
+                new_topic.as_components(),
+                false,
+                &sources_no_aliases,
+            );
             let r = match resolved {
                 Ok(rr) => rr,
                 Err(e) => {
@@ -1524,16 +1547,6 @@ fn resolve_extra_components(source: &TypeOFSource, rest: &Vec<String>) -> DTPSR<
 }
 
 #[async_trait]
-pub trait Patchable {
-    async fn patch(
-        &self,
-        presented_as: &str,
-        ss_mutex: ServerStateAccess,
-        patch: &Patch,
-    ) -> DTPSR<()>;
-}
-
-#[async_trait]
 impl Patchable for TypeOFSource {
     async fn patch(
         &self,
@@ -1549,7 +1562,7 @@ impl Patchable for TypeOFSource {
                 if topic_name.as_dash_sep() == TOPIC_PROXIED {
                     patch_proxied(ss_mutex, &topic_name, patch).await
                 } else {
-                    patch_our_queue(ss_mutex, presented_as, patch, topic_name).await
+                    patch_our_queue(ss_mutex, patch, topic_name).await
                 }
             }
             TypeOFSource::MountedDir(_, _, _) => {
@@ -1710,7 +1723,7 @@ async fn patch_transformed(
 
 async fn patch_our_queue(
     ss_mutex: ServerStateAccess,
-    _presented_as: &str,
+    // _presented_as: &str,
     patch: &Patch,
     topic_name: &TopicName,
 ) -> DTPSR<()> {
@@ -1733,10 +1746,7 @@ async fn patch_our_queue(
     let mut x: serde_json::Value = raw_data.get_as_json()?;
     let x0 = x.clone();
 
-    // debug!("patching: {x:?}");
-    // debug!("patch: {patch:?}");
     context!(json_patch::patch(&mut x, patch), "cannot apply patch")?;
-    // debug!("result: {x:?}");
     if x == x0 {
         log::debug!("The patch didn't change anything:\n {patch:?}");
         return Ok(());
@@ -1756,6 +1766,7 @@ async fn patch_our_queue(
     )?;
 
     if ds.index != data_saved.index + 1 {
+        // should never happen because we have acquired the lock
         panic!("there were some modifications inside: {ds:?} != {data_saved:?}");
     }
 
@@ -1772,10 +1783,7 @@ async fn patch_proxied(
     let (data_saved, raw_data) = match ss.get_last_insert(&topic_name)? {
         None => {
             // should not happen
-            panic!(
-                "patch_proxied: {topic_name:?} is empty",
-                topic_name = topic_name
-            );
+            panic!("patch_proxied: {topic_name:?} is empty");
         }
         Some(s) => (s.data_saved, s.raw_data),
     };
@@ -1796,13 +1804,23 @@ async fn patch_proxied(
                 let pj: ProxyJob = serde_json::from_value(ao.value.clone())?;
                 let key = unescape_json_patch(&ao.path)[1..].to_string();
                 let topic_name = TopicName::from_dash_sep(key)?;
-                let url = parse_url_ext(&pj.url)?;
+                let mut urls = Vec::new();
+                for u in pj.urls.iter() {
+                    match parse_url_ext(u) {
+                        Ok(u) => urls.push(u),
+                        Err(e) => {
+                            log::error!("cannot parse url: {u:?} {e:?}", u = u, e = e);
+                        }
+                    };
+                }
+
                 debug!(
-                    "adding proxy: topic_name = {topic_name:?} url = {url}",
+                    "adding proxy: topic_name = {topic_name:?} url = {url:?}",
                     topic_name = topic_name,
-                    url = url
+                    url = urls
                 );
-                ss.add_proxy_connection(&topic_name, &url, ss_mutex.clone())?;
+
+                ss.add_proxy_connection(&topic_name, &urls, pj.node_id, ss_mutex.clone())?;
             }
             PatchOperation::Remove(ro) => {
                 let key = unescape_json_patch(&ro.path)[1..].to_string();
@@ -1822,9 +1840,6 @@ async fn patch_proxied(
     let new_content: RawData = RawData::encode_from_json(&x, &data_saved.content_type)?;
     let new_clocks = data_saved.clocks.clone();
 
-    // let mut ss = ss_mutex.lock().await;
-
-    // oq.push(&new_content, Some(new_clocks))?;
     let ds = ss.publish(
         &topic_name,
         &new_content.content,

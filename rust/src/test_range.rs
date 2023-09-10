@@ -496,8 +496,10 @@ mod tests {
 
         let mounted_at = TopicName::from_dash_sep("mounted/here")?;
 
-        add_proxy(&instance2.con, &mounted_at, &instance.con).await?;
-        add_proxy(&instance2.con, &mounted_at, &instance.con).await?;
+        let node_id = instance.server.get_node_id().await;
+        let urls = vec![instance.con.clone()];
+        add_proxy(&instance2.con, &mounted_at, &node_id, &urls).await?;
+        add_proxy(&instance2.con, &mounted_at, &node_id, &urls).await?;
         // sleep 5 seconds
         tokio::time::sleep(Duration::from_millis(2000)).await;
 

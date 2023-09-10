@@ -8,6 +8,7 @@ use anyhow::Context;
 use bytes::Bytes;
 use futures::StreamExt;
 use hex;
+use http::StatusCode;
 use hyper;
 use hyper::Client;
 use hyper_tls::HttpsConnector;
@@ -264,6 +265,12 @@ pub async fn listen_events_websocket(
     Ok(())
 }
 
+pub async fn get_rawdata_status(con: &TypeOfConnection) -> DTPSR<(StatusCode, RawData)> {
+    let resp = make_request(con, hyper::Method::GET, b"", None, None).await?;
+    // TODO: send more headers
+    Ok((resp.status(), interpret_resp(con, resp).await?))
+}
+
 pub async fn get_rawdata(con: &TypeOfConnection) -> DTPSR<RawData> {
     let resp = make_request(con, hyper::Method::GET, b"", None, None).await?;
     // TODO: send more headers
@@ -293,7 +300,7 @@ pub async fn interpret_resp(con: &TypeOfConnection, resp: Response) -> DTPSR<Raw
 pub enum TypeOfResource {
     Other,
     DTPSTopic,
-    DTPSIndex,
+    DTPSIndex { node_id: String },
 }
 
 pub fn get_content_type<T>(resp: &http::Response<T>) -> String {
@@ -306,17 +313,25 @@ pub fn get_content_type<T>(resp: &http::Response<T>) -> String {
 }
 
 pub async fn sniff_type_resource(con: &TypeOfConnection) -> DTPSR<TypeOfResource> {
-    let rd = get_rawdata(con).await?;
+    let md = get_metadata(con).await?;
     // let resp = context!(
     //     make_request(con, hyper::Method::GET, b"", None, None).await,
     //     "Cannot make request to {}",
     //     con.to_string(),
     // )?;
-    let content_type = rd.content_type;
+    let content_type = &md.content_type;
     debug!("content_type: {:#?}", content_type);
 
     if content_type.contains(CONTENT_TYPE_DTPS_INDEX) {
-        Ok(TypeOfResource::DTPSIndex)
+        match &md.answering {
+            None => {
+                debug!("This looks like an indes but could not get answering:\n{md:#?}");
+                Ok(TypeOfResource::Other)
+            }
+            Some(node_id) => Ok(TypeOfResource::DTPSIndex {
+                node_id: node_id.clone(),
+            }),
+        }
     } else {
         Ok(TypeOfResource::Other)
     }
@@ -720,6 +735,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
         latency_ns,
         meta_url,
         history_url,
+        content_type: get_content_type(&resp),
     };
     // info!("Logging metadata: {md:#?} headers {headers:#?}");
 
@@ -770,12 +786,12 @@ pub fn unescape_json_patch(s: &str) -> String {
 pub async fn add_proxy(
     conbase: &TypeOfConnection,
     mountpoint: &TopicName,
-    url: &TypeOfConnection,
+    node_id: &String,
+    urls: &Vec<TypeOfConnection>,
 ) -> DTPSR<()> {
-    let pj = ProxyJob {
-        // mounted_at: mountpoint.as_dash_sep().to_string(),
-        url: url.to_string(),
-    };
+    let node_id = node_id.clone();
+    let urls = urls.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let pj = ProxyJob { node_id, urls };
 
     let mut path: String = String::new();
     path.push_str("/");

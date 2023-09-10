@@ -11,9 +11,7 @@ pub static TOPIC_LOGS: &'static str = "dtps/logs";
 pub static TOPIC_STATE_NOTIFICATION: &'static str = "dtps/states-notification";
 pub static TOPIC_STATE_SUMMARY: &'static str = "dtps/state";
 pub static TOPIC_LIST_AVAILABILITY: &'static str = "dtps/availability";
-
 pub static TOPIC_PROXIED: &'static str = "dtps/proxied";
-
 pub static CONTENT_TYPE: &'static str = "content-type";
 pub static OCTET_STREAM: &'static str = "application/octet-stream";
 

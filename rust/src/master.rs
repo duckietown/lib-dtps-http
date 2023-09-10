@@ -22,7 +22,7 @@ use crate::{
     display_printable, divide_in_components, do_receiving, error_with_info, get_accept_header,
     get_good_url_for_components, get_header_with_default, get_metadata,
     get_series_of_messages_for_notification_, handle_topic_post, handle_websocket_queue,
-    interpret_path, make_html, make_request, not_implemented, object_queues,
+    interpret_path, make_html, make_request, not_available, not_implemented,
     open_websocket_connection, put_alternative_locations, receive_from_websocket, send_as_ws_cbor,
     serve_static_file_path, utils_headers, utils_mime, DataProps, DataStream, GetMeta,
     HandlersResponse, MsgClientToServer, MsgServerToClient, ObjectQueue, Patchable, RawData,
@@ -56,7 +56,7 @@ pub async fn serve_master_post(
             // return Err<s.into()>;
             // let s = format!("Cannot resolve the path {:?}:\n{}", path_components, s);
             let res = http::Response::builder()
-                .status(StatusCode::NOT_FOUND)
+                .status(s.status_code())
                 .body(Body::from(s.to_string()))
                 .unwrap();
             return Ok(res);
@@ -83,7 +83,17 @@ pub async fn serve_master_post(
             let con = {
                 let ss = ss_mutex.lock().await;
                 let sub = ss.proxied.get(&fq.subscription).unwrap();
-                sub.url.join(fq.his_topic_name.as_relative_url())?
+                match &sub.established {
+                    None => {
+                        let msg = "Subscription not established";
+                        let res = http::Response::builder()
+                            .status(StatusCode::NOT_FOUND) //ok
+                            .body(Body::from(msg.to_string()))
+                            .unwrap();
+                        return Ok(res);
+                    }
+                    Some(est) => est.using.join(fq.his_topic_name.as_relative_url())?,
+                }
             };
             let resp = make_request(
                 &con,
@@ -174,7 +184,7 @@ pub async fn serve_master_patch(
             // return Err<s.into()>;
             // let s = format!("Cannot resolve the path {:?}:\n{}", path_components, s);
             let res = http::Response::builder()
-                .status(StatusCode::NOT_FOUND)
+                .status(s.status_code())
                 .body(Body::from(s.to_string()))
                 .unwrap();
             return Ok(res);
@@ -233,7 +243,7 @@ pub async fn serve_master_head(
             // debug!("serve_master_head: path_str: {}\n{}", path_str, s);
 
             let res = http::Response::builder()
-                .status(StatusCode::NOT_FOUND)
+                .status(s.status_code())
                 .body(Body::from(s.to_string()))
                 .unwrap();
             return Ok(res);
@@ -494,7 +504,7 @@ pub async fn serve_master_get(
         }
         ResolvedData::NotFound(s) => {
             let res = http::Response::builder()
-                .status(StatusCode::NOT_FOUND)
+                .status(StatusCode::NOT_FOUND) //ok
                 .body(Body::from(s))
                 .unwrap();
             return Ok(res);
@@ -778,10 +788,18 @@ pub async fn handle_websocket_forwarded(
 ) -> DTPSR<()> {
     let url = {
         let ss = state.lock().await;
+
         let sub = ss.proxied.get(&subscription).unwrap();
 
-        let url = sub.url.join(its_topic_name.as_relative_url())?;
-        url
+        match &sub.established {
+            None => {
+                return not_available!("Subscription not established");
+            }
+            Some(est) => {
+                let url = est.using.join(its_topic_name.as_relative_url())?;
+                url
+            }
+        }
     };
 
     let md = get_metadata(&url).await?;

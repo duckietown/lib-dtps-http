@@ -17,11 +17,14 @@ impl RawData {
                 serde_yaml::from_value(yaml_data)?
             }
             ContentPresentation::PlainText => {
-                let s = format!("Cannot convert {} to cbor", self.content_type);
+                let s = format!("get_as_cbor: Cannot convert {} to cbor", self.content_type);
                 return DTPSError::other(s);
             }
             _ => {
-                let s = format!("Cannot parse content type {}", self.content_type);
+                let s = format!(
+                    "get_as_cbor: Cannot parse content type {}",
+                    self.content_type
+                );
                 return DTPSError::other(s);
             }
         };
@@ -39,11 +42,14 @@ impl RawData {
                 serde_yaml::from_value(yaml_data)?
             }
             ContentPresentation::PlainText => {
-                let s = format!("Cannot convert {} to json", self.content_type);
+                let s = format!("get_as_json: Cannot convert {} to json", self.content_type);
                 return DTPSError::other(s);
             }
             _ => {
-                let s = format!("Cannot parse content type {}", self.content_type);
+                let s = format!(
+                    "get_as_json: Cannot parse content type {}",
+                    self.content_type
+                );
                 return DTPSError::other(s);
             }
         };
@@ -59,7 +65,7 @@ impl RawData {
             ContentPresentation::JSON => serde_json::to_vec(&json_data)?,
             ContentPresentation::YAML => serde_yaml::to_string(&json_data)?.as_bytes().to_vec(),
             ContentPresentation::PlainText | ContentPresentation::Other => {
-                let s = format!("Cannot convert json to  {target_content_type}");
+                let s = format!("Cannot convert json to {target_content_type}");
                 return DTPSError::other(s);
             }
         };

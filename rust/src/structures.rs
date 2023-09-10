@@ -644,6 +644,7 @@ pub struct FoundMetadata {
     pub history_url: Option<TypeOfConnection>,
     /// nanoseconds
     pub latency_ns: u128,
+    pub content_type: String,
 }
 
 pub fn get_url_from_topic_name(topic_name: &str) -> String {

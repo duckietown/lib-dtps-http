@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import traceback
 from abc import ABC, abstractmethod
@@ -26,15 +27,18 @@ from tcp_latency import measure_latency
 
 from . import logger
 from .constants import (
+    CONTENT_TYPE_PATCH_JSON,
     HEADER_CONTENT_LOCATION,
     HEADER_NODE_ID,
+    MIME_JSON,
     REL_EVENTS_DATA,
     REL_EVENTS_NODATA,
     REL_HISTORY,
     REL_META,
+    TOPIC_PROXIED,
 )
 from .exceptions import EventListeningNotAvailable
-from .server import get_link_headers
+from .link_headers import get_link_headers
 from .structures import (
     channel_msgs_parse,
     ChannelInfo,
@@ -66,6 +70,12 @@ __all__ = [
 ]
 
 U = TypeVar("U", bound=URL)
+
+
+@dataclass
+class ProxyJob:
+    node_id: str
+    urls: List[str]
 
 
 @dataclass
@@ -134,7 +144,7 @@ class DTPSClient:
         async with self.my_session(url) as (session, use_url):
             async with session.get(use_url) as resp:
                 resp.raise_for_status()
-                answering = resp.headers.get(HEADER_NODE_ID)
+                # answering = resp.headers.get(HEADER_NODE_ID)
 
                 #  logger.debug(f"ask topics {resp.headers}")
                 if (preferred := await self.prefer_alternative(url, resp)) is not None:
@@ -142,7 +152,7 @@ class DTPSClient:
                     return await self.ask_topics(preferred)
                 assert resp.status == 200, resp.status
                 res_bytes: bytes = await resp.read()
-                res = cbor2.loads(res_bytes)  # .decode("utf-8")
+                res = cbor2.loads(res_bytes)
 
             alternatives0 = cast(List[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION, []))
             where_this_available = [url]
@@ -161,18 +171,13 @@ class DTPSClient:
                 reachability: List[TopicReachability] = []
                 for r in tr0.reachability:
                     if "://" in r.url:
-                        reachability.append(r)  # r2 = replace(r, url=url2)
-                    #  reachability.append(r2)
+                        reachability.append(r)
                     else:
                         for w in where_this_available:
                             url2 = url_to_string(join(w, r.url))
 
                             r2 = replace(r, url=url2)
                             reachability.append(r2)
-
-                #  print(f"reachability {reachability}")
-
-                #  urls: list[URLString] = [url_to_string(join(url, _)) for _ in tr0.urls]
 
                 tr2 = replace(tr0, reachability=reachability)
                 available[k] = tr2
@@ -236,9 +241,7 @@ class DTPSClient:
             return None
 
         me = ForwardingStep(
-            this_node_id,  # complexity=benchmark.complexity,
-            #  estimated_latency=benchmark.latency,
-            #  estimated_bandwidth=benchmark.bandwidth,
+            this_node_id,
             forwarding_node_connects_to=url_to_string(connects_to),
             performance=benchmark,
         )
@@ -458,6 +461,104 @@ class DTPSClient:
 
             async with aiohttp.ClientSession(connector=connector, conn_timeout=conn_timeout) as session:
                 yield session, use_url
+
+    async def get_proxied(self, url0: URLIndexer) -> Dict[TopicNameV, ProxyJob]:
+        url = join(url0, TOPIC_PROXIED.as_relative_url())
+        rd = await self.get(url, accept=MIME_JSON)
+
+        js = json.loads(rd.content)
+        res: Dict[TopicNameV, ProxyJob] = {}
+        for k, v in js.items():
+            res[TopicNameV.from_dash_sep(k)] = ProxyJob(v["node_id"], v["urls"])
+        return res
+
+    async def add_proxy(
+        self, url0: URLIndexer, topic_name: TopicNameV, node_id: str, urls: List[str]
+    ) -> bool:
+        """Returns true if there were changes to be made"""
+
+        found = await self.get_proxied(url0)
+        path = "/" + escape_json_pointer(topic_name.as_dash_sep())
+        patch = []
+        if topic_name in found:
+            if found[topic_name].node_id == node_id and found[topic_name].urls == urls:
+                return False
+            else:
+                patch.append(
+                    {
+                        "op": "remove",
+                        "path": path,
+                    }
+                )
+        else:
+            patch.append({"op": "add", "path": path, "value": {"node_id": node_id, "urls": urls}})
+        as_json = json.dumps(patch).encode("utf-8")
+        url = join(url0, TOPIC_PROXIED.as_relative_url())
+        res = await self.patch(url, CONTENT_TYPE_PATCH_JSON, as_json)
+        return True
+
+    async def remove_proxy(self, url0: URLIndexer, topic_name: TopicNameV) -> None:
+        patch = [{"op": "remove", "path": "/" + escape_json_pointer(topic_name.as_dash_sep())}]
+        as_json = json.dumps(patch).encode("utf-8")
+        url = join(url0, TOPIC_PROXIED.as_relative_url())
+        res = await self.patch(url, CONTENT_TYPE_PATCH_JSON, as_json)
+
+    async def patch(self, url0: URL, content_type: Optional[str], data: bytes) -> RawData:
+        headers = {"content-type": content_type} if content_type is not None else {}
+
+        url = self._look_cache(url0)
+        use_url = None
+        try:
+            async with self.my_session(url, conn_timeout=2) as (session, use_url):
+                async with session.patch(use_url, data=data, headers=headers) as resp:
+                    res_bytes: bytes = await resp.read()
+                    content_type = resp.headers.get("content-type", "application/octet-stream")
+                    rd = RawData(res_bytes, content_type)
+
+                    if not resp.ok:
+                        try:
+                            message = res_bytes.decode("utf-8")
+                        except:
+                            message = res_bytes
+                        raise ValueError(f"cannot patch {url0=!r} {use_url=!r} {resp=!r}\n{message}")
+
+                    return rd
+
+        except:
+            logger.error(f"cannot connect to {url=!r} {use_url=!r} \n{traceback.format_exc()}")
+            raise
+
+    async def get(self, url0: URL, accept: Optional[str]) -> RawData:
+        headers = {}
+        if accept is not None:
+            headers["accept"] = accept
+
+        url = self._look_cache(url0)
+        use_url = None
+        try:
+            async with self.my_session(url, conn_timeout=2) as (session, use_url):
+                async with session.get(use_url) as resp:
+                    res_bytes: bytes = await resp.read()
+                    content_type = resp.headers.get("content-type", "application/octet-stream")
+                    rd = RawData(res_bytes, content_type)
+
+                    if not resp.ok:
+                        try:
+                            message = res_bytes.decode("utf-8")
+                        except:
+                            message = res_bytes
+                        raise ValueError(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
+
+                    if accept is not None:
+                        if content_type != accept:
+                            raise ValueError(
+                                f"GET gave a different content type ({accept=!r}, {content_type}\n{url0=}"
+                            )
+                    return rd
+
+        except:
+            logger.error(f"cannot connect to {url=!r} {use_url=!r} \n{traceback.format_exc()}")
+            raise
 
     async def get_metadata(self, url0: URLTopic) -> FoundMetadata:
         url = self._look_cache(url0)
@@ -745,3 +846,7 @@ class PushInterface(ABC):
     @abstractmethod
     async def push_through(self, data: bytes, content_type: ContentType) -> None:
         ...
+
+
+def escape_json_pointer(s: str) -> str:
+    return s.replace("~", "~0").replace("/", "~1")

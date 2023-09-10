@@ -1,3 +1,4 @@
+use std::cmp::max;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::future::Future;
@@ -20,21 +21,22 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 use crate::{
-    context, error_with_info, get_events_stream_inline, get_index, get_metadata, get_queue_id,
-    get_random_node_id, get_stats, invalid_input, is_prefix_of, not_available, not_implemented,
-    not_reachable, sniff_type_resource, Clocks, ContentInfo, DTPSError, DataSaved, FilePaths,
-    ForwardingStep, FoundMetadata, InsertNotification, LinkBenchmark, NodeAppData, ObjectQueue,
-    RawData, ServerStateAccess, TopicName, TopicProperties, TopicReachabilityInternal,
-    TopicRefInternal, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection, TypeOfResource,
-    UrlResult, CONTENT_TYPE_CBOR, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_JSON,
-    CONTENT_TYPE_PLAIN, CONTENT_TYPE_YAML, DTPSR, MASK_ORIGIN, TOPIC_LIST_AVAILABILITY,
-    TOPIC_LIST_CLOCK, TOPIC_LIST_NAME, TOPIC_LOGS, TOPIC_PROXIED, TOPIC_STATE_NOTIFICATION,
-    TOPIC_STATE_SUMMARY,
+    compute_best_alternative, context, error_with_info, get_events_stream_inline, get_index,
+    get_metadata, get_queue_id, get_random_node_id, get_stats, invalid_input, is_prefix_of,
+    not_available, not_implemented, not_reachable, sniff_type_resource, Clocks, ContentInfo,
+    DTPSError, DataSaved, FilePaths, ForwardingStep, FoundMetadata, InsertNotification,
+    LinkBenchmark, NodeAppData, ObjectQueue, RawData, ServerStateAccess, TopicName,
+    TopicProperties, TopicReachabilityInternal, TopicRefInternal, TopicsIndexInternal,
+    TopicsIndexWire, TypeOfConnection, TypeOfResource, UrlResult, CONTENT_TYPE_CBOR,
+    CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_JSON, CONTENT_TYPE_PLAIN, CONTENT_TYPE_YAML, DTPSR,
+    MASK_ORIGIN, TOPIC_LIST_AVAILABILITY, TOPIC_LIST_CLOCK, TOPIC_LIST_NAME, TOPIC_LOGS,
+    TOPIC_PROXIED, TOPIC_STATE_NOTIFICATION, TOPIC_STATE_SUMMARY,
 };
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 pub struct ProxyJob {
-    pub url: String,
+    pub node_id: String,
+    pub urls: Vec<String>,
 }
 
 type Proxied = HashMap<String, ProxyJob>;
@@ -47,13 +49,14 @@ pub struct LogEntry {
 
 #[derive(Debug)]
 pub struct ForwardInfoEstablished {
+    pub using: TypeOfConnection,
     pub md: FoundMetadata,
     pub index_internal: TopicsIndexInternal,
 }
 
 #[derive(Debug)]
 pub struct ForwardInfo {
-    pub url: TypeOfConnection,
+    pub urls: Vec<TypeOfConnection>,
 
     pub handle: Option<tokio::task::JoinHandle<()>>,
     pub established: Option<ForwardInfoEstablished>,
@@ -86,6 +89,8 @@ pub struct LocalDirInfo {
 pub struct SavedBlob {
     pub content: Vec<u8>,
     pub who_needs_it: HashSet<String>,
+    // will not be removed until who_needs_it is empty and the deadline has passed
+    pub deadline: i64,
 }
 
 #[derive(Debug)]
@@ -185,7 +190,7 @@ impl ServerState {
             None => HashMap::new(),
         };
         // let node_id = Uuid::new_v4().to_string();
-        let node_id = get_random_node_id();
+        let node_id = format!("rust-{}", get_random_node_id());
 
         let mut oqs: HashMap<TopicName, ObjectQueue> = HashMap::new();
 
@@ -366,13 +371,19 @@ impl ServerState {
     pub fn add_proxy_connection(
         &mut self,
         topic_name: &TopicName,
-        con: &TypeOfConnection,
+        cons: &Vec<TypeOfConnection>,
+        expect_node_id: String,
         ssa: ServerStateAccess,
     ) -> DTPSR<()> {
         if self.proxied.contains_key(topic_name) {
             return Err(DTPSError::TopicAlreadyExists(topic_name.to_dash_sep()));
         }
-        let future = observe_node_proxy(topic_name.clone(), con.clone(), ssa.clone());
+        let future = observe_node_proxy(
+            topic_name.clone(),
+            cons.clone(),
+            expect_node_id,
+            ssa.clone(),
+        );
 
         let handle = tokio::spawn(show_errors(
             Some(ssa.clone()),
@@ -383,7 +394,7 @@ impl ServerState {
             future,
         ));
         let fi = ForwardInfo {
-            url: con.clone(),
+            urls: cons.clone(),
             handle: Some(handle),
             established: None,
             mounted_at: topic_name.clone(),
@@ -601,9 +612,38 @@ impl ServerState {
         for digest in dropped_digests {
             self.release_blob(&digest, topic_name.as_dash_sep());
         }
+        self.cleanup_blobs();
         Ok(ds)
     }
 
+    pub fn guarantee_blob_exists(&mut self, digest: &str, seconds: f32) {
+        // debug!("Guarantee blob {digest} exists for {seconds} seconds more");
+        let now = Local::now().timestamp_nanos();
+        let deadline = now + (seconds * 1_000_000_000.0) as i64;
+        match self.blobs.get_mut(digest) {
+            None => {
+                log::error!("Blob {digest} not found");
+            }
+            Some(sb) => {
+                sb.deadline = max(sb.deadline, deadline);
+            }
+        }
+    }
+    pub fn cleanup_blobs(&mut self) {
+        let now = Local::now().timestamp_nanos();
+        let mut todrop = Vec::new();
+        for (digest, sb) in self.blobs.iter() {
+            let no_one_needs_it = sb.who_needs_it.is_empty();
+            let deadline_passed = now > sb.deadline;
+            if no_one_needs_it && deadline_passed {
+                todrop.push(digest.clone());
+            }
+        }
+        for digest in todrop {
+            // debug!("Dropping blob {digest} because deadline passed");
+            self.blobs.remove(&digest);
+        }
+    }
     pub fn release_blob(&mut self, digest: &str, who: &str) {
         // log::debug!("Del blob {digest} for {who:?}");
 
@@ -614,13 +654,18 @@ impl ServerState {
             Some(sb) => {
                 sb.who_needs_it.remove(who);
                 if sb.who_needs_it.is_empty() {
-                    self.blobs.remove(digest);
+                    let now = Local::now().timestamp_nanos();
+                    let deadline_passed = now > sb.deadline;
+                    if deadline_passed {
+                        self.blobs.remove(digest);
+                    }
                 }
             }
         }
     }
 
-    pub fn save_blob(&mut self, digest: &str, content: &[u8], who: &str, _comment: &str) {
+    pub fn save_blob(&mut self, digest: &str, content: &[u8], who: &str, comment: &str) {
+        let _ = comment;
         // log::debug!("Add blob {digest} for {who:?}: {comment}");
 
         match self.blobs.get_mut(digest) {
@@ -628,6 +673,7 @@ impl ServerState {
                 let mut sb = SavedBlob {
                     content: content.to_vec(),
                     who_needs_it: HashSet::new(),
+                    deadline: 0,
                 };
                 sb.who_needs_it.insert(who.to_string());
                 self.blobs.insert(digest.to_string(), sb);
@@ -1006,9 +1052,10 @@ pub async fn sniff_and_start_proxy(
         TypeOfResource::DTPSTopic => {
             not_implemented!("observe_proxy: TypeOfResource::DTPSTopic")
         }
-        TypeOfResource::DTPSIndex => {
+        TypeOfResource::DTPSIndex { node_id } => {
             let mut ss = ss_mutex.lock().await;
-            ss.add_proxy_connection(&mounted_at, &url, ss_mutex.clone())?;
+            let urls = vec![url.clone()];
+            ss.add_proxy_connection(&mounted_at, &urls, node_id, ss_mutex.clone())?;
             Ok(())
             // not_implemented!("observe_proxy: TypeOfResource::DTPSIndex")
             // ss.add_proxy_connection(&subcription_name, &url, ss_mutex).await
@@ -1018,7 +1065,6 @@ pub async fn sniff_and_start_proxy(
 }
 
 pub async fn handle_proxy_other(
-    // _subcription_name: String,
     mounted_at: TopicName,
     url: TypeOfConnection,
     ss_mutex: ServerStateAccess,
@@ -1033,9 +1079,12 @@ pub async fn handle_proxy_other(
 
 pub async fn observe_node_proxy(
     mounted_at: TopicName,
-    url: TypeOfConnection,
+    cons: Vec<TypeOfConnection>,
+    expect_node_id: String,
     ss_mutex: ServerStateAccess,
 ) -> DTPSR<()> {
+    let cons_set = HashSet::from_iter(cons.clone().into_iter());
+    let url = compute_best_alternative(&cons_set, &expect_node_id).await?;
     let (md, index_internal_at_t0) = loop {
         match get_proxy_info(&url).await {
             Ok(s) => break s,
@@ -1055,7 +1104,14 @@ pub async fn observe_node_proxy(
         None => {
             return not_available!("Nobody is answering {url:}:\n{md:?}");
         }
-        Some(n) => n.clone(),
+        Some(n) => {
+            if n != &expect_node_id {
+                return not_available!(
+                    "observe_node_proxy: invalid proxy connection: we expect {expect_node_id} but we find {n} at {url}",
+                );
+            };
+            n.clone()
+        }
     };
 
     {
@@ -1084,25 +1140,25 @@ pub async fn observe_node_proxy(
         let mut ss = ss_mutex.lock().await;
         let info = ss.proxied.get_mut(&mounted_at).unwrap();
         info.established = Some(ForwardInfoEstablished {
+            using: url.clone(),
             md: md.clone(),
             index_internal: index_internal_at_t0.clone(),
         });
     }
+
     {
         let mut ss = ss_mutex.lock().await;
         add_from_response(
             &mut ss,
-            who_answers.clone(),
+            // who_answers.clone(),
             &mounted_at,
             &index_internal_at_t0,
             link1.clone(),
-            url.to_string(),
+            // url.to_string(),
         )?;
     }
 
-    // let (tx, rx) = mpsc::unbounded_channel();
     let inline_url = md.events_data_inline_url.unwrap().clone();
-    //
     let (_handle, mut stream) = get_events_stream_inline(&inline_url).await;
 
     while let Some(notification) = stream.next().await {
@@ -1113,11 +1169,11 @@ pub async fn observe_node_proxy(
             let mut ss = ss_mutex.lock().await;
             add_from_response(
                 &mut ss,
-                who_answers.clone(),
+                // who_answers.clone(),
                 &mounted_at,
                 &ti,
                 link1.clone(),
-                url.to_string(),
+                // url.to_string(),
             )?;
         }
     }
@@ -1127,11 +1183,9 @@ pub async fn observe_node_proxy(
 
 pub fn add_from_response(
     s: &mut ServerState,
-    _who_answers: String,
     mounted_at: &TopicName,
     tii: &TopicsIndexInternal,
     link_benchmark1: LinkBenchmark,
-    _connected_url: String,
 ) -> DTPSR<()> {
     // debug!("topics_index: tii: \n{:#?}", tii);
     for (its_topic_name, tr) in tii.topics.iter() {

@@ -3,6 +3,7 @@ from .types import ContentType, TopicNameV
 __all__ = [
     "CONTENT_TYPE_DTPS_INDEX",
     "CONTENT_TYPE_DTPS_INDEX_CBOR",
+    "CONTENT_TYPE_PATCH_JSON",
     "CONTENT_TYPE_TOPIC_HISTORY_CBOR",
     "EVENTS_SUFFIX",
     "HEADER_CONTENT_LOCATION",
@@ -28,8 +29,8 @@ __all__ = [
     "TOPIC_AVAILABILITY",
     "TOPIC_CLOCK",
     "TOPIC_LIST",
-    "TOPIC_LIST",
     "TOPIC_LOGS",
+    "TOPIC_PROXIED",
     "TOPIC_STATE_NOTIFICATION",
     "TOPIC_STATE_SUMMARY",
 ]
@@ -48,16 +49,19 @@ HEADER_NODE_PASSED_THROUGH = "X-DTPS-Node-ID-Passed-Through"
 HEADER_LINK_BENCHMARK = "X-DTPS-link-benchmark"
 HEADER_DATA_UNIQUE_ID = "X-DTPS-data-unique-id"
 HEADER_DATA_ORIGIN_NODE_ID = "X-DTPS-data-origin-node"
+
 TOPIC_LIST = TopicNameV.from_dash_sep("dtps/topic_list")
 TOPIC_CLOCK = TopicNameV.from_dash_sep("dtps/clock")
 TOPIC_LOGS = TopicNameV.from_dash_sep("dtps/logs")
 TOPIC_AVAILABILITY = TopicNameV.from_dash_sep("dtps/availability")
 TOPIC_STATE_SUMMARY = TopicNameV.from_dash_sep("dtps/state")
 TOPIC_STATE_NOTIFICATION = TopicNameV.from_dash_sep("dtps/states-notification")
+TOPIC_PROXIED = TopicNameV.from_dash_sep("dtps/proxied")
 
 CONTENT_TYPE_DTPS_INDEX = "application/vnd.dt.dtps-index"
 CONTENT_TYPE_DTPS_INDEX_CBOR = "application/vnd.dt.dtps-index+cbor"
 CONTENT_TYPE_TOPIC_HISTORY_CBOR = "application/vnd.dt.dtps-history+cbor"
+CONTENT_TYPE_PATCH_JSON = "application/json-patch+json"
 
 HEADER_NO_AVAIL = "X-dtps-debug-Content-Location-Not-Available"
 HEADER_CONTENT_LOCATION = "Content-Location"

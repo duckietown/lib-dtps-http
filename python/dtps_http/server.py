@@ -3,7 +3,7 @@ import json
 import time
 import traceback
 import uuid
-from dataclasses import asdict, field, replace
+from dataclasses import asdict, replace
 from typing import Any, Awaitable, Callable, cast, Dict, List, Optional, Sequence, Tuple, Union
 
 import cbor2
@@ -14,6 +14,7 @@ from multidict import CIMultiDict
 from pydantic.dataclasses import dataclass
 
 from . import __version__, logger
+from .client import DTPSClient
 from .constants import (
     CONTENT_TYPE_DTPS_INDEX_CBOR,
     CONTENT_TYPE_TOPIC_HISTORY_CBOR,
@@ -41,6 +42,7 @@ from .constants import (
     TOPIC_STATE_NOTIFICATION,
     TOPIC_STATE_SUMMARY,
 )
+from .link_headers import put_link_header
 from .structures import (
     ChannelInfo,
     ChannelInfoDesc,
@@ -53,6 +55,7 @@ from .structures import (
     LinkBenchmark,
     MinMax,
     RawData,
+    Registration,
     ResourceAvailability,
     TopicProperties,
     TopicReachability,
@@ -79,7 +82,6 @@ __all__ = [
     "DTPSServer",
     "ForwardedTopic",
     "ObjectQueue",
-    "get_link_headers",
 ]
 
 
@@ -278,7 +280,7 @@ class DTPSServer:
         self.tasks = []
         self.logger = logger
         self.available_urls = []
-        self.node_id = NodeID(str(uuid.uuid4()))
+        self.node_id = NodeID(f"python-{str(uuid.uuid4())[:8]}")
 
         self.digest_to_urls = {}
 
@@ -298,6 +300,12 @@ class DTPSServer:
         wire = index.to_wire()
         as_cbor = cbor2.dumps(asdict(wire))
         self._oqs[ROOT].publish(RawData(as_cbor, CONTENT_TYPE_DTPS_INDEX_CBOR))
+        self.registrations = []
+
+    registrations: List[Registration]
+
+    def add_registrations(self, registrations: Sequence[Registration]) -> None:
+        self.registrations.extend(registrations)
 
     def has_forwarded(self, topic_name: TopicNameV) -> bool:
         return topic_name in self._forwarded
@@ -459,6 +467,42 @@ class DTPSServer:
         for f in self._more_on_startup:
             await f(self)
 
+        for registration in self.registrations:
+            self.remember_task(asyncio.create_task(self._register(registration)))
+
+    @async_error_catcher
+    async def _register(self, r: Registration) -> None:
+        n = 0
+        while True:
+            try:
+                changes = await self._try_register(r)
+
+            except Exception as e:
+                logger.error(f"Error while registering {r}: {e}")
+                await asyncio.sleep(1.0)
+            else:
+                if n == 0:
+                    logger.info(f"Registered as {r.topic.as_dash_sep()} on {r.switchboard_url}")
+                else:
+                    if changes:
+                        logger.info(f"Re-registered as {r.topic.as_dash_sep()} on {r.switchboard_url}")
+
+                n += 1
+                # TODO: just open a websocket connection and see when it closes
+                await asyncio.sleep(10.0)
+
+    @async_error_catcher
+    async def _try_register(self, r: Registration) -> bool:
+        async with DTPSClient.create() as client:
+            # url = parse_url_unescape(r.switchboard_url)
+            if not self.available_urls:
+                msg = f"Cannot register {r} because no available URLs"
+                logger.error(msg)
+                raise ValueError(msg)
+            postfix = r.namespace.as_relative_url()
+            urls = [_ + postfix for _ in self.available_urls]
+            return await client.add_proxy(r.switchboard_url, r.topic, self.node_id, urls)
+
     @async_error_catcher
     async def on_shutdown(self, _: web.Application) -> None:
         self.logger.info("on_shutdown")
@@ -480,9 +524,6 @@ class DTPSServer:
 
         for topic_name, fd in self._forwarded.items():
             qual_topic_name = self.topics_prefix + topic_name
-            #
-            # reach = TopicReachability(URLString(qual_topic_name.as_relative_url()), self.node_id,
-            #                           self.node_id, forwarders=[], benchmark=LinkBenchmark.identity(), )
 
             tr = TopicRef(
                 fd.unique_id,
@@ -1244,56 +1285,6 @@ def put_meta_headers(h: CIMultiDict[str], tp: TopicProperties) -> None:
 
 
 #
-
-
-def put_link_header(h: CIMultiDict[str], url: str, rel: str, content_type: Optional[str]):
-    l = LinkHeader(url, rel, attributes={"rel": rel})
-    if content_type is not None:
-        l.attributes["type"] = content_type
-
-    h.add("Link", l.to_header())
-
-
-@dataclass
-class LinkHeader:
-    url: str
-    rel: str
-    attributes: Dict[str, str] = field(default_factory=dict)
-
-    def to_header(self) -> str:
-        s = f"<{self.url}>; rel={self.rel}"
-        for k, v in self.attributes.items():
-            s += f"; {k}={v}"
-        return s
-
-    @classmethod
-    def parse(cls, header: str) -> "LinkHeader":
-        pairs = header.split(";")
-        if not pairs:
-            raise ValueError
-        first = pairs[0]
-        if not first.startswith("<") or not first.endswith(">"):
-            raise ValueError
-        url = first[1:-1]
-
-        attributes: Dict[str, str] = {}
-        for p in pairs[1:]:
-            p = p.strip()
-            k, _, v = p.partition("=")
-            k = k.strip()
-            v = v.strip()
-            attributes[k] = v
-
-        rel = attributes.pop("rel", "")
-        return cls(url, rel, attributes)
-
-
-def get_link_headers(h: CIMultiDict[str]) -> Dict[str, LinkHeader]:
-    res: Dict[str, LinkHeader] = {}
-    for l in h.getall("Link", []):
-        lh = LinkHeader.parse(l)
-        res[lh.rel] = lh
-    return res
 
 
 @async_error_catcher
