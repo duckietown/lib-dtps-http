@@ -25,16 +25,11 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tungstenite::Message as TM;
 use warp::reply::Response;
 
-use crate::constants::{HEADER_CONTENT_LOCATION, HEADER_NODE_ID};
-use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
-use crate::structures::{
-    DataReady, FoundMetadata, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection,
-};
-use crate::urls::{join_ext, parse_url_ext};
-use crate::utils::time_nanos;
-use crate::websocket_abstractions::open_websocket_connection;
+use crate::open_websocket_connection;
+use crate::time_nanos;
 use crate::websocket_signals::MsgServerToClient;
 use crate::TypeOfConnection::Same;
+use crate::TypeOfConnection::{Relative, TCP, UNIX};
 use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
 use crate::{
     context, error_with_info, internal_assertion, not_available, not_implemented, not_reachable,
@@ -42,7 +37,10 @@ use crate::{
     TopicName, TopicRefAdd, CONTENT_TYPE_DTPS_INDEX, CONTENT_TYPE_DTPS_INDEX_CBOR,
     CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR, REL_HISTORY, TOPIC_PROXIED,
 };
+use crate::{join_ext, parse_url_ext};
+use crate::{DataReady, FoundMetadata, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection};
 use crate::{LinkBenchmark, LinkHeader, REL_EVENTS_DATA, REL_EVENTS_NODATA, REL_META};
+use crate::{HEADER_CONTENT_LOCATION, HEADER_NODE_ID};
 
 /// Note: need to have use futures::{StreamExt} in scope to use this
 pub async fn get_events_stream_inline(
@@ -407,7 +405,7 @@ pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
     //     "Cannot interpret as CBOR"
     // )?;
 
-    let ti = TopicsIndexInternal::from_wire(x0, con);
+    let ti = TopicsIndexInternal::from_wire(&x0, con);
 
     // debug!("get_index: {:#?}\n {:#?}", con, ti);
     Ok(ti)
@@ -764,9 +762,11 @@ pub async fn delete_topic(conbase: &TypeOfConnection, topic_name: &TopicName) ->
 pub fn escape_json_patch(s: &str) -> String {
     s.replace("~", "~0").replace("/", "~1")
 }
+
 pub fn unescape_json_patch(s: &str) -> String {
     s.replace("~1", "/").replace("~0", "~")
 }
+
 pub async fn add_proxy(
     conbase: &TypeOfConnection,
     mountpoint: &TopicName,

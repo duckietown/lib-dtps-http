@@ -19,17 +19,17 @@ use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 
-use crate::constants::*;
-use crate::object_queues::*;
-use crate::structures::*;
-use crate::types::*;
-use crate::LinkBenchmark;
-use crate::TopicProperties;
 use crate::{
     context, error_with_info, get_events_stream_inline, get_index, get_metadata, get_queue_id,
     get_random_node_id, get_stats, invalid_input, is_prefix_of, not_available, not_implemented,
-    not_reachable, sniff_type_resource, DTPSError, ServerStateAccess, TypeOfResource, UrlResult,
-    DTPSR, MASK_ORIGIN,
+    not_reachable, sniff_type_resource, Clocks, ContentInfo, DTPSError, DataSaved, FilePaths,
+    ForwardingStep, FoundMetadata, InsertNotification, LinkBenchmark, NodeAppData, ObjectQueue,
+    RawData, ServerStateAccess, TopicName, TopicProperties, TopicReachabilityInternal,
+    TopicRefInternal, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection, TypeOfResource,
+    UrlResult, CONTENT_TYPE_CBOR, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_JSON,
+    CONTENT_TYPE_PLAIN, CONTENT_TYPE_YAML, DTPSR, MASK_ORIGIN, TOPIC_LIST_AVAILABILITY,
+    TOPIC_LIST_CLOCK, TOPIC_LIST_NAME, TOPIC_LOGS, TOPIC_PROXIED, TOPIC_STATE_NOTIFICATION,
+    TOPIC_STATE_SUMMARY,
 };
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
@@ -605,7 +605,7 @@ impl ServerState {
     }
 
     pub fn release_blob(&mut self, digest: &str, who: &str) {
-        log::debug!("Del blob {digest} for {who:?}");
+        // log::debug!("Del blob {digest} for {who:?}");
 
         match self.blobs.get_mut(digest) {
             None => {
@@ -621,7 +621,7 @@ impl ServerState {
     }
 
     pub fn save_blob(&mut self, digest: &str, content: &[u8], who: &str, comment: &str) {
-        log::debug!("Add blob {digest} for {who:?}: {comment}");
+        // log::debug!("Add blob {digest} for {who:?}: {comment}");
 
         match self.blobs.get_mut(digest) {
             None => {
@@ -662,7 +662,7 @@ impl ServerState {
         object: &T,
         clocks: Option<Clocks>,
     ) -> DTPSR<DataSaved> {
-        let data_json = serde_json::to_string(object).unwrap();
+        let data_json = serde_json::to_string(object)?;
         return self.publish_json(topic_name, data_json.as_str(), clocks);
     }
 
@@ -672,7 +672,7 @@ impl ServerState {
         object: &T,
         clocks: Option<Clocks>,
     ) -> DTPSR<DataSaved> {
-        let data_yaml = serde_yaml::to_string(object).unwrap();
+        let data_yaml = serde_yaml::to_string(object)?;
         return self.publish_yaml(topic_name, data_yaml.as_str(), clocks);
     }
 
@@ -682,7 +682,7 @@ impl ServerState {
         object: &T,
         clocks: Option<Clocks>,
     ) -> DTPSR<DataSaved> {
-        let data_cbor = serde_cbor::to_vec(object).unwrap();
+        let data_cbor = serde_cbor::to_vec(object)?;
         return self.publish_cbor(topic_name, &data_cbor, clocks);
     }
 
@@ -722,7 +722,7 @@ impl ServerState {
         clocks: Option<Clocks>,
     ) -> DTPSR<DataSaved> {
         let bytesdata = text_content.as_bytes().to_vec();
-        self.publish(topic_name, &bytesdata, "text/plain", clocks)
+        self.publish(topic_name, &bytesdata, CONTENT_TYPE_PLAIN, clocks)
     }
 
     pub fn create_topic_index(&self) -> TopicsIndexInternal {
@@ -863,9 +863,18 @@ impl ServerState {
         TopicsIndexInternal { topics }
     }
 
-    pub fn subscribe_insert_notification(&self, tn: &TopicName) -> Receiver<InsertNotification> {
-        let q = self.oqs.get(tn).unwrap();
-        q.subscribe_insert_notification()
+    pub fn subscribe_insert_notification(
+        &self,
+        tn: &TopicName,
+    ) -> DTPSR<Receiver<InsertNotification>> {
+        let q = match self.oqs.get(tn) {
+            None => {
+                let s = format!("Could not find topic {}", tn.as_dash_sep());
+                return Err(DTPSError::TopicNotFound(s));
+            }
+            Some(q) => q,
+        };
+        Ok(q.subscribe_insert_notification())
     }
 
     pub fn get_last_insert(&self, tn: &TopicName) -> DTPSR<Option<InsertNotification>> {
@@ -1078,15 +1087,6 @@ pub async fn observe_node_proxy(
             md: md.clone(),
             index_internal: index_internal_at_t0.clone(),
         });
-        //
-        //     subcription_name.clone(),
-        //     ForwardInfo {
-        //         mounted_at: mounted_at.clone(),
-        //         url: url.clone(),
-        //         md: md.clone(),
-        //         index_internal: index_internal_at_t0.clone(),
-        //     },
-        // );
     }
     {
         let mut ss = ss_mutex.lock().await;
@@ -1106,12 +1106,8 @@ pub async fn observe_node_proxy(
     let (_handle, mut stream) = get_events_stream_inline(&inline_url).await;
 
     while let Some(notification) = stream.next().await {
-        // debug!("observe_proxy: got notification: {:#?}", notification);
-        // add_from_response(&mut ss, &subcription_name,
-        //                 &  mounted_at,&index_internal,);
-        //
         let x0: TopicsIndexWire = serde_cbor::from_slice(&notification.rd.content).unwrap();
-        let ti = TopicsIndexInternal::from_wire(x0, &url);
+        let ti = TopicsIndexInternal::from_wire(&x0, &url);
 
         {
             let mut ss = ss_mutex.lock().await;

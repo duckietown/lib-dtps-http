@@ -1,5 +1,6 @@
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt::Debug;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -17,21 +18,20 @@ use serde_cbor::Value as CBORValue;
 use serde_cbor::Value::Null as CBORNull;
 use serde_cbor::Value::Text as CBORText;
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::task::JoinHandle;
 
-use crate::cbor_manipulation::get_inside;
-use crate::signals_logic::ResolvedData::{NotAvailableYet, NotFound, Regular};
-use crate::utils::{divide_in_components, is_prefix_of};
-use crate::websocket_signals::ChannelInfo;
-use crate::TypeOfConnection::Relative;
 use crate::{
-    context, error_with_info, get_channel_info_message, get_dataready, get_rawdata, merge_clocks,
-    not_implemented, parse_url_ext, unescape_json_patch, utils, Clocks, ContentInfo, DTPSError,
-    DataReady, DataSaved, ForwardingStep, History, InsertNotification, LinkBenchmark,
-    OtherProxyInfo, ProxyJob, RawData, ServerState, ServerStateAccess, TopicName,
-    TopicReachabilityInternal, TopicRefAdd, TopicRefInternal, TopicsIndexInternal,
-    TypeOfConnection, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR,
-    REL_URL_META, TOPIC_PROXIED, URL_HISTORY,
+    context, divide_in_components, error_with_info, get_channel_info_message, get_dataready,
+    get_inside, get_rawdata, is_prefix_of, merge_clocks, not_implemented, parse_url_ext,
+    unescape_json_patch, utils, ChannelInfo, Clocks, ContentInfo, DTPSError, DataReady, DataSaved,
+    ForwardingStep, History, InsertNotification, LinkBenchmark, OtherProxyInfo, ProxyJob, RawData,
+    ResolvedData::{NotAvailableYet, NotFound, Regular},
+    ServerState, ServerStateAccess, TopicName, TopicReachabilityInternal, TopicRefAdd,
+    TopicRefInternal, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection,
+    TypeOfConnection::Relative,
+    CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR, REL_URL_META,
+    TOPIC_PROXIED, URL_HISTORY,
 };
 
 #[derive(Debug, Clone)]
@@ -335,7 +335,7 @@ impl ResolveDataSingle for TypeOFSource {
                     };
                     return Ok(ResolvedData::RawData(raw_data));
                 }
-                not_implemented!("MountedDir: {self:?}")
+                not_implemented!("MountedDir:\n{self:#?}")
             }
             TypeOFSource::MountedFile(_, filename, _) => {
                 let data = std::fs::read(filename)?;
@@ -359,7 +359,7 @@ impl ResolveDataSingle for TypeOFSource {
                 return Ok(ResolvedData::RawData(raw_data));
             }
             TypeOFSource::Aliased(_, _) => {
-                not_implemented!("resolve_data_single for {self:#?} with {self:?}")
+                not_implemented!("resolve_data_single for:\n{self:#?}")
             }
             TypeOFSource::History(s) => {
                 let x: &TypeOFSource = s;
@@ -379,8 +379,18 @@ impl ResolveDataSingle for TypeOFSource {
                             CONTENT_TYPE_TOPIC_HISTORY_CBOR,
                         )));
                     }
+                    TypeOFSource::Compose(sc) => {
+                        if sc.topic_name.is_root() {
+                            let ds2 = TypeOFSource::History(Box::new(TypeOFSource::OurQueue(
+                                TopicName::root(),
+                                TopicProperties::rw(),
+                            )));
+                            return ds2.resolve_data_single(presented_as, ss_mutex).await;
+                        }
+                        not_implemented!("resolve_data_single for:\n{self:#?}")
+                    }
                     _ => {
-                        not_implemented!("resolve_data_single for {self:#?} with {self:?}")
+                        not_implemented!("resolve_data_single for:\n{self:#?}")
                     }
                 }
 
@@ -496,7 +506,7 @@ impl TypeOFSource {
                 let (rx, first, channel_info) = {
                     let ss = ssa.lock().await;
 
-                    let rx = ss.subscribe_insert_notification(topic_name);
+                    let rx = ss.subscribe_insert_notification(topic_name)?;
                     let first = ss.get_last_insert(topic_name)?;
                     let oq = ss.get_queue(topic_name)?;
                     let channel_info = get_channel_info_message(oq);
@@ -511,16 +521,11 @@ impl TypeOFSource {
                 })
             }
 
-            TypeOFSource::Compose(sc) => {
-                // if sc.topic_name.is_root() {
-                //
-                // }
-                todo!("get_stream for {self:#?} with {self:?}")
-            }
+            TypeOFSource::Compose(sc) => get_stream_compose_meta(presented_as, ssa, sc).await,
             TypeOFSource::Transformed(s, _) => {
                 todo!("get_stream for {self:#?} with {self:?}")
             }
-            TypeOFSource::Deref(d) => Ok(get_stream_compose(presented_as, ssa, d).await?),
+            TypeOFSource::Deref(d) => get_stream_compose_data(presented_as, ssa, d).await,
             TypeOFSource::OtherProxied(_) => {
                 todo!("get_stream for {self:#?} with {self:?}")
             }
@@ -647,8 +652,195 @@ async fn listen_to_updates(
     Ok(())
 }
 
+async fn filter_stream<T, U, F>(mut receiver: Receiver<T>, sender: Sender<U>, f: F) -> DTPSR<()>
+where
+    F: Fn(T) -> DTPSR<U>,
+    T: Send + Clone + Debug,
+    U: Send + Clone + Debug,
+{
+    loop {
+        match receiver.recv().await {
+            Ok(m) => {
+                let u = f(m)?;
+                if sender.receiver_count() != 0 {
+                    match sender.send(u) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            log::warn!("Cannot send: {e:?}");
+                        }
+                    }
+                }
+            }
+            Err(e) => match e {
+                RecvError::Closed => {
+                    break;
+                }
+                RecvError::Lagged(e) => {
+                    log::warn!("Lagged: {e}");
+                }
+            },
+        }
+    }
+    Ok(())
+}
+
+// fn adapt_cbor_map<'a, F, T1, T2>(in1: &InsertNotification, f: F, content_type: String,
+//                              unique_id_suffix: String) -> DTPSR<InsertNotification>
+//     where F: FnOnce(&T1) -> T2,
+//           T1: Clone + Debug + Deserialize<'a>,
+//           T2: Serialize  + Clone + Debug ,
+// {
+//     let in1 = in1.clone();
+//     let rd0 = in1.raw_data.clone();
+//     let content: Vec<u8> = in1.raw_data.content.to_vec().clone();
+//     let rd = {
+//         // let v1 = serde_cbor::from_slice(&content)?;
+//         let v1 = rd0.interpret::<T1>()?;
+//         let v1_ = v1.clone();
+//         let v2 = f(&v1_);
+//         // let v2 = match f(v1) {
+//         //     Ok(v) => v,
+//         //     Err(e) => {
+//         //         return Err(DTPSError::Other(format!("Cannot run function")));
+//         //     }
+//         // };
+//         todo!();
+//         // let cbor_bytes = serde_cbor::to_vec(&v2)?;
+//         // let rd = RawData::new(&cbor_bytes, content_type);
+//         // rd.clone()
+//     };
+//     todo!("adapt_cbor_map")
+//     //
+//     // let ds = in1.data_saved.clone();
+//     //
+//     // let data_saved = DataSaved {
+//     //     origin_node: ds.origin_node.clone(),
+//     //     unique_id: format!("{}:{}", ds.unique_id, unique_id_suffix),
+//     //     index: ds.index,
+//     //     time_inserted: ds.time_inserted,
+//     //     clocks: ds.clocks.clone(),
+//     //     content_type: rd.content_type.clone(),
+//     //     content_length: rd.content.len(),
+//     //     digest: rd.digest().clone(),
+//     // };
+//     // Ok(InsertNotification {
+//     //     data_saved,
+//     //     raw_data: rd,
+//     // })
+// }
+
+fn filter_index(
+    data1: &TopicsIndexWire,
+    prefix: TopicName,
+    presented_as: String,
+) -> DTPSR<TopicsIndexWire> {
+    let con = TypeOfConnection::Relative(presented_as, None);
+    let data1 = TopicsIndexInternal::from_wire(&data1, &con);
+    let mut data2 = TopicsIndexInternal::default();
+    for (k, v) in data1.topics.iter() {
+        match is_prefix_of(prefix.as_components(), k.as_components()) {
+            None => {}
+            Some((_matched, extra_elements)) => {
+                let tn2 = TopicName::from_components(&extra_elements);
+                data2.topics.insert(tn2, v.clone());
+            }
+        }
+    }
+    let data2 = data2.to_wire(None); // XXX
+
+    Ok(data2)
+}
+
+fn filter_func(
+    in1: InsertNotification,
+    prefix: TopicName,
+    presented_as: String,
+) -> DTPSR<InsertNotification> {
+    // let f = |x: &TopicsIndexWire| filter_index(x, prefix, presented_as).unwrap();
+
+    let v1 = in1.raw_data.interpret::<TopicsIndexWire>()?;
+    let v2 = filter_index(&v1, prefix.clone(), presented_as.clone())?;
+    let rd = RawData::represent_as_cbor_ct(v2, CONTENT_TYPE_DTPS_INDEX_CBOR)?;
+    //
+    // adapt_cbor_map(&in1, f, CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(), "filtered".to_string())
+    // todo!("filter_func")
+    let ds = &in1.data_saved;
+    let data_saved = DataSaved {
+        origin_node: ds.origin_node.clone(),
+        unique_id: format!("{}:{}", ds.unique_id, "filtered"),
+        index: ds.index,
+        time_inserted: ds.time_inserted,
+        clocks: ds.clocks.clone(),
+        content_type: rd.content_type.clone(),
+        content_length: rd.content.len(),
+        digest: rd.digest().clone(),
+    };
+    Ok(InsertNotification {
+        data_saved,
+        raw_data: rd,
+    })
+}
+
+async fn transform_for(
+    receiver: Receiver<InsertNotification>,
+    out_stream_sender: Sender<InsertNotification>,
+    prefix: TopicName,
+    presented_as: String,
+) -> DTPSR<()> {
+    let f = |in1: InsertNotification| filter_func(in1, prefix.clone(), presented_as.clone());
+    filter_stream(receiver, out_stream_sender, f).await
+}
+
 #[async_recursion]
-async fn get_stream_compose(
+async fn get_stream_compose_meta(
+    presented_as: &str,
+    ssa: ServerStateAccess,
+    sc: &SourceComposition,
+) -> DTPSR<DataStream> {
+    let tn = TopicName::root();
+    let ds0 = TypeOFSource::OurQueue(tn.clone(), TopicProperties::rw());
+    let stream0 = ds0.get_data_stream(presented_as, ssa.clone()).await?;
+    let mut handles = stream0.handles;
+    let receiver = stream0.stream.unwrap();
+    let (out_stream_sender, out_stream_recv) = tokio::sync::broadcast::channel(1024);
+
+    let future = transform_for(
+        receiver,
+        out_stream_sender,
+        sc.topic_name.clone(),
+        presented_as.to_string(),
+    );
+    // let handle1 = tokio::spawn(show_errors(
+    //     Some(ssa.clone()),
+    //     "receiver".to_string(), future,
+    // ));
+    handles.push(tokio::spawn(future));
+
+    let queue_created: i64 = Local::now().timestamp_nanos();
+    let num_total = 1;
+
+    let in0 = filter_func(
+        stream0.first.unwrap(),
+        sc.topic_name.clone(),
+        presented_as.to_string(),
+    )?;
+
+    let data_stream = DataStream {
+        channel_info: ChannelInfo {
+            queue_created,
+            num_total,
+            newest: None,
+            oldest: None,
+        },
+        first: Some(in0),
+        stream: Some(out_stream_recv),
+        handles,
+    };
+    Ok(data_stream)
+}
+
+#[async_recursion]
+async fn get_stream_compose_data(
     presented_as: &str,
     ssa: ServerStateAccess,
     sc: &SourceComposition,

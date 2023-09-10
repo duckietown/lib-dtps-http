@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::string::ToString;
-use strip_ansi_escapes::strip;
 
 use bytes::Bytes;
 use futures::stream::SplitSink;
@@ -8,6 +7,7 @@ use futures::SinkExt;
 use futures::StreamExt;
 use log::{debug, error};
 use maud::{html, PreEscaped};
+use strip_ansi_escapes::strip;
 use tokio::spawn;
 use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -18,23 +18,16 @@ use warp::hyper::Body;
 use warp::reply::Response;
 use warp::ws::Message as WarpMessage;
 
-use crate::cbor_manipulation::display_printable;
-use crate::html_utils::make_html;
-use crate::signals_logic::{
-    interpret_path, DataProps, GetMeta, ResolveDataSingle, ResolvedData, TopicProperties,
-    TypeOFSource,
-};
-use crate::utils::{divide_in_components, get_good_url_for_components};
-use crate::utils_headers::get_accept_header;
-use crate::websocket_abstractions::open_websocket_connection;
-use crate::websocket_signals::{MsgClientToServer, MsgServerToClient};
 use crate::{
-    do_receiving, error_with_info, get_header_with_default, get_metadata,
+    display_printable, divide_in_components, do_receiving, error_with_info, get_accept_header,
+    get_good_url_for_components, get_header_with_default, get_metadata,
     get_series_of_messages_for_notification_, handle_topic_post, handle_websocket_queue,
-    make_request, not_implemented, object_queues, put_alternative_locations,
-    receive_from_websocket, send_as_ws_cbor, serve_static_file_path, utils_headers, utils_mime,
-    DataStream, HandlersResponse, ObjectQueue, Patchable, RawData, ServerStateAccess, TopicName,
-    TopicsIndexInternal, CONTENT_TYPE, CONTENT_TYPE_CBOR, CONTENT_TYPE_PATCH_CBOR,
+    interpret_path, make_html, make_request, not_implemented, object_queues,
+    open_websocket_connection, put_alternative_locations, receive_from_websocket, send_as_ws_cbor,
+    serve_static_file_path, utils_headers, utils_mime, DataProps, DataStream, GetMeta,
+    HandlersResponse, MsgClientToServer, MsgServerToClient, ObjectQueue, Patchable, RawData,
+    ResolveDataSingle, ResolvedData, ServerStateAccess, TopicName, TopicProperties,
+    TopicsIndexInternal, TypeOFSource, CONTENT_TYPE, CONTENT_TYPE_PATCH_CBOR,
     CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_YAML, DTPSR, JAVASCRIPT_SEND, OCTET_STREAM,
 };
 
@@ -398,7 +391,7 @@ pub async fn serve_master_get(
     // get referrer
     let referrer = get_referrer(&headers);
     debug!("GET {} ", path.as_str());
-    debug!("Referrer {:?} ", referrer);
+    // debug!("Referrer {:?} ", referrer);
 
     let path_str = path_normalize(&path);
 

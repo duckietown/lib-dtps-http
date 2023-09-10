@@ -11,9 +11,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::signals_logic::TopicProperties;
 use crate::urls::join_ext;
 use crate::utils::divide_in_components;
+use crate::TopicProperties;
 use crate::{join_con, RawData, TopicName};
 use crate::{parse_url_ext, LinkBenchmark, DTPSR};
 
@@ -24,7 +24,7 @@ pub struct TopicsIndexWire {
     pub topics: HashMap<String, TopicRefWire>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TopicsIndexInternal {
     pub topics: HashMap<TopicName, TopicRefInternal>,
 }
@@ -38,7 +38,7 @@ impl TopicsIndexInternal {
         }
         TopicsIndexWire { topics }
     }
-    pub fn from_wire(wire: TopicsIndexWire, conbase: &TypeOfConnection) -> Self {
+    pub fn from_wire(wire: &TopicsIndexWire, conbase: &TypeOfConnection) -> Self {
         let mut topics: HashMap<TopicName, TopicRefInternal> = HashMap::new();
         for (topic_name, topic_ref_wire) in &wire.topics {
             let topic_ref_internal = TopicRefInternal::from_wire(topic_ref_wire, conbase);

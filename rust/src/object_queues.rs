@@ -10,7 +10,7 @@ use tokio::sync::broadcast;
 use crate::structures::TopicRefInternal;
 use crate::{
     identify_presentation, merge_clocks, Clocks, ContentPresentation, DTPSError, MinMax,
-    ServerState, CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, DTPSR,
+    CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, DTPSR,
 };
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, PartialEq)]
@@ -22,8 +22,8 @@ pub struct RawData {
 impl RawData {
     pub fn new<S: AsRef<[u8]>, T: AsRef<str>>(content: S, content_type: T) -> RawData {
         RawData {
-            content: Bytes::from(content.as_ref().to_vec()),
-            content_type: content_type.as_ref().to_string(),
+            content: Bytes::from(content.as_ref().to_vec().clone()).clone(),
+            content_type: content_type.as_ref().to_string().clone(),
         }
     }
     pub fn cbor<S: AsRef<[u8]>>(content: S) -> RawData {
@@ -43,6 +43,9 @@ impl RawData {
     pub fn represent_as_cbor<T: Serialize>(x: T) -> DTPSR<Self> {
         Ok(RawData::new(serde_cbor::to_vec(&x)?, CONTENT_TYPE_CBOR))
     }
+    pub fn represent_as_cbor_ct<T: Serialize>(x: T, ct: &str) -> DTPSR<Self> {
+        Ok(RawData::new(serde_cbor::to_vec(&x)?, ct.to_string()))
+    }
     pub fn from_cbor_value(x: &serde_cbor::Value) -> DTPSR<Self> {
         Ok(RawData::cbor(serde_cbor::to_vec(x)?))
     }
@@ -59,15 +62,15 @@ impl RawData {
         match self.presentation() {
             ContentPresentation::CBOR => {
                 let v: T = serde_cbor::from_slice::<T>(&self.content)?;
-                Ok(v.clone())
+                Ok(v)
             }
             ContentPresentation::JSON => {
                 let v: T = serde_json::from_slice::<T>(&self.content)?;
-                Ok(v.clone())
+                Ok(v)
             }
             ContentPresentation::YAML => {
                 let v: T = serde_yaml::from_slice::<T>(&self.content)?;
-                Ok(v.clone())
+                Ok(v)
             }
             ContentPresentation::PlainText => DTPSError::other("cannot interpret plain text"),
             ContentPresentation::Other => DTPSError::other("cannot interpret unknown content type"),
