@@ -209,10 +209,7 @@ pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<Option<MsgServe
     Ok(Some(msg_from_server))
 }
 
-pub async fn listen_events_websocket(
-    con: TypeOfConnection,
-    tx: UnboundedSender<Notification>,
-) -> DTPSR<()> {
+pub async fn listen_events_websocket(con: TypeOfConnection, tx: UnboundedSender<Notification>) -> DTPSR<()> {
     let wsc = open_websocket_connection(&con).await?;
     let prefix = format!("listen_events_websocket({con})");
     // debug_with_info!("starting to listen to events for {} on {:?}", con, read);
@@ -238,8 +235,7 @@ pub async fn listen_events_websocket(
             Some(MsgServerToClient::DataReady(dr_)) => dr_,
 
             _ => {
-                let s =
-                    format!("{prefix}: message #{index}: unexpected message: {msg_from_server:#?}");
+                let s = format!("{prefix}: message #{index}: unexpected message: {msg_from_server:#?}");
                 error_with_info!("{}", s);
                 return DTPSError::other(s);
             }
@@ -264,8 +260,7 @@ pub async fn listen_events_websocket(
                 let msg_from_server = receive_from_server(&mut rx).await?;
 
                 let chunk = match msg_from_server {
-                    Some(MsgServerToClient::DataReady(..) | MsgServerToClient::ChannelInfo(..))
-                    | None => {
+                    Some(MsgServerToClient::DataReady(..) | MsgServerToClient::ChannelInfo(..)) | None => {
                         // pragma: no cover
                         let s = format!("{prefix}: unexpected message : {msg_from_server:#?}");
                         return DTPSError::other(s);
@@ -325,10 +320,7 @@ pub async fn interpret_resp(con: &TypeOfConnection, resp: Response) -> DTPSR<Raw
         let content_type = get_content_type(&resp);
         // Get the response body bytes.
         let content = hyper::body::to_bytes(resp.into_body()).await?;
-        Ok(RawData {
-            content,
-            content_type,
-        })
+        Ok(RawData { content, content_type })
     } else {
         let url = con.to_string();
         let code = resp.status().as_u16();
@@ -377,32 +369,19 @@ pub async fn sniff_type_resource(con: &TypeOfConnection) -> DTPSR<TypeOfResource
 
 pub async fn post_data(con: &TypeOfConnection, rd: &RawData) -> DTPSR<DataSaved> {
     let resp = context!(
-        make_request(
-            con,
-            hyper::Method::POST,
-            &rd.content,
-            Some(&rd.content_type),
-            None
-        )
-        .await,
+        make_request(con, hyper::Method::POST, &rd.content, Some(&rd.content_type), None).await,
         "Cannot make request to {}",
         con.to_string(),
     )?;
 
     let (is_success, as_string) = (resp.status().is_success(), resp.status().to_string());
-    let body_bytes = context!(
-        hyper::body::to_bytes(resp.into_body()).await,
-        "Cannot get body bytes"
-    )?;
+    let body_bytes = context!(hyper::body::to_bytes(resp.into_body()).await, "Cannot get body bytes")?;
     if !is_success {
         // pragma: no cover
         let body_text = String::from_utf8_lossy(&body_bytes);
         return not_available!("Request is not a success: for {con}\n{as_string:?}\n{body_text}");
     }
-    let x0: DataSaved = context!(
-        serde_cbor::from_slice(&body_bytes),
-        "Cannot interpret as CBOR"
-    )?;
+    let x0: DataSaved = context!(serde_cbor::from_slice(&body_bytes), "Cannot interpret as CBOR")?;
 
     Ok(x0)
 }
@@ -412,9 +391,7 @@ pub async fn get_history(con: &TypeOfConnection) -> DTPSR<History> {
     let content_type = rd.content_type;
     if content_type != CONTENT_TYPE_TOPIC_HISTORY_CBOR {
         // pragma: no cover
-        return not_available!(
-            "Expected content type {CONTENT_TYPE_TOPIC_HISTORY_CBOR}, obtained {content_type} "
-        );
+        return not_available!("Expected content type {CONTENT_TYPE_TOPIC_HISTORY_CBOR}, obtained {content_type} ");
     }
     let x = serde_cbor::from_slice::<History>(&rd.content);
     if x.is_err() {
@@ -439,9 +416,7 @@ pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
     let content_type = rd.content_type;
     if content_type != CONTENT_TYPE_DTPS_INDEX_CBOR {
         // pragma: no cover
-        return not_available!(
-            "Expected content type {CONTENT_TYPE_DTPS_INDEX_CBOR}, obtained {content_type} "
-        );
+        return not_available!("Expected content type {CONTENT_TYPE_DTPS_INDEX_CBOR}, obtained {content_type} ");
     }
     let x = serde_cbor::from_slice::<TopicsIndexWire>(&rd.content);
     if x.is_err() {
@@ -591,9 +566,7 @@ fn check_unix_socket(file_path: &str) -> DTPSR<()> {
             not_reachable!("File {file_path} exists but it is not a socket.")
         }
     } else {
-        Err(DTPSError::NotAvailable(format!(
-            "Socket {file_path} does not exist."
-        )))
+        Err(DTPSError::NotAvailable(format!("Socket {file_path} does not exist.")))
     }
 }
 
@@ -607,10 +580,7 @@ pub async fn make_request(
     let use_url = match conbase {
         TCP(url) => url.clone().to_string(),
         UNIX(uc) => {
-            context!(
-                check_unix_socket(&uc.socket_name),
-                "cannot use unix socket {uc}",
-            )?;
+            context!(check_unix_socket(&uc.socket_name), "cannot use unix socket {uc}",)?;
 
             let h = hex::encode(&uc.socket_name);
             let p0 = format!("unix://{}{}", h, uc.path);
@@ -716,14 +686,11 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     let alternatives0 = headers.get_all(HEADER_CONTENT_LOCATION);
     // debug_with_info!("alternatives0: {:#?}", alternatives0);
     // convert into a vector of strings
-    let alternative_urls: Vec<String> =
-        alternatives0.iter().map(string_from_header_value).collect();
+    let alternative_urls: Vec<String> = alternatives0.iter().map(string_from_header_value).collect();
 
     // convert into a vector of URLs
-    let mut alternative_urls: Vec<TypeOfConnection> = alternative_urls
-        .iter()
-        .map(|x| parse_url_ext(x).unwrap())
-        .collect();
+    let mut alternative_urls: Vec<TypeOfConnection> =
+        alternative_urls.iter().map(|x| parse_url_ext(x).unwrap()).collect();
     alternative_urls.push(conbase.clone());
 
     let answering = headers.get(HEADER_NODE_ID).map(string_from_header_value);
@@ -777,11 +744,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     Ok(md)
 }
 
-pub async fn create_topic(
-    conbase: &TypeOfConnection,
-    topic_name: &TopicName,
-    tr: &TopicRefAdd,
-) -> DTPSR<()> {
+pub async fn create_topic(conbase: &TypeOfConnection, topic_name: &TopicName, tr: &TopicRefAdd) -> DTPSR<()> {
     let mut path: String = String::new();
     for t in topic_name.as_components() {
         path.push_str("/");

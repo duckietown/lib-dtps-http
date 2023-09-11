@@ -122,10 +122,7 @@ impl RawData {
             ContentPresentation::JSON => serde_json::to_vec(&value)?,
             ContentPresentation::YAML => Bytes::from(serde_yaml::to_string(&value)?).to_vec(),
             ContentPresentation::PlainText | ContentPresentation::Other => {
-                return DTPSError::other(format!(
-                    "cannot translate from {:?} to {:?}",
-                    mine, desired
-                ));
+                return DTPSError::other(format!("cannot translate from {:?} to {:?}", mine, desired));
             }
         };
         Ok(RawData::new(bytes, ct))
@@ -208,10 +205,7 @@ impl TopicsIndexInternal {
         let mut topics: HashMap<TopicName, TopicRefInternal> = HashMap::new();
         for (topic_name, topic_ref_wire) in &wire.topics {
             let topic_ref_internal = TopicRefInternal::from_wire(topic_ref_wire, conbase);
-            topics.insert(
-                TopicName::from_dash_sep(topic_name).unwrap(),
-                topic_ref_internal,
-            );
+            topics.insert(TopicName::from_dash_sep(topic_name).unwrap(), topic_ref_internal);
         }
         Self { topics }
     }
@@ -325,8 +319,7 @@ impl TopicRefInternal {
     pub fn from_wire(wire: &TopicRefWire, conbase: &TypeOfConnection) -> Self {
         let mut reachability = Vec::new();
         for topic_reachability_wire in &wire.reachability {
-            let topic_reachability_internal =
-                TopicReachabilityInternal::from_wire(topic_reachability_wire, conbase);
+            let topic_reachability_internal = TopicReachabilityInternal::from_wire(topic_reachability_wire, conbase);
             reachability.push(topic_reachability_internal);
         }
         TopicRefInternal {
@@ -406,21 +399,12 @@ pub enum FilePaths {
 pub fn join_and_normalize(path1: &str, path2: &str) -> String {
     let mut path = PathBuf::from(path1);
     path.push(path2);
-    path.canonicalize()
-        .unwrap_or(path)
-        .to_str()
-        .unwrap()
-        .to_string()
+    path.canonicalize().unwrap_or(path).to_str().unwrap().to_string()
 }
 
 pub fn normalize_path(path1: &str) -> String {
     let path = PathBuf::from(path1);
-    let mut p = path
-        .canonicalize()
-        .unwrap_or(path)
-        .to_str()
-        .unwrap()
-        .to_string();
+    let mut p = path.canonicalize().unwrap_or(path).to_str().unwrap().to_string();
     if p.len() > 1 {
         p = p.trim_end_matches("/").to_string();
     }
@@ -545,9 +529,7 @@ impl TopicReachabilityInternal {
                 TypeOfConnection::UNIX(_) => self.con.clone(),
                 TypeOfConnection::Same() => self.con.clone(),
                 TypeOfConnection::File(..) => self.con.clone(),
-                TypeOfConnection::Relative(_, query) => {
-                    TypeOfConnection::Relative(use_patch.clone(), query.clone())
-                }
+                TypeOfConnection::Relative(_, query) => TypeOfConnection::Relative(use_patch.clone(), query.clone()),
             },
         };
 
@@ -606,10 +588,7 @@ pub struct Clocks {
     pub wall: HashMap<String, MinMax<i64>>,
 }
 
-pub fn merge_to<T: Ord + Clone>(
-    x: &mut HashMap<String, MinMax<T>>,
-    y: &HashMap<String, MinMax<T>>,
-) {
+pub fn merge_to<T: Ord + Clone>(x: &mut HashMap<String, MinMax<T>>, y: &HashMap<String, MinMax<T>>) {
     for (key, minmax) in y {
         if let Some(minmax2) = x.get(key) {
             x.insert(key.clone(), merge_minmax(minmax, minmax2));

@@ -63,8 +63,7 @@ impl JsonSchema for TopicName {
 
     fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
         let mut schema_object = SchemaObject::default();
-        schema_object.metadata().description =
-            Some("dash separate topic name (empty string=root)".to_string());
+        schema_object.metadata().description = Some("dash separate topic name (empty string=root)".to_string());
         schema_object.string(); //chemars::schema::SimpleTypes::String);
         Schema::Object(schema_object)
     }

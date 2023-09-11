@@ -218,9 +218,7 @@ pub fn join_ext(conbase: &TypeOfConnection, s: &str) -> DTPSR<TypeOfConnection> 
             }
 
             TypeOfConnection::Same() => Ok(Relative(s.to_string(), None)),
-            TypeOfConnection::File(hostname, path) => {
-                Ok(TypeOfConnection::File(hostname, path.join(s)))
-            }
+            TypeOfConnection::File(hostname, path) => Ok(TypeOfConnection::File(hostname, path.join(s))),
         }
     }
 }

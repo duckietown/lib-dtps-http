@@ -70,9 +70,7 @@ pub trait GenericSocketConnection: Send + Sync {
     fn get_handles(&self) -> &Vec<JoinHandle<()>>;
 }
 
-pub async fn open_websocket_connection(
-    con: &TypeOfConnection,
-) -> DTPSR<Box<dyn GenericSocketConnection>> {
+pub async fn open_websocket_connection(con: &TypeOfConnection) -> DTPSR<Box<dyn GenericSocketConnection>> {
     info_with_info!("open_websocket_connection: {:#?}", con.to_string());
     match con {
         TCP(url) => open_websocket_connection_tcp(url).await,
@@ -331,17 +329,12 @@ pub async fn open_websocket_connection_tcp(url: &Url) -> DTPSR<Box<dyn GenericSo
     Ok(Box::new(tcp))
 }
 
-pub async fn open_websocket_connection_unix(
-    uc: &UnixCon,
-) -> DTPSR<Box<dyn GenericSocketConnection>> {
+pub async fn open_websocket_connection_unix(uc: &UnixCon) -> DTPSR<Box<dyn GenericSocketConnection>> {
     let stream_res = UnixStream::connect(uc.socket_name.clone()).await;
     let stream = match stream_res {
         Ok(s) => s,
         Err(err) => {
-            return DTPSError::not_reachable(format!(
-                "could not connect to {}: {}",
-                uc.socket_name, err
-            ));
+            return DTPSError::not_reachable(format!("could not connect to {}: {}", uc.socket_name, err));
         }
     };
     // let ready = stream.ready(Interest::WRITABLE).await.unwrap();
@@ -378,10 +371,7 @@ pub async fn open_websocket_connection_unix(
             Ok(s) => s,
             Err(err) => {
                 error_with_info!("could not connect to {}: {}", uc.socket_name, err);
-                return DTPSError::other(format!(
-                    "could not connect to {}: {}",
-                    uc.socket_name, err
-                ));
+                return DTPSError::other(format!("could not connect to {}: {}", uc.socket_name, err));
             }
         }
     };

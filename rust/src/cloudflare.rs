@@ -23,14 +23,9 @@ pub struct CloudflareTunnel {
     pub TunnelName: String,
 }
 
-pub async fn open_cloudflare(
-    port: u16,
-    tunnel_file: &str,
-    cloudflare_executable: &str,
-) -> JoinHandle<()> {
+pub async fn open_cloudflare(port: u16, tunnel_file: &str, cloudflare_executable: &str) -> JoinHandle<()> {
     let contents = std::fs::File::open(tunnel_file).expect("file not found");
-    let tunnel_info: CloudflareTunnel =
-        serde_json::from_reader(contents).expect("error while reading file");
+    let tunnel_info: CloudflareTunnel = serde_json::from_reader(contents).expect("error while reading file");
     let hoststring_127 = format!("127.0.0.1:{}", port);
     let cmdline = [
         "tunnel",

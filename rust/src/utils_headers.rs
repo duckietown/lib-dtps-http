@@ -72,12 +72,7 @@ impl LinkHeader {
     }
 }
 
-pub fn put_link_header(
-    h: &mut HeaderMap<HeaderValue>,
-    url: &str,
-    rel: &str,
-    content_type: Option<&str>,
-) {
+pub fn put_link_header(h: &mut HeaderMap<HeaderValue>, url: &str, rel: &str, content_type: Option<&str>) {
     let mut l = LinkHeader {
         url: url.to_string(),
         attributes: hashmap! {
@@ -85,8 +80,7 @@ pub fn put_link_header(
         },
     };
     if let Some(content_type) = content_type {
-        l.attributes
-            .insert("type".to_string(), content_type.to_string());
+        l.attributes.insert("type".to_string(), content_type.to_string());
     }
 
     let s = l.format_header_value();
@@ -94,28 +88,16 @@ pub fn put_link_header(
 }
 
 pub fn put_source_headers(h: &mut HeaderMap<HeaderValue>, origin_node: &str, unique_id: &str) {
-    h.append(
-        HEADER_DATA_ORIGIN_NODE_ID,
-        HeaderValue::from_str(origin_node).unwrap(),
-    );
-    h.append(
-        HEADER_DATA_UNIQUE_ID,
-        HeaderValue::from_str(unique_id).unwrap(),
-    );
+    h.append(HEADER_DATA_ORIGIN_NODE_ID, HeaderValue::from_str(origin_node).unwrap());
+    h.append(HEADER_DATA_UNIQUE_ID, HeaderValue::from_str(unique_id).unwrap());
 }
 
 pub fn put_header_location(h: &mut HeaderMap<HeaderValue>, location: &str) {
-    h.append(
-        header::CONTENT_LOCATION,
-        HeaderValue::from_str(location).unwrap(),
-    );
+    h.append(header::CONTENT_LOCATION, HeaderValue::from_str(location).unwrap());
 }
 
 pub fn put_header_content_type(h: &mut HeaderMap<HeaderValue>, content_type: &str) {
-    h.append(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(content_type).unwrap(),
-    );
+    h.append(header::CONTENT_TYPE, HeaderValue::from_str(content_type).unwrap());
 }
 
 pub fn put_header_accept(h: &mut HeaderMap<HeaderValue>, content_type: &str) {
@@ -123,14 +105,8 @@ pub fn put_header_accept(h: &mut HeaderMap<HeaderValue>, content_type: &str) {
 }
 
 pub fn put_common_headers(ss: &ServerState, headers: &mut HeaderMap<HeaderValue>) {
-    headers.append(
-        header::SERVER,
-        HeaderValue::from_str(get_id_string().as_str()).unwrap(),
-    );
-    headers.append(
-        HEADER_NODE_ID,
-        HeaderValue::from_str(ss.node_id.as_str()).unwrap(),
-    );
+    headers.append(header::SERVER, HeaderValue::from_str(get_id_string().as_str()).unwrap());
+    headers.append(HEADER_NODE_ID, HeaderValue::from_str(ss.node_id.as_str()).unwrap());
 }
 
 pub fn put_meta_headers(h: &mut HeaderMap<HeaderValue>, tp: &TopicProperties) {
@@ -140,12 +116,7 @@ pub fn put_meta_headers(h: &mut HeaderMap<HeaderValue>, tp: &TopicProperties) {
     //     HeaderValue::from_static(EVENTS_SUFFIX_DATA),
     // );
     if tp.streamable {
-        put_link_header(
-            h,
-            &format!("{EVENTS_SUFFIX}/"),
-            REL_EVENTS_NODATA,
-            Some("websocket"),
-        );
+        put_link_header(h, &format!("{EVENTS_SUFFIX}/"), REL_EVENTS_NODATA, Some("websocket"));
         put_link_header(
             h,
             &format!("{EVENTS_SUFFIX}/?send_data=1"),
@@ -200,10 +171,7 @@ pub fn get_accept_header(headers: &HeaderMap) -> Vec<String> {
     match accept_header {
         Some(x) => {
             let accept_header = x.to_str().unwrap();
-            let accept_header = accept_header
-                .split(",")
-                .map(|x| x.trim().to_string())
-                .collect();
+            let accept_header = accept_header.split(",").map(|x| x.trim().to_string()).collect();
             accept_header
         }
         None => vec![],

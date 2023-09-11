@@ -148,14 +148,7 @@ pub async fn serve_master_post(
                     Some(est) => est.using.join(fq.his_topic_name.as_relative_url())?,
                 }
             };
-            let resp = make_request(
-                &con,
-                hyper::Method::POST,
-                &rd.content,
-                Some(&rd.content_type),
-                None,
-            )
-            .await?;
+            let resp = make_request(&con, hyper::Method::POST, &rd.content, Some(&rd.content_type), None).await?;
             if !resp.status().is_success() {
                 let s = format!("The proxied request did not succeed. con ={con} ");
                 error_with_info!("{s}");
@@ -246,8 +239,7 @@ pub async fn serve_master_patch(
 
     let p = ds.get_properties();
     if !p.patchable {
-        let s =
-            format!("Cannot patch to {path_str:?} because the topic is not patchable:\n{ds:#?}");
+        let s = format!("Cannot patch to {path_str:?} because the topic is not patchable:\n{ds:#?}");
         error_with_info!(" {s}");
         let res = http::Response::builder()
             .status(StatusCode::METHOD_NOT_ALLOWED)

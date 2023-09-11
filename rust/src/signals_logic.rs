@@ -191,21 +191,12 @@ pub enum TypeOFSource {
 
 #[async_trait]
 pub trait Patchable {
-    async fn patch(
-        &self,
-        presented_as: &str,
-        ss_mutex: ServerStateAccess,
-        patch: &Patch,
-    ) -> DTPSR<()>;
+    async fn patch(&self, presented_as: &str, ss_mutex: ServerStateAccess, patch: &Patch) -> DTPSR<()>;
 }
 
 #[async_trait]
 pub trait ResolveDataSingle {
-    async fn resolve_data_single(
-        &self,
-        presented_as: &str,
-        ss_mutex: ServerStateAccess,
-    ) -> DTPSR<ResolvedData>;
+    async fn resolve_data_single(&self, presented_as: &str, ss_mutex: ServerStateAccess) -> DTPSR<ResolvedData>;
 }
 
 impl TypeOFSource {
@@ -255,10 +246,7 @@ impl TypeOFSource {
             }
             TypeOFSource::Transformed(source, transform) => {
                 // not_implemented!("get_inside for {self:#?} with {s:?}")
-                Ok(TypeOFSource::Transformed(
-                    source.clone(),
-                    transform.get_inside(s),
-                ))
+                Ok(TypeOFSource::Transformed(source.clone(), transform.get_inside(s)))
             }
 
             TypeOFSource::MountedFile(_, _, _) => {
@@ -297,11 +285,7 @@ pub struct OtherProxied {
 
 #[async_trait]
 pub trait GetMeta {
-    async fn get_meta_index(
-        &self,
-        presented_as: &str,
-        ss_mutex: ServerStateAccess,
-    ) -> DTPSR<TopicsIndexInternal>;
+    async fn get_meta_index(&self, presented_as: &str, ss_mutex: ServerStateAccess) -> DTPSR<TopicsIndexInternal>;
 }
 
 pub trait DataProps {
@@ -310,11 +294,7 @@ pub trait DataProps {
 
 #[async_trait]
 impl ResolveDataSingle for TypeOFSource {
-    async fn resolve_data_single(
-        &self,
-        presented_as: &str,
-        ss_mutex: ServerStateAccess,
-    ) -> DTPSR<ResolvedData> {
+    async fn resolve_data_single(&self, presented_as: &str, ss_mutex: ServerStateAccess) -> DTPSR<ResolvedData> {
         match self {
             TypeOFSource::Digest(digest, content_type) => {
                 let ss = ss_mutex.lock().await;
@@ -348,9 +328,7 @@ impl ResolveDataSingle for TypeOFSource {
                 Ok(ResolvedData::RawData(raw_data))
             }
             TypeOFSource::Transformed(source, transforms) => {
-                let data = source
-                    .resolve_data_single(presented_as, ss_mutex.clone())
-                    .await?;
+                let data = source.resolve_data_single(presented_as, ss_mutex.clone()).await?;
                 transform(data, transforms).await
             }
             TypeOFSource::Deref(sc) => single_compose(sc, presented_as, ss_mutex).await,
@@ -531,11 +509,7 @@ pub struct DataStream {
 
 impl TypeOFSource {
     #[async_recursion]
-    pub async fn get_data_stream(
-        &self,
-        presented_as: &str,
-        ssa: ServerStateAccess,
-    ) -> DTPSR<DataStream> {
+    pub async fn get_data_stream(&self, presented_as: &str, ssa: ServerStateAccess) -> DTPSR<DataStream> {
         match self {
             TypeOFSource::Digest(_, _) => {
                 not_implemented!("get_stream for {self:#?} with {self:?}")
@@ -775,11 +749,7 @@ where
 //     // })
 // }
 
-fn filter_index(
-    data1: &TopicsIndexWire,
-    prefix: TopicName,
-    presented_as: String,
-) -> DTPSR<TopicsIndexWire> {
+fn filter_index(data1: &TopicsIndexWire, prefix: TopicName, presented_as: String) -> DTPSR<TopicsIndexWire> {
     let con = TypeOfConnection::Relative(presented_as, None);
     let data1 = TopicsIndexInternal::from_wire(&data1, &con);
     let mut data2 = TopicsIndexInternal::default();
@@ -835,9 +805,7 @@ async fn transform_for(
     presented_as: String,
     unique_id: String,
 ) -> DTPSR<()> {
-    let f = |in1: InsertNotification| {
-        filter_func(in1, prefix.clone(), presented_as.clone(), unique_id.clone())
-    };
+    let f = |in1: InsertNotification| filter_func(in1, prefix.clone(), presented_as.clone(), unique_id.clone());
     filter_stream(receiver, out_stream_sender, f).await
 }
 
@@ -1018,16 +986,10 @@ async fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<Resolved
     }
 }
 
-async fn resolve_our_queue(
-    topic_name: &TopicName,
-    ss_mutex: ServerStateAccess,
-) -> DTPSR<ResolvedData> {
+async fn resolve_our_queue(topic_name: &TopicName, ss_mutex: ServerStateAccess) -> DTPSR<ResolvedData> {
     let ss = ss_mutex.lock().await;
     if !ss.oqs.contains_key(topic_name) {
-        return Ok(NotFound(format!(
-            "No queue with name {:?}",
-            topic_name.as_dash_sep()
-        )));
+        return Ok(NotFound(format!("No queue with name {:?}", topic_name.as_dash_sep())));
     }
     let oq = ss.oqs.get(topic_name).unwrap();
 
@@ -1054,11 +1016,7 @@ pub const MASK_ORIGIN: bool = false;
 
 #[async_trait]
 impl GetMeta for TypeOFSource {
-    async fn get_meta_index(
-        &self,
-        presented_url: &str,
-        ss_mutex: ServerStateAccess,
-    ) -> DTPSR<TopicsIndexInternal> {
+    async fn get_meta_index(&self, presented_url: &str, ss_mutex: ServerStateAccess) -> DTPSR<TopicsIndexInternal> {
         let x = self.get_meta_index_(presented_url, ss_mutex).await?;
 
         let root = TopicName::root();
@@ -1092,11 +1050,7 @@ mod test {
 
 impl TypeOFSource {
     //noinspection RsConstantConditionIf
-    async fn get_meta_index_(
-        &self,
-        presented_url: &str,
-        ss_mutex: ServerStateAccess,
-    ) -> DTPSR<TopicsIndexInternal> {
+    async fn get_meta_index_(&self, presented_url: &str, ss_mutex: ServerStateAccess) -> DTPSR<TopicsIndexInternal> {
         // debug_with_info!("get_meta_index: {:?}", self);
         return match self {
             TypeOFSource::ForwardedQueue(q) => {
@@ -1118,8 +1072,8 @@ impl TypeOFSource {
 
                     performance: the_data.link_benchmark_last.clone(),
                 });
-                let link_benchmark_total = the_data.reachability_we_used.benchmark.clone()
-                    + the_data.link_benchmark_last.clone();
+                let link_benchmark_total =
+                    the_data.reachability_we_used.benchmark.clone() + the_data.link_benchmark_last.clone();
 
                 if MASK_ORIGIN {
                     tr.reachability.clear();
@@ -1173,15 +1127,11 @@ impl TypeOFSource {
                 Ok(index)
             }
             TypeOFSource::Compose(sc) => get_sc_meta(sc, presented_url, ss_mutex).await,
-            TypeOFSource::Transformed(_, _) => Err(DTPSError::NotImplemented(
-                "get_meta_index for Transformed".to_string(),
-            )),
-            TypeOFSource::Digest(_, _) => Err(DTPSError::NotImplemented(
-                "get_meta_index for Digest".to_string(),
-            )),
-            TypeOFSource::Deref(_) => Err(DTPSError::NotImplemented(
-                "get_meta_index for Deref".to_string(),
-            )),
+            TypeOFSource::Transformed(_, _) => {
+                Err(DTPSError::NotImplemented("get_meta_index for Transformed".to_string()))
+            }
+            TypeOFSource::Digest(_, _) => Err(DTPSError::NotImplemented("get_meta_index for Digest".to_string())),
+            TypeOFSource::Deref(_) => Err(DTPSError::NotImplemented("get_meta_index for Deref".to_string())),
             TypeOFSource::OtherProxied(_) => {
                 not_implemented!("OtherProxied: {self:?}")
             }
@@ -1190,10 +1140,7 @@ impl TypeOFSource {
                 // let dir = ss.local_dirs.get(topic_name).unwrap();
                 let d = PathBuf::from(the_path);
                 if !d.exists() {
-                    return Err(DTPSError::TopicNotFound(format!(
-                        "MountedDir: {:?} does not exist",
-                        d
-                    )));
+                    return Err(DTPSError::TopicNotFound(format!("MountedDir: {:?} does not exist", d)));
                 }
                 let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
 
@@ -1253,9 +1200,7 @@ async fn get_sc_meta(
     let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
 
     for (prefix, inside) in sc.compose.iter() {
-        let x = inside
-            .get_meta_index(presented_as, ss_mutex.clone())
-            .await?;
+        let x = inside.get_meta_index(presented_as, ss_mutex.clone()).await?;
 
         for (a, b) in x.topics {
             let tr = b.clone();
@@ -1302,19 +1247,13 @@ async fn get_sc_meta(
     Ok(index)
 }
 
-fn get_result_to_put(
-    result_dict: &mut serde_cbor::value::Value,
-    prefix: Vec<String>,
-) -> &mut serde_cbor::value::Value {
+fn get_result_to_put(result_dict: &mut serde_cbor::value::Value, prefix: Vec<String>) -> &mut serde_cbor::value::Value {
     let mut current: &mut serde_cbor::value::Value = result_dict;
     for component in &prefix[..prefix.len() - 1] {
         if let serde_cbor::value::Value::Map(inside) = current {
             let the_key = CBORText(component.clone().into());
             if !inside.contains_key(&the_key) {
-                inside.insert(
-                    the_key.clone(),
-                    serde_cbor::value::Value::Map(BTreeMap::new()),
-                );
+                inside.insert(the_key.clone(), serde_cbor::value::Value::Map(BTreeMap::new()));
             }
             current = inside.get_mut(&the_key).unwrap();
         } else {
@@ -1324,11 +1263,7 @@ fn get_result_to_put(
     current
 }
 
-fn putinside(
-    result_dict: &mut serde_cbor::value::Value,
-    prefix: &Vec<String>,
-    what: ResolvedData,
-) -> DTPSR<()> {
+fn putinside(result_dict: &mut serde_cbor::value::Value, prefix: &Vec<String>, what: ResolvedData) -> DTPSR<()> {
     let mut the_result_to_put = get_result_to_put(result_dict, prefix.clone());
 
     let where_to_put = if let serde_cbor::value::Value::Map(where_to_put) = &mut the_result_to_put {
@@ -1391,10 +1326,7 @@ pub async fn interpret_path(
     let ends_with_dash = path.ends_with('/');
 
     if path_components.contains(&"!".to_string()) {
-        return DTPSError::other(format!(
-            "interpret_path: Cannot have ! in path: {:?}",
-            path_components
-        ));
+        return DTPSError::other(format!("interpret_path: Cannot have ! in path: {:?}", path_components));
     }
     {
         let deref: String = ":deref".to_string();
@@ -1424,10 +1356,7 @@ pub async fn interpret_path(
         let history_marker: String = URL_HISTORY.to_string();
 
         if path_components.contains(&history_marker) {
-            let i = path_components
-                .iter()
-                .position(|x| x == &history_marker)
-                .unwrap();
+            let i = path_components.iter().position(|x| x == &history_marker).unwrap();
             let before = path_components.get(0..i).unwrap().to_vec();
             let after = path_components.get(i + 1..).unwrap().to_vec();
             debug_with_info!("interpret_path: before: {:?} after: {:?}", before, after);
@@ -1442,10 +1371,7 @@ pub async fn interpret_path(
     {
         let index_marker = REL_URL_META.to_string();
         if path_components.contains(&index_marker) {
-            let i = path_components
-                .iter()
-                .position(|x| x == &index_marker)
-                .unwrap();
+            let i = path_components.iter().position(|x| x == &index_marker).unwrap();
             let before = path_components.get(0..i).unwrap().to_vec();
             let after = path_components.get(i + 1..).unwrap().to_vec();
 
@@ -1460,18 +1386,12 @@ pub async fn interpret_path(
     if path_components.len() > 1 {
         if path_components.first().unwrap() == ":ipfs" {
             if path_components.len() != 3 {
-                return DTPSError::other(format!(
-                    "Wrong number of components: {:?}; expected 3",
-                    path_components
-                ));
+                return DTPSError::other(format!("Wrong number of components: {:?}; expected 3", path_components));
             }
             let digest = path_components.get(1).unwrap();
             let content_type = path_components.get(2).unwrap();
             let content_type = content_type.replace("_", "/");
-            return Ok(TypeOFSource::Digest(
-                digest.to_string(),
-                content_type.to_string(),
-            ));
+            return Ok(TypeOFSource::Digest(digest.to_string(), content_type.to_string()));
         }
     }
     {
@@ -1562,10 +1482,7 @@ fn resolve(
     Ok(TypeOFSource::Compose(sc))
 }
 
-pub fn iterate_type_of_sources(
-    s: &ServerState,
-    add_aliases: bool,
-) -> Vec<(TopicName, TypeOFSource)> {
+pub fn iterate_type_of_sources(s: &ServerState, add_aliases: bool) -> Vec<(TopicName, TypeOFSource)> {
     let mut res: Vec<(TopicName, TypeOFSource)> = vec![];
     for (topic_name, x) in s.proxied_topics.iter() {
         let fq = ForwardedQueue {
@@ -1588,12 +1505,7 @@ pub fn iterate_type_of_sources(
         let sources_no_aliases = iterate_type_of_sources(s, false);
 
         for (topic_name, new_topic) in s.aliases.iter() {
-            let resolved = resolve(
-                &s.node_id,
-                new_topic.as_components(),
-                false,
-                &sources_no_aliases,
-            );
+            let resolved = resolve(&s.node_id, new_topic.as_components(), false, &sources_no_aliases);
             let r = match resolved {
                 Ok(rr) => rr,
                 Err(e) => {
@@ -1641,12 +1553,7 @@ fn resolve_extra_components(source: &TypeOFSource, rest: &Vec<String>) -> DTPSR<
 
 #[async_trait]
 impl Patchable for TypeOFSource {
-    async fn patch(
-        &self,
-        presented_as: &str,
-        ss_mutex: ServerStateAccess,
-        patch: &Patch,
-    ) -> DTPSR<()> {
+    async fn patch(&self, presented_as: &str, ss_mutex: ServerStateAccess, patch: &Patch) -> DTPSR<()> {
         match self {
             TypeOFSource::ForwardedQueue(_) => {
                 not_implemented!("patch for {self:#?} with {self:?}")
@@ -1737,11 +1644,7 @@ pub fn add_prefix_to_patch(patch: &Patch, prefix: &str) -> Patch {
     Patch(ops)
 }
 
-async fn patch_composition(
-    ss_mutex: ServerStateAccess,
-    patch: &Patch,
-    sc: &SourceComposition,
-) -> DTPSR<()> {
+async fn patch_composition(ss_mutex: ServerStateAccess, patch: &Patch, sc: &SourceComposition) -> DTPSR<()> {
     let mut ss = ss_mutex.lock().await;
 
     for x in &patch.0 {
@@ -1866,11 +1769,7 @@ async fn patch_our_queue(
     Ok(())
 }
 
-async fn patch_proxied(
-    ss_mutex: ServerStateAccess,
-    topic_name: &TopicName,
-    p: &Patch,
-) -> DTPSR<()> {
+async fn patch_proxied(ss_mutex: ServerStateAccess, topic_name: &TopicName, p: &Patch) -> DTPSR<()> {
     let mut ss = ss_mutex.lock().await;
 
     let (data_saved, raw_data) = match ss.get_last_insert(&topic_name)? {
@@ -1920,9 +1819,7 @@ async fn patch_proxied(
             | PatchOperation::Move(_)
             | PatchOperation::Copy(_)
             | PatchOperation::Test(_) => {
-                return Err(DTPSError::NotImplemented(format!(
-                    "operation invalid with {p:?}"
-                )));
+                return Err(DTPSError::NotImplemented(format!("operation invalid with {p:?}")));
             }
         }
     }

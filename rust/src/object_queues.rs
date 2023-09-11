@@ -152,9 +152,7 @@ impl ObjectQueue {
         let my_id = self.tr.unique_id.clone();
         if this_seq > 0 {
             let based_on = this_seq - 1;
-            clocks
-                .logical
-                .insert(my_id.clone(), MinMax::new(based_on, based_on));
+            clocks.logical.insert(my_id.clone(), MinMax::new(based_on, based_on));
         }
         clocks.wall.insert(my_id.clone(), MinMax::new(now, now));
         clocks

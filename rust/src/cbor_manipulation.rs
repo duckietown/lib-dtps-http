@@ -31,10 +31,7 @@ impl RawData {
                 return DTPSError::other(s);
             }
             _ => {
-                let s = format!(
-                    "get_as_cbor: Cannot parse content type {}",
-                    self.content_type
-                );
+                let s = format!("get_as_cbor: Cannot parse content type {}", self.content_type);
                 return DTPSError::other(s);
             }
         };
@@ -56,20 +53,14 @@ impl RawData {
                 return DTPSError::other(s);
             }
             _ => {
-                let s = format!(
-                    "get_as_json: Cannot parse content type {}",
-                    self.content_type
-                );
+                let s = format!("get_as_json: Cannot parse content type {}", self.content_type);
                 return DTPSError::other(s);
             }
         };
         Ok(r)
     }
 
-    pub fn encode_from_json(
-        json_data: &serde_json::Value,
-        target_content_type: &str,
-    ) -> DTPSR<Self> {
+    pub fn encode_from_json(json_data: &serde_json::Value, target_content_type: &str) -> DTPSR<Self> {
         let bytes = match identify_presentation(target_content_type) {
             ContentPresentation::CBOR => serde_cbor::to_vec(&json_data)?,
             ContentPresentation::JSON => serde_json::to_vec(&json_data)?,
@@ -83,17 +74,8 @@ impl RawData {
     }
 }
 
-pub fn get_inside(
-    context: Vec<String>,
-    data: &serde_cbor::Value,
-    path: &Vec<String>,
-) -> DTPSR<serde_cbor::Value> {
-    debug_with_info!(
-        "get_inside: context: {:?}, data: {:?}, path: {:?}",
-        context,
-        data,
-        path
-    );
+pub fn get_inside(context: Vec<String>, data: &serde_cbor::Value, path: &Vec<String>) -> DTPSR<serde_cbor::Value> {
+    debug_with_info!("get_inside: context: {:?}, data: {:?}, path: {:?}", context, data, path);
     let current = data;
     if path.len() == 0 {
         return Ok(current.clone());
@@ -130,11 +112,7 @@ pub fn get_inside(
             let key = serde_cbor::value::Value::Text(first.clone().into());
             match a.get(&key) {
                 None => {
-                    let available = a
-                        .keys()
-                        .map(|x| format!("{:?}", x))
-                        .collect::<Vec<String>>()
-                        .join(", ");
+                    let available = a.keys().map(|x| format!("{:?}", x)).collect::<Vec<String>>().join(", ");
                     let s = format!(
                         "{}Cannot find key {} for map. Available: {}",
                         context_s, first, available

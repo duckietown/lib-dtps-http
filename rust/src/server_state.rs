@@ -281,10 +281,7 @@ impl ServerState {
                 has_history: true,
                 patchable: true,
             },
-            content_info: ContentInfo::simple(
-                CONTENT_TYPE_DTPS_INDEX_CBOR,
-                Some(schema_for!(TopicsIndexWire)),
-            ),
+            content_info: ContentInfo::simple(CONTENT_TYPE_DTPS_INDEX_CBOR, Some(schema_for!(TopicsIndexWire))),
         };
         oqs.insert(TopicName::root(), ObjectQueue::new(tr, Some(10)));
 
@@ -412,11 +409,7 @@ impl ServerState {
             level: level.to_string(),
             msg,
         };
-        let x = self.publish_object_as_json(
-            &TopicName::from_relative_url(TOPIC_LOGS).unwrap(),
-            &log_entry,
-            None,
-        );
+        let x = self.publish_object_as_json(&TopicName::from_relative_url(TOPIC_LOGS).unwrap(), &log_entry, None);
         if let Err(e) = x {
             error_with_info!("Error publishing log message: {:?}", e);
         }
@@ -448,12 +441,7 @@ impl ServerState {
         if self.proxied.contains_key(topic_name) {
             return Err(DTPSError::TopicAlreadyExists(topic_name.to_dash_sep()));
         }
-        let future = observe_node_proxy(
-            topic_name.clone(),
-            cons.clone(),
-            expect_node_id,
-            ssa.clone(),
-        );
+        let future = observe_node_proxy(topic_name.clone(), cons.clone(), expect_node_id, ssa.clone());
 
         let handle = tokio::spawn(show_errors(
             Some(ssa.clone()),
@@ -533,17 +521,11 @@ impl ServerState {
 
         let local_dir = match fp {
             FilePaths::Absolute(s) => PathBuf::from(s),
-            FilePaths::Relative(s) => {
-                absolute_path(s).map_err(|e| DTPSError::Other(e.to_string()))?
-            }
+            FilePaths::Relative(s) => absolute_path(s).map_err(|e| DTPSError::Other(e.to_string()))?,
         };
 
         // let local_dir = PathBuf::from(path);
-        debug_with_info!(
-            "New local folder {:?} -> {:?}",
-            topic_name,
-            local_dir.to_str()
-        );
+        debug_with_info!("New local folder {:?} -> {:?}", topic_name, local_dir.to_str());
         let uuid = get_queue_id(&self.node_id, &topic_name);
         self.local_dirs.insert(
             topic_name.clone(),
@@ -630,12 +612,7 @@ impl ServerState {
         let index = index_internal.to_wire(None);
         let data_cbor = serde_cbor::to_vec(&index).unwrap();
         // self.publish(topic_name, content, CONTENT_TYPE_CBOR, clocks)content_
-        self.publish(
-            &TopicName::root(),
-            &data_cbor,
-            CONTENT_TYPE_DTPS_INDEX_CBOR,
-            None,
-        )?;
+        self.publish(&TopicName::root(), &data_cbor, CONTENT_TYPE_DTPS_INDEX_CBOR, None)?;
 
         let mut topics: Vec<String> = Vec::new();
         let oqs = &mut self.oqs;
@@ -643,11 +620,7 @@ impl ServerState {
         for topic_name in oqs.keys() {
             topics.push(topic_name.to_relative_url());
         }
-        self.publish_object_as_json(
-            &TopicName::from_relative_url(TOPIC_LIST_NAME)?,
-            &topics.clone(),
-            None,
-        )?;
+        self.publish_object_as_json(&TopicName::from_relative_url(TOPIC_LIST_NAME)?, &topics.clone(), None)?;
 
         Ok(())
     }
@@ -673,12 +646,7 @@ impl ServerState {
         if ds.digest != data.digest() {
             panic!("Internal inconsistency: digest mismatch");
         }
-        self.save_blob(
-            &new_digest,
-            &data.content,
-            topic_name.as_dash_sep(),
-            &comment,
-        );
+        self.save_blob(&new_digest, &data.content, topic_name.as_dash_sep(), &comment);
         for digest in dropped_digests {
             self.release_blob(&digest, topic_name.as_dash_sep());
         }
@@ -759,10 +727,7 @@ impl ServerState {
     }
 
     pub fn get_blob_bytes(&self, digest: &str) -> DTPSR<Bytes> {
-        let x = self
-            .blobs
-            .get(digest)
-            .map(|v| Bytes::from(v.content.clone()));
+        let x = self.blobs.get(digest).map(|v| Bytes::from(v.content.clone()));
         match x {
             Some(v) => Ok(v),
             None => {
@@ -802,12 +767,7 @@ impl ServerState {
         return self.publish_cbor(topic_name, &data_cbor, clocks);
     }
 
-    pub fn publish_cbor(
-        &mut self,
-        topic_name: &TopicName,
-        content: &[u8],
-        clocks: Option<Clocks>,
-    ) -> DTPSR<DataSaved> {
+    pub fn publish_cbor(&mut self, topic_name: &TopicName, content: &[u8], clocks: Option<Clocks>) -> DTPSR<DataSaved> {
         self.publish(topic_name, content, CONTENT_TYPE_CBOR, clocks)
     }
 
@@ -979,10 +939,7 @@ impl ServerState {
         TopicsIndexInternal { topics }
     }
 
-    pub fn subscribe_insert_notification(
-        &self,
-        tn: &TopicName,
-    ) -> DTPSR<Receiver<InsertNotification>> {
+    pub fn subscribe_insert_notification(&self, tn: &TopicName) -> DTPSR<Receiver<InsertNotification>> {
         let q = match self.oqs.get(tn) {
             None => {
                 let s = format!("Could not find topic {}", tn.as_dash_sep());
@@ -1044,11 +1001,7 @@ impl ServerState {
 }
 
 async fn get_proxy_info(url: &TypeOfConnection) -> DTPSR<(FoundMetadata, TopicsIndexInternal)> {
-    let md = context!(
-        get_metadata(url).await,
-        "Error getting metadata for proxied at {}",
-        url,
-    )?;
+    let md = context!(get_metadata(url).await, "Error getting metadata for proxied at {}", url,)?;
 
     let meta_url = match &md.meta_url {
         None => {
@@ -1063,16 +1016,11 @@ async fn get_proxy_info(url: &TypeOfConnection) -> DTPSR<(FoundMetadata, TopicsI
     Ok((md, index_internal))
 }
 
-pub async fn show_errors<X, F: Future<Output = DTPSR<X>>>(
-    ssa: Option<ServerStateAccess>,
-    desc: String,
-    future: F,
-) {
+pub async fn show_errors<X, F: Future<Output = DTPSR<X>>>(ssa: Option<ServerStateAccess>, desc: String, future: F) {
     let tn = TopicName::from_dash_sep(&desc).unwrap();
     if let Some(ssa) = &ssa {
         let mut ss = ssa.lock().await;
-        ss.send_status_notification(&tn, Status::RUNNING, None)
-            .unwrap();
+        ss.send_status_notification(&tn, Status::RUNNING, None).unwrap();
     };
 
     let message = match future.await {
@@ -1089,8 +1037,7 @@ pub async fn show_errors<X, F: Future<Output = DTPSR<X>>>(
 
     if let Some(ssa) = &ssa {
         let mut ss = ssa.lock().await;
-        ss.send_status_notification(&tn, Status::EXITED, message)
-            .unwrap();
+        ss.send_status_notification(&tn, Status::EXITED, message).unwrap();
     }
 }
 

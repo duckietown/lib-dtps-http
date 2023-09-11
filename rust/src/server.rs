@@ -157,12 +157,8 @@ impl DTPSServer {
         // get current pid
         let pid = std::process::id();
         if pid == 1 {
-            warn_with_info!(
-                "WARNING: Running as PID 1. This is not recommended because CTRL-C may not work."
-            );
-            warn_with_info!(
-                "If running through `docker run`, use `docker run --init` to avoid this."
-            )
+            warn_with_info!("WARNING: Running as PID 1. This is not recommended because CTRL-C may not work.");
+            warn_with_info!("If running through `docker run`, use `docker run --init` to avoid this.")
         }
 
         let ssa: ServerStateAccess = self.mutex.clone();
@@ -223,9 +219,7 @@ impl DTPSServer {
                         None => false,
                     };
                     let path = path.to_string();
-                    ws.on_upgrade(move |socket| {
-                        handle_websocket_generic2(path, socket, state1, send_data)
-                    })
+                    ws.on_upgrade(move |socket| handle_websocket_generic2(path, socket, state1, send_data))
                 }
             });
 
@@ -271,9 +265,7 @@ impl DTPSServer {
         }
 
         // if tunnel is given ,start
-        if let (Some(tunnel_file), Some(address)) =
-            (&self.cloudflare_tunnel_name, self.listen_address)
-        {
+        if let (Some(tunnel_file), Some(address)) = (&self.cloudflare_tunnel_name, self.listen_address) {
             let port = address.port();
             let handle = open_cloudflare(port, tunnel_file, &self.cloudflare_executable).await;
 
@@ -360,8 +352,7 @@ impl DTPSServer {
             );
         }
         for (i, con) in self.topic_connections.iter().enumerate() {
-            let component_name =
-                TopicName::from_components(&vec!["connections".to_string(), format!("{i}")]);
+            let component_name = TopicName::from_components(&vec!["connections".to_string(), format!("{i}")]);
 
             let fut = start_connection(
                 ssa.clone(),
@@ -370,11 +361,7 @@ impl DTPSServer {
                 con.target.clone(),
             );
 
-            let handle = tokio::spawn(show_errors(
-                Some(ssa.clone()),
-                component_name.to_dash_sep(),
-                fut,
-            ));
+            let handle = tokio::spawn(show_errors(Some(ssa.clone()), component_name.to_dash_sep(), fut));
             handles.push(handle);
         }
 
@@ -448,20 +435,13 @@ impl DTPSServer {
         ss.node_id.clone()
     }
 
-    pub async fn add_proxied(
-        &mut self,
-        mounted_at: &TopicName,
-        url: TypeOfConnection,
-    ) -> DTPSR<JoinHandle<()>> {
+    pub async fn add_proxied(&mut self, mounted_at: &TopicName, url: TypeOfConnection) -> DTPSR<JoinHandle<()>> {
         let ssa = self.get_lock();
 
         let future = sniff_and_start_proxy(mounted_at.clone(), url.clone(), ssa.clone());
         let handle = tokio::spawn(show_errors(
             Some(ssa.clone()),
-            format!(
-                "proxied/{mounted_at}",
-                mounted_at = mounted_at.as_dash_sep()
-            ),
+            format!("proxied/{mounted_at}", mounted_at = mounted_at.as_dash_sep()),
             future,
         ));
 
@@ -699,8 +679,7 @@ pub async fn handle_websocket_queue(
 
             let oq: &ObjectQueue = ss0.get_queue(&topic_name)?;
 
-            let channel_info_message =
-                MsgServerToClient::ChannelInfo(get_channel_info_message(&oq));
+            let channel_info_message = MsgServerToClient::ChannelInfo(get_channel_info_message(&oq));
             starting_messaging.push(channel_info_message);
 
             let inot = ss0.get_last_insert(&topic_name)?;
@@ -822,9 +801,7 @@ async fn handler_topic_html_summary(
                 Some(c) => c,
             };
             let initial = match l.content_type.as_str() {
-                "application/yaml" | "application/json" => {
-                    String::from_utf8(content.to_vec()).unwrap()
-                }
+                "application/yaml" | "application/json" => String::from_utf8(content.to_vec()).unwrap(),
                 _ => "{}".to_string(),
             };
             (l.content_type.clone(), initial)
@@ -836,8 +813,7 @@ async fn handler_topic_html_summary(
 
     let data_or_digest = |data: &DataSaved| -> PreEscaped<String> {
         let printable = match data.content_type.as_str() {
-            "application/yaml" | "application/x-yaml" | "text/yaml" | "text/vnd.yaml"
-            | "application/json" => true,
+            "application/yaml" | "application/x-yaml" | "text/yaml" | "text/vnd.yaml" | "application/json" => true,
             _ => false,
         };
         let url = format_digest_path(&data.digest, &data.content_type);
@@ -940,11 +916,7 @@ pub const JAVASCRIPT_SEND: &str = r##"
 
 "##;
 
-pub fn put_alternative_locations(
-    ss: &ServerState,
-    headers: &mut HeaderMap<HeaderValue>,
-    suffix: &str,
-) {
+pub fn put_alternative_locations(ss: &ServerState, headers: &mut HeaderMap<HeaderValue>, suffix: &str) {
     for x in ss.get_advertise_urls().iter() {
         let x_suff = format!("{}{}", x, suffix);
         put_header_content_type(headers, "text/html");
@@ -1064,10 +1036,7 @@ pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {
     let args = ServerArgs::parse();
 
     let listen_address = if args.tcp_port > 0 {
-        Some(address_from_host_port(
-            args.tcp_host.as_str(),
-            args.tcp_port,
-        )?)
+        Some(address_from_host_port(args.tcp_host.as_str(), args.tcp_port)?)
     } else {
         None
     };
@@ -1202,10 +1171,7 @@ pub async fn do_receiving(
     }
 }
 
-async fn collect_statuses(
-    ssa: ServerStateAccess,
-    mut rx: Receiver<InsertNotification>,
-) -> DTPSR<()> {
+async fn collect_statuses(ssa: ServerStateAccess, mut rx: Receiver<InsertNotification>) -> DTPSR<()> {
     let mut cur = StatusSummary {
         components: Default::default(),
         comments: Default::default(),

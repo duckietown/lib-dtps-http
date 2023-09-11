@@ -69,17 +69,9 @@ mod tests {
     #[fixture]
     async fn instance() -> TestFixture {
         init_logging();
-        let mut server = DTPSServer::new(
-            None,
-            None,
-            "cloudflare".to_string(),
-            None,
-            hashmap! {},
-            vec![],
-            vec![],
-        )
-        .await
-        .unwrap();
+        let mut server = DTPSServer::new(None, None, "cloudflare".to_string(), None, hashmap! {}, vec![], vec![])
+            .await
+            .unwrap();
 
         let handles = server.start_serving().await.unwrap();
 
@@ -122,14 +114,7 @@ mod tests {
         {
             let mut ss = instance.ssa.lock().await;
             let topic_name = TopicName::from_dash_sep("a/b")?;
-            ss.new_topic(
-                &topic_name,
-                None,
-                CONTENT_TYPE_CBOR,
-                &TopicProperties::rw(),
-                None,
-                None,
-            )?;
+            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
             for i in 0..10 {
                 ss.publish_object_as_cbor(&topic_name, &i, None)?;
             }
@@ -148,14 +133,7 @@ mod tests {
         {
             let mut ss = instance.ssa.lock().await;
             let topic_name = TopicName::from_dash_sep("a/b")?;
-            ss.new_topic(
-                &topic_name,
-                None,
-                CONTENT_TYPE_CBOR,
-                &TopicProperties::rw(),
-                None,
-                None,
-            )?;
+            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
             for i in 0..10 {
                 let h = hashmap! {"value" => i};
                 ss.publish_object_as_cbor(&topic_name, &h, None)?;
@@ -198,14 +176,7 @@ mod tests {
         {
             let mut ss = instance.ssa.lock().await;
             let topic_name = TopicName::from_dash_sep("a/b")?;
-            ss.new_topic(
-                &topic_name,
-                None,
-                CONTENT_TYPE_CBOR,
-                &TopicProperties::rw(),
-                None,
-                None,
-            )?;
+            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
         }
         let con_original = instance.con.join("a/b/")?;
 
@@ -237,14 +208,7 @@ mod tests {
 
         {
             let mut ss = instance.ssa.lock().await;
-            ss.new_topic(
-                &topic_name,
-                None,
-                CONTENT_TYPE_CBOR,
-                &TopicProperties::rw(),
-                None,
-                None,
-            )?;
+            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
         }
         let con_original = instance.con.join(topic_name.as_relative_url())?;
 
@@ -275,10 +239,7 @@ mod tests {
     #[rstest]
     #[awt]
     #[tokio::test]
-    async fn check_proxy(
-        #[future] instance: TestFixture,
-        #[future] mut instance2: TestFixture,
-    ) -> DTPSR<()> {
+    async fn check_proxy(#[future] instance: TestFixture, #[future] mut instance2: TestFixture) -> DTPSR<()> {
         init_logging();
         let instance = instance;
         let mut instance2 = instance2;
@@ -288,14 +249,7 @@ mod tests {
 
         {
             let mut ss = instance.ssa.lock().await;
-            ss.new_topic(
-                &topic_name,
-                None,
-                CONTENT_TYPE_CBOR,
-                &TopicProperties::rw(),
-                None,
-                None,
-            )?;
+            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
             for i in 0..n {
                 let h = hashmap! {"value" => i};
                 ss.publish_object_as_cbor(&topic_name, &h, None)?;
@@ -308,10 +262,7 @@ mod tests {
 
         let mounted_at = TopicName::from_dash_sep("mounted/here")?;
 
-        instance2
-            .server
-            .add_proxied(&mounted_at, con_original.clone())
-            .await?;
+        instance2.server.add_proxied(&mounted_at, con_original.clone()).await?;
 
         let con_proxied = instance2.con.join(mounted_at.as_relative_url())?;
 
@@ -359,14 +310,7 @@ mod tests {
 
         {
             let mut ss = instance.ssa.lock().await;
-            ss.new_topic(
-                &topic_name,
-                None,
-                CONTENT_TYPE_CBOR,
-                &TopicProperties::rw(),
-                None,
-                None,
-            )?;
+            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
             let h = hashmap! {"value" => "initial"};
             ss.publish_object_as_cbor(&topic_name, &h, None)?;
         }
@@ -388,9 +332,7 @@ mod tests {
         };
         let operation = PatchOperation::Replace(replace);
         let patch = json_patch::Patch(vec![operation]);
-        patch_data(&con_original, &patch)
-            .await
-            .expect_err("should fail");
+        patch_data(&con_original, &patch).await.expect_err("should fail");
 
         // now let's see if we can replace entirely
 
@@ -469,17 +411,13 @@ mod tests {
         // first time ok
         delete_topic(&instance.con, &topic_name).await?;
         // second time should fail
-        delete_topic(&instance.con, &topic_name)
-            .await
-            .expect_err("should fail");
+        delete_topic(&instance.con, &topic_name).await.expect_err("should fail");
 
         let topic_name = TopicName::root();
         create_topic(&instance.con, &topic_name, &tr)
             .await
             .expect_err("should fail");
-        delete_topic(&instance.con, &topic_name)
-            .await
-            .expect_err("should fail");
+        delete_topic(&instance.con, &topic_name).await.expect_err("should fail");
 
         instance.finish()?;
         Ok(())
@@ -488,10 +426,7 @@ mod tests {
     #[rstest]
     #[awt]
     #[tokio::test]
-    async fn check_proxy_manual(
-        #[future] instance: TestFixture,
-        #[future] mut instance2: TestFixture,
-    ) -> DTPSR<()> {
+    async fn check_proxy_manual(#[future] instance: TestFixture, #[future] mut instance2: TestFixture) -> DTPSR<()> {
         init_logging();
         let instance = instance;
         let mut instance2 = instance2;
@@ -501,14 +436,7 @@ mod tests {
 
         {
             let mut ss = instance.ssa.lock().await;
-            ss.new_topic(
-                &topic_name,
-                None,
-                CONTENT_TYPE_CBOR,
-                &TopicProperties::rw(),
-                None,
-                None,
-            )?;
+            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
             for i in 0..n {
                 let h = hashmap! {"value" => i};
                 ss.publish_object_as_cbor(&topic_name, &h, None)?;
@@ -525,7 +453,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(2000)).await;
 
         let con_proxied = instance2.con.join(mounted_at.as_relative_url())?;
-        let rd = get_rawdata(&con_proxied).await?;
+        let _rd = get_rawdata(&con_proxied).await?;
 
         remove_proxy(&instance2.con, &mounted_at).await?;
 

@@ -180,10 +180,7 @@ async fn check_topic(topic: TopicName, con: TypeOfConnection) -> DTPSR<()> {
 
     // check_complete_metadata(&md)?;
     if md.meta_url == None {
-        return Err(DTPSError::from(format!(
-            "{:?}: meta is None",
-            topic.as_dash_sep()
-        )));
+        return Err(DTPSError::from(format!("{:?}: meta is None", topic.as_dash_sep())));
     }
 
     let index = get_index(&md.meta_url.unwrap()).await?;

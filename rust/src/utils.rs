@@ -12,10 +12,7 @@ pub fn divide_in_components(pstr: &str, sep: char) -> Vec<String> {
         if pstr == "" {
             vec![]
         } else {
-            pstr.as_str()
-                .split(sep)
-                .map(|x| x.to_string())
-                .collect::<Vec<String>>()
+            pstr.as_str().split(sep).map(|x| x.to_string()).collect::<Vec<String>>()
         }
     };
     path_components
@@ -38,10 +35,7 @@ pub fn vec_concat<T: Clone>(a: &Vec<T>, b: &Vec<T>) -> Vec<T> {
     c
 }
 
-pub fn is_prefix_of<'a>(
-    a: &'a Vec<String>,
-    b: &'a Vec<String>,
-) -> Option<(Vec<String>, Vec<String>)> {
+pub fn is_prefix_of<'a>(a: &'a Vec<String>, b: &'a Vec<String>) -> Option<(Vec<String>, Vec<String>)> {
     if a.len() > b.len() {
         return None;
     }
