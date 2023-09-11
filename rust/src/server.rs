@@ -19,12 +19,7 @@ use futures::{
     StreamExt,
 };
 use indent::indent_all_with;
-use log::{
-    debug,
-    error,
-    info,
-    warn,
-};
+
 use maplit::hashmap;
 use maud::{
     html,

@@ -9,10 +9,6 @@ use futures::{
     SinkExt,
     StreamExt,
 };
-use log::{
-    debug,
-    error,
-};
 use maud::{
     html,
     PreEscaped,

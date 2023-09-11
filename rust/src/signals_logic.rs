@@ -23,10 +23,7 @@ use json_patch::{
     Patch,
     PatchOperation,
 };
-use log::{
-    debug,
-    error,
-};
+
 use maplit::hashmap;
 use schemars::JsonSchema;
 use serde::{

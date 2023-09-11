@@ -1,5 +1,4 @@
 use crate::debug_with_info;
-use log::debug;
 
 #[cfg(target_os = "linux")]
 use getaddrs::InterfaceAddrs;

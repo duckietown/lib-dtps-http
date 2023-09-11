@@ -4,7 +4,6 @@ mod tests {
 
     use futures::StreamExt;
     use json_patch::*;
-    use log::debug;
     use maplit::hashmap;
     use rstest::*;
     use schemars::{

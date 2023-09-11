@@ -1,11 +1,3 @@
-use crate::{
-    error_with_info,
-    info_with_info,
-};
-use log::{
-    error,
-    info,
-};
 use serde::{
     Deserialize,
     Serialize,
@@ -15,6 +7,11 @@ use tokio::{
     process::Command,
     spawn,
     task::JoinHandle,
+};
+
+use crate::{
+    error_with_info,
+    info_with_info,
 };
 
 #[allow(non_snake_case)]

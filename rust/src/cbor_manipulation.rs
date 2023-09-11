@@ -1,4 +1,3 @@
-use log::debug;
 use maud::{
     html,
     PreEscaped,

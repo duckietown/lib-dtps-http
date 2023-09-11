@@ -1,15 +1,15 @@
+use crate::{
+    debug_with_info,
+    error_with_info,
+};
+use anyhow::Result;
+use http::StatusCode;
+use indent::indent_all_with;
 use std::{
     fmt::Debug,
     net::AddrParseError,
 };
 
-use anyhow::Result;
-use http::StatusCode;
-use indent::indent_all_with;
-use log::{
-    debug,
-    error,
-};
 use warp::{
     Rejection,
     Reply,
@@ -165,14 +165,14 @@ impl DTPSError {
 impl warp::reject::Reject for DTPSError {}
 
 pub async fn handle_rejection(err: Rejection) -> std::result::Result<impl Reply, Rejection> {
-    debug!("handle_rejection: {:#?}", err);
+    debug_with_info!("handle_rejection: {:#?}", err);
     if let Some(custom_error) = err.find::<DTPSError>() {
         let status_code = custom_error.status_code();
 
         let error_message = format!("{}\n\n{:#?}", status_code, custom_error);
 
         if status_code != 404 {
-            error!("{}", error_message);
+            error_with_info!("{}", error_message);
         }
         return Ok(warp::reply::with_status(error_message, status_code));
     }
@@ -195,7 +195,7 @@ macro_rules! add_info {
 #[macro_export]
 macro_rules! error_with_info {
     ($($u:expr),* $(,)?) => {{
-        log::error!("{}:{}:\n{}", file!(), line!(),
+        log::error!("{}:{}:\n{}", file!(), line!(), // ok
             indent::indent_all_with("| ", format!($($u),*))
         )
     }};
@@ -204,7 +204,7 @@ macro_rules! error_with_info {
 #[macro_export]
 macro_rules! warn_with_info {
     ($($u:expr),* $(,)?) => {{
-        log::warn!("{}:{}:\n{}", file!(), line!(),
+        log::warn!("{}:{}:\n{}", file!(), line!(), // ok
             indent::indent_all_with("| ", format!($($u),*))
         )
     }};

@@ -1,7 +1,6 @@
 extern crate dtps_http;
 
 use chrono::prelude::*;
-use log::error;
 use schemars::schema_for;
 use tokio::{
     spawn,
@@ -13,6 +12,7 @@ use tokio::{
 
 use dtps_http::{
     create_server_from_command_line,
+    error_with_info,
     init_logging,
     show_errors,
     ServerStateAccess,
@@ -83,7 +83,7 @@ async fn main() -> () {
     match clock().await {
         Ok(_) => return,
         Err(e) => {
-            error!("Error in serving:\n{:?}", e);
+            error_with_info!("Error in serving:\n{:?}", e);
 
             // error!("Source: {}", e.source().unwrap());
 

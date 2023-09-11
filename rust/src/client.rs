@@ -23,7 +23,6 @@ use json_patch::{
     PatchOperation,
     RemoveOperation,
 };
-use log::info;
 use maplit::hashmap;
 use tokio::{
     sync::{

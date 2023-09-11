@@ -47,7 +47,6 @@ pub enum MsgServerToClient {
 
 #[cfg(test)]
 mod test {
-    use log::info;
     use serde_cbor::{
         from_slice,
         to_vec,

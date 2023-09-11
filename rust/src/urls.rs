@@ -1,4 +1,3 @@
-use log::info;
 use url::Url;
 
 use crate::{
@@ -268,7 +267,6 @@ fn normalize_dot_dot(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use log::debug;
     use rstest::rstest;
 
     use crate::{
