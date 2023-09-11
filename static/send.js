@@ -102,7 +102,7 @@ function subscribeWebSocket(url, fieldId) {
         console.log('WebSocket connection closed');
          let field = document.getElementById(fieldId);
         if (field) {
-            field.textContent = 'WebSocket connection closed';
+            field.textContent = field.textContent + '\nWebSocket connection CLOSED';
         }
     });
 

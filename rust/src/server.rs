@@ -1104,18 +1104,8 @@ pub async fn pull_<T: DeserializeOwned + Clone + Send>(
                         }
                     };
                     // let c = serde_cbor::to_vec(&ms).unwrap();
+
                     tx.send(ms.clone()).unwrap();
-                    // debug!("ws_rx.next() returned {:#?}", ms);
-                    // match ms {
-                    //     MsgClientToServer::RawData(rd) => {
-                    //         let mut ss0 = ss_mutex.lock().await;
-                    //
-                    //         // let oq: &ObjectQueue=  ss0.oqs.get(topic_name.as_str()).unwrap();
-                    //
-                    //         let _ds =
-                    //             ss0.publish(&topic_name, &rd.content, &rd.content_type, None);
-                    //     }
-                    // }
                 }
             }
             Some(Err(err)) => {

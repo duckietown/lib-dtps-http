@@ -106,8 +106,11 @@ pub struct ForwardedQueue {
 
 #[derive(Debug, Clone)]
 pub enum TypeOFSource {
+    /// A remote queue
     ForwardedQueue(ForwardedQueue),
+    /// Our queue
     OurQueue(TopicName, TopicProperties),
+
     MountedDir(TopicName, String, TopicProperties),
     MountedFile(TopicName, String, TopicProperties),
     Compose(SourceComposition),
@@ -470,11 +473,11 @@ impl TypeOFSource {
     ) -> DTPSR<DataStream> {
         match self {
             TypeOFSource::Digest(_, _) => {
-                todo!("get_stream for {self:#?} with {self:?}");
-                let _x = self.resolve_data_single(presented_as, ssa).await?;
+                not_implemented!("get_stream for {self:#?} with {self:?}")
+                // let _x = self.resolve_data_single(presented_as, ssa).await?;
             }
             TypeOFSource::ForwardedQueue(_q) => {
-                todo!("get_stream for {self:#?} with {self:?}")
+                not_implemented!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::OurQueue(topic_name, ..) => {
                 let (rx, first, channel_info) = {
@@ -497,26 +500,26 @@ impl TypeOFSource {
 
             TypeOFSource::Compose(sc) => get_stream_compose_meta(presented_as, ssa, sc).await,
             TypeOFSource::Transformed(_s, _) => {
-                todo!("get_stream for {self:#?} with {self:?}")
+                not_implemented!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::Deref(d) => get_stream_compose_data(presented_as, ssa, d).await,
             TypeOFSource::OtherProxied(_) => {
-                todo!("get_stream for {self:#?} with {self:?}")
+                not_implemented!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::MountedDir(_, _, _props) => {
-                todo!("get_stream for {self:#?} with {self:?}")
+                not_implemented!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::MountedFile(_, _, _props) => {
-                todo!("get_stream for {self:#?} with {self:?}")
+                not_implemented!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::Index(_s) => {
-                todo!("get_stream for {self:#?} with {self:?}")
+                not_implemented!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::Aliased(_, _) => {
-                todo!("get_stream for {self:#?} with {self:?}")
+                not_implemented!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::History(_) => {
-                todo!("get_stream for {self:#?} with {self:?}")
+                not_implemented!("get_stream for {self:#?} with {self:?}")
             }
         }
     }
@@ -577,7 +580,9 @@ async fn put_together(
                     data_saved,
                     raw_data: rd,
                 };
-                tx_out.send(notification).unwrap();
+                if tx_out.receiver_count() > 0 {
+                    tx_out.send(notification).unwrap();
+                }
                 index += 1;
             }
             SingleUpdates::Finished(which) => {
@@ -605,12 +610,14 @@ async fn listen_to_updates(
     loop {
         match rx.recv().await {
             Ok(m) => {
-                tx.send(SingleUpdates::Update(ActualUpdate {
-                    component: component.clone(),
-                    data: ResolvedData::RawData(m.raw_data),
-                    clocks: m.data_saved.clocks,
-                }))
-                .unwrap();
+                if tx.receiver_count() > 0 {
+                    tx.send(SingleUpdates::Update(ActualUpdate {
+                        component: component.clone(),
+                        data: ResolvedData::RawData(m.raw_data),
+                        clocks: m.data_saved.clocks,
+                    }))
+                    .unwrap();
+                }
             }
             Err(e) => match e {
                 RecvError::Closed => {
@@ -678,12 +685,12 @@ where
 //         //         return Err(DTPSError::Other(format!("Cannot run function")));
 //         //     }
 //         // };
-//         todo!();
+//         not_implemented!();
 //         // let cbor_bytes = serde_cbor::to_vec(&v2)?;
 //         // let rd = RawData::new(&cbor_bytes, content_type);
 //         // rd.clone()
 //     };
-//     todo!("adapt_cbor_map")
+//     not_implemented!("adapt_cbor_map")
 //     //
 //     // let ds = in1.data_saved.clone();
 //     //
@@ -738,7 +745,7 @@ fn filter_func(
     let rd = RawData::represent_as_cbor_ct(v2, CONTENT_TYPE_DTPS_INDEX_CBOR)?;
     //
     // adapt_cbor_map(&in1, f, CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(), "filtered".to_string())
-    // todo!("filter_func")
+    // not_implemented!("filter_func")
     let ds = &in1.data_saved;
     let data_saved = DataSaved {
         origin_node: ds.origin_node.clone(),
@@ -842,7 +849,24 @@ async fn get_stream_compose_data(
 
     for (k, v) in sc.compose.iter() {
         let ts: &TypeOFSource = v;
-        let mut cs = ts.get_data_stream(presented_as, ssa.clone()).await?;
+        let mut cs = match ts.get_data_stream(presented_as, ssa.clone()).await {
+            Ok(x) => x,
+            Err(e) => match e {
+                DTPSError::NotImplemented(_) => {
+                    log::warn!(
+                        "Not implemented get_data_stream() for component {:?}:\n{:?}\n{:?}",
+                        k,
+                        v,
+                        e
+                    );
+                    continue;
+                }
+                _ => {
+                    log::error!("Error while creating data stream: {:?}", e);
+                    return Err(e);
+                }
+            },
+        };
         queue_created = min(queue_created, cs.channel_info.queue_created);
         num_total = max(num_total, cs.channel_info.num_total);
 
@@ -935,20 +959,24 @@ async fn resolve_our_queue(
 ) -> DTPSR<ResolvedData> {
     let ss = ss_mutex.lock().await;
     if !ss.oqs.contains_key(topic_name) {
-        return Ok(NotFound(format!("No queue with name {:?}", topic_name)));
+        return Ok(NotFound(format!(
+            "No queue with name {:?}",
+            topic_name.as_dash_sep()
+        )));
     }
     let oq = ss.oqs.get(topic_name).unwrap();
 
     return match oq.stored.last() {
         None => {
-            let s = format!("No data in queue {:?}", topic_name);
+            let s = format!("No data in queue {:?}", topic_name.as_dash_sep());
             Ok(NotAvailableYet(s))
         }
         Some(v) => {
             let data_saved = oq.saved.get(v).unwrap();
             let content = context!(
                 ss.get_blob_bytes(&data_saved.digest),
-                "Cannot get blob bytes for topic {topic_name:?}:\n {data_saved:#?}"
+                "Cannot get blob bytes for topic {:?}:\n {data_saved:#?}",
+                topic_name.as_dash_sep(),
             )?;
             let raw_data = RawData::new(content, &data_saved.content_type);
             // debug!(" {topic_name:?} -> {raw_data:?}");
@@ -1556,7 +1584,7 @@ impl Patchable for TypeOFSource {
     ) -> DTPSR<()> {
         match self {
             TypeOFSource::ForwardedQueue(_) => {
-                todo!("patch for {self:#?} with {self:?}")
+                not_implemented!("patch for {self:#?} with {self:?}")
             }
             TypeOFSource::OurQueue(topic_name, ..) => {
                 if topic_name.as_dash_sep() == TOPIC_PROXIED {
@@ -1566,32 +1594,32 @@ impl Patchable for TypeOFSource {
                 }
             }
             TypeOFSource::MountedDir(_, _, _) => {
-                todo!("patch for {self:#?} with {self:?}")
+                not_implemented!("patch for {self:#?} with {self:?}")
             }
             TypeOFSource::MountedFile(_, _, _) => {
-                todo!("patch for {self:#?} with {self:?}")
+                not_implemented!("patch for {self:#?} with {self:?}")
             }
             TypeOFSource::Compose(sc) => patch_composition(ss_mutex, patch, sc).await,
             TypeOFSource::Transformed(ts_inside, transform) => {
                 patch_transformed(ss_mutex, presented_as, patch, ts_inside, transform).await
             }
             TypeOFSource::Digest(_, _) => {
-                todo!("patch for {self:#?} with {self:?}")
+                not_implemented!("patch for {self:#?} with {self:?}")
             }
             TypeOFSource::Deref(_) => {
-                todo!("patch for {self:#?} with {self:?}")
+                not_implemented!("patch for {self:#?} with {self:?}")
             }
             TypeOFSource::Index(_) => {
-                todo!("patch for {self:#?} with {self:?}")
+                not_implemented!("patch for {self:#?} with {self:?}")
             }
             TypeOFSource::Aliased(_, _) => {
-                todo!("patch for {self:#?} with {self:?}")
+                not_implemented!("patch for {self:#?} with {self:?}")
             }
             TypeOFSource::History(_) => {
-                todo!("patch for {self:#?} with {self:?}")
+                not_implemented!("patch for {self:#?} with {self:?}")
             }
             TypeOFSource::OtherProxied(_) => {
-                todo!("patch for {self:#?} with {self:?}")
+                not_implemented!("patch for {self:#?} with {self:?}")
             }
         }
     }
@@ -1716,7 +1744,7 @@ async fn patch_transformed(
             return ts.patch(presented_as, ss_mutex, &patch2).await;
         }
         _ => {
-            todo!("patch for {ts:#?} with {transform:?}")
+            not_implemented!("patch for {ts:#?} with {transform:?}")
         }
     }
 }

@@ -17,10 +17,11 @@ use warp::http::header;
 use warp::hyper::Body;
 use warp::reply::Response;
 use warp::ws::Message as WarpMessage;
+use warp::Error;
 
 use crate::{
-    display_printable, divide_in_components, do_receiving, error_with_info, get_accept_header,
-    get_good_url_for_components, get_header_with_default, get_metadata,
+    debug_with_info, display_printable, divide_in_components, do_receiving, error_with_info,
+    get_accept_header, get_good_url_for_components, get_header_with_default, get_metadata,
     get_series_of_messages_for_notification_, handle_topic_post, handle_websocket_queue,
     interpret_path, make_html, make_request, not_available, not_implemented,
     open_websocket_connection, put_alternative_locations, receive_from_websocket, send_as_ws_cbor,
@@ -650,14 +651,15 @@ pub async fn handle_websocket_generic2(
         Err(e) => {
             let close_code: u16 = 1006; // Close codes 4000-4999 are available for private use
             let s = format!("handle_websocket_generic2: {}", e);
-            error_with_info!("{s}");
+            debug_with_info!("{s}");
+
             let msg = WarpMessage::text("closing with error");
             let _ = ws_tx.send(msg).await.map_err(|e| {
-                error_with_info!("Cannot send closing error: {:?}", e);
+                debug_with_info!("Cannot send closing error: {:?}", e);
             });
             let msg = WarpMessage::close_with(close_code, s);
             let _ = ws_tx.send(msg).await.map_err(|e| {
-                error_with_info!("Cannot send closing error: {:?}", e);
+                debug_with_info!("Cannot send closing error: {:?}", e);
             });
         }
     }
