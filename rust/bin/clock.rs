@@ -38,7 +38,7 @@ async fn clock_go(state: ServerStateAccess, topic_name: &str, interval_s: f32) -
         let s = format!("{}", now);
         let _inserted = ss.publish_json(&TopicName::from_relative_url(topic_name)?, &s, None)?;
 
-        // debug!("inserted {}: {:?}", topic_name, inserted);
+        // debug_with_info!("inserted {}: {:?}", topic_name, inserted);
     }
     // Ok(())
 }

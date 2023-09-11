@@ -87,7 +87,7 @@ mod tests {
     async fn check_server_answers(#[future] instance: TestFixture) -> DTPSR<()> {
         let x = check_server(&instance.con).await;
         if let Err(ei) = &x {
-            log::error!("check_server failed:\n{}", ei);
+            error_with_info!("check_server failed:\n{}", ei);
         }
         x
     }
@@ -197,7 +197,7 @@ mod tests {
         let data = serde_cbor::to_vec(&object)?;
         let rd = RawData::cbor(data);
         let ds = post_data(&con_original, &rd).await?;
-        debug!("post resulted in {ds:?}");
+        debug_with_info!("post resulted in {ds:?}");
         let notification = receiver.next().await.unwrap();
         assert_eq!(rd, notification.rd);
 
@@ -237,14 +237,14 @@ mod tests {
         let data = serde_cbor::to_vec(&object)?;
         let rd = RawData::cbor(data);
         let ds = post_data(&con_original, &rd).await?;
-        debug!("post resulted in {ds:?}");
+        debug_with_info!("post resulted in {ds:?}");
 
         let get_inside = con_original.join("one/0/b/")?;
         let rd2 = get_rawdata(&get_inside).await?;
         let converted: serde_cbor::Value = serde_cbor::from_slice(&rd2.content)?;
 
         let expected = serde_cbor::Value::Integer(42);
-        debug!("Converted {converted:?}");
+        debug_with_info!("Converted {converted:?}");
 
         assert_eq!(expected, converted);
         instance.finish()?;
@@ -294,21 +294,21 @@ mod tests {
 
         let con_proxied = instance2.con.join(mounted_at.as_relative_url())?;
 
-        debug!("ask metadata for con_original {con_original:#?}");
+        debug_with_info!("ask metadata for con_original {con_original:#?}");
         let md_original = get_metadata(&con_original).await;
-        debug!("ask metadata for con_proxied {con_proxied:#?}");
+        debug_with_info!("ask metadata for con_proxied {con_proxied:#?}");
         let md_proxied = get_metadata(&con_proxied).await;
 
-        debug!("md_original {md_original:#?}");
-        debug!("md_proxied {md_proxied:#?}");
+        debug_with_info!("md_original {md_original:#?}");
+        debug_with_info!("md_proxied {md_proxied:#?}");
 
-        debug!("get data for con_original {con_original:#?}");
+        debug_with_info!("get data for con_original {con_original:#?}");
         let data_original = get_rawdata(&con_original).await?;
-        debug!("get data for con_proxied {con_proxied:#?}");
+        debug_with_info!("get data for con_proxied {con_proxied:#?}");
         let data_proxied = get_rawdata(&con_proxied).await?;
 
-        debug!("data_original {con_original:#} {data_original:#?}");
-        debug!("data_proxied {con_proxied:#} {data_proxied:#?}");
+        debug_with_info!("data_original {con_original:#} {data_original:#?}");
+        debug_with_info!("data_proxied {con_proxied:#} {data_proxied:#?}");
 
         assert_eq!(data_original.content_type, CONTENT_TYPE_CBOR);
         assert_eq!(data_original, data_proxied);
@@ -316,9 +316,9 @@ mod tests {
         // now let's get the value inside
         let con_original_inside = con_original.join("value/")?;
         let con_proxied_inside = con_proxied.join("value/")?;
-        debug!("get data for con_original_inside {con_original_inside:#?}");
+        debug_with_info!("get data for con_original_inside {con_original_inside:#?}");
         let inside_original = get_rawdata(&con_original_inside).await?;
-        debug!("get data for con_proxied_inside {con_proxied_inside:#?}");
+        debug_with_info!("get data for con_proxied_inside {con_proxied_inside:#?}");
         let inside_proxied = get_rawdata(&con_proxied_inside).await?;
         assert_eq!(inside_original, inside_proxied);
         let i: i64 = serde_cbor::from_slice(&inside_original.content)?;

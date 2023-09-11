@@ -295,7 +295,7 @@ mod tests {
         // without end /
         let s = "http+unix://%2Fsockets%2Fargo%2Fnode1%2F_node";
         let x = super::parse_url_ext(s).unwrap();
-        debug!("test_p1 {s:?} {x:?}");
+        debug_with_info!("test_p1 {s:?} {x:?}");
         assert_eq!(
             x,
             super::TypeOfConnection::UNIX(super::UnixCon {
@@ -312,7 +312,7 @@ mod tests {
         // without end /
         let s = "http+unix://[/sockets/argo/node1/_node]/the/path";
         let x = super::parse_url_ext(s).unwrap();
-        debug!("test_p1 {s:?} {x:?}");
+        debug_with_info!("test_p1 {s:?} {x:?}");
         assert_eq!(
             x,
             super::TypeOfConnection::UNIX(super::UnixCon {
@@ -328,7 +328,7 @@ mod tests {
     fn url_parse_3() {
         let s = "file:///abs/file";
         let x = super::parse_url_ext(s).unwrap();
-        // debug!("test_p1 {s:?} {x:?}");
+        // debug_with_info!("test_p1 {s:?} {x:?}");
         assert_eq!(
             x,
             super::TypeOfConnection::File(None, FilePaths::Absolute("/abs/file".to_string()))
@@ -360,7 +360,7 @@ mod tests {
     fn url_parse_4b() {
         let s = "./reldir/";
         let x = super::parse_url_ext(s).unwrap();
-        debug!("test_p1 {s:?} {x:?}");
+        debug_with_info!("test_p1 {s:?} {x:?}");
         assert_eq!(
             x,
             super::TypeOfConnection::File(None, FilePaths::Relative("reldir".to_string()))

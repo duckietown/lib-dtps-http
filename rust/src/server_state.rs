@@ -21,16 +21,16 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 use crate::{
-    compute_best_alternative, context, error_with_info, get_events_stream_inline, get_index,
-    get_metadata, get_queue_id, get_random_node_id, get_stats, invalid_input, is_prefix_of,
-    not_available, not_implemented, not_reachable, sniff_type_resource, Clocks, ContentInfo,
-    DTPSError, DataSaved, FilePaths, ForwardingStep, FoundMetadata, InsertNotification,
-    LinkBenchmark, NodeAppData, ObjectQueue, RawData, ServerStateAccess, TopicName,
-    TopicProperties, TopicReachabilityInternal, TopicRefInternal, TopicsIndexInternal,
-    TopicsIndexWire, TypeOfConnection, TypeOfResource, UrlResult, CONTENT_TYPE_CBOR,
-    CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_JSON, CONTENT_TYPE_PLAIN, CONTENT_TYPE_YAML, DTPSR,
-    MASK_ORIGIN, TOPIC_LIST_AVAILABILITY, TOPIC_LIST_CLOCK, TOPIC_LIST_NAME, TOPIC_LOGS,
-    TOPIC_PROXIED, TOPIC_STATE_NOTIFICATION, TOPIC_STATE_SUMMARY,
+    compute_best_alternative, context, debug_with_info, error_with_info, get_events_stream_inline,
+    get_index, get_metadata, get_queue_id, get_random_node_id, get_stats, invalid_input,
+    is_prefix_of, not_available, not_implemented, not_reachable, sniff_type_resource,
+    warn_with_info, Clocks, ContentInfo, DTPSError, DataSaved, FilePaths, ForwardingStep,
+    FoundMetadata, InsertNotification, LinkBenchmark, NodeAppData, ObjectQueue, RawData,
+    ServerStateAccess, TopicName, TopicProperties, TopicReachabilityInternal, TopicRefInternal,
+    TopicsIndexInternal, TopicsIndexWire, TypeOfConnection, TypeOfResource, UrlResult,
+    CONTENT_TYPE_CBOR, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_JSON, CONTENT_TYPE_PLAIN,
+    CONTENT_TYPE_YAML, DTPSR, MASK_ORIGIN, TOPIC_LIST_AVAILABILITY, TOPIC_LIST_CLOCK,
+    TOPIC_LIST_NAME, TOPIC_LOGS, TOPIC_PROXIED, TOPIC_STATE_NOTIFICATION, TOPIC_STATE_SUMMARY,
 };
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
@@ -348,11 +348,11 @@ impl ServerState {
             None,
         );
         if let Err(e) = x {
-            error!("Error publishing log message: {:?}", e);
+            error_with_info!("Error publishing log message: {:?}", e);
         }
     }
     pub fn debug(&mut self, msg: String) {
-        debug!("{}", msg);
+        debug_with_info!("{}", msg);
         self.log_message(msg, "debug");
     }
     pub fn info(&mut self, msg: String) {
@@ -360,12 +360,12 @@ impl ServerState {
         self.log_message(msg, "info");
     }
     pub fn error(&mut self, msg: String) {
-        error!("{}", msg);
+        error_with_info!("{}", msg);
 
         self.log_message(msg, "error");
     }
     pub fn warn(&mut self, msg: String) {
-        warn!("{}", msg);
+        warn_with_info!("{}", msg);
         self.log_message(msg, "warn");
     }
     pub fn add_proxy_connection(
@@ -407,11 +407,11 @@ impl ServerState {
         if !self.proxied.contains_key(topic_name) {
             return Err(DTPSError::TopicNotFound(topic_name.to_dash_sep()));
         }
-        debug!("Removing proxy connection {:?}", topic_name);
+        debug_with_info!("Removing proxy connection {:?}", topic_name);
         self.proxied.remove(topic_name);
         self.proxied_topics.retain(|k, _| {
             if let Some(_) = is_prefix_of(topic_name.as_components(), k.as_components()) {
-                debug!("Removing proxy topic {:?}", k);
+                debug_with_info!("Removing proxy topic {:?}", k);
                 false
             } else {
                 true
@@ -617,12 +617,12 @@ impl ServerState {
     }
 
     pub fn guarantee_blob_exists(&mut self, digest: &str, seconds: f32) {
-        // debug!("Guarantee blob {digest} exists for {seconds} seconds more");
+        // debug_with_info!("Guarantee blob {digest} exists for {seconds} seconds more");
         let now = Local::now().timestamp_nanos();
         let deadline = now + (seconds * 1_000_000_000.0) as i64;
         match self.blobs.get_mut(digest) {
             None => {
-                log::error!("Blob {digest} not found");
+                error_with_info!("Blob {digest} not found");
             }
             Some(sb) => {
                 sb.deadline = max(sb.deadline, deadline);
@@ -640,7 +640,7 @@ impl ServerState {
             }
         }
         for digest in todrop {
-            // debug!("Dropping blob {digest} because deadline passed");
+            // debug_with_info!("Dropping blob {digest} because deadline passed");
             self.blobs.remove(&digest);
         }
     }
@@ -649,7 +649,7 @@ impl ServerState {
 
         match self.blobs.get_mut(digest) {
             None => {
-                log::warn!("Blob {digest} not found");
+                warn_with_info!("Blob {digest} not found");
             }
             Some(sb) => {
                 sb.who_needs_it.remove(who);
@@ -1012,7 +1012,7 @@ pub async fn show_errors<X, F: Future<Output = DTPSR<X>>>(
             // let ef = format!("{}\n---\n{:?}", e, e);
             let ef = format!("{:?}", e);
             error_with_info!("Error in async {desc}:\n{}", indent_all_with("| ", &ef));
-            // error!("Error: {:#?}", e.backtrace());
+            // error_with_info!("Error: {:#?}", e.backtrace());
             Some(ef)
         }
     };
@@ -1039,7 +1039,7 @@ pub async fn sniff_and_start_proxy(
         match sniff_type_resource(&url).await {
             Ok(s) => break s,
             Err(e) => {
-                warn!("Cannot sniff:\n{e:?}");
+                warn_with_info!("Cannot sniff:\n{e:?}");
                 info!("observe_proxy: retrying in 2 seconds");
                 sleep(std::time::Duration::from_secs(2)).await;
                 continue;
@@ -1089,9 +1089,10 @@ pub async fn observe_node_proxy(
         match get_proxy_info(&url).await {
             Ok(s) => break s,
             Err(e) => {
-                warn!(
+                warn_with_info!(
                     "observe_proxy: error getting proxy info for proxied {:?}:\n{:?}",
-                    mounted_at, e
+                    mounted_at,
+                    e
                 );
                 info!("observe_proxy: retrying in 2 seconds");
                 sleep(std::time::Duration::from_secs(2)).await;
@@ -1187,7 +1188,7 @@ pub fn add_from_response(
     tii: &TopicsIndexInternal,
     link_benchmark1: LinkBenchmark,
 ) -> DTPSR<()> {
-    // debug!("topics_index: tii: \n{:#?}", tii);
+    // debug_with_info!("topics_index: tii: \n{:#?}", tii);
     for (its_topic_name, tr) in tii.topics.iter() {
         if its_topic_name.is_root() {
             // ok

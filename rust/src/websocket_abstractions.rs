@@ -38,7 +38,7 @@ pub trait GenericSocketConnection: Send + Sync {
 pub async fn open_websocket_connection(
     con: &TypeOfConnection,
 ) -> DTPSR<Box<dyn GenericSocketConnection>> {
-    info!("open_websocket_connection: {:#?}", con);
+    info!("open_websocket_connection: {:#?}", con.to_string());
     match con {
         TCP(url) => open_websocket_connection_tcp(url).await,
         TypeOfConnection::File(_, _) => {
@@ -280,7 +280,7 @@ pub async fn open_websocket_connection_tcp(url: &Url) -> DTPSR<Box<dyn GenericSo
         panic!("unexpected scheme: {}", url.scheme());
     }
     let connection_res = connect_async(url.clone()).await;
-    // debug!("connection: {:#?}", connection);
+    // debug_with_info!("connection: {:#?}", connection);
     let connection;
     match connection_res {
         Ok(c) => {
@@ -291,7 +291,7 @@ pub async fn open_websocket_connection_tcp(url: &Url) -> DTPSR<Box<dyn GenericSo
         }
     }
     let (ws_stream, response) = connection;
-    // debug!("TCP response: {:#?}", response);
+    // debug_with_info!("TCP response: {:#?}", response);
 
     let tcp = AnySocketConnection::from_tcp(ws_stream, response);
 
@@ -353,7 +353,7 @@ pub async fn open_websocket_connection_unix(
         }
     };
 
-    // debug!("WS response: {:#?}", response);
+    // debug_with_info!("WS response: {:#?}", response);
     // use_stream = EitherStream::UnixStream(socket_stream);
     let res = AnySocketConnection::from_unix(None, socket_stream, response);
     return Ok(Box::new(res));

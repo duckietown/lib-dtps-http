@@ -50,8 +50,9 @@ use crate::websocket_signals::{
     ChannelInfo, ChannelInfoDesc, Chunk, MsgClientToServer, MsgServerToClient,
 };
 use crate::{
-    error_other, error_with_info, format_digest_path, handle_rejection, interpret_path,
-    invalid_input, parse_url_ext, utils, utils_headers, DTPSError, TopicName, DTPSR,
+    debug_with_info, error_other, error_with_info, format_digest_path, handle_rejection,
+    interpret_path, invalid_input, parse_url_ext, utils, utils_headers, warn_with_info, DTPSError,
+    TopicName, DTPSR,
 };
 
 const AVAILABILITY_LENGTH_SEC: f32 = 60.0;
@@ -100,10 +101,12 @@ impl DTPSServer {
         // get current pid
         let pid = std::process::id();
         if pid == 1 {
-            warn!(
+            warn_with_info!(
                 "WARNING: Running as PID 1. This is not recommended because CTRL-C may not work."
             );
-            warn!("If running through `docker run`, use `docker run --init` to avoid this.")
+            warn_with_info!(
+                "If running through `docker run`, use `docker run --init` to avoid this."
+            )
         }
 
         let server_state_access: ServerStateAccess = self.mutex.clone();
@@ -148,7 +151,7 @@ impl DTPSServer {
                 if last == Some(&EVENTS_SUFFIX.to_string()) {
                     let start = path.as_str().rfind(EVENTS_SUFFIX).unwrap();
                     let part = &path.as_str()[..start];
-                    // debug!("websocket raw {path1:?} -> {part:?}");
+                    // debug_with_info!("websocket raw {path1:?} -> {part:?}");
                     Ok(part.to_string())
                 } else {
                     Err(warp::reject::not_found()) // should be not_available
@@ -236,15 +239,15 @@ impl DTPSServer {
 
         for (i, unix_path) in unix_paths.iter().enumerate() {
             let the_path = Path::new(&unix_path);
-            warn!("Opening socket on: {the_path:?}");
+            warn_with_info!("Opening socket on: {the_path:?}");
             let dirname = the_path.parent().unwrap();
             if !dirname.exists() {
-                warn!("Creating dirname: {dirname:?}");
+                warn_with_info!("Creating dirname: {dirname:?}");
                 std::fs::create_dir_all(dirname).unwrap();
             }
             // remove the socket if it exists
             if the_path.exists() {
-                warn!("removing existing socket: {:?}", unix_path);
+                warn_with_info!("removing existing socket: {:?}", unix_path);
                 std::fs::remove_file(&unix_path).unwrap();
             }
 
@@ -284,12 +287,12 @@ impl DTPSServer {
 
         if self.initial_proxy.len() > 0 {
             // let s = ssa.lock().await;
-            let mut i = 0;
+            // let mut i = 0;
             for (k, v) in self.initial_proxy.clone() {
                 let mounted_at = TopicName::from_relative_url(&k)?;
                 self.add_proxied(&mounted_at, v.clone()).await?;
 
-                i += 1;
+                // i += 1;
             }
             info!("Proxies started");
         }
@@ -424,7 +427,7 @@ pub async fn start_connection(
         let target = interpret_path(target.as_relative_url(), &hashmap! {}, &None, &ss).await?;
         (source, target)
     };
-    debug!("Connecting source {source:?} with {target:?}");
+    debug_with_info!("Connecting source {source:?} with {target:?}");
 
     {
         let mut ss = ssa.lock().await;
@@ -672,7 +675,7 @@ pub async fn handle_websocket_queue(
                     break;
                 }
                 RecvError::Lagged(_) => {
-                    warn!("Lagged");
+                    warn_with_info!("Lagged");
                     continue;
                 }
             },
@@ -694,7 +697,7 @@ pub async fn send_as_ws_cbor<T: Serialize>(
     for x in data {
         let bytes = serde_cbor::to_vec(&x).unwrap();
         // let value2: serde_cbor::Value = serde_cbor::from_slice(&bytes).unwrap();
-        // debug!("send_as_ws_cbor: {:?}", value2);
+        // debug_with_info!("send_as_ws_cbor: {:?}", value2);
         let message = warp::ws::Message::binary(bytes);
 
         ws_tx.send(message).await?;
@@ -995,7 +998,7 @@ pub fn address_from_host_port(host: &str, port: u16) -> DTPSR<SocketAddr> {
     match s {
         Ok(x) => return Ok(x),
         Err(e) => {
-            debug!("Cannot parse {}: {}", hoststring, e);
+            debug_with_info!("Cannot parse {}: {}", hoststring, e);
             error_other(format!("Cannot parse {}: {}", hoststring, e))
         }
     }
@@ -1026,7 +1029,7 @@ pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {
         proxy.insert(name.to_string(), url);
     }
     if proxy.len() != 0 {
-        debug!("Proxy:\n{:#?}", proxy);
+        debug_with_info!("Proxy:\n{:#?}", proxy);
     }
     let topic_connections = args
         .connect
@@ -1062,7 +1065,7 @@ async fn clock_go(state: ServerStateAccess, topic_name: TopicName, interval_s: f
         let s = format!("{}", now);
         let _inserted = ss.publish_json(&topic_name, &s, None);
 
-        // debug!("inserted {}: {:?}", topic_name, inserted);
+        // debug_with_info!("inserted {}: {:?}", topic_name, inserted);
     }
 }
 
@@ -1084,7 +1087,7 @@ pub async fn pull_<T: DeserializeOwned + Clone + Send>(
     loop {
         match ws_rx.next().await {
             None => {
-                // debug!("ws_rx.next() returned None");
+                // debug_with_info!("ws_rx.next() returned None");
                 // finished = true;
                 break;
             }
@@ -1093,13 +1096,13 @@ pub async fn pull_<T: DeserializeOwned + Clone + Send>(
                     let raw_data = msg.as_bytes().to_vec().clone();
                     // let v: serde_cbor::Value = serde_cbor::from_slice(&raw_data).unwrap();
                     //
-                    // debug!("ws_rx.next() returned {:#?}", v);
+                    // debug_with_info!("ws_rx.next() returned {:#?}", v);
                     //
 
                     let ms: T = match serde_cbor::from_slice(raw_data.as_slice()) {
                         Ok(x) => x,
                         Err(err) => {
-                            debug!("ws_rx.next() cannot interpret error {:#?}", err);
+                            debug_with_info!("ws_rx.next() cannot interpret error {:#?}", err);
                             continue;
                         }
                     };
@@ -1109,7 +1112,7 @@ pub async fn pull_<T: DeserializeOwned + Clone + Send>(
                 }
             }
             Some(Err(err)) => {
-                debug!("ws_rx.next() returned error {:#?}", err);
+                debug_with_info!("ws_rx.next() returned error {:#?}", err);
                 // match err {
                 //     Error { .. } => {}
                 // }
@@ -1128,7 +1131,7 @@ pub async fn do_receiving(
     loop {
         match receiver.next().await {
             None => {
-                debug!("do_receiving: receiver.next() returned None");
+                debug_with_info!("do_receiving: receiver.next() returned None");
                 // finished = true;
                 break;
             }
@@ -1163,11 +1166,11 @@ async fn collect_statuses(
             Ok(inot) => inot,
             Err(e) => match e {
                 RecvError::Closed => {
-                    debug!("collect_statuses: finished collecting");
+                    debug_with_info!("collect_statuses: finished collecting");
                     break;
                 }
                 RecvError::Lagged(_) => {
-                    error!("collect_statuses: lagged");
+                    error_with_info!("collect_statuses: lagged");
                     continue;
                 }
             },
@@ -1175,7 +1178,7 @@ async fn collect_statuses(
         let csn0 = inot.raw_data.interpret::<ComponentStatusNotification>();
 
         let csn = if let Err(e) = csn0 {
-            error!("Cannot parse status notification: {:?}", e);
+            error_with_info!("Cannot parse status notification: {:?}", e);
             continue;
         } else {
             csn0.unwrap()
@@ -1186,7 +1189,7 @@ async fn collect_statuses(
             let mut ss = ssa.lock().await;
             let r = ss.publish_object_as_cbor(&res, &cur, None);
             if let Err(e) = r {
-                error!("Cannot publish status summary: {:?}", e);
+                error_with_info!("Cannot publish status summary: {:?}", e);
                 continue;
             }
         }
@@ -1196,7 +1199,7 @@ async fn collect_statuses(
             match ss.publish_object_as_cbor(&res, &cur, None) {
                 Ok(_) => {}
                 Err(e) => {
-                    error!("Cannot publish status summary: {:?}", e);
+                    error_with_info!("Cannot publish status summary: {:?}", e);
                 }
             }
         }

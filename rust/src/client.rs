@@ -26,7 +26,6 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tungstenite::Message as TM;
 use warp::reply::Response;
 
-use crate::open_websocket_connection;
 use crate::time_nanos;
 use crate::websocket_signals::MsgServerToClient;
 use crate::TypeOfConnection::Same;
@@ -38,6 +37,7 @@ use crate::{
     TopicName, TopicRefAdd, CONTENT_TYPE_DTPS_INDEX, CONTENT_TYPE_DTPS_INDEX_CBOR,
     CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR, REL_HISTORY, TOPIC_PROXIED,
 };
+use crate::{debug_with_info, open_websocket_connection};
 use crate::{join_ext, parse_url_ext};
 use crate::{DataReady, FoundMetadata, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection};
 use crate::{LinkBenchmark, LinkHeader, REL_EVENTS_DATA, REL_EVENTS_NODATA, REL_META};
@@ -139,7 +139,7 @@ pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<Option<MsgServe
     let msg_from_server: MsgServerToClient;
     match serde_cbor::from_slice::<MsgServerToClient>(&data) {
         Ok(dr_) => {
-            // debug!("dr: {:#?}", dr_);
+            // debug_with_info!("dr: {:#?}", dr_);
             msg_from_server = dr_;
         }
         Err(e) => {
@@ -151,7 +151,7 @@ pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<Option<MsgServe
                 msg.type_id(),
                 rawvalue,
             );
-            error!("{}", s);
+            error_with_info!("{}", s);
             return DTPSError::other(s);
         }
     };
@@ -164,7 +164,7 @@ pub async fn listen_events_websocket(
 ) -> DTPSR<()> {
     let wsc = open_websocket_connection(&con).await?;
     let prefix = format!("listen_events_websocket({con})");
-    // debug!("starting to listen to events for {} on {:?}", con, read);
+    // debug_with_info!("starting to listen to events for {} on {:?}", con, read);
     let mut index: u32 = 0;
     let mut rx = wsc.get_incoming().await;
 
@@ -174,7 +174,7 @@ pub async fn listen_events_websocket(
         _ => {
             // pragma: no cover
             let s = format!("Expected ChannelInfo, got {first:?}");
-            log::error!("{}", s);
+            error_with_info!("{}", s);
             return DTPSError::other(s);
         }
     }
@@ -183,7 +183,7 @@ pub async fn listen_events_websocket(
         let msg_from_server = receive_from_server(&mut rx).await?;
         let dr = match msg_from_server {
             None => {
-                // debug!("end of stream");
+                // debug_with_info!("end of stream");
                 break;
             }
             Some(MsgServerToClient::DataReady(dr_)) => dr_,
@@ -192,7 +192,7 @@ pub async fn listen_events_websocket(
                 // pragma: no cover
                 let s =
                     format!("{prefix}: message #{index}: unexpected message: {msg_from_server:#?}");
-                log::error!("{}", s);
+                error_with_info!("{}", s);
                 return DTPSError::other(s);
             }
         };
@@ -320,12 +320,12 @@ pub async fn sniff_type_resource(con: &TypeOfConnection) -> DTPSR<TypeOfResource
     //     con.to_string(),
     // )?;
     let content_type = &md.content_type;
-    debug!("content_type: {:#?}", content_type);
+    debug_with_info!("content_type: {:#?}", content_type);
 
     if content_type.contains(CONTENT_TYPE_DTPS_INDEX) {
         match &md.answering {
             None => {
-                debug!("This looks like an indes but could not get answering:\n{md:#?}");
+                debug_with_info!("This looks like an indes but could not get answering:\n{md:#?}");
                 Ok(TypeOfResource::Other)
             }
             Some(node_id) => Ok(TypeOfResource::DTPSIndex {
@@ -383,8 +383,8 @@ pub async fn get_history(con: &TypeOfConnection) -> DTPSR<History> {
         // pragma: no cover
         let value: serde_cbor::Value = serde_cbor::from_slice(&rd.content)?;
         let s = format!("cannot parse as CBOR:\n{:#?}", value);
-        log::error!("{}", s);
-        log::error!("content: {:#?}", x);
+        error_with_info!("{}", s);
+        error_with_info!("content: {:#?}", x);
         return DTPSError::other(s);
     }
     let x0 = x.unwrap();
@@ -395,9 +395,9 @@ pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
     let rd = get_rawdata(con).await?;
 
     // let h = resp.headers();
-    // debug!("headers: {h:?}");
+    // debug_with_info!("headers: {h:?}");
 
-    // debug!("{con:?}: content type {content_type}");
+    // debug_with_info!("{con:?}: content type {content_type}");
     let content_type = rd.content_type;
     if content_type != CONTENT_TYPE_DTPS_INDEX_CBOR {
         // pragma: no cover
@@ -410,8 +410,8 @@ pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
         // pragma: no cover
         let value: serde_cbor::Value = serde_cbor::from_slice(&rd.content)?;
         let s = format!("cannot parse as CBOR:\n{:#?}", value);
-        log::error!("{}", s);
-        log::error!("content: {:#?}", x);
+        error_with_info!("{}", s);
+        error_with_info!("content: {:#?}", x);
         return DTPSError::other(s);
     }
     let x0 = x.unwrap();
@@ -422,7 +422,7 @@ pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
 
     let ti = TopicsIndexInternal::from_wire(&x0, con);
 
-    // debug!("get_index: {:#?}\n {:#?}", con, ti);
+    // debug_with_info!("get_index: {:#?}\n {:#?}", con, ti);
     Ok(ti)
 }
 
@@ -499,26 +499,26 @@ pub async fn compute_best_alternative(
     let n = alternatives.len();
     for alternative in alternatives.iter() {
         i += 1;
-        debug!("Trying {}/{}: {}", i, n, alternative);
+        debug_with_info!("Trying {}/{}: {}", i, n, alternative);
         let result_future = get_stats(alternative, expect_node_id);
 
         let result = match timeout(Duration::from_millis(2000), result_future).await {
             Ok(r) => r,
             Err(_) => {
-                debug!("-> Timeout: {}", alternative);
+                debug_with_info!("-> Timeout: {}", alternative);
                 continue;
             }
         };
 
         match result {
             Inaccessible(why) => {
-                debug!("-> Inaccessible: {}", why);
+                debug_with_info!("-> Inaccessible: {}", why);
             }
             WrongNodeAnswering => {
-                debug!("-> Wrong node answering");
+                debug_with_info!("-> Wrong node answering");
             }
             Accessible(link_benchmark) => {
-                debug!("-> Accessible: {:?}", link_benchmark);
+                debug_with_info!("-> Accessible: {:?}", link_benchmark);
                 possible_urls.push(alternative.clone());
                 possible_stats.push(link_benchmark.into());
             }
@@ -539,16 +539,18 @@ pub async fn compute_best_alternative(
         .unwrap()
         .0;
     let best_url = possible_urls[min_index].clone();
-    debug!(
+    debug_with_info!(
         "Best is {}: {} with {:?}",
-        min_index, best_url, possible_stats[min_index]
+        min_index,
+        best_url,
+        possible_stats[min_index]
     );
     return Ok(best_url);
 }
 
 fn check_unix_socket(file_path: &str) -> DTPSR<()> {
     if let Ok(metadata) = std::fs::metadata(file_path) {
-        // debug!("metadata for {}: {:?}", file_path, metadata);
+        // debug_with_info!("metadata for {}: {:?}", file_path, metadata);
         let is_socket = metadata.file_type().is_socket();
         if is_socket {
             Ok(())
@@ -679,7 +681,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
 
     // get all the HEADER_CONTENT_LOCATION in the response
     let alternatives0 = headers.get_all(HEADER_CONTENT_LOCATION);
-    // debug!("alternatives0: {:#?}", alternatives0);
+    // debug_with_info!("alternatives0: {:#?}", alternatives0);
     // convert into a vector of strings
     let alternative_urls: Vec<String> =
         alternatives0.iter().map(string_from_header_value).collect();
@@ -694,13 +696,13 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     let answering = headers.get(HEADER_NODE_ID).map(string_from_header_value);
     //
     // if answering == None {
-    //     debug!("Cannot find header {HEADER_NODE_ID} in response {headers:?}")
+    //     debug_with_info!("Cannot find header {HEADER_NODE_ID} in response {headers:?}")
     // }
     let mut links = hashmap! {};
     for v in headers.get_all("link") {
         let link = LinkHeader::from_header_value(&string_from_header_value(v));
 
-        // debug!("Link = {link:?}");
+        // debug_with_info!("Link = {link:?}");
 
         let rel = match link.get("rel") {
             None => {
@@ -796,7 +798,7 @@ pub async fn add_proxy(
     let mut path: String = String::new();
     path.push_str("/");
     path.push_str(escape_json_patch(mountpoint.as_dash_sep()).as_str());
-    debug!("patch path: {}", path);
+    debug_with_info!("patch path: {}", path);
     let value = serde_json::to_value(&pj)?;
 
     let add_operation = AddOperation { path, value };
@@ -824,7 +826,7 @@ pub async fn remove_proxy(conbase: &TypeOfConnection, mountpoint: &TopicName) ->
 
 pub async fn patch_data(conbase: &TypeOfConnection, patch: &JsonPatch) -> DTPSR<()> {
     let json_data = serde_json::to_vec(patch)?;
-    // debug!("patch_data out: {:#?}", String::from_utf8(json_data.clone()));
+    // debug_with_info!("patch_data out: {:#?}", String::from_utf8(json_data.clone()));
     let resp = make_request(
         conbase,
         hyper::Method::PATCH,

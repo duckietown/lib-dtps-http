@@ -23,11 +23,11 @@ use tokio::task::JoinHandle;
 
 use crate::client::get_rawdata_status;
 use crate::{
-    context, divide_in_components, error_with_info, get_channel_info_message, get_dataready,
-    get_inside, get_rawdata, is_prefix_of, merge_clocks, not_implemented, parse_url_ext,
-    unescape_json_patch, utils, ChannelInfo, Clocks, ContentInfo, DTPSError, DataReady, DataSaved,
-    ForwardingStep, History, InsertNotification, LinkBenchmark, OtherProxyInfo, ProxyJob, RawData,
-    ResolvedData,
+    context, debug_with_info, divide_in_components, error_with_info, get_channel_info_message,
+    get_dataready, get_inside, get_rawdata, is_prefix_of, merge_clocks, not_implemented,
+    parse_url_ext, unescape_json_patch, utils, warn_with_info, ChannelInfo, Clocks, ContentInfo,
+    DTPSError, DataReady, DataSaved, ForwardingStep, History, InsertNotification, LinkBenchmark,
+    OtherProxyInfo, ProxyJob, RawData, ResolvedData,
     ResolvedData::{NotAvailableYet, NotFound, Regular},
     ServerState, ServerStateAccess, TopicName, TopicProperties, TopicReachabilityInternal,
     TopicRefAdd, TopicRefInternal, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection,
@@ -271,7 +271,7 @@ impl ResolveDataSingle for TypeOFSource {
             TypeOFSource::OurQueue(q, _) => resolve_our_queue(q, ss_mutex).await,
             TypeOFSource::Compose(_sc) => {
                 let index = self.get_meta_index(presented_as, ss_mutex).await?;
-                // debug!("Compose index intenral:\n {:#?}", index);
+                // debug_with_info!("Compose index intenral:\n {:#?}", index);
                 let to_wire = index.to_wire(None);
 
                 // convert to cbor
@@ -301,7 +301,7 @@ impl ResolveDataSingle for TypeOFSource {
                 if the_path.is_dir() {
                     drop(ss);
                     let index = self.get_meta_index(presented_as, ss_mutex).await?;
-                    // debug!("Compose index intenral:\n {:#?}", index);
+                    // debug_with_info!("Compose index intenral:\n {:#?}", index);
                     let to_wire = index.to_wire(None);
 
                     // convert to cbor
@@ -384,7 +384,7 @@ pub async fn resolve_proxied(op: &OtherProxied) -> DTPSR<ResolvedData> {
 
     let con = con0.join(&rest)?;
 
-    debug!("Proxied: {:?} -> {:?}", con0, con);
+    debug_with_info!("Proxied: {:?} -> {:?}", con0, con);
 
     let rd = get_rawdata(&con).await?;
     // let resp = context!(
@@ -559,7 +559,7 @@ async fn put_together(
                 clocks,
             }) => {
                 if !active_components.contains(&component) {
-                    log::warn!("Received update for inactive component: {:?}", component);
+                    warn_with_info!("Received update for inactive component: {:?}", component);
                     continue;
                 }
                 clocks0 = merge_clocks(&clocks0, &clocks);
@@ -587,9 +587,9 @@ async fn put_together(
             }
             SingleUpdates::Finished(which) => {
                 if !active_components.contains(&which) {
-                    log::warn!("Received update for inactive component: {:?}", which);
+                    warn_with_info!("Received update for inactive component: {:?}", which);
                 } else {
-                    log::debug!("Finished  for active component: {:?}", which);
+                    debug_with_info!("Finished  for active component: {:?}", which);
                     active_components.remove(&which);
                     if active_components.is_empty() {
                         break;
@@ -624,7 +624,7 @@ async fn listen_to_updates(
                     break;
                 }
                 RecvError::Lagged(e) => {
-                    log::warn!("Lagged: {e}");
+                    warn_with_info!("Lagged: {e}");
                 }
             },
         }
@@ -647,7 +647,7 @@ where
                     match sender.send(u) {
                         Ok(_) => {}
                         Err(e) => {
-                            log::warn!("Cannot send: {e:?}");
+                            warn_with_info!("Cannot send: {e:?}");
                         }
                     }
                 }
@@ -657,7 +657,7 @@ where
                     break;
                 }
                 RecvError::Lagged(e) => {
-                    log::warn!("Lagged: {e}");
+                    warn_with_info!("Lagged: {e}");
                 }
             },
         }
@@ -853,7 +853,7 @@ async fn get_stream_compose_data(
             Ok(x) => x,
             Err(e) => match e {
                 DTPSError::NotImplemented(_) => {
-                    log::warn!(
+                    warn_with_info!(
                         "Not implemented get_data_stream() for component {:?}:\n{:?}\n{:?}",
                         k,
                         v,
@@ -862,7 +862,7 @@ async fn get_stream_compose_data(
                     continue;
                 }
                 _ => {
-                    log::error!("Error while creating data stream: {:?}", e);
+                    error_with_info!("Error while creating data stream: {:?}", e);
                     return Err(e);
                 }
             },
@@ -943,7 +943,7 @@ async fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<Resolved
     };
     match &transform {
         Transforms::GetInside(path) => {
-            debug!("Get inside: {:?}", d);
+            debug_with_info!("Get inside: {:?}", d);
             let inside = get_inside(vec![], &d, path);
             match inside {
                 Ok(d) => Ok(ResolvedData::Regular(d)),
@@ -979,7 +979,7 @@ async fn resolve_our_queue(
                 topic_name.as_dash_sep(),
             )?;
             let raw_data = RawData::new(content, &data_saved.content_type);
-            // debug!(" {topic_name:?} -> {raw_data:?}");
+            // debug_with_info!(" {topic_name:?} -> {raw_data:?}");
             Ok(ResolvedData::RawData(raw_data))
         }
     };
@@ -1032,7 +1032,7 @@ impl TypeOFSource {
         presented_url: &str,
         ss_mutex: ServerStateAccess,
     ) -> DTPSR<TopicsIndexInternal> {
-        // debug!("get_meta_index: {:?}", self);
+        // debug_with_info!("get_meta_index: {:?}", self);
         return match self {
             TypeOFSource::ForwardedQueue(q) => {
                 let ss = ss_mutex.lock().await;
@@ -1088,13 +1088,13 @@ impl TypeOFSource {
                 let oq = ss.oqs.get(topic_name).unwrap();
                 let mut tr = oq.tr.clone();
 
-                // debug!("topic_name = {topic_name:?} presented_url = {presented_url:?}");
+                // debug_with_info!("topic_name = {topic_name:?} presented_url = {presented_url:?}");
 
                 // let presented_url = presented_as.as_relative_url();
                 let topic_url = topic_name.as_relative_url();
 
                 let rurl = make_relative(&presented_url[1..], topic_url);
-                debug!("topic_url = {topic_url} presented = {presented_url} rulr = {rurl}");
+                // debug_with_info!("topic_url = {topic_url} presented = {presented_url} rulr = {rurl}");
                 tr.reachability.push(TopicReachabilityInternal {
                     con: TypeOfConnection::Relative(rurl, None),
                     answering: node_id.clone(),
@@ -1132,7 +1132,7 @@ impl TypeOFSource {
                 }
                 let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
 
-                debug!("MountedDir: {:?}", d);
+                debug_with_info!("MountedDir: {:?}", d);
                 let inside = d.read_dir().unwrap();
                 for x in inside {
                     let filename = x?.file_name().to_str().unwrap().to_string();
@@ -1320,7 +1320,7 @@ pub async fn interpret_path(
     referrer: &Option<String>,
     ss: &ServerState,
 ) -> DTPSR<TypeOFSource> {
-    debug!("interpret_path: path: {}", path);
+    // debug_with_info!("interpret_path: path: {}", path);
     let path_components0 = divide_in_components(&path, '/');
     let path_components = path_components0.clone();
     let ends_with_dash = path.ends_with('/');
@@ -1338,7 +1338,7 @@ pub async fn interpret_path(
             let i = path_components.iter().position(|x| x == &deref).unwrap();
             let before = path_components.get(0..i).unwrap().to_vec();
             let after = path_components.get(i + 1..).unwrap().to_vec();
-            debug!("interpret_path: before: {:?} after: {:?}", before, after);
+            debug_with_info!("interpret_path: before: {:?} after: {:?}", before, after);
 
             let before2 = before.join("/") + "/";
             let interpret_before = interpret_path(&before2, query, referrer, ss).await?;
@@ -1365,7 +1365,7 @@ pub async fn interpret_path(
                 .unwrap();
             let before = path_components.get(0..i).unwrap().to_vec();
             let after = path_components.get(i + 1..).unwrap().to_vec();
-            debug!("interpret_path: before: {:?} after: {:?}", before, after);
+            debug_with_info!("interpret_path: before: {:?} after: {:?}", before, after);
 
             let before2 = before.join("/") + "/";
             let interpret_before = interpret_path(&before2, query, referrer, ss).await?;
@@ -1445,7 +1445,7 @@ fn resolve(
     //     p =
     //     return Ok(TypeOFSource::OurQueue(TopicName::root(), p));
     // }
-    // log::debug!(" = all_sources =\n{:#?} ", all_sources);
+    // debug_with_info!(" = all_sources =\n{:#?} ", all_sources);
     for (k, source) in all_sources.iter() {
         let topic_components = k.as_components();
         subtopics_vec.push(topic_components.clone());
@@ -1461,7 +1461,7 @@ fn resolve(
             }
         };
 
-        // log::debug!("k: {:?} = components = {:?} ", k, components);
+        // debug_with_info!("k: {:?} = components = {:?} ", k, components);
 
         let (matched, rest) = match is_prefix_of(&path_components, &topic_components) {
             None => continue,
@@ -1469,17 +1469,17 @@ fn resolve(
             Some(rest) => rest,
         };
 
-        // debug!("pushing: {k:?}");
+        // debug_with_info!("pushing: {k:?}");
         subtopics.push((k.clone(), matched, rest, source.clone()));
     }
 
-    // debug!("subtopics: {subtopics:?}");
+    // debug_with_info!("subtopics: {subtopics:?}");
     if subtopics.len() == 0 {
         let s = format!(
             "Cannot find a matching topic for {:?}.\nMy Topics: {:?}\n",
             path_components, subtopics_vec
         );
-        error!("{}", s);
+        error_with_info!("{}", s);
         return Err(DTPSError::TopicNotFound(s));
     }
     let y = path_components.join("/");
@@ -1730,7 +1730,7 @@ async fn patch_transformed(
     ts: &TypeOFSource,
     transform: &Transforms,
 ) -> DTPSR<()> {
-    log::debug!("patch_transformed:\n{ts:#?}\n---\n{transform:?}\n---\n{patch:?}");
+    debug_with_info!("patch_transformed:\n{ts:#?}\n---\n{transform:?}\n---\n{patch:?}");
     match transform {
         Transforms::GetInside(path) => {
             let mut prefix = String::new();
@@ -1740,7 +1740,7 @@ async fn patch_transformed(
             }
             // prefix.pop();
             let patch2 = add_prefix_to_patch(patch, &prefix);
-            // log::debug!("redirecting patch:\nbefore: {patch:#?} after: \n{patch2:#?}");
+            // debug_with_info!("redirecting patch:\nbefore: {patch:#?} after: \n{patch2:#?}");
             return ts.patch(presented_as, ss_mutex, &patch2).await;
         }
         _ => {
@@ -1776,7 +1776,7 @@ async fn patch_our_queue(
 
     context!(json_patch::patch(&mut x, patch), "cannot apply patch")?;
     if x == x0 {
-        log::debug!("The patch didn't change anything:\n {patch:?}");
+        debug_with_info!("The patch didn't change anything:\n {patch:?}");
         return Ok(());
     }
 
@@ -1818,13 +1818,13 @@ async fn patch_proxied(
 
     let x0: serde_json::Value = raw_data.get_as_json()?;
     let mut x = x0.clone();
-    debug!("patching:\n---{x0:?}---\n{p:?}\n");
+    // debug_with_info!("patching:\n---{x0:?}---\n{p:?}\n");
     patch(&mut x, p)?;
     if x == x0 {
-        log::debug!("The patch didn't change anything:\n {p:?}");
+        debug_with_info!("The patch didn't change anything:\n {p:?}");
         return Ok(());
     }
-    debug!("patching:\n---\n{x0:?}\n---\n{x:?}");
+    // debug_with_info!("patching:\n---\n{x0:?}\n---\n{x:?}");
 
     for po in &p.0 {
         match po {
@@ -1837,16 +1837,12 @@ async fn patch_proxied(
                     match parse_url_ext(u) {
                         Ok(u) => urls.push(u),
                         Err(e) => {
-                            log::error!("cannot parse url: {u:?} {e:?}", u = u, e = e);
+                            error_with_info!("cannot parse url: {u:?} {e:?}");
                         }
                     };
                 }
 
-                debug!(
-                    "adding proxy: topic_name = {topic_name:?} url = {url:?}",
-                    topic_name = topic_name,
-                    url = urls
-                );
+                debug_with_info!("adding proxy: topic_name = {topic_name:?} urls = {urls:?}",);
 
                 ss.add_proxy_connection(&topic_name, &urls, pj.node_id, ss_mutex.clone())?;
             }

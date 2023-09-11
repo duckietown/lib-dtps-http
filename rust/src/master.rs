@@ -67,7 +67,7 @@ pub async fn serve_master_post(
     let p = ds.get_properties();
     if !p.pushable {
         let s = format!("Cannot push to {path_str:?} because the topic is not pushable:\n{ds:?}");
-        error!(" {s}");
+        error_with_info!(" {s}");
         let res = http::Response::builder()
             .status(StatusCode::METHOD_NOT_ALLOWED)
             .body(Body::from(s.to_string()))
@@ -77,7 +77,7 @@ pub async fn serve_master_post(
 
     return match ds {
         TypeOFSource::OurQueue(topic_name, _) => {
-            debug!("Pushing to topic {:?}", topic_name);
+            debug_with_info!("Pushing to topic {:?}", topic_name);
             handle_topic_post(&topic_name, ss_mutex, &rd).await
         }
         TypeOFSource::ForwardedQueue(fq) => {
@@ -141,8 +141,8 @@ pub async fn serve_master_patch(
     let content_type = get_header_with_default(&headers, CONTENT_TYPE, OCTET_STREAM);
     let result = if content_type == CONTENT_TYPE_PATCH_JSON {
         let r = serde_json::from_slice::<json_patch::Patch>(&data);
-        debug!("orig: {:?}", data);
-        debug!("Parsed patch: {:?}", r);
+        debug_with_info!("orig: {:?}", data);
+        debug_with_info!("Parsed patch: {:?}", r);
         match r {
             Ok(x) => x,
             Err(_) => {
@@ -196,7 +196,7 @@ pub async fn serve_master_patch(
     if !p.patchable {
         let s =
             format!("Cannot patch to {path_str:?} because the topic is not patchable:\n{ds:#?}");
-        error!(" {s}");
+        error_with_info!(" {s}");
         let res = http::Response::builder()
             .status(StatusCode::METHOD_NOT_ALLOWED)
             .body(Body::from(s.to_string()))
@@ -214,7 +214,7 @@ pub async fn serve_master_patch(
             Ok(res)
         }
         Err(e) => {
-            log::error!("Patch not ok: {e:?}");
+            error_with_info!("Patch not ok: {e:?}");
             let res = http::Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .body(Body::from(format!("Patch not ok: {e:?}")))
@@ -231,7 +231,7 @@ pub async fn serve_master_head(
     headers: HeaderMap,
 ) -> HandlersResponse {
     let path_str = path_normalize(&path);
-    // debug!("serve_master_head: path_str: {}", path_str);
+    // debug_with_info!("serve_master_head: path_str: {}", path_str);
     let referrer = get_referrer(&headers);
     let matched: DTPSR<TypeOFSource> = {
         let ss = ss_mutex.lock().await;
@@ -241,7 +241,7 @@ pub async fn serve_master_head(
     let ds = match matched {
         Ok(ds) => ds,
         Err(s) => {
-            // debug!("serve_master_head: path_str: {}\n{}", path_str, s);
+            // debug_with_info!("serve_master_head: path_str: {}\n{}", path_str, s);
 
             let res = http::Response::builder()
                 .status(s.status_code())
@@ -250,7 +250,7 @@ pub async fn serve_master_head(
             return Ok(res);
         }
     };
-    // debug!("serve_master_head: ds: {:?}", ds);
+    // debug_with_info!("serve_master_head: ds: {:?}", ds);
     match &ds {
         TypeOFSource::OurQueue(topic_name, _) => {
             let x: &ObjectQueue;
@@ -293,12 +293,12 @@ pub async fn serve_master_head(
 
         TypeOFSource::MountedDir(_, _, _) => {
             // return serve_master_get(path, query, ss_mutex, headers).await;
-            // error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
+            // error_with_info!("HEAD not supported for path = {path_str}, ds = {ds:?}");
             //
             // not_supported
         }
         TypeOFSource::MountedFile(_, _, _) => {
-            // error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
+            // error_with_info!("HEAD not supported for path = {path_str}, ds = {ds:?}");
 
             // not_supported
         }
@@ -328,7 +328,7 @@ pub async fn serve_master_head(
         TypeOFSource::Index(..) => {}
         TypeOFSource::Aliased(..) => {}
         TypeOFSource::History(..) => {
-            // error!("HEAD not supported for path = {path_str}, ds = {ds:?}");
+            // error_with_info!("HEAD not supported for path = {path_str}, ds = {ds:?}");
 
             // not_supported
         }
@@ -347,7 +347,7 @@ fn path_normalize(path: &warp::path::FullPath) -> String {
     //
     //     let text_response = format!("Redirecting to {:?} -> {:?} ", path_str, new_path_str);
     //
-    //     debug!("serve_master: removing initial /!/ directly ={:?} => {:?} ", path, new_path_str);
+    //     debug_with_info!("serve_master: removing initial /!/ directly ={:?} => {:?} ", path, new_path_str);
     //
     //     let res = http::Response::builder()
     //         .status(StatusCode::MOVED_PERMANENTLY)
@@ -365,7 +365,7 @@ fn path_normalize(path: &warp::path::FullPath) -> String {
 
         let res = path_str2.to_string().replace("/!!", "/!");
 
-        // debug!(
+        // debug_with_info!(
         //     "serve_master: normalizing /!/:\n   {:?}\n-> {:?} ",
         //     path, res
         // );
@@ -375,7 +375,7 @@ fn path_normalize(path: &warp::path::FullPath) -> String {
     };
 
     if path_str != new_path {
-        // debug!("serve_master: path={:?} => {:?} ", path, new_path);
+        // debug_with_info!("serve_master: path={:?} => {:?} ", path, new_path);
     }
 
     new_path
@@ -401,8 +401,8 @@ pub async fn serve_master_get(
 ) -> HandlersResponse {
     // get referrer
     let referrer = get_referrer(&headers);
-    debug!("GET {} ", path.as_str());
-    // debug!("Referrer {:?} ", referrer);
+    debug_with_info!("GET {} ", path.as_str());
+    // debug_with_info!("Referrer {:?} ", referrer);
 
     let path_str = path_normalize(&path);
 
@@ -434,9 +434,11 @@ pub async fn serve_master_get(
             if good_url != path_str {
                 let good_relative_url = format!("./{}/", path_components.last().unwrap());
 
-                debug!(
+                debug_with_info!(
                     "Redirecting\n - {}\n->  {};\n rel = {}\n",
-                    path_str, good_url, good_relative_url
+                    path_str,
+                    good_url,
+                    good_relative_url
                 );
 
                 let text_response = format!("Redirecting to {}", good_url);
@@ -456,21 +458,7 @@ pub async fn serve_master_get(
         interpret_path(&path_str, &query, &referrer, &ss).await
     }?;
 
-    debug!("serve_master: ds={:?} ", ds);
-
-    // let ds_props = ds.get_properties();
-
-    // match ds {
-    //     TypeOFSource::OurQueue(topic_name, _, _) => {
-    //         return if true || topic_name.is_root() {
-    //             handler_topic_generic(&topic_name, ss_mutex.clone(), headers).await
-    //         } else {
-    //             root_handler(ss_mutex.clone(), headers).await
-    //         };
-    //     }
-    //     _ => {}
-    // }
-    // let presented_as = TopicName::from_components(&path_components0);
+    // debug_with_info!("serve_master: ds={:?} ", ds);
 
     let resd0 = ds.resolve_data_single(&path_str, ss_mutex.clone()).await;
 
@@ -488,7 +476,6 @@ pub async fn serve_master_get(
             return Ok(res);
         }
     };
-    // debug!("serve_master: resolved: {:#?}", resd);
     let rd: RawData = match resd {
         ResolvedData::RawData(rd) => rd,
         ResolvedData::Regular(reg) => {
@@ -632,7 +619,7 @@ pub async fn visualize_data(
             let ss = ssa.lock().await;
             utils_headers::put_common_headers(&ss, h);
         }
-        // debug!("the response is {resp:?}");
+        // debug_with_info!("the response is {resp:?}");
         Ok(resp.into())
     }
 }
@@ -643,6 +630,7 @@ pub async fn handle_websocket_generic2(
     state: ServerStateAccess,
     send_data: bool,
 ) -> () {
+    debug_with_info!("WEBSOCKET {path} send_data={send_data}");
     let (mut ws_tx, ws_rx) = ws.split();
     let (receiver, join_handle) = receive_from_websocket(ws_rx);
 
@@ -682,26 +670,14 @@ pub async fn handle_websocket_generic2_(
         interpret_path(&path, &query, &referrer, &ss).await
     }?;
 
-    // let ds = interpret_path(&path, &query, &referrer, state.clone()).await?;
-
     return match &ds {
         TypeOFSource::Compose(_) => {
-            // if sc.is_root {
-            //     let topic_name = TopicName::root();
-            //     spawn(do_receiving(topic_name.clone(), state.clone(), receiver));
-            //
-            //     return handle_websocket_queue(ws_tx, state, topic_name, send_data).await;
-            // } else {
             let stream = ds.get_data_stream(path.as_str(), state).await?;
-
             handle_websocket_data_stream(ws_tx, stream, send_data).await
-            // not_implemented!("handle_websocket_generic2 not implemented TypeOFSource::Compose")
-            // }
         }
         TypeOFSource::OurQueue(topic_name, _) => {
             spawn(do_receiving(topic_name.clone(), state.clone(), receiver));
-
-            return handle_websocket_queue(ws_tx, state, topic_name.clone(), send_data).await;
+            handle_websocket_queue(ws_tx, state, topic_name.clone(), send_data).await
         }
 
         TypeOFSource::ForwardedQueue(fq) => {
@@ -714,7 +690,6 @@ pub async fn handle_websocket_generic2_(
                 send_data,
             )
             .await
-            // not_implemented!("handle_websocket_generic2 not implemented for {ds:?}")
         }
         // TypeOFSource::Digest(_digest, _content_type) => {
         //     not_implemented!("handle_websocket_generic2 not implemented TypeOFSource::Digest")

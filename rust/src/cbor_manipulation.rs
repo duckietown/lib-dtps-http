@@ -2,7 +2,10 @@ use log::debug;
 use maud::{html, PreEscaped};
 
 use crate::utils_yaml::generate_html_from_cbor;
-use crate::{identify_presentation, utils_mime, ContentPresentation, DTPSError, RawData, DTPSR};
+use crate::{
+    debug_with_info, identify_presentation, utils_mime, ContentPresentation, DTPSError, RawData,
+    DTPSR,
+};
 
 impl RawData {
     pub fn get_as_cbor(self: &RawData) -> DTPSR<serde_cbor::Value> {
@@ -78,9 +81,11 @@ pub fn get_inside(
     data: &serde_cbor::Value,
     path: &Vec<String>,
 ) -> DTPSR<serde_cbor::Value> {
-    debug!(
+    debug_with_info!(
         "get_inside: context: {:?}, data: {:?}, path: {:?}",
-        context, data, path
+        context,
+        data,
+        path
     );
     let current = data;
     if path.len() == 0 {

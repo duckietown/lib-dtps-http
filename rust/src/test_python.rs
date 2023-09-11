@@ -4,9 +4,9 @@ use tokio::task::JoinHandle;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::{
-    get_events_stream_inline, get_history, get_index, get_metadata, get_rawdata, interpret_resp,
-    make_request, DTPSError, FoundMetadata, Notification, TopicName, TypeOfConnection, DTPSR,
-    TOPIC_LIST_CLOCK,
+    debug_with_info, get_events_stream_inline, get_history, get_index, get_metadata, get_rawdata,
+    interpret_resp, make_request, DTPSError, FoundMetadata, Notification, TopicName,
+    TypeOfConnection, DTPSR, TOPIC_LIST_CLOCK,
 };
 
 #[cfg(test)]
@@ -122,11 +122,11 @@ async fn read_notifications(
         let ne = stream.next().await;
         match ne {
             None => {
-                log::debug!("finished stream");
+                debug_with_info!("finished stream");
                 break;
             }
             Some(notification) => {
-                log::debug!("clock notification: {:#?}", notification);
+                debug_with_info!("clock notification: {:#?}", notification);
 
                 i += 1;
             }
@@ -146,7 +146,7 @@ async fn read_notifications(
 }
 
 async fn check_topic(topic: TopicName, con: TypeOfConnection) -> DTPSR<()> {
-    log::debug!("check_topic {topic:?}...");
+    debug_with_info!("check_topic {topic:?}...");
     let _data = get_rawdata(&con).await?;
 
     let resp = make_request(&con, hyper::Method::GET, b"", None, Some("text/html")).await?;
@@ -166,14 +166,14 @@ async fn check_topic(topic: TopicName, con: TypeOfConnection) -> DTPSR<()> {
     }
 
     let index = get_index(&md.meta_url.unwrap()).await?;
-    log::debug!("check_topic {topic:?} {index:?}");
+    debug_with_info!("check_topic {topic:?} {index:?}");
 
     if let Some(x) = &md.history_url {
         let history = get_history(x).await?;
-        log::debug!("check_topic {topic:?} {history:?}");
+        debug_with_info!("check_topic {topic:?} {history:?}");
     }
 
-    log::debug!("check_topic {topic:?} OK");
+    debug_with_info!("check_topic {topic:?} OK");
 
     Ok(())
 }

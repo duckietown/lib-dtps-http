@@ -1,3 +1,4 @@
+use crate::error_with_info;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 use serde_yaml;
@@ -45,7 +46,7 @@ pub async fn open_cloudflare(
 
     let handle = spawn(async move {
         let output = child.wait().await;
-        error!("tunnel exited: {:?}", output);
+        error_with_info!("tunnel exited: {:?}", output);
     });
     handle
 }

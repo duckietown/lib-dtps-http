@@ -66,8 +66,7 @@ pub enum DTPSError {
 
     #[error(transparent)]
     WarpError(#[from] warp::Error),
-    // #[error(transparent)]
-    // SendError(#[from] SendError),
+
     #[error("DTPSError: Error {1} - {2} for url {0} \n{}", indent_inside(.3))]
     FailedRequest(String, u16, String, String),
 
@@ -114,6 +113,7 @@ impl From<String> for DTPSError {
         DTPSError::Other(item)
     }
 }
+
 impl From<&String> for DTPSError {
     fn from(item: &String) -> Self {
         DTPSError::Other(item.to_string())
@@ -168,14 +168,12 @@ pub async fn handle_rejection(err: Rejection) -> std::result::Result<impl Reply,
         }
         return Ok(warp::reply::with_status(error_message, status_code));
     }
-
-    // handle other rejections
     Err(err)
 }
-
-pub fn just_log<E: Debug>(e: E) -> () {
-    log::error!("Ignoring error: {:?}", e);
-}
+//
+// pub fn just_log<E: Debug>(e: E) -> () {
+//     error_with_info!("Ignoring error: {:?}", e);
+// }
 
 #[macro_export]
 macro_rules! add_info {
@@ -196,9 +194,26 @@ macro_rules! error_with_info {
 }
 
 #[macro_export]
+macro_rules! warn_with_info {
+    ($($u:expr),* $(,)?) => {{
+        log::error!("{}:{}:\n{}", file!(), line!(),
+            indent::indent_all_with("| ", format!($($u),*))
+        )
+    }};
+}
+
+#[macro_export]
 macro_rules! debug_with_info {
     ($($u:expr),* $(,)?) => {{
-        log::debug!("{}:{}:\n{}", file!(), line!(),
+        log::debug!("{}:{}:\n{}", file!(), line!(), // OK
+            indent::indent_all_with("| ", format!($($u),*))
+        )
+    }};
+}
+#[macro_export]
+macro_rules! info_with_info {
+    ($($u:expr),* $(,)?) => {{
+        log::info!("{}:{}:\n{}", file!(), line!(),
             indent::indent_all_with("| ", format!($($u),*))
         )
     }};
