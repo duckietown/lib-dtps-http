@@ -320,9 +320,11 @@ class DataReady:
         return TypeAdapter(cls).validate_python(struct)
 
 
-@dataclass
-class History:
-    available: Dict[int, DataReady]
+# @dataclass
+# class History:
+#     available: Dict[int, DataReady]
+
+History = Dict[int, DataReady]
 
 
 def channel_msgs_parse(d: bytes) -> Union[ChannelInfo, DataReady, Chunk]:

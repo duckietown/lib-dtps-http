@@ -2,6 +2,7 @@ use maud::{
     html,
     PreEscaped,
 };
+use std::num::ParseIntError;
 
 use crate::{
     debug_with_info,
@@ -86,7 +87,7 @@ pub fn get_inside(context: Vec<String>, data: &serde_cbor::Value, path: &Vec<Str
     let first = path.remove(0);
     let inside = match current {
         serde_cbor::value::Value::Array(a) => {
-            let p: i64 = match first.parse() {
+            let p: usize = match first.parse() {
                 Ok(x) => x,
                 Err(e) => {
                     let s = format!("{}Cannot parse {} as usize: {}", context_s, first, e);
@@ -94,7 +95,7 @@ pub fn get_inside(context: Vec<String>, data: &serde_cbor::Value, path: &Vec<Str
                 }
             };
 
-            if !(0 <= p && p < a.len() as i64) {
+            if p >= a.len() {
                 let s = format!(
                     "{}Cannot find index {} for array of length {}",
                     context_s,
@@ -109,12 +110,16 @@ pub fn get_inside(context: Vec<String>, data: &serde_cbor::Value, path: &Vec<Str
             }
         }
         serde_cbor::value::Value::Map(a) => {
-            let key = serde_cbor::value::Value::Text(first.clone().into());
+            // try to parse the string first as a integer
+            let key = match first.parse::<i128>() {
+                Ok(n) => serde_cbor::value::Value::Integer(n),
+                Err(_) => serde_cbor::value::Value::Text(first.clone()),
+            };
             match a.get(&key) {
                 None => {
                     let available = a.keys().map(|x| format!("{:?}", x)).collect::<Vec<String>>().join(", ");
                     let s = format!(
-                        "{}Cannot find key {} for map. Available: {}",
+                        "{}Cannot find key {} for map.\nAvailable: {}",
                         context_s, first, available
                     );
 

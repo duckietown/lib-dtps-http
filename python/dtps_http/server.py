@@ -650,11 +650,9 @@ class DTPSServer:
         for i in oq.stored:
             ds = oq.saved[i]
             a = oq.get_data_ready(ds, presented_as, inline_data=False)
-            history[a.sequence] = a
+            history[a.sequence] = asdict(a)
 
-        hist = History(history)
-
-        cbor = cbor2.dumps(asdict(hist))
+        cbor = cbor2.dumps(history)
         rd = RawData(cbor, CONTENT_TYPE_TOPIC_HISTORY_CBOR)
         title = f"History for {topic_name_s}"
         return self.visualize_data(request, title, rd, headers)

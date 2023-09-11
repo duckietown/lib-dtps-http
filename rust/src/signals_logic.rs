@@ -23,7 +23,6 @@ use json_patch::{
     Patch,
     PatchOperation,
 };
-
 use maplit::hashmap;
 use schemars::JsonSchema;
 use serde::{
@@ -70,7 +69,6 @@ use crate::{
     DataReady,
     DataSaved,
     ForwardingStep,
-    History,
     InsertNotification,
     LinkBenchmark,
     OtherProxyInfo,
@@ -202,9 +200,10 @@ pub trait ResolveDataSingle {
 impl TypeOFSource {
     pub fn get_inside(&self, s: &str) -> DTPSR<Self> {
         match self {
-            TypeOFSource::ForwardedQueue(_q) => {
-                not_implemented!("get_inside for {self:#?} with {s:?}")
-            }
+            TypeOFSource::ForwardedQueue(_q) => Ok(TypeOFSource::Transformed(
+                Box::new(self.clone()),
+                Transforms::GetInside(vec![s.to_string()]),
+            )),
             TypeOFSource::OurQueue(..) => {
                 // TODO: this is where you would check the schema
                 // not_implemented!("get_inside for {self:#?} with {s:?}")
@@ -261,18 +260,21 @@ impl TypeOFSource {
             TypeOFSource::Digest(_, _) => {
                 not_implemented!("get_inside for {self:#?} with {s:?}")
             }
-            TypeOFSource::Deref(_c) => {
-                not_implemented!("get_inside for {self:#?} with {s:?}")
-            }
+            TypeOFSource::Deref(_c) => Ok(TypeOFSource::Transformed(
+                Box::new(self.clone()),
+                Transforms::GetInside(vec![s.to_string()]),
+            )),
             TypeOFSource::OtherProxied(_) => {
                 not_implemented!("get_inside for {self:#?} with {s:?}")
             }
-            TypeOFSource::Aliased(_, _) => {
-                not_implemented!("get_inside for {self:#?} with {s:?}")
-            }
-            TypeOFSource::History(_) => {
-                not_implemented!("get_inside for {self:#?} with {s:?}")
-            }
+            TypeOFSource::Aliased(_, _) => Ok(TypeOFSource::Transformed(
+                Box::new(self.clone()),
+                Transforms::GetInside(vec![s.to_string()]),
+            )),
+            TypeOFSource::History(_) => Ok(TypeOFSource::Transformed(
+                Box::new(self.clone()),
+                Transforms::GetInside(vec![s.to_string()]),
+            )),
         }
     }
 }
@@ -329,7 +331,7 @@ impl ResolveDataSingle for TypeOFSource {
             }
             TypeOFSource::Transformed(source, transforms) => {
                 let data = source.resolve_data_single(presented_as, ss_mutex.clone()).await?;
-                transform(data, transforms).await
+                transform(data, transforms)
             }
             TypeOFSource::Deref(sc) => single_compose(sc, presented_as, ss_mutex).await,
             TypeOFSource::OtherProxied(op) => resolve_proxied(op).await,
@@ -392,7 +394,7 @@ impl ResolveDataSingle for TypeOFSource {
                             let s = q.saved.get(index).unwrap();
                             available.insert(s.index, get_dataready(s));
                         }
-                        let history = History { available };
+                        let history = available;
                         let bytes = serde_cbor::to_vec(&history).unwrap();
                         return Ok(ResolvedData::RawData(RawData::new(
                             bytes,
@@ -430,18 +432,6 @@ pub async fn resolve_proxied(op: &OtherProxied) -> DTPSR<ResolvedData> {
     debug_with_info!("Proxied: {:?} -> {:?}", con0, con);
 
     let rd = get_rawdata(&con).await?;
-    // let resp = context!(
-    //     make_request(&con, hyper::Method::GET, b"",None, None).await,
-    //     "Cannot make request to {:?}",
-    //     con
-    // )?;
-    // let content_type = get_content_type(&resp);
-    //
-    // let body_bytes = context!(
-    //     hyper::body::to_bytes(resp.into_body()).await,
-    //     "Cannot get body bytes"
-    // )?;
-    // let rd = RawData::new(body_bytes, content_type);
 
     Ok(ResolvedData::RawData(rd))
 }
@@ -461,7 +451,7 @@ impl DataProps for TypeOFSource {
             TypeOFSource::OurQueue(_, props) => props.clone(),
 
             TypeOFSource::Compose(sc) => sc.get_properties(),
-            TypeOFSource::Transformed(s, _) => s.get_properties(),
+            TypeOFSource::Transformed(s, _) => s.get_properties(), // ok but when do we do the history?
             TypeOFSource::Deref(d) => d.get_properties(),
             TypeOFSource::OtherProxied(_) => {
                 TopicProperties {
@@ -538,8 +528,9 @@ impl TypeOFSource {
             }
 
             TypeOFSource::Compose(sc) => get_stream_compose_meta(presented_as, ssa, sc).await,
-            TypeOFSource::Transformed(_s, _) => {
-                not_implemented!("get_stream for {self:#?} with {self:?}")
+            TypeOFSource::Transformed(tos, tr) => {
+                get_stream_transform(presented_as, ssa, tos, tr).await
+                // not_implemented!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::Deref(d) => get_stream_compose_data(presented_as, ssa, d).await,
             TypeOFSource::OtherProxied(_) => {
@@ -672,16 +663,32 @@ async fn listen_to_updates(
     Ok(())
 }
 
-async fn filter_stream<T, U, F>(mut receiver: Receiver<T>, sender: Sender<U>, f: F) -> DTPSR<()>
+async fn filter_stream<T, U, F, G>(
+    mut receiver: Receiver<T>,
+    sender: Sender<U>,
+    f: F,
+    filter_same: bool,
+    mut last: Option<U>,
+    are_they_same: G,
+) -> DTPSR<()>
 where
     F: Fn(T) -> DTPSR<U>,
     T: Send + Clone + Debug,
     U: Send + Clone + Debug,
+    G: Fn(&U, &U) -> bool,
 {
     loop {
         match receiver.recv().await {
             Ok(m) => {
                 let u = f(m)?;
+                if filter_same {
+                    if let Some(a) = &last {
+                        if are_they_same(a, &u) {
+                            continue;
+                        }
+                    }
+                    last = Some(u.clone());
+                }
                 if sender.receiver_count() != 0 {
                     match sender.send(u) {
                         Ok(_) => {}
@@ -804,9 +811,11 @@ async fn transform_for(
     prefix: TopicName,
     presented_as: String,
     unique_id: String,
+    first: Option<InsertNotification>,
 ) -> DTPSR<()> {
+    let compare = |a: &InsertNotification, b: &InsertNotification| a.raw_data == b.raw_data;
     let f = |in1: InsertNotification| filter_func(in1, prefix.clone(), presented_as.clone(), unique_id.clone());
-    filter_stream(receiver, out_stream_sender, f).await
+    filter_stream(receiver, out_stream_sender, f, true, first, compare).await
 }
 
 #[async_recursion]
@@ -824,12 +833,20 @@ async fn get_stream_compose_meta(
 
     let unique_id = sc.unique_id.clone();
 
+    let in0 = filter_func(
+        stream0.first.unwrap(),
+        sc.topic_name.clone(),
+        presented_as.to_string(),
+        unique_id.clone(),
+    )?;
+
     let future = transform_for(
         receiver,
         out_stream_sender,
         sc.topic_name.clone(),
         presented_as.to_string(),
         unique_id.clone(),
+        Some(in0.clone()),
     );
     // let handle1 = tokio::spawn(show_errors(
     //     Some(ssa.clone()),
@@ -840,12 +857,82 @@ async fn get_stream_compose_meta(
     let queue_created: i64 = Local::now().timestamp_nanos();
     let num_total = 1;
 
-    let in0 = filter_func(
-        stream0.first.unwrap(),
-        sc.topic_name.clone(),
-        presented_as.to_string(),
+    let data_stream = DataStream {
+        channel_info: ChannelInfo {
+            queue_created,
+            num_total,
+            newest: None,
+            oldest: None,
+        },
+        first: Some(in0),
+        stream: Some(out_stream_recv),
+        handles,
+    };
+    Ok(data_stream)
+}
+
+fn filter_transform(in1: InsertNotification, t: &Transforms, unique_id: String) -> DTPSR<InsertNotification> {
+    let v1 = in1.raw_data.get_as_cbor()?;
+    let v2 = t.apply(v1)?;
+    let rd = RawData::from_cbor_value(&v2)?;
+
+    let ds = &in1.data_saved;
+    let data_saved = DataSaved {
+        origin_node: ds.origin_node.clone(),
+        unique_id,
+        index: ds.index,
+        time_inserted: ds.time_inserted,
+        clocks: ds.clocks.clone(),
+        content_type: rd.content_type.clone(),
+        content_length: rd.content.len(),
+        digest: rd.digest().clone(),
+    };
+    // FIXME: need to save the blob
+    Ok(InsertNotification {
+        data_saved,
+        raw_data: rd,
+    })
+}
+
+async fn apply_transformer(
+    receiver: Receiver<InsertNotification>,
+    out_stream_sender: Sender<InsertNotification>,
+    transform: Transforms,
+    unique_id: String,
+    first: Option<InsertNotification>,
+) -> DTPSR<()> {
+    let are_they_same = |a: &InsertNotification, b: &InsertNotification| a.raw_data == b.raw_data;
+    let f = |in1: InsertNotification| filter_transform(in1, &transform, unique_id.clone());
+    filter_stream(receiver, out_stream_sender, f, true, first, are_they_same).await
+}
+
+#[async_recursion]
+async fn get_stream_transform(
+    presented_as: &str,
+    ssa: ServerStateAccess,
+    ds0: &TypeOFSource,
+    transform: &Transforms,
+) -> DTPSR<DataStream> {
+    let stream0 = ds0.get_data_stream(presented_as, ssa.clone()).await?;
+    let mut handles = stream0.handles;
+    let receiver = stream0.stream.unwrap();
+    let (out_stream_sender, out_stream_recv) = tokio::sync::broadcast::channel(1024);
+
+    let unique_id = "XXX".to_string();
+
+    let in0 = filter_transform(stream0.first.unwrap(), transform, unique_id.clone())?;
+
+    let future = apply_transformer(
+        receiver,
+        out_stream_sender,
+        transform.clone(),
         unique_id.clone(),
-    )?;
+        Some(in0.clone()),
+    );
+    handles.push(tokio::spawn(future));
+
+    let queue_created: i64 = Local::now().timestamp_nanos();
+    let num_total = 1;
 
     let data_stream = DataStream {
         channel_info: ChannelInfo {
@@ -966,21 +1053,23 @@ async fn get_stream_compose_data(
     };
     Ok(data_stream)
 }
-
-async fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<ResolvedData> {
+fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<ResolvedData> {
     let d = match data {
         Regular(d) => d,
         NotAvailableYet(s) => return Ok(NotAvailableYet(s.clone())),
         NotFound(s) => return Ok(NotFound(s.clone())),
         ResolvedData::RawData(rd) => rd.get_as_cbor()?,
     };
-    match &transform {
-        Transforms::GetInside(path) => {
-            debug_with_info!("Get inside: {:?}", d);
-            let inside = get_inside(vec![], &d, path);
-            match inside {
-                Ok(d) => Ok(ResolvedData::Regular(d)),
-                Err(e) => Err(DTPSError::Other(format!("Error getting inside: {}", e))),
+    Ok(ResolvedData::Regular(transform.apply(d)?))
+}
+
+impl Transforms {
+    fn apply(&self, data: CBORValue) -> DTPSR<CBORValue> {
+        match self {
+            Transforms::GetInside(path) => {
+                // debug_with_info!("Get inside: {:?}", d);
+                let inside = context!(get_inside(vec![], &data, path), "Error getting inside: {path:?}")?;
+                Ok(inside)
             }
         }
     }
@@ -1028,9 +1117,9 @@ impl GetMeta for TypeOFSource {
 }
 
 fn make_relative(base: &str, url: &str) -> String {
-    if base.starts_with("/") || url.starts_with("/") {
-        panic!("neither should start with /: {base:?} {url:?}")
-    }
+    // if base.starts_with("/") || url.starts_with("/") {
+    //     return DTPSError::invalid_input!("neither should start with /: {base:?} {url:?}")
+    // }
     let base = url::Url::parse(&format!("http://example.org/{base}")).unwrap();
     let target = url::Url::parse(&format!("http://example.org/{url}")).unwrap();
     let rurl = base.make_relative(&target).unwrap();
@@ -1706,13 +1795,9 @@ async fn patch_transformed(
                 prefix.push('/');
                 prefix.push_str(p);
             }
-            // prefix.pop();
             let patch2 = add_prefix_to_patch(patch, &prefix);
             // debug_with_info!("redirecting patch:\nbefore: {patch:#?} after: \n{patch2:#?}");
-            return ts.patch(presented_as, ss_mutex, &patch2).await;
-        }
-        _ => {
-            not_implemented!("patch for {ts:#?} with {transform:?}")
+            ts.patch(presented_as, ss_mutex, &patch2).await
         }
     }
 }

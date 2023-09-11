@@ -624,10 +624,11 @@ pub struct DataReady {
     pub chunks_arriving: usize,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct History {
-    pub available: HashMap<usize, DataReady>,
-}
+// #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+// pub struct History {
+//     pub available: HashMap<usize, DataReady>,
+// }
+pub type History = HashMap<usize, DataReady>;
 
 #[derive(Debug, Clone)]
 pub struct FoundMetadata {
