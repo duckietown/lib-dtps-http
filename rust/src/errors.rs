@@ -1,11 +1,19 @@
-use std::fmt::Debug;
-use std::net::AddrParseError;
+use std::{
+    fmt::Debug,
+    net::AddrParseError,
+};
 
 use anyhow::Result;
 use http::StatusCode;
 use indent::indent_all_with;
-use log::{debug, error};
-use warp::{Rejection, Reply};
+use log::{
+    debug,
+    error,
+};
+use warp::{
+    Rejection,
+    Reply,
+};
 
 #[derive(thiserror::Error, Debug)]
 pub enum DTPSError {
@@ -196,7 +204,7 @@ macro_rules! error_with_info {
 #[macro_export]
 macro_rules! warn_with_info {
     ($($u:expr),* $(,)?) => {{
-        log::error!("{}:{}:\n{}", file!(), line!(),
+        log::warn!("{}:{}:\n{}", file!(), line!(),
             indent::indent_all_with("| ", format!($($u),*))
         )
     }};
@@ -213,7 +221,7 @@ macro_rules! debug_with_info {
 #[macro_export]
 macro_rules! info_with_info {
     ($($u:expr),* $(,)?) => {{
-        log::info!("{}:{}:\n{}", file!(), line!(),
+        log::info!("{}:{}:\n{}", file!(), line!(), // OK
             indent::indent_all_with("| ", format!($($u),*))
         )
     }};

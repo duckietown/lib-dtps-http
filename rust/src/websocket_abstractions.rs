@@ -1,28 +1,63 @@
 use std::fmt::Debug;
 
 use async_trait::async_trait;
-use base64;
-use base64::{engine::general_purpose, Engine as _};
-use futures::stream::{SplitSink, SplitStream};
-use futures::{SinkExt, StreamExt};
-use log::info;
+use base64::{
+    self,
+    engine::general_purpose,
+    Engine as _, // keep
+};
+use futures::{
+    stream::{
+        SplitSink,
+        SplitStream,
+    },
+    SinkExt,
+    StreamExt,
+};
 use rand::Rng;
-use tokio::net::{TcpStream, UnixStream};
-use tokio::sync::broadcast;
-use tokio::task::JoinHandle;
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
-use tokio_tungstenite::{client_async_with_config, connect_async, MaybeTlsStream, WebSocketStream};
-use tungstenite::error::ProtocolError;
-use tungstenite::handshake::client::Request;
-use tungstenite::{Error, Message as TM};
+use tokio::{
+    net::{
+        TcpStream,
+        UnixStream,
+    },
+    sync::broadcast,
+    task::JoinHandle,
+};
+use tokio_tungstenite::{
+    client_async_with_config,
+    connect_async,
+    tungstenite::protocol::WebSocketConfig,
+    MaybeTlsStream,
+    WebSocketStream,
+};
+use tungstenite::{
+    error::ProtocolError,
+    handshake::client::Request,
+    Error,
+    Message as TM,
+};
 use url::Url;
 
-use crate::structures::TypeOfConnection;
-use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
-use crate::TypeOfConnection::Same;
 use crate::{
-    debug_with_info, error_with_info, not_implemented, not_reachable, show_errors, DTPSError,
-    ServerStateAccess, UnixCon, DTPSR,
+    debug_with_info,
+    error_with_info,
+    info_with_info,
+    not_implemented,
+    not_reachable,
+    show_errors,
+    structures::{
+        TypeOfConnection,
+        TypeOfConnection::{
+            Relative,
+            TCP,
+            UNIX,
+        },
+    },
+    DTPSError,
+    ServerStateAccess,
+    TypeOfConnection::Same,
+    UnixCon,
+    DTPSR,
 };
 
 #[async_trait]
@@ -38,7 +73,7 @@ pub trait GenericSocketConnection: Send + Sync {
 pub async fn open_websocket_connection(
     con: &TypeOfConnection,
 ) -> DTPSR<Box<dyn GenericSocketConnection>> {
-    info!("open_websocket_connection: {:#?}", con.to_string());
+    info_with_info!("open_websocket_connection: {:#?}", con.to_string());
     match con {
         TCP(url) => open_websocket_connection_tcp(url).await,
         TypeOfConnection::File(_, _) => {
@@ -154,7 +189,7 @@ async fn read_websocket_stream<S: Debug, T: StreamExt<Item = Result<S, tungsteni
     loop {
         match source.next().await {
             Some(msgr) => {
-                // info!("received message: {:?}", msg);
+                // info_with_info!("received message: {:?}", msg);
                 match msgr {
                     Ok(msg) => {
                         if incoming_sender.receiver_count() > 0 {
@@ -280,7 +315,6 @@ pub async fn open_websocket_connection_tcp(url: &Url) -> DTPSR<Box<dyn GenericSo
         panic!("unexpected scheme: {}", url.scheme());
     }
     let connection_res = connect_async(url.clone()).await;
-    // debug_with_info!("connection: {:#?}", connection);
     let connection;
     match connection_res {
         Ok(c) => {
@@ -291,7 +325,6 @@ pub async fn open_websocket_connection_tcp(url: &Url) -> DTPSR<Box<dyn GenericSo
         }
     }
     let (ws_stream, response) = connection;
-    // debug_with_info!("TCP response: {:#?}", response);
 
     let tcp = AnySocketConnection::from_tcp(ws_stream, response);
 

@@ -2,12 +2,21 @@
 // #![cfg_attr(debug_assertions, allow(unused_variables))]
 #![cfg_attr(debug_assertions, allow(unused_imports))]
 
-pub use client::ms_from_ns;
-pub use client::{compute_best_alternative, estimate_latencies, get_index, get_metadata};
+pub use client::{
+    compute_best_alternative,
+    estimate_latencies,
+    get_index,
+    get_metadata,
+    ms_from_ns,
+};
 pub use constants::*;
 pub use errors::*;
 pub use logs::init_logging;
-pub use server::{create_server_from_command_line, DTPSServer, ServerStateAccess};
+pub use server::{
+    create_server_from_command_line,
+    DTPSServer,
+    ServerStateAccess,
+};
 pub use server_state::show_errors;
 pub use structures::*;
 pub use types::TopicName;

@@ -1,9 +1,22 @@
 use log::info;
 use url::Url;
 
-use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
-use crate::structures::{TypeOfConnection, UnixCon};
-use crate::{normalize_path, DTPSError, FilePaths, DTPSR};
+use crate::{
+    info_with_info,
+    normalize_path,
+    structures::{
+        TypeOfConnection,
+        TypeOfConnection::{
+            Relative,
+            TCP,
+            UNIX,
+        },
+        UnixCon,
+    },
+    DTPSError,
+    FilePaths,
+    DTPSR,
+};
 
 fn get_scheme_part(s0: &str) -> Option<&str> {
     let scheme_end = s0.find("://")?;
@@ -99,7 +112,7 @@ pub fn parse_url_ext(mut s0: &str) -> DTPSR<TypeOfConnection> {
                 query,
             };
 
-            info!("UnixCon: parsed {:?} as {:?}", s, con);
+            info_with_info!("UnixCon: parsed {:?} as {:?}", s, con);
             return Ok(UNIX(con));
         }
 
@@ -129,7 +142,7 @@ pub fn parse_url_ext(mut s0: &str) -> DTPSR<TypeOfConnection> {
                 query,
             };
 
-            info!("UnixCon: parsed {:?} as {:?}", s, con);
+            info_with_info!("UnixCon: parsed {:?} as {:?}", s, con);
             Ok(UNIX(con))
         } else {
             let path_start = after_scheme.rfind('/').unwrap();
@@ -258,7 +271,10 @@ mod tests {
     use log::debug;
     use rstest::rstest;
 
-    use crate::FilePaths;
+    use crate::{
+        debug_with_info,
+        FilePaths,
+    };
 
     use super::*;
 

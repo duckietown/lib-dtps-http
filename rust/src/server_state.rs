@@ -1,36 +1,106 @@
-use std::cmp::max;
-use std::collections::{HashMap, HashSet};
-use std::env;
-use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::{
+    cmp::max,
+    collections::{
+        HashMap,
+        HashSet,
+    },
+    env,
+    future::Future,
+    path::{
+        Path,
+        PathBuf,
+    },
+};
 
 use anyhow::Context;
 use bytes::Bytes;
 use chrono::Local;
 use futures::StreamExt;
 use indent::indent_all_with;
-use log::{debug, error, info, warn};
+// use log::{
+//     debug,
+//     error,
+//     info,
+//     warn,
+// };
 use maplit::hashmap;
 use path_clean::PathClean;
-use schemars::schema::RootSchema;
-use schemars::{schema_for, JsonSchema};
-use serde::{Deserialize, Serialize};
-use strum_macros::{Display, EnumString};
-use tokio::sync::broadcast::Receiver;
-use tokio::sync::mpsc;
-use tokio::time::sleep;
+use schemars::{
+    schema::RootSchema,
+    schema_for,
+    JsonSchema,
+};
+use serde::{
+    Deserialize,
+    Serialize,
+};
+use strum_macros::{
+    Display,
+    EnumString,
+};
+use tokio::{
+    sync::{
+        broadcast::Receiver,
+        mpsc,
+    },
+    time::sleep,
+};
 
 use crate::{
-    compute_best_alternative, context, debug_with_info, error_with_info, get_events_stream_inline,
-    get_index, get_metadata, get_queue_id, get_random_node_id, get_stats, invalid_input,
-    is_prefix_of, not_available, not_implemented, not_reachable, sniff_type_resource,
-    warn_with_info, Clocks, ContentInfo, DTPSError, DataSaved, FilePaths, ForwardingStep,
-    FoundMetadata, InsertNotification, LinkBenchmark, NodeAppData, ObjectQueue, RawData,
-    ServerStateAccess, TopicName, TopicProperties, TopicReachabilityInternal, TopicRefInternal,
-    TopicsIndexInternal, TopicsIndexWire, TypeOfConnection, TypeOfResource, UrlResult,
-    CONTENT_TYPE_CBOR, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_JSON, CONTENT_TYPE_PLAIN,
-    CONTENT_TYPE_YAML, DTPSR, MASK_ORIGIN, TOPIC_LIST_AVAILABILITY, TOPIC_LIST_CLOCK,
-    TOPIC_LIST_NAME, TOPIC_LOGS, TOPIC_PROXIED, TOPIC_STATE_NOTIFICATION, TOPIC_STATE_SUMMARY,
+    compute_best_alternative,
+    context,
+    debug_with_info,
+    error_with_info,
+    get_events_stream_inline,
+    get_index,
+    get_metadata,
+    get_queue_id,
+    get_random_node_id,
+    get_stats,
+    info_with_info,
+    invalid_input,
+    is_prefix_of,
+    not_available,
+    not_implemented,
+    not_reachable,
+    sniff_type_resource,
+    warn_with_info,
+    Clocks,
+    ContentInfo,
+    DTPSError,
+    DataSaved,
+    FilePaths,
+    ForwardingStep,
+    FoundMetadata,
+    InsertNotification,
+    LinkBenchmark,
+    NodeAppData,
+    ObjectQueue,
+    RawData,
+    ServerStateAccess,
+    TopicName,
+    TopicProperties,
+    TopicReachabilityInternal,
+    TopicRefInternal,
+    TopicsIndexInternal,
+    TopicsIndexWire,
+    TypeOfConnection,
+    TypeOfResource,
+    UrlResult,
+    CONTENT_TYPE_CBOR,
+    CONTENT_TYPE_DTPS_INDEX_CBOR,
+    CONTENT_TYPE_JSON,
+    CONTENT_TYPE_PLAIN,
+    CONTENT_TYPE_YAML,
+    DTPSR,
+    MASK_ORIGIN,
+    TOPIC_LIST_AVAILABILITY,
+    TOPIC_LIST_CLOCK,
+    TOPIC_LIST_NAME,
+    TOPIC_LOGS,
+    TOPIC_PROXIED,
+    TOPIC_STATE_NOTIFICATION,
+    TOPIC_STATE_SUMMARY,
 };
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
@@ -356,7 +426,7 @@ impl ServerState {
         self.log_message(msg, "debug");
     }
     pub fn info(&mut self, msg: String) {
-        info!("{}", msg);
+        debug_with_info!("{}", msg);
         self.log_message(msg, "info");
     }
     pub fn error(&mut self, msg: String) {
@@ -447,7 +517,7 @@ impl ServerState {
                 reachability_we_used,
             },
         );
-        info!("New proxy topic {:?} -> {:?}", topic_name, its_topic_name);
+        debug_with_info!("New proxy topic {:?} -> {:?}", topic_name, its_topic_name);
         self.update_my_topic()
     }
 
@@ -469,7 +539,7 @@ impl ServerState {
         };
 
         // let local_dir = PathBuf::from(path);
-        info!(
+        debug_with_info!(
             "New local folder {:?} -> {:?}",
             topic_name,
             local_dir.to_str()
@@ -527,7 +597,7 @@ impl ServerState {
         let oqs = &mut self.oqs;
 
         oqs.insert(topic_name.clone(), ObjectQueue::new(tr, max_history));
-        info!("New topic: {:?}", topic_name);
+        info_with_info!("New topic: {:?}", topic_name);
 
         self.update_my_topic()
     }
@@ -536,7 +606,7 @@ impl ServerState {
         if !self.oqs.contains_key(topic_name) {
             return Err(DTPSError::TopicNotFound(topic_name.to_relative_url()));
         }
-        log::info!("Removing topic {topic_name:?}");
+        info_with_info!("Removing topic {topic_name:?}");
         let dropped_digests = {
             let mut todrop = Vec::new();
             let oq = self.oqs.get_mut(topic_name).unwrap();
@@ -1040,7 +1110,7 @@ pub async fn sniff_and_start_proxy(
             Ok(s) => break s,
             Err(e) => {
                 warn_with_info!("Cannot sniff:\n{e:?}");
-                info!("observe_proxy: retrying in 2 seconds");
+                debug_with_info!("observe_proxy: retrying in 2 seconds");
                 sleep(std::time::Duration::from_secs(2)).await;
                 continue;
             }
@@ -1094,7 +1164,7 @@ pub async fn observe_node_proxy(
                     mounted_at,
                     e
                 );
-                info!("observe_proxy: retrying in 2 seconds");
+                info_with_info!("observe_proxy: retrying in 2 seconds");
                 sleep(std::time::Duration::from_secs(2)).await;
                 continue;
             }

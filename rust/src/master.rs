@@ -1,35 +1,91 @@
-use std::collections::HashMap;
-use std::string::ToString;
+use std::{
+    collections::HashMap,
+    string::ToString,
+};
 
 use bytes::Bytes;
-use futures::stream::SplitSink;
-use futures::SinkExt;
-use futures::StreamExt;
-use log::{debug, error};
-use maud::{html, PreEscaped};
+use futures::{
+    stream::SplitSink,
+    SinkExt,
+    StreamExt,
+};
+use log::{
+    debug,
+    error,
+};
+use maud::{
+    html,
+    PreEscaped,
+};
 use strip_ansi_escapes::strip;
-use tokio::spawn;
-use tokio::sync::broadcast::error::RecvError;
+use tokio::{
+    spawn,
+    sync::broadcast::error::RecvError,
+};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tungstenite::http::{HeaderMap, StatusCode};
-use tungstenite::Message as TungsteniteMessage;
-use warp::http::header;
-use warp::hyper::Body;
-use warp::reply::Response;
-use warp::ws::Message as WarpMessage;
-use warp::Error;
+use tungstenite::{
+    http::{
+        HeaderMap,
+        StatusCode,
+    },
+    Message as TungsteniteMessage,
+};
+use warp::{
+    http::header,
+    hyper::Body,
+    reply::Response,
+    ws::Message as WarpMessage,
+    Error,
+};
 
 use crate::{
-    debug_with_info, display_printable, divide_in_components, do_receiving, error_with_info,
-    get_accept_header, get_good_url_for_components, get_header_with_default, get_metadata,
-    get_series_of_messages_for_notification_, handle_topic_post, handle_websocket_queue,
-    interpret_path, make_html, make_request, not_available, not_implemented,
-    open_websocket_connection, put_alternative_locations, receive_from_websocket, send_as_ws_cbor,
-    serve_static_file_path, utils_headers, utils_mime, DataProps, DataStream, GetMeta,
-    HandlersResponse, MsgClientToServer, MsgServerToClient, ObjectQueue, Patchable, RawData,
-    ResolveDataSingle, ResolvedData, ServerStateAccess, TopicName, TopicProperties,
-    TopicsIndexInternal, TypeOFSource, CONTENT_TYPE, CONTENT_TYPE_PATCH_CBOR,
-    CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_YAML, DTPSR, JAVASCRIPT_SEND, OCTET_STREAM,
+    debug_with_info,
+    display_printable,
+    divide_in_components,
+    do_receiving,
+    error_with_info,
+    get_accept_header,
+    get_good_url_for_components,
+    get_header_with_default,
+    get_metadata,
+    get_series_of_messages_for_notification_,
+    handle_topic_post,
+    handle_websocket_queue,
+    interpret_path,
+    make_html,
+    make_request,
+    not_available,
+    not_implemented,
+    open_websocket_connection,
+    put_alternative_locations,
+    receive_from_websocket,
+    send_as_ws_cbor,
+    serve_static_file_path,
+    utils_headers,
+    utils_mime,
+    DataProps,
+    DataStream,
+    GetMeta,
+    HandlersResponse,
+    MsgClientToServer,
+    MsgServerToClient,
+    ObjectQueue,
+    Patchable,
+    RawData,
+    ResolveDataSingle,
+    ResolvedData,
+    ServerStateAccess,
+    TopicName,
+    TopicProperties,
+    TopicsIndexInternal,
+    TypeOFSource,
+    CONTENT_TYPE,
+    CONTENT_TYPE_PATCH_CBOR,
+    CONTENT_TYPE_PATCH_JSON,
+    CONTENT_TYPE_YAML,
+    DTPSR,
+    JAVASCRIPT_SEND,
+    OCTET_STREAM,
 };
 
 pub async fn serve_master_post(

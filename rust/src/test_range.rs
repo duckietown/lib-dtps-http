@@ -7,19 +7,41 @@ mod tests {
     use log::debug;
     use maplit::hashmap;
     use rstest::*;
-    use schemars::{schema_for, JsonSchema};
-    use serde::{Deserialize, Serialize};
+    use schemars::{
+        schema_for,
+        JsonSchema,
+    };
+    use serde::{
+        Deserialize,
+        Serialize,
+    };
     use serde_json::json;
     use tokio::task::JoinHandle;
 
-    use crate::test_python::check_server;
     use crate::{
-        add_proxy, create_topic, delete_topic, get_events_stream_inline, get_rawdata, init_logging,
-        patch_data, post_data, remove_proxy, ContentInfo, RawData, TopicRefAdd, CONTENT_TYPE_CBOR,
+        add_proxy,
+        create_topic,
+        debug_with_info,
+        delete_topic,
+        error_with_info,
+        get_events_stream_inline,
+        get_metadata,
+        get_rawdata,
+        init_logging,
+        patch_data,
+        post_data,
+        remove_proxy,
+        test_python::check_server,
+        ContentInfo,
+        DTPSServer,
+        RawData,
+        ServerStateAccess,
+        TopicName,
+        TopicProperties,
+        TopicRefAdd,
+        TypeOfConnection,
+        CONTENT_TYPE_CBOR,
         CONTENT_TYPE_JSON,
-    };
-    use crate::{
-        get_metadata, DTPSServer, ServerStateAccess, TopicName, TopicProperties, TypeOfConnection,
         DTPSR,
     };
 

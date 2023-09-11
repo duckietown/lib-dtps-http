@@ -1,19 +1,40 @@
-use futures::{SinkExt, StreamExt};
-use tokio::process::Command;
-use tokio::task::JoinHandle;
+use futures::{
+    SinkExt,
+    StreamExt,
+};
+use tokio::{
+    process::Command,
+    task::JoinHandle,
+};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::{
-    debug_with_info, get_events_stream_inline, get_history, get_index, get_metadata, get_rawdata,
-    interpret_resp, make_request, DTPSError, FoundMetadata, Notification, TopicName,
-    TypeOfConnection, DTPSR, TOPIC_LIST_CLOCK,
+    debug_with_info,
+    get_events_stream_inline,
+    get_history,
+    get_index,
+    get_metadata,
+    get_rawdata,
+    info_with_info,
+    interpret_resp,
+    make_request,
+    DTPSError,
+    FoundMetadata,
+    Notification,
+    TopicName,
+    TypeOfConnection,
+    DTPSR,
+    TOPIC_LIST_CLOCK,
 };
 
 #[cfg(test)]
 mod tests {
     use std::fmt::Debug;
 
-    use crate::{init_logging, TypeOfConnection};
+    use crate::{
+        init_logging,
+        TypeOfConnection,
+    };
 
     use super::*;
 
@@ -41,10 +62,10 @@ mod tests {
 
 pub async fn check_server(con: &TypeOfConnection) -> DTPSR<()> {
     let md = get_metadata(&con).await?;
-    log::info!("metadata: {:#?}", md);
+    info_with_info!("metadata: {:#?}", md);
     let index = get_index(&con).await?;
 
-    log::info!("index: {:#?}", index);
+    info_with_info!("index: {:#?}", index);
 
     // let mut topics: HashSet<TopicName> = index.topics.keys().cloned().collect();
     // for topic in topics.clone().iter() {
@@ -63,11 +84,11 @@ pub async fn check_server(con: &TypeOfConnection) -> DTPSR<()> {
         handles.push(handle);
 
         //
-        // log::info!("metadata: {:#?}", md);
+        // info_with_info!("metadata: {:#?}", md);
         // let index = get_index(&con).await?;
-        // log::info!("index: {:#?}", index);
+        // info_with_info!("index: {:#?}", index);
         // let data = get_data(&con, &topic).await?;
-        // log::info!("data: {:#?}", data);
+        // info_with_info!("data: {:#?}", data);
     }
 
     // wait for all handles to finish
@@ -155,7 +176,7 @@ async fn check_topic(topic: TopicName, con: TypeOfConnection) -> DTPSR<()> {
 
     let md = get_metadata(&con).await?;
 
-    log::info!("{topic:#?}: {md:#?}");
+    info_with_info!("{topic:#?}: {md:#?}");
 
     // check_complete_metadata(&md)?;
     if md.meta_url == None {

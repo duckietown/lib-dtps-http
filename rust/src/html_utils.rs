@@ -1,4 +1,8 @@
-use maud::{html, PreEscaped, DOCTYPE};
+use maud::{
+    html,
+    PreEscaped,
+    DOCTYPE,
+};
 
 pub fn make_html(title: &str, body: PreEscaped<String>) -> PreEscaped<String> {
     html! {

@@ -1,8 +1,14 @@
 use bytes::Bytes;
 use derive_more::Constructor;
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize,
+    Serialize,
+};
 
-use crate::{DataReady, RawData};
+use crate::{
+    DataReady,
+    RawData,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum MsgClientToServer {
@@ -42,9 +48,15 @@ pub enum MsgServerToClient {
 #[cfg(test)]
 mod test {
     use log::info;
-    use serde_cbor::{from_slice, to_vec};
+    use serde_cbor::{
+        from_slice,
+        to_vec,
+    };
 
-    use crate::init_logging;
+    use crate::{
+        info_with_info,
+        init_logging,
+    };
 
     // create a test that checks the serialization of MsgServerToClient to CBOR
     // and back
@@ -67,7 +79,7 @@ mod test {
         });
         let bytes = to_vec(&msg).unwrap();
         let value: serde_cbor::Value = serde_cbor::from_slice(&bytes).unwrap();
-        info!("value: {:#?}", value);
+        info_with_info!("value: {:#?}", value);
         let msg2: MsgServerToClient = from_slice(&bytes).unwrap();
         assert_eq!(msg, msg2);
     }

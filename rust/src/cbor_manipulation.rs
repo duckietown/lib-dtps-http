@@ -1,9 +1,17 @@
 use log::debug;
-use maud::{html, PreEscaped};
+use maud::{
+    html,
+    PreEscaped,
+};
 
-use crate::utils_yaml::generate_html_from_cbor;
 use crate::{
-    debug_with_info, identify_presentation, utils_mime, ContentPresentation, DTPSError, RawData,
+    debug_with_info,
+    identify_presentation,
+    utils_mime,
+    utils_yaml::generate_html_from_cbor,
+    ContentPresentation,
+    DTPSError,
+    RawData,
     DTPSR,
 };
 

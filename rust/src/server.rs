@@ -1,58 +1,119 @@
-use std::collections::HashMap;
-use std::env;
-use std::net::SocketAddr;
-use std::path::Path;
-use std::string::ToString;
-use std::sync::Arc as StdArc;
+use std::{
+    collections::HashMap,
+    env,
+    net::SocketAddr,
+    path::Path,
+    string::ToString,
+    sync::Arc as StdArc,
+};
 
 use bytes::Bytes;
 use chrono::Local;
 use clap::Parser;
-use futures::stream::{SplitSink, SplitStream};
-use futures::{SinkExt, StreamExt};
+use futures::{
+    stream::{
+        SplitSink,
+        SplitStream,
+    },
+    SinkExt,
+    StreamExt,
+};
 use indent::indent_all_with;
-use log::{debug, error, info, warn};
+use log::{
+    debug,
+    error,
+    info,
+    warn,
+};
 use maplit::hashmap;
-use maud::PreEscaped;
-use maud::{html, DOCTYPE};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use maud::{
+    html,
+    PreEscaped,
+    DOCTYPE,
+};
+use serde::{
+    de::DeserializeOwned,
+    Deserialize,
+    Serialize,
+};
 use serde_yaml;
-use tokio::net::UnixListener;
-use tokio::signal::unix::SignalKind;
-use tokio::spawn;
-use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::broadcast::Receiver;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::Mutex as TokioMutex;
-use tokio::task::JoinHandle;
-use tokio::time::{interval, Duration};
-use tokio_stream::wrappers::{UnboundedReceiverStream, UnixListenerStream};
-use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
-use warp::hyper::Body;
-use warp::reply::Response;
-use warp::{Filter, Rejection};
+use tokio::{
+    net::UnixListener,
+    signal::unix::SignalKind,
+    spawn,
+    sync::{
+        broadcast::{
+            error::RecvError,
+            Receiver,
+        },
+        mpsc,
+        mpsc::UnboundedSender,
+        Mutex as TokioMutex,
+    },
+    task::JoinHandle,
+    time::{
+        interval,
+        Duration,
+    },
+};
+use tokio_stream::wrappers::{
+    UnboundedReceiverStream,
+    UnixListenerStream,
+};
+use tungstenite::http::{
+    HeaderMap,
+    HeaderValue,
+    StatusCode,
+};
+use warp::{
+    hyper::Body,
+    reply::Response,
+    Filter,
+    Rejection,
+};
 
-use crate::cloudflare::open_cloudflare;
-use crate::constants::*;
-use crate::html_utils::make_html;
-use crate::master::{
-    handle_websocket_generic2, serve_master_get, serve_master_head, serve_master_patch,
-    serve_master_post,
-};
-use crate::object_queues::*;
-use crate::server_state::*;
-use crate::structures::*;
-use crate::utils::divide_in_components;
-use crate::utils_headers::{put_common_headers, put_header_content_type, put_header_location};
-use crate::websocket_signals::{
-    ChannelInfo, ChannelInfoDesc, Chunk, MsgClientToServer, MsgServerToClient,
-};
 use crate::{
-    debug_with_info, error_other, error_with_info, format_digest_path, handle_rejection,
-    interpret_path, invalid_input, parse_url_ext, utils, utils_headers, warn_with_info, DTPSError,
-    TopicName, DTPSR,
+    cloudflare::open_cloudflare,
+    constants::*,
+    debug_with_info,
+    error_other,
+    error_with_info,
+    format_digest_path,
+    handle_rejection,
+    html_utils::make_html,
+    info_with_info,
+    interpret_path,
+    invalid_input,
+    master::{
+        handle_websocket_generic2,
+        serve_master_get,
+        serve_master_head,
+        serve_master_patch,
+        serve_master_post,
+    },
+    object_queues::*,
+    parse_url_ext,
+    server_state::*,
+    structures::*,
+    utils,
+    utils::divide_in_components,
+    utils_headers,
+    utils_headers::{
+        put_common_headers,
+        put_header_content_type,
+        put_header_location,
+    },
+    warn_with_info,
+    websocket_signals::{
+        ChannelInfo,
+        ChannelInfoDesc,
+        Chunk,
+        MsgClientToServer,
+        MsgServerToClient,
+    },
+    DTPSError,
+    TopicName,
+    DTPSR,
 };
 
 const AVAILABILITY_LENGTH_SEC: f32 = 60.0;
@@ -109,9 +170,9 @@ impl DTPSServer {
             )
         }
 
-        let server_state_access: ServerStateAccess = self.mutex.clone();
+        let ssa: ServerStateAccess = self.mutex.clone();
 
-        let clone_access = warp::any().map(move || server_state_access.clone());
+        let clone_access = warp::any().map(move || ssa.clone());
 
         let master_route_get = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
@@ -188,7 +249,7 @@ impl DTPSServer {
             {
                 let mut s = self.mutex.lock().await;
 
-                info!("Listening on port {}", address.port());
+                info_with_info!("Listening on port {}", address.port());
 
                 let s1 = format!("http://localhost:{}{}", address.port(), "/");
                 s.add_advertise_url(&s1)?;
@@ -269,7 +330,7 @@ impl DTPSServer {
 
             let stream = UnixListenerStream::new(listener);
             let handle = spawn(warp::serve(the_routes.clone()).run_incoming(stream));
-            // info!("Listening on {:?}", unix_path);
+            // info_with_info!("Listening on {:?}", unix_path);
             let unix_url = format!("http+unix://{}/", unix_path.replace("/", "%2F"));
             {
                 let mut s = ssa.lock().await;
@@ -294,11 +355,11 @@ impl DTPSServer {
 
                 // i += 1;
             }
-            info!("Proxies started");
+            info_with_info!("Proxies started");
         }
         {
             let ss = ssa.lock().await;
-            info!(
+            info_with_info!(
                 "Server started. Advertised URLs: \n{}\n",
                 indent_all_with(" ", ss.get_advertise_urls().join("\n"))
             );
@@ -345,25 +406,25 @@ impl DTPSServer {
         let mut sig_int = tokio::signal::unix::signal(SignalKind::interrupt())?;
 
         let pid = std::process::id();
-        info!("PID: {}", pid);
+        info_with_info!("PID: {}", pid);
         let res: DTPSR<()>;
         tokio::select! {
 
             _ = sig_int.recv() => {
-                info!("SIGINT received");
+                info_with_info!("SIGINT received");
                     res = Err(DTPSError::Interrupted);
             },
             _ = sig_hup.recv() => {
-                info!("SIGHUP received: gracefully shutting down");
+                info_with_info!("SIGHUP received: gracefully shutting down");
                 res = Ok(());
             },
             _ = sig_term.recv() => {
-                info!("SIGTERM received: gracefully shutting down");
+                info_with_info!("SIGTERM received: gracefully shutting down");
                 res = Ok(());
 
             },
                 // _ = futures::future::join_all(&handles) => {
-                //     info!("shutdown received");
+                //     info_with_info!("shutdown received");
                 //     // return Err("shutdown received".into());
                 // },
         }

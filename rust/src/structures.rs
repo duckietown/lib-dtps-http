@@ -1,26 +1,43 @@
-use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::fmt::Display;
-use std::ops::Add;
-use std::path::PathBuf;
+use std::{
+    collections::{
+        HashMap,
+        HashSet,
+    },
+    fmt,
+    fmt::Display,
+    ops::Add,
+    path::PathBuf,
+};
 
 use bytes::Bytes;
 use derive_more::Constructor;
 use maplit::hashmap;
-use schemars::schema::RootSchema;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use schemars::{
+    schema::RootSchema,
+    JsonSchema,
+};
+use serde::{
+    Deserialize,
+    Serialize,
+};
 use serde_cbor::Value as CBORValue;
 use sha256::digest;
 use url::Url;
 
-use crate::divide_in_components;
-use crate::join_ext;
 use crate::{
-    identify_presentation, ContentPresentation, DTPSError, CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON,
+    divide_in_components,
+    identify_presentation,
+    join_con,
+    join_ext,
+    parse_url_ext,
+    ContentPresentation,
+    DTPSError,
+    LinkBenchmark,
+    TopicName,
+    CONTENT_TYPE_CBOR,
+    CONTENT_TYPE_JSON,
+    DTPSR,
 };
-use crate::{join_con, TopicName};
-use crate::{parse_url_ext, LinkBenchmark, DTPSR};
 
 pub type NodeAppData = String;
 

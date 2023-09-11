@@ -1,47 +1,100 @@
-use std::any::Any;
-use std::collections::HashSet;
-use std::fmt::Debug;
-use std::os::unix::fs::FileTypeExt;
-use std::time::Duration;
+use std::{
+    any::Any,
+    collections::HashSet,
+    fmt::Debug,
+    os::unix::fs::FileTypeExt,
+    time::Duration,
+};
 
 use anyhow::Context;
 use bytes::Bytes;
 use futures::StreamExt;
 use hex;
 use http::StatusCode;
-use hyper;
-use hyper::Client;
+use hyper::{
+    self,
+    Client,
+};
 use hyper_tls::HttpsConnector;
 use hyperlocal::UnixClientExt;
-use json_patch::{AddOperation, Patch as JsonPatch, PatchOperation, RemoveOperation};
-use log::{debug, error, info};
+use json_patch::{
+    AddOperation,
+    Patch as JsonPatch,
+    PatchOperation,
+    RemoveOperation,
+};
+use log::info;
 use maplit::hashmap;
-use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::broadcast::Receiver;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::task::JoinHandle;
-use tokio::time::timeout;
+use tokio::{
+    sync::{
+        broadcast::{
+            error::RecvError,
+            Receiver,
+        },
+        mpsc,
+        mpsc::UnboundedSender,
+    },
+    task::JoinHandle,
+    time::timeout,
+};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tungstenite::Message as TM;
 use warp::reply::Response;
 
-use crate::time_nanos;
-use crate::websocket_signals::MsgServerToClient;
-use crate::TypeOfConnection::Same;
-use crate::TypeOfConnection::{Relative, TCP, UNIX};
-use crate::UrlResult::{Accessible, Inaccessible, WrongNodeAnswering};
 use crate::{
-    context, error_with_info, internal_assertion, not_available, not_implemented, not_reachable,
-    put_header_accept, put_header_content_type, DTPSError, DataSaved, History, ProxyJob, RawData,
-    TopicName, TopicRefAdd, CONTENT_TYPE_DTPS_INDEX, CONTENT_TYPE_DTPS_INDEX_CBOR,
-    CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR, REL_HISTORY, TOPIC_PROXIED,
+    context,
+    debug_with_info,
+    error_with_info,
+    info_with_info,
+    internal_assertion,
+    join_ext,
+    not_available,
+    not_implemented,
+    not_reachable,
+    open_websocket_connection,
+    parse_url_ext,
+    put_header_accept,
+    put_header_content_type,
+    time_nanos,
+    DTPSError,
+    DataReady,
+    DataSaved,
+    FoundMetadata,
+    History,
+    LinkBenchmark,
+    LinkHeader,
+    MsgServerToClient,
+    ProxyJob,
+    RawData,
+    TopicName,
+    TopicRefAdd,
+    TopicsIndexInternal,
+    TopicsIndexWire,
+    TypeOfConnection,
+    TypeOfConnection::{
+        Relative,
+        Same,
+        TCP,
+        UNIX,
+    },
+    UrlResult::{
+        Accessible,
+        Inaccessible,
+        WrongNodeAnswering,
+    },
+    CONTENT_TYPE_DTPS_INDEX,
+    CONTENT_TYPE_DTPS_INDEX_CBOR,
+    CONTENT_TYPE_PATCH_JSON,
+    CONTENT_TYPE_TOPIC_HISTORY_CBOR,
+    DTPSR,
+    HEADER_CONTENT_LOCATION,
+    HEADER_NODE_ID,
+    REL_EVENTS_DATA,
+    REL_EVENTS_NODATA,
+    REL_HISTORY,
+    REL_META,
+    TOPIC_PROXIED,
 };
-use crate::{debug_with_info, open_websocket_connection};
-use crate::{join_ext, parse_url_ext};
-use crate::{DataReady, FoundMetadata, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection};
-use crate::{LinkBenchmark, LinkHeader, REL_EVENTS_DATA, REL_EVENTS_NODATA, REL_META};
-use crate::{HEADER_CONTENT_LOCATION, HEADER_NODE_ID};
 
 /// Note: need to have use futures::{StreamExt} in scope to use this
 pub async fn get_events_stream_inline(
@@ -55,7 +108,6 @@ pub async fn get_events_stream_inline(
 }
 
 pub async fn estimate_latencies(which: TopicName, md: FoundMetadata) {
-    // let (tx, rx) = mpsc::unbounded_channel();
     let inline_url = md.events_data_inline_url.unwrap().clone();
 
     let (handle, mut stream) = get_events_stream_inline(&inline_url).await;
@@ -85,7 +137,7 @@ pub async fn estimate_latencies(which: TopicName, md: FoundMetadata) {
             let latencies_mean_ns = (latencies_sum_ns) / (latencies_ns.len() as u128);
             let latencies_min_ns = *latencies_ns.iter().min().unwrap();
             let latencies_max_ns = *latencies_ns.iter().max().unwrap();
-            info!(
+            info_with_info!(
                 "{:?} latency: {:.3}ms   (last {} : mean: {:.3}ms  min: {:.3}ms  max {:.3}ms )",
                 which,
                 ms_from_ns(diff),
@@ -172,7 +224,6 @@ pub async fn listen_events_websocket(
     match first {
         Some(MsgServerToClient::ChannelInfo(..)) => {}
         _ => {
-            // pragma: no cover
             let s = format!("Expected ChannelInfo, got {first:?}");
             error_with_info!("{}", s);
             return DTPSError::other(s);
@@ -183,13 +234,11 @@ pub async fn listen_events_websocket(
         let msg_from_server = receive_from_server(&mut rx).await?;
         let dr = match msg_from_server {
             None => {
-                // debug_with_info!("end of stream");
                 break;
             }
             Some(MsgServerToClient::DataReady(dr_)) => dr_,
 
             _ => {
-                // pragma: no cover
                 let s =
                     format!("{prefix}: message #{index}: unexpected message: {msg_from_server:#?}");
                 error_with_info!("{}", s);
@@ -199,11 +248,6 @@ pub async fn listen_events_websocket(
         index += 1;
 
         let content: Vec<u8> = if dr.chunks_arriving == 0 {
-            // error_with_info!(
-            //     "{prefix}: message #{}: no chunks arriving. listening to {}",
-            //     index,
-            //     con
-            // );
             if dr.availability.is_empty() {
                 let s = format!(
                     "{prefix}: message #{}: availability is empty. listening to {}",
@@ -314,11 +358,6 @@ pub fn get_content_type<T>(resp: &http::Response<T>) -> String {
 
 pub async fn sniff_type_resource(con: &TypeOfConnection) -> DTPSR<TypeOfResource> {
     let md = get_metadata(con).await?;
-    // let resp = context!(
-    //     make_request(con, hyper::Method::GET, b"", None, None).await,
-    //     "Cannot make request to {}",
-    //     con.to_string(),
-    // )?;
     let content_type = &md.content_type;
     debug_with_info!("content_type: {:#?}", content_type);
 
@@ -415,14 +454,9 @@ pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
         return DTPSError::other(s);
     }
     let x0 = x.unwrap();
-    // let x0: TopicsIndexWire = context!(
-    //     serde_cbor::from_slice(&rd.content),
-    //     "Cannot interpret as CBOR"
-    // )?;
 
     let ti = TopicsIndexInternal::from_wire(&x0, con);
 
-    // debug_with_info!("get_index: {:#?}\n {:#?}", con, ti);
     Ok(ti)
 }
 
@@ -739,7 +773,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
         history_url,
         content_type: get_content_type(&resp),
     };
-    // info!("Logging metadata: {md:#?} headers {headers:#?}");
+    // info_with_info!("Logging metadata: {md:#?} headers {headers:#?}");
 
     Ok(md)
 }

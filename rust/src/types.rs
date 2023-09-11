@@ -1,13 +1,33 @@
-use std::fmt::{Debug, Formatter};
-use std::ops::Add;
+use std::{
+    fmt::{
+        Debug,
+        Formatter,
+    },
+    ops::Add,
+};
 
 use colored::Colorize;
-use schemars::gen::SchemaGenerator;
-use schemars::schema::{Schema, SchemaObject};
-use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use schemars::{
+    gen::SchemaGenerator,
+    schema::{
+        Schema,
+        SchemaObject,
+    },
+    JsonSchema,
+};
+use serde::{
+    Deserialize,
+    Deserializer,
+    Serialize,
+    Serializer,
+};
 
-use crate::{divide_in_components, vec_concat, DTPSError, DTPSR};
+use crate::{
+    divide_in_components,
+    vec_concat,
+    DTPSError,
+    DTPSR,
+};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct TopicName {

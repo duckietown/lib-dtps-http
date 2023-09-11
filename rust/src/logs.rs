@@ -1,5 +1,7 @@
-use std::env;
-use std::sync::Once;
+use std::{
+    env,
+    sync::Once,
+};
 
 use crate::built_info;
 

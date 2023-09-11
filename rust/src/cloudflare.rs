@@ -1,10 +1,21 @@
-use crate::error_with_info;
-use log::{error, info};
-use serde::{Deserialize, Serialize};
+use crate::{
+    error_with_info,
+    info_with_info,
+};
+use log::{
+    error,
+    info,
+};
+use serde::{
+    Deserialize,
+    Serialize,
+};
 use serde_yaml;
-use tokio::process::Command;
-use tokio::spawn;
-use tokio::task::JoinHandle;
+use tokio::{
+    process::Command,
+    spawn,
+    task::JoinHandle,
+};
 
 #[allow(non_snake_case)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -36,7 +47,7 @@ pub async fn open_cloudflare(
         &hoststring_127,
         &tunnel_info.TunnelID,
     ];
-    info!("starting tunnel: {:?}", cmdline);
+    info_with_info!("starting tunnel: {:?}", cmdline);
 
     let mut child = Command::new(cloudflare_executable)
         .args(cmdline)

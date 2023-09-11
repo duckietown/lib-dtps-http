@@ -59,11 +59,11 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 
     let best =
         compute_best_alternative(&md.alternative_urls, md.answering.unwrap().as_str()).await?;
-    warn_with_info!("Best connection: {} ", best);
+    debug_with_info!("Best connection: {best} ");
 
     let x = get_index(&best).await?;
 
-    warn_with_info!("Internal: {:#?} ", x);
+    debug_with_info!("Internal: {x:#?} ");
     //
     // if best.is_none() {
     //     info_with_info!("no alternative url found");
