@@ -376,7 +376,6 @@ impl ResolveDataSingle for TypeOFSource {
             }
             TypeOFSource::Index(inside) => {
                 let x = inside.get_meta_index(presented_as, ss_mutex).await?;
-                // not_implemented!("get_inside for {self:#?} with {s:?}")
                 let xw = x.to_wire(None);
                 // convert to cbor
                 let cbor_bytes = serde_cbor::to_vec(&xw).unwrap();
@@ -421,8 +420,6 @@ impl ResolveDataSingle for TypeOFSource {
                         not_implemented!("resolve_data_single for:\n{self:#?}")
                     }
                 }
-
-                // not_implemented!("resolve_data_single for {self:#?} with {self:?}")
             }
         }
     }

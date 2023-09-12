@@ -1,4 +1,8 @@
-use crate::context;
+use std::{
+    collections::HashMap,
+    string::ToString,
+};
+
 use anyhow::Context;
 use bytes::Bytes;
 use futures::{
@@ -9,10 +13,6 @@ use futures::{
 use maud::{
     html,
     PreEscaped,
-};
-use std::{
-    collections::HashMap,
-    string::ToString,
 };
 use strip_ansi_escapes::strip;
 use tokio::{
@@ -35,6 +35,7 @@ use warp::{
 };
 
 use crate::{
+    context,
     debug_with_info,
     display_printable,
     divide_in_components,
@@ -692,59 +693,9 @@ pub async fn handle_websocket_generic2_(
         let ss = state.lock().await;
         interpret_path(&path, &query, &referrer, &ss).await
     }?;
+    let stream = ds.get_data_stream(path.as_str(), state.clone()).await?;
 
-    return match &ds {
-        TypeOFSource::Compose(_) => {
-            let stream = ds.get_data_stream(path.as_str(), state.clone()).await?;
-            handle_websocket_data_stream(ws_tx, stream, send_data, state.clone()).await
-        }
-        TypeOFSource::OurQueue(topic_name, _) => {
-            spawn(do_receiving(topic_name.clone(), state.clone(), receiver));
-            handle_websocket_queue(ws_tx, state, topic_name.clone(), send_data).await
-        }
-
-        // TypeOFSource::ForwardedQueue(fq) => {
-        //     handle_websocket_forwarded(
-        //         state,
-        //         fq.subscription.clone(),
-        //         fq.his_topic_name.clone(),
-        //         ws_tx,
-        //         receiver,
-        //         send_data,
-        //     )
-        //     .await
-        // }
-        // TypeOFSource::Digest(_digest, _content_type) => {
-        //     not_implemented!("handle_websocket_generic2 not implemented TypeOFSource::Digest")
-        // }
-        //
-        // TypeOFSource::Transformed(_, _) => {
-        //     not_implemented!("handle_websocket_generic2 not implemented for {ds:?}")
-        // }
-        // TypeOFSource::Deref(_) => {
-        //     not_implemented!("handle_websocket_generic2 not implemented for {ds:?}")
-        // }
-        // TypeOFSource::OtherProxied(_) => {
-        //     not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
-        // }
-        // TypeOFSource::MountedDir(..) => {
-        //     not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
-        // }
-        // TypeOFSource::MountedFile(..) => {
-        //     not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
-        // }
-        // TypeOFSource::Index(..) => {
-        //     not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
-        // }
-        // TypeOFSource::Aliased(..) => {
-        //     not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
-        // }
-        _ => {
-            let stream = ds.get_data_stream(path.as_str(), state.clone()).await?;
-
-            handle_websocket_data_stream(ws_tx, stream, send_data, state.clone()).await
-        }
-    };
+    handle_websocket_data_stream(ws_tx, stream, send_data, state.clone()).await
 }
 
 const DELTA_WEBSOCKET_AVAIL: f64 = 30.0;
@@ -869,23 +820,23 @@ pub async fn handle_websocket_data_stream(
 //     }
 //     Ok(())
 // }
-
-fn warp_from_tungstenite(msg: TungsteniteMessage) -> DTPSR<WarpMessage> {
-    match msg {
-        TungsteniteMessage::Text(text) => Ok(WarpMessage::text(text)),
-        TungsteniteMessage::Binary(data) => Ok(WarpMessage::binary(data)),
-        TungsteniteMessage::Ping(data) => Ok(WarpMessage::ping(data)),
-        TungsteniteMessage::Pong(data) => Ok(WarpMessage::pong(data)),
-        TungsteniteMessage::Close(Some(frame)) => {
-            let code: u16 = frame.code.into();
-            Ok(WarpMessage::close_with(code, frame.reason))
-        }
-        TungsteniteMessage::Close(None) => Ok(WarpMessage::close()),
-        TungsteniteMessage::Frame(..) => {
-            return not_implemented!("we should never get here: {msg}");
-        }
-    }
-}
+//
+// fn warp_from_tungstenite(msg: TungsteniteMessage) -> DTPSR<WarpMessage> {
+//     match msg {
+//         TungsteniteMessage::Text(text) => Ok(WarpMessage::text(text)),
+//         TungsteniteMessage::Binary(data) => Ok(WarpMessage::binary(data)),
+//         TungsteniteMessage::Ping(data) => Ok(WarpMessage::ping(data)),
+//         TungsteniteMessage::Pong(data) => Ok(WarpMessage::pong(data)),
+//         TungsteniteMessage::Close(Some(frame)) => {
+//             let code: u16 = frame.code.into();
+//             Ok(WarpMessage::close_with(code, frame.reason))
+//         }
+//         TungsteniteMessage::Close(None) => Ok(WarpMessage::close()),
+//         TungsteniteMessage::Frame(..) => {
+//             return not_implemented!("we should never get here: {msg}");
+//         }
+//     }
+// }
 
 pub fn make_index_html(index: &TopicsIndexInternal) -> PreEscaped<String> {
     let mut keys: Vec<&str> = index.topics.keys().map(|k| k.as_relative_url()).collect();
