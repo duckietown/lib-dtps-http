@@ -176,7 +176,13 @@ async def go_proxy(args: Optional[List[str]] = None) -> None:
         search_queue.put_nowait("initial")
 
         t2 = asyncio.create_task(
-            dtpsclient.listen_topic(url0, TOPIC_LIST, topic_list_changed, inline_data=True)
+            dtpsclient.listen_topic(
+                url0,
+                TOPIC_LIST,
+                topic_list_changed,
+                inline_data=True,
+                raise_on_error=False,
+            )
         )
         # task_listen_to_all_topics = asyncio.ensure_future(asyncio.create_task(xt))
 

@@ -1,3 +1,5 @@
+#![allow(unused_mut)]
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -15,7 +17,10 @@ mod tests {
         Serialize,
     };
     use serde_json::json;
-    use tokio::task::JoinHandle;
+    use tokio::{
+        process::Command,
+        task::JoinHandle,
+    };
 
     use crate::{
         add_proxy,
@@ -32,6 +37,7 @@ mod tests {
         remove_proxy,
         test_python::check_server,
         ContentInfo,
+        DTPSError,
         DTPSServer,
         RawData,
         ServerStateAccess,
@@ -236,6 +242,7 @@ mod tests {
         Ok(())
     }
 
+    #[allow(unused_mut)]
     #[rstest]
     #[awt]
     #[tokio::test]
@@ -295,6 +302,92 @@ mod tests {
         assert_eq!(inside_original, inside_proxied);
         let i: i64 = serde_cbor::from_slice(&inside_original.content)?;
         assert_eq!(i, n - 1);
+        instance.finish()?;
+        instance2.finish()?;
+        Ok(())
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_proxy_websocket_01(#[future] instance: TestFixture, #[future] instance2: TestFixture) -> DTPSR<()> {
+        check_proxy_websocket(instance, instance2, "").await
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_proxy_websocket_02(#[future] instance: TestFixture, #[future] instance2: TestFixture) -> DTPSR<()> {
+        check_proxy_websocket(instance, instance2, ":deref/").await
+    }
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_proxy_websocket_03(#[future] instance: TestFixture, #[future] instance2: TestFixture) -> DTPSR<()> {
+        check_proxy_websocket(instance, instance2, "mounted/").await
+    }
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_proxy_websocket_04_mounted_dtps_clock(
+        #[future] instance: TestFixture,
+        #[future] instance2: TestFixture,
+    ) -> DTPSR<()> {
+        check_proxy_websocket(instance, instance2, "mounted/dtps/clock/").await
+    }
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_proxy_websocket_05_dtps_clock(
+        #[future] instance: TestFixture,
+        #[future] instance2: TestFixture,
+    ) -> DTPSR<()> {
+        check_proxy_websocket(instance, instance2, "dtps/clock/").await
+    }
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_proxy_websocket_06_dtps(
+        #[future] instance: TestFixture,
+        #[future] instance2: TestFixture,
+    ) -> DTPSR<()> {
+        check_proxy_websocket(instance, instance2, "dtps/").await
+    }
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_proxy_websocket_04_mounted_dtps(
+        #[future] instance: TestFixture,
+        #[future] instance2: TestFixture,
+    ) -> DTPSR<()> {
+        check_proxy_websocket(instance, instance2, "mounted/dtps/").await
+    }
+    async fn check_proxy_websocket(instance: TestFixture, mut instance2: TestFixture, path: &str) -> DTPSR<()> {
+        init_logging();
+
+        let mounted_at = TopicName::from_dash_sep("mounted")?;
+        instance2.server.add_proxied(&mounted_at, instance.con.clone()).await?;
+        let url = instance2.con.to_string();
+        let url = format!("{url}{path}");
+        let cmd = vec![
+            "dtps-http-py-listen",
+            "--max-time",
+            "5",
+            "--max-messages",
+            "5",
+            "--raise-on-error",
+            "--url",
+            url.as_str(),
+        ];
+
+        // create process given by command above
+        let mut child = Command::new(cmd[0]).args(&cmd[1..]).spawn().unwrap();
+
+        let status = child.wait().await?;
+        if !status.success() {
+            return DTPSError::other(format!("child process failed with error {status}"));
+        }
+
         instance.finish()?;
         instance2.finish()?;
         Ok(())

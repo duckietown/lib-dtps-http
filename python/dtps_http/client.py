@@ -22,10 +22,7 @@ from typing import (
 
 import aiohttp
 import cbor2
-from aiohttp import ClientWebSocketResponse, TCPConnector, UnixConnector
-
-from aiohttp import WSMessage
-
+from aiohttp import ClientWebSocketResponse, TCPConnector, UnixConnector, WSMessage
 from tcp_latency import measure_latency
 
 from . import logger
@@ -43,23 +40,22 @@ from .constants import (
 from .exceptions import EventListeningNotAvailable
 from .link_headers import get_link_headers
 from .structures import (
-    DataFromChannel,
-    DataSaved,
-    ErrorMsg,
-    FinishedMsg,
-    WarningMsg,
     channel_msgs_parse,
     ChannelInfo,
     Chunk,
-    DataReady,
-    ForwardingStep,
     DataFromChannel,
+    DataReady,
+    ErrorMsg,
+    FinishedMsg,
+    ForwardingStep,
     LinkBenchmark,
     ListenURLEvents,
     RawData,
+    SilenceMsg,
     TopicReachability,
     TopicRef,
     TopicsIndex,
+    WarningMsg,
 )
 from .types import ContentType, NodeID, TopicNameV, URLString
 from .urls import (
@@ -194,8 +190,6 @@ class DTPSClient:
             return available
 
     def _look_cache(self, url0: U) -> U:
-        # if not isinstance(url0, URL):
-        #     url0 = parse_url_unescape(url0)
         return cast(U, self.preferred_cache.get(url0, url0))
 
     async def publish(self, url0: URL, rd: RawData) -> None:
@@ -383,25 +377,7 @@ class DTPSClient:
 
             return LinkBenchmark(complexity, bandwidth, latency_ns, reliability_percent, hops)
 
-            #
-        #  if path is None:
-        #      raise ValueError(f"no host in {repr(url)}")
-        #  if os.path.exists(path):
-        #
-        #  else:
-        #      logger.warning(f"unix socket {path!r} does not exist")
-        #      self.blacklist_protocol_host_port.add(blacklist_key)
-        #      return None
         if url.scheme == "http+ether":
-            #  path = url.host
-
-            #  if os.path.exists(path):
-
-            #      return 2
-
-            #  else:
-
-            #      logger.warning(f"unix socket {path!r} does not exist")
             return None
 
         logger.warning(f"unknown scheme {url.scheme!r} for {url}")
@@ -444,33 +420,33 @@ class DTPSClient:
 
         return res
 
-    if TYPE_CHECKING:
+    # if TYPE_CHECKING:
 
-        def my_session(
-            self, url: URL, /, *, conn_timeout: Optional[float] = None
-        ) -> AsyncContextManager[Tuple[aiohttp.ClientSession, URLString]]:
-            ...
+    #     def my_session(
+    #         self, url: URL, /, *, conn_timeout: Optional[float] = None
+    #     ) -> AsyncContextManager[Tuple[aiohttp.ClientSession, URLString]]:
+    #         ...
 
-    else:
+    # else:
 
-        @asynccontextmanager
-        async def my_session(
-            self, url: URL, /, *, conn_timeout: Optional[float] = None
-        ) -> AsyncIterator[Tuple[aiohttp.ClientSession, str]]:
-            assert isinstance(url, URL)
-            if url.scheme == "http+unix":
-                connector = UnixConnector(path=url.host)
+    @asynccontextmanager
+    async def my_session(
+        self, url: URL, /, *, conn_timeout: Optional[float] = None
+    ) -> AsyncIterator[Tuple[aiohttp.ClientSession, URLString]]:
+        assert isinstance(url, URL)
+        if url.scheme == "http+unix":
+            connector = UnixConnector(path=url.host)
 
-                #  noinspection PyProtectedMember
-                use_url = str(url._replace(scheme="http", host="localhost"))
-            elif url.scheme in ("http", "https"):
-                connector = TCPConnector()
-                use_url = str(url)
-            else:
-                raise ValueError(f"unknown scheme {url.scheme!r}")
+            #  noinspection PyProtectedMember
+            use_url = str(url._replace(scheme="http", host="localhost"))
+        elif url.scheme in ("http", "https"):
+            connector = TCPConnector()
+            use_url = str(url)
+        else:
+            raise ValueError(f"unknown scheme {url.scheme!r}")
 
-            async with aiohttp.ClientSession(connector=connector, conn_timeout=conn_timeout) as session:
-                yield session, use_url
+        async with aiohttp.ClientSession(connector=connector, conn_timeout=conn_timeout) as session:
+            yield session, URLString(use_url)
 
     async def get_proxied(self, url0: URLIndexer) -> Dict[TopicNameV, ProxyJob]:
         url = join(url0, TOPIC_PROXIED.as_relative_url())
@@ -646,16 +622,22 @@ class DTPSClient:
         return res
 
     async def listen_topic(
-        self, urlbase: URLIndexer, topic_name: TopicNameV, cb: Callable[[RawData], Any], inline_data: bool
+        self,
+        urlbase: URLIndexer,
+        topic_name: TopicNameV,
+        cb: Callable[[RawData], Any],
+        *,
+        inline_data: bool,
+        raise_on_error: bool,
     ) -> "asyncio.Task[None]":
         available = await self.ask_topics(urlbase)
         topic = available[topic_name]
         url = cast(URLTopic, await self.choose_best(topic.reachability))
 
-        return await self.listen_url(url, cb, inline_data)
+        return await self.listen_url(url, cb, inline_data=inline_data, raise_on_error=raise_on_error)
 
     async def listen_url(
-        self, url_topic: URLTopic, cb: Callable[[RawData], Any], inline_data: bool
+        self, url_topic: URLTopic, cb: Callable[[RawData], Any], *, inline_data: bool, raise_on_error: bool
     ) -> "asyncio.Task[None]":
         url_topic = self._look_cache(url_topic)
         metadata = await self.get_metadata(url_topic)
@@ -673,33 +655,40 @@ class DTPSClient:
                 raise EventListeningNotAvailable(f"cannot find metadata {url_topic}: {metadata}")
 
         logger.info(f"listening to  {url_topic} -> {metadata} -> {url_events}")
-        it = self.listen_url_events(url_events, inline_data)
+        it = self.listen_url_events(
+            url_events, inline_data=inline_data, raise_on_error=raise_on_error, add_silence=None
+        )
         t = asyncio.create_task(_listen_and_callback(it, cb))
         self.tasks.append(t)
         return t
 
-    if TYPE_CHECKING:
-
-        def listen_url_events(self, url_events: URLWS, inline_data: bool) -> "AsyncIterator[ListenURLEvents]":
-            ...
-
-    else:
-
-        async def listen_url_events(
-            self, url_events: URLWS, inline_data: bool
-        ) -> "AsyncIterator[ListenURLEvents]":
-            if inline_data:
-                if "?" not in str(url_events):
-                    raise ValueError(f"inline data requested but no ? in {url_events}")
-                async for _ in self.listen_url_events_with_data_inline(url_events):
-                    yield _
-            else:
-                async for _ in self.listen_url_events_with_data_offline(url_events):
-                    yield _
+    async def listen_url_events(
+        self,
+        url_events: URLWS,
+        *,
+        inline_data: bool,
+        raise_on_error: bool,
+        add_silence: Optional[float],
+    ) -> "AsyncIterator[ListenURLEvents]":
+        if inline_data:
+            if "?" not in str(url_events):
+                raise ValueError(f"inline data requested but no ? in {url_events}")
+            async for _ in self.listen_url_events_with_data_inline(
+                url_events, raise_on_error=raise_on_error, add_silence=add_silence
+            ):
+                yield _
+        else:
+            async for _ in self.listen_url_events_with_data_offline(
+                url_events, raise_on_error=raise_on_error, add_silence=add_silence
+            ):
+                yield _
 
     async def listen_url_events_with_data_offline(
         self,
         url_websockets: URLWS,
+        *,
+        raise_on_error: bool,
+        add_silence: Optional[float],
     ) -> AsyncIterator[ListenURLEvents]:
         """Iterates using direct data using side loading"""
         use_url: URLString
@@ -713,14 +702,25 @@ class DTPSClient:
                 while True:
                     if ws.closed:
                         break
-                    msg: WSMessage = await ws.receive()
-                    if msg.type == aiohttp.WSMsgType.BINARY:
+                    wmsg: WSMessage
+                    if add_silence is not None:
                         try:
-                            cm = channel_msgs_parse(msg.data)
+                            wmsg = await asyncio.wait_for(ws.receive(), timeout=add_silence)
+                        except asyncio.exceptions.TimeoutError:
+                            logger.debug(f"add_silence {add_silence} expired")
+                            yield SilenceMsg(add_silence)
+                            continue
+                    else:
+                        wmsg = await ws.receive()
+
+                    if wmsg.type == aiohttp.WSMsgType.BINARY:
+                        try:
+                            cm = channel_msgs_parse(wmsg.data)
                         except Exception as e:
-                            logger.error(
-                                f"error in parsing\n{msg.data!r}\nerror:\n{e.__class__.__name__} {e!r}"
-                            )
+                            msg = f"error in parsing\n{wmsg.data!r}\nerror:\n{e.__class__.__name__} {e!r}"
+                            logger.error(msg)
+                            if raise_on_error:
+                                raise Exception(msg) from e
                             continue
 
                         if isinstance(cm, DataReady):
@@ -728,18 +728,22 @@ class DTPSClient:
                                 data = await self._download_from_urls(url_websockets, cm)
                             except Exception as e:
                                 # todo: send message
-                                logger.error(f"error in downloading {cm}: {e.__class__.__name__} {e!r}")
+                                msg = f"error in downloading {cm}: {e.__class__.__name__} {e!r}"
+                                logger.error(msg)
+                                if raise_on_error:
+                                    raise Exception(msg) from e
                                 continue
 
                             yield DataFromChannel(cm, data)
                         elif isinstance(cm, ChannelInfo):
-                            logger.info(f"channel info {cm}")
+                            # logger.info(f"channel info {cm}")
+                            pass
                         elif isinstance(cm, (WarningMsg, ErrorMsg, FinishedMsg)):
                             yield cm
                         else:
                             logger.debug(f"cannot interpret {cm}")
                     else:
-                        logger.error(f"unexpected message type {msg.type} {msg.data!r}")
+                        logger.error(f"unexpected message type {wmsg.type} {wmsg.data!r}")
 
     async def _download_from_urls(self, urlbase: URL, dr: DataReady) -> RawData:
         url_datas = [join(urlbase, _.url) for _ in dr.availability]
@@ -753,23 +757,14 @@ class DTPSClient:
         #  TODO: try multiple urls
 
         return await self.get(url_data, accept=dr.content_type)
-        #
-        # #  logger.info(f"downloading {url_data!r}")
-        # async with self.my_session(url_data) as (session2, use_url2):
-        #     async with session2.get(use_url2) as resp_data:
-        #         if not resp_data.ok:
-        #             msg = f"cannot download {url_data!r} {resp_data.status=}"
-        #             msg +=
-        #         resp_data.raise_for_status()
-        #         data = await resp_data.read()
-        #         content_type = resp_data.content_type
-        #         data = RawData(content_type=content_type, content=data)
-        #         return data
 
     @async_error_catcher_iterator
     async def listen_url_events_with_data_inline(
-        self, url_websockets: URLWS
-    ) -> "AsyncIterator[tuple[DataReady, RawData]]":
+        self,
+        url_websockets: URLWS,
+        raise_on_error: bool,
+        add_silence: Optional[float],
+    ) -> "AsyncIterator[ListenURLEvents]":
         """Iterates using direct data in websocket."""
         logger.info(f"listen_url_events_with_data_inline {url_websockets}")
         async with self.my_session(url_websockets) as (session, use_url):
@@ -782,13 +777,21 @@ class DTPSClient:
                 while True:
                     if ws.closed:
                         break
-                    msg = await ws.receive()
+                    if add_silence is not None:
+                        try:
+                            msg = await asyncio.wait_for(ws.receive(), timeout=add_silence)
+                        except asyncio.exceptions.TimeoutError:
+                            logger.debug(f"add_silence {add_silence} expired")
+                            yield SilenceMsg(add_silence)
+                            continue
+                    else:
+                        msg = await ws.receive()
+
                     if msg.type == aiohttp.WSMsgType.CLOSE:
                         break
                     if msg.type == aiohttp.WSMsgType.BINARY:
                         try:
                             cm = channel_msgs_parse(msg.data)
-
                         except Exception as e:
                             logger.error(f"error in parsing {msg.data!r}: {e.__class__.__name__} {e!r}")
                             continue
@@ -800,7 +803,10 @@ class DTPSClient:
                         dr = cm
                         if dr.chunks_arriving == 0:
                             logger.error(f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}")
-                            raise AssertionError(f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}")
+                            if raise_on_error:
+                                raise AssertionError(
+                                    f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}"
+                                )
 
                         #  create a byte array initialized at
 
@@ -816,22 +822,21 @@ class DTPSClient:
                                 logger.error(f"unexpected message {msg!r}")
                                 continue
 
-                            # match cm:
-                            #     case Chunk(index=index, data=this_data):
-                            #         data += this_data
-                            #     case _:
-                            #         continue
-                            #         logger.error(f"unexpected message {msg!r}")
-
                         if len(data) != dr.content_length:
                             logger.error(f"unexpected data length {len(data)} != {dr.content_length}\n{dr}")
-                            raise AssertionError(f"unexpected data length {len(data)} != {dr.content_length}")
+                            if raise_on_error:
+                                raise AssertionError(
+                                    f"unexpected data length {len(data)} != {dr.content_length}"
+                                )
 
-                        yield dr, RawData(content_type=dr.content_type, content=data)
+                        raw_data = RawData(content_type=dr.content_type, content=data)
+                        x = DataFromChannel(dr, raw_data)
+                        yield x
 
                     elif isinstance(cm, ChannelInfo):
                         logger.info(f"channel info {cm}")
-
+                    elif isinstance(cm, (WarningMsg, ErrorMsg, FinishedMsg)):
+                        yield cm
                     else:
                         logger.error(f"unexpected message {cm!r}")
 
@@ -858,13 +863,24 @@ class DTPSClient:
 
     @async_error_catcher_iterator
     async def listen_continuous(
-        self, urlbase0: URL, expect_node: Optional[NodeID], switch_identity_ok: bool
+        self,
+        urlbase0: URL,
+        expect_node: Optional[NodeID],
+        *,
+        switch_identity_ok: bool,
+        raise_on_error: bool,
+        add_silence: Optional[float],
     ) -> AsyncIterator[ListenURLEvents]:
         while True:
             try:
                 md = await self.get_metadata(urlbase0)
             except Exception as e:
-                logger.error(f"Error getting metadata for {urlbase0!r}: {e!r}")
+                msg = f"Error getting metadata for {urlbase0!r}: {e!r}"
+                logger.error(msg)
+
+                if raise_on_error:
+                    raise Exception(msg) from e
+
                 await asyncio.sleep(1.0)
                 continue
 
@@ -875,6 +891,8 @@ class DTPSClient:
             if md.answering is None:
                 msg = f"This is not a DTPS node."
                 logger.error(msg)
+                if raise_on_error:
+                    raise Exception(msg)
                 await asyncio.sleep(2.0)
                 continue
 
@@ -885,6 +903,8 @@ class DTPSClient:
                 else:
                     msg = f"This is not the expected node {expect_node!r}."
                     logger.error(msg)
+                    if raise_on_error:
+                        raise Exception(msg)
                     await asyncio.sleep(2.0)
                     continue
 
@@ -893,13 +913,22 @@ class DTPSClient:
             if md.events_url is None and md.events_data_inline_url == "":
                 msg = f"This resource does not support events."
                 logger.error(msg)
+                if raise_on_error:
+                    raise Exception(msg)
                 await asyncio.sleep(2.0)
                 continue
 
             if md.events_url is not None:
-                iterator = self.listen_url_events(md.events_url, inline_data=False)
+                iterator = self.listen_url_events(
+                    md.events_url, raise_on_error=raise_on_error, inline_data=False, add_silence=add_silence
+                )
             elif md.events_data_inline_url is not None:
-                iterator = self.listen_url_events(md.events_data_inline_url, inline_data=True)
+                iterator = self.listen_url_events(
+                    md.events_data_inline_url,
+                    raise_on_error=raise_on_error,
+                    inline_data=True,
+                    add_silence=add_silence,
+                )
             else:
                 assert False
 
@@ -907,7 +936,10 @@ class DTPSClient:
                 async for _ in iterator:
                     yield _
             except Exception as e:
-                logger.error(f"Error listening to {urlbase0!r}:\n{traceback.format_exc()}")
+                msg = f"Error listening to {urlbase0!r}:\n{traceback.format_exc()}"
+                logger.error(msg)
+                if raise_on_error:
+                    raise Exception(msg) from e
                 await asyncio.sleep(1.0)
                 continue
 

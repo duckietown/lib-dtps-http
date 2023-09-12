@@ -6,9 +6,10 @@ import cbor2
 from multidict import CIMultiDict
 from pydantic import TypeAdapter
 from pydantic.dataclasses import dataclass
+
 from .constants import HEADER_LINK_BENCHMARK, MIME_TEXT
 from .types import ContentType, NodeID, SourceID, TopicNameS, TopicNameV, URLString
-from .urls import URL, URLIndexer
+from .urls import URLIndexer
 
 __all__ = [
     "ChannelInfo",
@@ -19,6 +20,7 @@ __all__ = [
     "DataFromChannel",
     "DataReady",
     "DataSaved",
+    "FinishedMsg",
     "ForwardingStep",
     "History",
     "LinkBenchmark",
@@ -338,10 +340,6 @@ class DataFromChannel:
     raw_data: RawData
 
 
-# @dataclass
-# class History:
-#     available: Dict[int, DataReady]
-
 History = Dict[int, DataReady]
 
 
@@ -360,13 +358,18 @@ class FinishedMsg:
     comment: str
 
 
+@dataclass
+class SilenceMsg:
+    dt: float
+
+
 def channel_msgs_parse(d: bytes) -> "ChannelMsgs":
     struct = cbor2.loads(d)
     if not isinstance(struct, dict):
         msg = "Expected a dictionary here"
         raise ValueError(f"{msg}: {d}\n{struct}")
 
-    for T in (ChannelInfo, DataReady, Chunk, FinishedMsg, ErrorMsg, WarningMsg):
+    for T in (ChannelInfo, DataReady, Chunk, FinishedMsg, ErrorMsg, WarningMsg, SilenceMsg):
         if T.__name__ in struct:
             # noinspection PyTypeChecker
             return TypeAdapter(T).validate_python(struct[T.__name__])
@@ -393,5 +396,5 @@ class Registration:
     namespace: TopicNameV
 
 
-ChannelMsgs = Union[ChannelInfo, DataReady, Chunk, FinishedMsg, ErrorMsg, WarningMsg]
-ListenURLEvents = Union[DataFromChannel, WarningMsg, ErrorMsg, FinishedMsg]
+ChannelMsgs = Union[ChannelInfo, DataReady, Chunk, FinishedMsg, ErrorMsg, WarningMsg, SilenceMsg]
+ListenURLEvents = Union[DataFromChannel, WarningMsg, ErrorMsg, FinishedMsg, SilenceMsg]

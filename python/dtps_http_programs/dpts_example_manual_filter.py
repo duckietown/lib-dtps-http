@@ -34,7 +34,9 @@ async def main():
     if metadata.events_data_inline_url is None:
         raise AssertionError
 
-    async for d in client.listen_url_events(metadata.events_data_inline_url, inline_data=True):
+    async for d in client.listen_url_events(
+        metadata.events_data_inline_url, raise_on_error=False, inline_data=True, add_silence=None
+    ):
         if isinstance(d, DataFromChannel):
             await client.publish(URL_OUT, d.raw_data)
 
@@ -57,7 +59,9 @@ async def on_startup2_mixed(s: DTPSServer) -> None:
     if metadata.events_data_inline_url is None:
         raise AssertionError
 
-    async for d in client.listen_url_events(metadata.events_data_inline_url, inline_data=True):
+    async for d in client.listen_url_events(
+        metadata.events_data_inline_url, raise_on_error=False, inline_data=True, add_silence=None
+    ):
         if isinstance(d, DataFromChannel):
             await client.publish(URL_OUT, d.raw_data)
 

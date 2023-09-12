@@ -474,7 +474,8 @@ impl TypeOfConnection {
             TypeOfConnection::UNIX(unixcon) => {
                 let mut s = unixcon.scheme.clone();
                 s.push_str("://");
-                s.push_str(&unixcon.socket_name);
+                let escaped = unixcon.socket_name.replace("/", "%2F");
+                s.push_str(&escaped);
                 s.push_str(&unixcon.path);
                 if let Some(query) = &unixcon.query {
                     s.push_str("?");
@@ -632,6 +633,7 @@ pub type History = HashMap<usize, DataReady>;
 
 #[derive(Debug, Clone)]
 pub struct FoundMetadata {
+    pub base_url: TypeOfConnection,
     pub alternative_urls: HashSet<TypeOfConnection>,
     pub answering: Option<String>,
 
@@ -642,6 +644,19 @@ pub struct FoundMetadata {
     /// nanoseconds
     pub latency_ns: u128,
     pub content_type: String,
+}
+
+impl FoundMetadata {
+    pub fn get_answering(&self) -> DTPSR<String> {
+        match &self.answering {
+            None => {
+                let base = self.base_url.to_string();
+                let msg = format!("Metadata says this is not a DTPS node:\nconbase: {base}");
+                return Err(anyhow::anyhow!(msg).into());
+            }
+            Some(x) => Ok(x.clone()),
+        }
+    }
 }
 
 pub fn get_url_from_topic_name(topic_name: &str) -> String {

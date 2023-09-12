@@ -43,6 +43,10 @@ pub struct FinishedMsg {
     pub comment: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SilenceMsg {
+    pub dt: f32,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ErrorMsg {
     pub comment: String,
 }
@@ -59,6 +63,7 @@ pub enum MsgServerToClient {
     WarningMsg(WarningMsg),
     ErrorMsg(ErrorMsg),
     FinishedMsg(FinishedMsg),
+    SilenceMsg(SilenceMsg),
 }
 
 #[cfg(test)]

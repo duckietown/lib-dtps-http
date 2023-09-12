@@ -1,8 +1,5 @@
-use std::{
-    collections::HashMap,
-    string::ToString,
-};
-
+use crate::context;
+use anyhow::Context;
 use bytes::Bytes;
 use futures::{
     stream::SplitSink,
@@ -12,6 +9,10 @@ use futures::{
 use maud::{
     html,
     PreEscaped,
+};
+use std::{
+    collections::HashMap,
+    string::ToString,
 };
 use strip_ansi_escapes::strip;
 use tokio::{
@@ -109,15 +110,7 @@ pub async fn serve_master_post(
 
     let ds = match matched {
         Ok(ds) => ds,
-        Err(s) => {
-            // return Err<s.into()>;
-            // let s = format!("Cannot resolve the path {:?}:\n{}", path_components, s);
-            let res = http::Response::builder()
-                .status(s.status_code())
-                .body(Body::from(s.to_string()))
-                .unwrap();
-            return Ok(res);
-        }
+        Err(s) => return s.into(),
     };
 
     let p = ds.get_properties();
@@ -226,15 +219,7 @@ pub async fn serve_master_patch(
 
     let ds = match matched {
         Ok(ds) => ds,
-        Err(s) => {
-            // return Err<s.into()>;
-            // let s = format!("Cannot resolve the path {:?}:\n{}", path_components, s);
-            let res = http::Response::builder()
-                .status(s.status_code())
-                .body(Body::from(s.to_string()))
-                .unwrap();
-            return Ok(res);
-        }
+        Err(s) => return s.into(),
     };
 
     let p = ds.get_properties();
@@ -284,15 +269,7 @@ pub async fn serve_master_head(
 
     let ds = match matched {
         Ok(ds) => ds,
-        Err(s) => {
-            // debug_with_info!("serve_master_head: path_str: {}\n{}", path_str, s);
-
-            let res = http::Response::builder()
-                .status(s.status_code())
-                .body(Body::from(s.to_string()))
-                .unwrap();
-            return Ok(res);
-        }
+        Err(s) => return s.into(),
     };
     // debug_with_info!("serve_master_head: ds: {:?}", ds);
     match &ds {
@@ -503,22 +480,24 @@ pub async fn serve_master_get(
     }?;
 
     // debug_with_info!("serve_master: ds={:?} ", ds);
+    let r = ds.resolve_data_single(&path_str, ss_mutex.clone()).await;
+    // let resd0 = context!(r, "Cannot resolve_data_single for {path_str}");
 
-    let resd0 = ds.resolve_data_single(&path_str, ss_mutex.clone()).await;
-
-    let resd = match resd0 {
+    let resd = match r {
         Ok(x) => x,
         Err(s) => {
-            let desc = format!("Cannot resolve_data_single for:\n{ds:#?}:\n{s:?}");
-            // escape special characters
-            let code = s.status_code();
-            let desc = format!("{code}\n\n{desc}");
-            let res = http::Response::builder()
-                .status(s.status_code())
-                .body(Body::from(strip(desc)))
-                .unwrap();
-            return Ok(res);
-        }
+            return s.into();
+        } //
+          //     let desc = format!();
+          //     // escape special characters
+          //     let code = s.status_code();
+          //     let desc = format!("{code}\n\n{desc}");
+          //     let res = http::Response::builder()
+          //         .status(s.status_code())
+          //         .body(Body::from(strip(desc)))
+          //         .unwrap();
+          //     return Ok(res);
+          // }
     };
     let rd: RawData = match resd {
         ResolvedData::RawData(rd) => rd,
@@ -716,25 +695,25 @@ pub async fn handle_websocket_generic2_(
 
     return match &ds {
         TypeOFSource::Compose(_) => {
-            let stream = ds.get_data_stream(path.as_str(), state).await?;
-            handle_websocket_data_stream(ws_tx, stream, send_data).await
+            let stream = ds.get_data_stream(path.as_str(), state.clone()).await?;
+            handle_websocket_data_stream(ws_tx, stream, send_data, state.clone()).await
         }
         TypeOFSource::OurQueue(topic_name, _) => {
             spawn(do_receiving(topic_name.clone(), state.clone(), receiver));
             handle_websocket_queue(ws_tx, state, topic_name.clone(), send_data).await
         }
 
-        TypeOFSource::ForwardedQueue(fq) => {
-            handle_websocket_forwarded(
-                state,
-                fq.subscription.clone(),
-                fq.his_topic_name.clone(),
-                ws_tx,
-                receiver,
-                send_data,
-            )
-            .await
-        }
+        // TypeOFSource::ForwardedQueue(fq) => {
+        //     handle_websocket_forwarded(
+        //         state,
+        //         fq.subscription.clone(),
+        //         fq.his_topic_name.clone(),
+        //         ws_tx,
+        //         receiver,
+        //         send_data,
+        //     )
+        //     .await
+        // }
         // TypeOFSource::Digest(_digest, _content_type) => {
         //     not_implemented!("handle_websocket_generic2 not implemented TypeOFSource::Digest")
         // }
@@ -761,24 +740,30 @@ pub async fn handle_websocket_generic2_(
         //     not_implemented!("handle_websocket_generic2 not implemented {ds:?}")
         // }
         _ => {
-            let stream = ds.get_data_stream(path.as_str(), state).await?;
+            let stream = ds.get_data_stream(path.as_str(), state.clone()).await?;
 
-            handle_websocket_data_stream(ws_tx, stream, send_data).await
+            handle_websocket_data_stream(ws_tx, stream, send_data, state.clone()).await
         }
     };
 }
+
+const DELTA_WEBSOCKET_AVAIL: f64 = 30.0;
 
 pub async fn handle_websocket_data_stream(
     ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
     data_stream: DataStream,
     send_data: bool,
+    ssa: ServerStateAccess,
 ) -> DTPSR<()> {
     let mut starting_messaging = vec![];
 
     starting_messaging.push(MsgServerToClient::ChannelInfo(data_stream.channel_info));
 
     if let Some(first) = data_stream.first {
-        let mut for_this = get_series_of_messages_for_notification_(send_data, &first).await;
+        let mut ss = ssa.lock().await;
+        let mut for_this =
+            get_series_of_messages_for_notification_(send_data, &first, DELTA_WEBSOCKET_AVAIL, &mut ss).await;
+
         starting_messaging.append(&mut for_this);
     }
 
@@ -793,8 +778,11 @@ pub async fn handle_websocket_data_stream(
     loop {
         match stream.recv().await {
             Ok(r) => {
-                let for_this = get_series_of_messages_for_notification_(send_data, &r).await;
-                // fixme: we need to reserve the blobs when we send it
+                let mut ss = ssa.lock().await;
+
+                let for_this =
+                    get_series_of_messages_for_notification_(send_data, &r, DELTA_WEBSOCKET_AVAIL, &mut ss).await;
+
                 send_as_ws_cbor(&for_this, ws_tx).await?;
             }
             Err(e) => match e {
@@ -818,69 +806,69 @@ pub async fn handle_websocket_data_stream(
     ws_tx.close().await?;
     Ok(())
 }
-
-pub async fn handle_websocket_forwarded(
-    state: ServerStateAccess,
-    subscription: TopicName,
-    its_topic_name: TopicName,
-    ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
-    _receiver: UnboundedReceiverStream<MsgClientToServer>,
-    send_data: bool,
-) -> DTPSR<()> {
-    let url = {
-        let ss = state.lock().await;
-
-        let sub = ss.proxied.get(&subscription).unwrap();
-
-        match &sub.established {
-            None => {
-                return not_available!("Subscription not established");
-            }
-            Some(est) => {
-                let url = est.using.join(its_topic_name.as_relative_url())?;
-                url
-            }
-        }
-    };
-
-    let md = get_metadata(&url).await?;
-
-    let use_url = if send_data {
-        md.events_data_inline_url.unwrap()
-    } else {
-        md.events_url.unwrap()
-    };
-
-    let wsc = open_websocket_connection(&use_url).await?;
-
-    let mut incoming = wsc.get_incoming().await;
-
-    loop {
-        let msg = match incoming.recv().await {
-            Ok(msg) => msg,
-            Err(e) => match e {
-                RecvError::Closed => {
-                    break;
-                }
-                RecvError::Lagged(_) => {
-                    error_with_info!("lagged");
-                    continue;
-                }
-            },
-        };
-        let x = warp_from_tungstenite(msg)?;
-        match ws_tx.send(x).await {
-            Ok(_) => {}
-            Err(e) => {
-                // match e {
-                //     Error { .. } => {}
-                // }
-                error_with_info!("Cannot send message: {e}")
-            }
-        }
-    }
-    Ok(())
-}
+//
+// pub async fn handle_websocket_forwarded(
+//     state: ServerStateAccess,
+//     subscription: TopicName,
+//     its_topic_name: TopicName,
+//     ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
+//     _receiver: UnboundedReceiverStream<MsgClientToServer>,
+//     send_data: bool,
+// ) -> DTPSR<()> {
+//     let url = {
+//         let ss = state.lock().await;
+//
+//         let sub = ss.proxied.get(&subscription).unwrap();
+//
+//         match &sub.established {
+//             None => {
+//                 return not_available!("Subscription not established");
+//             }
+//             Some(est) => {
+//                 let url = est.using.join(its_topic_name.as_relative_url())?;
+//                 url
+//             }
+//         }
+//     };
+//
+//     let md = get_metadata(&url).await?;
+//
+//     let use_url = if send_data {
+//         md.events_data_inline_url.unwrap()
+//     } else {
+//         md.events_url.unwrap()
+//     };
+//
+//     let wsc = open_websocket_connection(&use_url).await?;
+//
+//     let mut incoming = wsc.get_incoming().await;
+//
+//     loop {
+//         let msg = match incoming.recv().await {
+//             Ok(msg) => msg,
+//             Err(e) => match e {
+//                 RecvError::Closed => {
+//                     break;
+//                 }
+//                 RecvError::Lagged(_) => {
+//                     error_with_info!("lagged");
+//                     continue;
+//                 }
+//             },
+//         };
+//         let x = warp_from_tungstenite(msg)?;
+//         match ws_tx.send(x).await {
+//             Ok(_) => {}
+//             Err(e) => {
+//                 // match e {
+//                 //     Error { .. } => {}
+//                 // }
+//                 error_with_info!("Cannot send message: {e}")
+//             }
+//         }
+//     }
+//     Ok(())
+// }
 
 fn warp_from_tungstenite(msg: TungsteniteMessage) -> DTPSR<WarpMessage> {
     match msg {

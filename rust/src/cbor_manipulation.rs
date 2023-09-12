@@ -104,7 +104,6 @@ pub fn get_inside(context: Vec<String>, data: &serde_cbor::Value, path: &Vec<Str
                 );
                 return DTPSError::other(s);
             } else {
-                let p = p as usize;
                 new_context.push(format!("[{}]", p));
                 a.get(p).unwrap()
             }

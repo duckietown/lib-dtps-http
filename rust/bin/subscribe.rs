@@ -47,15 +47,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     // debug_with_info!("connection base: {:#?}", bc);
     let md = get_metadata(&bc).await?;
     // debug_with_info!("metadata:\n{:#?}", md);
-    match md.answering {
-        None => {
-            let msg = format!("not a DTPS node:\nconbase:{bc}\nmd:{md:?}");
-            return Err(anyhow::anyhow!(msg).into());
-
-            // return Err(Box::new(io::Error::new(ErrorKind::Other, "no answering url found")));
-        }
-        Some(_) => {}
-    }
+    md.get_answering()?;
 
     let best = compute_best_alternative(&md.alternative_urls, md.answering.unwrap().as_str()).await?;
     debug_with_info!("Best connection: {best} ");
@@ -63,19 +55,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     let x = get_index(&best).await?;
 
     debug_with_info!("Internal: {x:#?} ");
-    //
-    // if best.is_none() {
-    //     info_with_info!("no alternative url found");
-    //     return;
-    // }
-    // let use_url = best.unwrap();
-    //
-    // if use_url.is_none() {
-    //     info_with_info!("no alternative url found");
-    //     return;
-    // }
 
-    // debug_with_info!("{:#?}", x);
     let mut handles: Vec<JoinHandle<_>> = Vec::new();
 
     for (topic_name, topic_info) in &x.topics {

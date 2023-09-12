@@ -1221,7 +1221,9 @@ pre {{
         from .client import DTPSClient
 
         async with DTPSClient.create() as client:
-            async for lue in client.listen_url_events(url, inline_data=use_remote_inline_data):
+            async for lue in client.listen_url_events(
+                url, inline_data=use_remote_inline_data, raise_on_error=False, add_silence=None
+            ):
                 if isinstance(lue, DataFromChannel):
                     dr = lue.data_ready
                     urls = [join(url, _.url) for _ in dr.availability]

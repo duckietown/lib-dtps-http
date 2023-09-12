@@ -17,12 +17,6 @@ use bytes::Bytes;
 use chrono::Local;
 use futures::StreamExt;
 use indent::indent_all_with;
-// use log::{
-//     debug,
-//     error,
-//     info,
-//     warn,
-// };
 use maplit::hashmap;
 use path_clean::PathClean;
 use schemars::{
@@ -183,6 +177,7 @@ pub struct ServerState {
     /// The proxied other resources
     pub proxied_other: HashMap<TopicName, OtherProxyInfo>,
     pub blobs: HashMap<String, SavedBlob>,
+    pub blobs_forgotten: HashMap<String, i64>,
 
     advertise_urls: Vec<String>,
 
@@ -297,6 +292,7 @@ impl ServerState {
             proxied_other: HashMap::new(),
             proxied_topics: HashMap::new(),
             blobs: HashMap::new(),
+            blobs_forgotten: HashMap::new(),
             proxied: HashMap::new(),
             advertise_urls: vec![],
             local_dirs: HashMap::new(),
@@ -654,7 +650,7 @@ impl ServerState {
         Ok(ds)
     }
 
-    pub fn guarantee_blob_exists(&mut self, digest: &str, seconds: f32) {
+    pub fn guarantee_blob_exists(&mut self, digest: &str, seconds: f64) {
         // debug_with_info!("Guarantee blob {digest} exists for {seconds} seconds more");
         let now = Local::now().timestamp_nanos();
         let deadline = now + (seconds * 1_000_000_000.0) as i64;
@@ -680,6 +676,8 @@ impl ServerState {
         for digest in todrop {
             // debug_with_info!("Dropping blob {digest} because deadline passed");
             self.blobs.remove(&digest);
+
+            self.blobs_forgotten.insert(digest, now);
         }
     }
     pub fn release_blob(&mut self, digest: &str, who: &str) {
@@ -696,6 +694,7 @@ impl ServerState {
                     let deadline_passed = now > sb.deadline;
                     if deadline_passed {
                         self.blobs.remove(digest);
+                        self.blobs_forgotten.insert(digest.to_string(), now);
                     }
                 }
             }
@@ -722,6 +721,25 @@ impl ServerState {
         }
     }
 
+    pub fn save_blob_for_time(&mut self, digest: &str, content: &[u8], delta_seconds: f64) {
+        let time_nanos_delta = (delta_seconds * 1_000_000_000.0) as i64;
+        let nanos_now = Local::now().timestamp_nanos();
+        let deadline = nanos_now + time_nanos_delta;
+        match self.blobs.get_mut(digest) {
+            None => {
+                let sb = SavedBlob {
+                    content: content.to_vec(),
+                    who_needs_it: HashSet::new(),
+                    deadline,
+                };
+                self.blobs.insert(digest.to_string(), sb);
+            }
+            Some(sb) => {
+                sb.deadline = max(sb.deadline, deadline);
+            }
+        }
+    }
+
     pub fn get_blob(&self, digest: &str) -> Option<&Vec<u8>> {
         return self.blobs.get(digest).map(|v| &v.content);
     }
@@ -730,10 +748,19 @@ impl ServerState {
         let x = self.blobs.get(digest).map(|v| Bytes::from(v.content.clone()));
         match x {
             Some(v) => Ok(v),
-            None => {
-                let msg = format!("Blob {:#?} not found", digest);
-                Err(DTPSError::InternalInconsistency(msg))
-            }
+            None => match self.blobs_forgotten.get(digest) {
+                Some(ts) => {
+                    let now = Local::now().timestamp_nanos();
+                    let delta = now - ts;
+                    let seconds = delta as f64 / 1_000_000_000.0;
+                    let msg = format!("Blob {:#?} not found. It was forgotten {} seconds ago", digest, seconds);
+                    Err(DTPSError::NotAvailable(msg))
+                }
+                None => {
+                    let msg = format!("Blob {:#?} was never saved", digest);
+                    Err(DTPSError::ResourceNotFound(msg)) // should be resource not found
+                }
+            },
         }
     }
 

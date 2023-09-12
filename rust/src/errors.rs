@@ -35,6 +35,8 @@ pub enum DTPSError {
     TopicNotFound(String),
     #[error("DTPSError: Topic already exists:\n{}", indent_inside(.0))]
     TopicAlreadyExists(String),
+    #[error("DTPSError: Resource not found:\n{}", indent_inside(.0))]
+    ResourceNotFound(String),
 
     #[error("DTPSError: Unknown DTPS error")]
     Unknown,
@@ -130,9 +132,8 @@ impl From<&String> for DTPSError {
         DTPSError::Other(item.to_string())
     }
 }
-
-impl Into<HandlersResponse> for DTPSError {
-    fn into(self) -> HandlersResponse {
+impl DTPSError {
+    pub fn as_handler_response(&self) -> HandlersResponse {
         let s = self.to_string();
         let res = http::Response::builder()
             .status(self.status_code())
@@ -141,6 +142,12 @@ impl Into<HandlersResponse> for DTPSError {
         return Ok(res);
     }
 }
+impl Into<HandlersResponse> for DTPSError {
+    fn into(self) -> HandlersResponse {
+        self.as_handler_response()
+    }
+}
+
 pub type DTPSR<T> = anyhow::Result<T, DTPSError>;
 
 pub fn not_available<T, S: AsRef<str>>(s: S) -> Result<T, DTPSError> {
@@ -162,7 +169,7 @@ pub fn indent_inside(s: &String) -> String {
 impl DTPSError {
     pub fn status_code(&self) -> StatusCode {
         match self {
-            DTPSError::TopicNotFound(_) => StatusCode::NOT_FOUND,
+            DTPSError::TopicNotFound(..) | DTPSError::ResourceNotFound(..) => StatusCode::NOT_FOUND,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -177,20 +184,6 @@ impl DTPSError {
 
 impl warp::reject::Reject for DTPSError {}
 
-pub async fn handle_rejection(err: Rejection) -> std::result::Result<impl Reply, Rejection> {
-    debug_with_info!("handle_rejection: {:#?}", err);
-    if let Some(custom_error) = err.find::<DTPSError>() {
-        let status_code = custom_error.status_code();
-
-        let error_message = format!("{}\n\n{:#?}", status_code, custom_error);
-
-        if status_code != 404 {
-            error_with_info!("{}", error_message);
-        }
-        return Ok(warp::reply::with_status(error_message, status_code));
-    }
-    Err(err)
-}
 //
 // pub fn just_log<E: Debug>(e: E) -> () {
 //     error_with_info!("Ignoring error: {:?}", e);
@@ -278,4 +271,19 @@ macro_rules! not_reachable {
     ($($u:expr),* $(,)?) => {{
         crate::DTPSError::not_reachable(crate::add_info!($($u),*) )
     }};
+}
+
+pub async fn handle_rejection(err: Rejection) -> std::result::Result<impl Reply, Rejection> {
+    debug_with_info!("handle_rejection: {:#?}", err);
+    if let Some(custom_error) = err.find::<DTPSError>() {
+        let status_code = custom_error.status_code();
+
+        let error_message = format!("{}\n\n{:#?}", status_code, custom_error);
+
+        if status_code != 404 {
+            error_with_info!("{}", error_message);
+        }
+        return Ok(warp::reply::with_status(error_message, status_code));
+    }
+    Err(err)
 }

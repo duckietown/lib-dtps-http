@@ -84,6 +84,11 @@ name = "dtps-http-rs-client-stats"
 path = "rust/bin/stats.rs"
 
 
+[[bin]]
+name = "dtps-http-rs-subscribe"
+path = "rust/bin/subscribe.rs"
+
+
 [build-dependencies]
 built = { version = "0.6", features = ["chrono", "git2", "semver"] }
 git2 = "0.17.2"

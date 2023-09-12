@@ -244,10 +244,7 @@ pub async fn listen_events_websocket(con: TypeOfConnection, tx: UnboundedSender<
 
         let content: Vec<u8> = if dr.chunks_arriving == 0 {
             if dr.availability.is_empty() {
-                let s = format!(
-                    "{prefix}: message #{}: availability is empty. listening to {}",
-                    index, con
-                );
+                let s = format!("{prefix}: message #{index}: availability is empty. listening to {con}",);
                 return DTPSError::other(s);
             }
             let avail = dr.availability.get(0).unwrap();
@@ -260,15 +257,15 @@ pub async fn listen_events_websocket(con: TypeOfConnection, tx: UnboundedSender<
                 let msg_from_server = receive_from_server(&mut rx).await?;
 
                 let chunk = match msg_from_server {
-                    None => {
-                        break;
-                    }
+                    None => break,
+
                     Some(x) => match x {
                         MsgServerToClient::Chunk(chunk) => chunk,
 
                         MsgServerToClient::DataReady(..)
                         | MsgServerToClient::ChannelInfo(..)
                         | MsgServerToClient::WarningMsg(..)
+                        | MsgServerToClient::SilenceMsg(..)
                         | MsgServerToClient::ErrorMsg(..)
                         | MsgServerToClient::FinishedMsg(..) => {
                             let s = format!("{prefix}: unexpected message : {x:#?}");
@@ -364,7 +361,7 @@ pub async fn sniff_type_resource(con: &TypeOfConnection) -> DTPSR<TypeOfResource
     if content_type.contains(CONTENT_TYPE_DTPS_INDEX) {
         match &md.answering {
             None => {
-                debug_with_info!("This looks like an indes but could not get answering:\n{md:#?}");
+                debug_with_info!("This looks like an index but could not get answering:\n{md:#?}");
                 Ok(TypeOfResource::Other)
             }
             Some(node_id) => Ok(TypeOfResource::DTPSIndex {
@@ -403,16 +400,17 @@ pub async fn get_history(con: &TypeOfConnection) -> DTPSR<History> {
         return not_available!("Expected content type {CONTENT_TYPE_TOPIC_HISTORY_CBOR}, obtained {content_type} ");
     }
     let x = serde_cbor::from_slice::<History>(&rd.content);
-    if x.is_err() {
-        // pragma: no cover
-        let value: serde_cbor::Value = serde_cbor::from_slice(&rd.content)?;
-        let s = format!("cannot parse as CBOR:\n{:#?}", value);
-        error_with_info!("{}", s);
-        error_with_info!("content: {:#?}", x);
-        return DTPSError::other(s);
+    match x {
+        Ok(x) => Ok(x),
+        Err(e) => {
+            // pragma: no cover
+            let value: serde_cbor::Value = serde_cbor::from_slice(&rd.content)?;
+            let s = format!("cannot parse as CBOR:\n{:#?}", value);
+            error_with_info!("{}", s);
+            error_with_info!("content: {:#?}", e);
+            return DTPSError::other(s);
+        }
     }
-    let x0 = x.unwrap();
-    Ok(x0)
 }
 
 pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
@@ -703,10 +701,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     alternative_urls.push(conbase.clone());
 
     let answering = headers.get(HEADER_NODE_ID).map(string_from_header_value);
-    //
-    // if answering == None {
-    //     debug_with_info!("Cannot find header {HEADER_NODE_ID} in response {headers:?}")
-    // }
+
     let mut links = hashmap! {};
     for v in headers.get_all("link") {
         let link = LinkHeader::from_header_value(&string_from_header_value(v));
@@ -739,6 +734,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     let history_url = get_if_exists(REL_HISTORY);
 
     let md = FoundMetadata {
+        base_url: conbase.clone(),
         alternative_urls,
         events_url,
         answering,
