@@ -368,6 +368,7 @@ def channel_msgs_parse(d: bytes) -> "ChannelMsgs":
 
     for T in (ChannelInfo, DataReady, Chunk, FinishedMsg, ErrorMsg, WarningMsg):
         if T.__name__ in struct:
+            # noinspection PyTypeChecker
             return TypeAdapter(T).validate_python(struct[T.__name__])
 
     raise ValueError(f"unexpected value {struct}")
