@@ -58,10 +58,10 @@ TOPIC_STATE_SUMMARY = TopicNameV.from_dash_sep("dtps/state")
 TOPIC_STATE_NOTIFICATION = TopicNameV.from_dash_sep("dtps/states-notification")
 TOPIC_PROXIED = TopicNameV.from_dash_sep("dtps/proxied")
 
-CONTENT_TYPE_DTPS_INDEX = "application/vnd.dt.dtps-index"
-CONTENT_TYPE_DTPS_INDEX_CBOR = "application/vnd.dt.dtps-index+cbor"
-CONTENT_TYPE_TOPIC_HISTORY_CBOR = "application/vnd.dt.dtps-history+cbor"
-CONTENT_TYPE_PATCH_JSON = "application/json-patch+json"
+CONTENT_TYPE_DTPS_INDEX = ContentType("application/vnd.dt.dtps-index")
+CONTENT_TYPE_DTPS_INDEX_CBOR = ContentType("application/vnd.dt.dtps-index+cbor")
+CONTENT_TYPE_TOPIC_HISTORY_CBOR = ContentType("application/vnd.dt.dtps-history+cbor")
+CONTENT_TYPE_PATCH_JSON = ContentType("application/json-patch+json")
 
 HEADER_NO_AVAIL = "X-dtps-debug-Content-Location-Not-Available"
 HEADER_CONTENT_LOCATION = "Content-Location"

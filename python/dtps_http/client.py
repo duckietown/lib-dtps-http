@@ -22,7 +22,10 @@ from typing import (
 
 import aiohttp
 import cbor2
-from aiohttp import ClientWebSocketResponse, TCPConnector, UnixConnector, WSMessage
+from aiohttp import ClientWebSocketResponse, TCPConnector, UnixConnector
+
+from aiohttp import WSMessage
+
 from tcp_latency import measure_latency
 
 from . import logger
@@ -40,12 +43,19 @@ from .constants import (
 from .exceptions import EventListeningNotAvailable
 from .link_headers import get_link_headers
 from .structures import (
+    DataFromChannel,
+    DataSaved,
+    ErrorMsg,
+    FinishedMsg,
+    WarningMsg,
     channel_msgs_parse,
     ChannelInfo,
     Chunk,
     DataReady,
     ForwardingStep,
+    DataFromChannel,
     LinkBenchmark,
+    ListenURLEvents,
     RawData,
     TopicReachability,
     TopicRef,
@@ -92,9 +102,9 @@ class FoundMetadata:
     events_data_inline_url: Optional[URLWSInline]
 
     # metadati della risorsa (il ContentInfo etc.)
-    meta_url: Optional[URLString]
+    meta_url: Optional[URL]
     # servizio history
-    history_url: Optional[URLString]
+    history_url: Optional[URL]
 
 
 class DTPSClient:
@@ -155,7 +165,7 @@ class DTPSClient:
                 res = cbor2.loads(res_bytes)
 
             alternatives0 = cast(List[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION, []))
-            where_this_available = [url]
+            where_this_available: list[URL] = [url]
             for a in alternatives0:
                 try:
                     x = parse_url_unescape(a)
@@ -184,8 +194,8 @@ class DTPSClient:
             return available
 
     def _look_cache(self, url0: U) -> U:
-        if not isinstance(url0, URL):
-            url0 = parse_url_unescape(url0)
+        # if not isinstance(url0, URL):
+        #     url0 = parse_url_unescape(url0)
         return cast(U, self.preferred_cache.get(url0, url0))
 
     async def publish(self, url0: URL, rd: RawData) -> None:
@@ -233,7 +243,7 @@ class DTPSClient:
         self,
         this_node_id: NodeID,
         this_url: URLString,
-        connects_to: URL,
+        connects_to: URLTopic,
         expects_answer_from: NodeID,
         forwarders: List[ForwardingStep],
     ) -> Optional[TopicReachability]:
@@ -252,12 +262,12 @@ class DTPSClient:
         tr2 = TopicReachability(this_url, this_node_id, forwarders=forwarders + [me], benchmark=total)
         return tr2
 
-    async def find_best_alternative(self, us: List[Tuple[U, NodeID]]) -> Optional[U]:
+    async def find_best_alternative(self, us: List[Tuple[URLTopic, Optional[NodeID]]]) -> Optional[URLTopic]:
         if not us:
             logger.warning("find_best_alternative: no alternatives")
             return None
         results: List[str] = []
-        possible: List[Tuple[float, float, float, U]] = []
+        possible: List[Tuple[float, float, float, URLTopic]] = []
         for a, expects_answer_from in us:
             if (score := await self.can_use_url(a, expects_answer_from)) is not None:
                 possible.append((score.complexity, score.latency_ns, -score.bandwidth, a))
@@ -295,8 +305,8 @@ class DTPSClient:
 
     async def can_use_url(
         self,
-        url: URL,
-        expects_answer_from: NodeID,
+        url: URLTopic,
+        expects_answer_from: Optional[NodeID],
         do_measure_latency: bool = True,
         check_right_node: bool = True,
     ) -> Optional[LinkBenchmark]:
@@ -324,7 +334,7 @@ class DTPSClient:
             else:
                 latency = 0.1
 
-            if check_right_node:
+            if check_right_node and expects_answer_from is not None:
                 who_answers = await self.get_who_answers(url)
 
                 if who_answers != expects_answer_from:
@@ -397,7 +407,7 @@ class DTPSClient:
         logger.warning(f"unknown scheme {url.scheme!r} for {url}")
         return None
 
-    async def get_who_answers(self, url: URL) -> Optional[NodeID]:
+    async def get_who_answers(self, url: URLTopic) -> Optional[NodeID]:
         key = (url.scheme, url.host, url.port or 0)
         if key not in self.obtained_answer:
             try:
@@ -479,7 +489,7 @@ class DTPSClient:
 
         found = await self.get_proxied(url0)
         path = "/" + escape_json_pointer(topic_name.as_dash_sep())
-        patch = []
+        patch: List[Dict[str, Any]] = []
         if topic_name in found:
             if found[topic_name].node_id == node_id and found[topic_name].urls == urls:
                 return False
@@ -512,7 +522,7 @@ class DTPSClient:
             async with self.my_session(url, conn_timeout=2) as (session, use_url):
                 async with session.patch(use_url, data=data, headers=headers) as resp:
                     res_bytes: bytes = await resp.read()
-                    content_type = resp.headers.get("content-type", "application/octet-stream")
+                    content_type = ContentType(resp.headers.get("content-type", "application/octet-stream"))
                     rd = RawData(res_bytes, content_type)
 
                     if not resp.ok:
@@ -539,7 +549,7 @@ class DTPSClient:
             async with self.my_session(url, conn_timeout=2) as (session, use_url):
                 async with session.get(use_url) as resp:
                     res_bytes: bytes = await resp.read()
-                    content_type = resp.headers.get("content-type", "application/octet-stream")
+                    content_type = ContentType(resp.headers.get("content-type", "application/octet-stream"))
                     rd = RawData(res_bytes, content_type)
 
                     if not resp.ok:
@@ -549,11 +559,10 @@ class DTPSClient:
                             message = res_bytes
                         raise ValueError(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
 
-                    if accept is not None:
-                        if content_type != accept:
-                            raise ValueError(
-                                f"GET gave a different content type ({accept=!r}, {content_type}\n{url0=}"
-                            )
+                    if accept is not None and content_type != accept:
+                        raise ValueError(
+                            f"GET gave a different content type ({accept=!r}, {content_type}\n{url0=}"
+                        )
                     return rd
 
         except:
@@ -586,7 +595,7 @@ class DTPSClient:
                     else:
                         events_url_data = None
                     if REL_EVENTS_NODATA in links:
-                        events_url = cast(URLWSInline, join(url, links[REL_EVENTS_NODATA].url))
+                        events_url = cast(URLWSOffline, join(url, links[REL_EVENTS_NODATA].url))
                     else:
                         events_url = None
 
@@ -620,7 +629,7 @@ class DTPSClient:
         )
 
     async def choose_best(self, reachability: List[TopicReachability]) -> URL:
-        use = []
+        use: List[Tuple[URL, Optional[NodeID]]] = []
         for r in reachability:
             try:
                 x = parse_url_unescape(r.url)
@@ -665,32 +674,33 @@ class DTPSClient:
 
         logger.info(f"listening to  {url_topic} -> {metadata} -> {url_events}")
         it = self.listen_url_events(url_events, inline_data)
-        t = asyncio.create_task(self._listen_and_callback(it, cb))
+        t = asyncio.create_task(_listen_and_callback(it, cb))
         self.tasks.append(t)
         return t
 
-    async def _listen_and_callback(
-        self, it: AsyncIterator[Tuple[DataReady, RawData]], cb: Callable[[RawData], Any]
-    ) -> None:
-        async for dr, rd in it:
-            cb(rd)
+    if TYPE_CHECKING:
 
-    async def listen_url_events(
-        self, url_events: URLWS, inline_data: bool
-    ) -> "AsyncIterator[tuple[DataReady, RawData]]":
-        if inline_data:
-            if "?" not in str(url_events):
-                raise ValueError(f"inline data requested but no ? in {url_events}")
-            async for _ in self.listen_url_events_with_data_inline(url_events):
-                yield _
-        else:
-            async for _ in self.listen_url_events_with_data_offline(url_events):
-                yield _
+        def listen_url_events(self, url_events: URLWS, inline_data: bool) -> "AsyncIterator[ListenURLEvents]":
+            ...
+
+    else:
+
+        async def listen_url_events(
+            self, url_events: URLWS, inline_data: bool
+        ) -> "AsyncIterator[ListenURLEvents]":
+            if inline_data:
+                if "?" not in str(url_events):
+                    raise ValueError(f"inline data requested but no ? in {url_events}")
+                async for _ in self.listen_url_events_with_data_inline(url_events):
+                    yield _
+            else:
+                async for _ in self.listen_url_events_with_data_offline(url_events):
+                    yield _
 
     async def listen_url_events_with_data_offline(
         self,
         url_websockets: URLWS,
-    ) -> AsyncIterator[Tuple[DataReady, RawData]]:
+    ) -> AsyncIterator[ListenURLEvents]:
         """Iterates using direct data using side loading"""
         use_url: URLString
         async with self.my_session(url_websockets) as (session, use_url):
@@ -714,20 +724,20 @@ class DTPSClient:
                             continue
 
                         if isinstance(cm, DataReady):
-                            data = await self._download_from_urls(url_websockets, cm)
-                            yield cm, data
+                            try:
+                                data = await self._download_from_urls(url_websockets, cm)
+                            except Exception as e:
+                                # todo: send message
+                                logger.error(f"error in downloading {cm}: {e.__class__.__name__} {e!r}")
+                                continue
+
+                            yield DataFromChannel(cm, data)
                         elif isinstance(cm, ChannelInfo):
                             logger.info(f"channel info {cm}")
+                        elif isinstance(cm, (WarningMsg, ErrorMsg, FinishedMsg)):
+                            yield cm
                         else:
                             logger.debug(f"cannot interpret {cm}")
-                        # match cm:
-                        #     case DataReady() as dr:
-                        #         data = await self._download_from_urls(url_websockets, dr)
-                        #         yield dr, data
-                        #     case ChannelInfo() as ci:
-                        #         logger.info(f"channel info {ci}")
-                        #     case _:
-                        #         logger.debug(f"cannot interpret {cm}")
                     else:
                         logger.error(f"unexpected message type {msg.type} {msg.data!r}")
 
@@ -742,14 +752,19 @@ class DTPSClient:
         url_data = url_datas[0]
         #  TODO: try multiple urls
 
-        #  logger.info(f"downloading {url_data!r}")
-        async with self.my_session(url_data) as (session2, use_url2):
-            async with session2.get(use_url2) as resp_data:
-                resp_data.raise_for_status()
-                data = await resp_data.read()
-                content_type = resp_data.content_type
-                data = RawData(content_type=content_type, content=data)
-                return data
+        return await self.get(url_data, accept=dr.content_type)
+        #
+        # #  logger.info(f"downloading {url_data!r}")
+        # async with self.my_session(url_data) as (session2, use_url2):
+        #     async with session2.get(use_url2) as resp_data:
+        #         if not resp_data.ok:
+        #             msg = f"cannot download {url_data!r} {resp_data.status=}"
+        #             msg +=
+        #         resp_data.raise_for_status()
+        #         data = await resp_data.read()
+        #         content_type = resp_data.content_type
+        #         data = RawData(content_type=content_type, content=data)
+        #         return data
 
     @async_error_catcher_iterator
     async def listen_url_events_with_data_inline(
@@ -841,6 +856,61 @@ class DTPSClient:
 
                 yield PushInterfaceImpl()
 
+    @async_error_catcher_iterator
+    async def listen_continuous(
+        self, urlbase0: URL, expect_node: Optional[NodeID], switch_identity_ok: bool
+    ) -> AsyncIterator[ListenURLEvents]:
+        while True:
+            try:
+                md = await self.get_metadata(urlbase0)
+            except Exception as e:
+                logger.error(f"Error getting metadata for {urlbase0!r}: {e!r}")
+                await asyncio.sleep(1.0)
+                continue
+
+            # logger.info(
+            #     f"Metadata for {urlbase0!r}:\n" + json.dumps(asdict(md), indent=2)
+            # )  # available = await dtpsclient.ask_topics(urlbase0)
+
+            if md.answering is None:
+                msg = f"This is not a DTPS node."
+                logger.error(msg)
+                await asyncio.sleep(2.0)
+                continue
+
+            if expect_node is not None and md.answering != expect_node:
+                if switch_identity_ok:
+                    msg = f"Switching identity to {md.answering!r}."
+                    logger.info(msg)
+                else:
+                    msg = f"This is not the expected node {expect_node!r}."
+                    logger.error(msg)
+                    await asyncio.sleep(2.0)
+                    continue
+
+            expect_node = md.answering
+
+            if md.events_url is None and md.events_data_inline_url == "":
+                msg = f"This resource does not support events."
+                logger.error(msg)
+                await asyncio.sleep(2.0)
+                continue
+
+            if md.events_url is not None:
+                iterator = self.listen_url_events(md.events_url, inline_data=False)
+            elif md.events_data_inline_url is not None:
+                iterator = self.listen_url_events(md.events_data_inline_url, inline_data=True)
+            else:
+                assert False
+
+            try:
+                async for _ in iterator:
+                    yield _
+            except Exception as e:
+                logger.error(f"Error listening to {urlbase0!r}:\n{traceback.format_exc()}")
+                await asyncio.sleep(1.0)
+                continue
+
 
 class PushInterface(ABC):
     @abstractmethod
@@ -850,3 +920,9 @@ class PushInterface(ABC):
 
 def escape_json_pointer(s: str) -> str:
     return s.replace("~", "~0").replace("/", "~1")
+
+
+async def _listen_and_callback(it: AsyncIterator[ListenURLEvents], cb: Callable[[RawData], Any]) -> None:
+    async for lue in it:
+        if isinstance(lue, DataFromChannel):
+            cb(lue.raw_data)

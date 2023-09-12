@@ -41,7 +41,7 @@ mod tests {
     #[tokio::test]
     async fn test_python1() -> DTPSR<()> {
         init_logging();
-        let path = "/tmp/ex1";
+        let path = "/tmp/dtps-tests/test_python1/socket";
         let cmd = vec!["dtps-http-py-server-example-clock", "--unix-path", path];
 
         // create process given by command above

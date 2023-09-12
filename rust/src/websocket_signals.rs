@@ -39,10 +39,26 @@ pub struct Chunk {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FinishedMsg {
+    pub comment: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ErrorMsg {
+    pub comment: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WarningMsg {
+    pub comment: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum MsgServerToClient {
     DataReady(DataReady),
     ChannelInfo(ChannelInfo),
     Chunk(Chunk),
+    WarningMsg(WarningMsg),
+    ErrorMsg(ErrorMsg),
+    FinishedMsg(FinishedMsg),
 }
 
 #[cfg(test)]

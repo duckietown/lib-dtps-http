@@ -1,18 +1,21 @@
-use crate::{
-    debug_with_info,
-    error_with_info,
-};
-use anyhow::Result;
-use http::StatusCode;
-use indent::indent_all_with;
 use std::{
     fmt::Debug,
     net::AddrParseError,
 };
 
+use anyhow::Result;
+use http::StatusCode;
+use hyper::Body;
+use indent::indent_all_with;
 use warp::{
     Rejection,
     Reply,
+};
+
+use crate::{
+    debug_with_info,
+    error_with_info,
+    server::HandlersResponse,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -128,6 +131,16 @@ impl From<&String> for DTPSError {
     }
 }
 
+impl Into<HandlersResponse> for DTPSError {
+    fn into(self) -> HandlersResponse {
+        let s = self.to_string();
+        let res = http::Response::builder()
+            .status(self.status_code())
+            .body(Body::from(s.to_string()))
+            .unwrap();
+        return Ok(res);
+    }
+}
 pub type DTPSR<T> = anyhow::Result<T, DTPSError>;
 
 pub fn not_available<T, S: AsRef<str>>(s: S) -> Result<T, DTPSError> {

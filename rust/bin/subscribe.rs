@@ -57,8 +57,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
         Some(_) => {}
     }
 
-    let best =
-        compute_best_alternative(&md.alternative_urls, md.answering.unwrap().as_str()).await?;
+    let best = compute_best_alternative(&md.alternative_urls, md.answering.unwrap().as_str()).await?;
     debug_with_info!("Best connection: {best} ");
 
     let x = get_index(&best).await?;

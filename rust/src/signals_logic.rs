@@ -175,7 +175,11 @@ pub enum TypeOFSource {
     OurQueue(TopicName, TopicProperties),
 
     MountedDir(TopicName, String, TopicProperties),
-    MountedFile(TopicName, String, TopicProperties),
+    MountedFile {
+        topic_name: TopicName,
+        filename: String,
+        properties: TopicProperties,
+    },
     Compose(SourceComposition),
     Transformed(Box<TypeOFSource>, Transforms),
     Digest(String, String),
@@ -223,11 +227,12 @@ impl TypeOFSource {
                             props.clone(),
                         ))
                     } else if inside.is_file() {
-                        Ok(TypeOFSource::MountedFile(
-                            topic_name.clone(),
-                            inside.to_str().unwrap().to_string(),
-                            props.clone(),
-                        ))
+                        Ok(TypeOFSource::MountedFile {
+                            topic_name: topic_name.clone(),
+                            filename: inside.to_str().unwrap().to_string(),
+
+                            properties: props.clone(),
+                        })
                     } else {
                         not_implemented!("get_inside for {self:#?} with {s:?}")
                     }
@@ -248,7 +253,7 @@ impl TypeOFSource {
                 Ok(TypeOFSource::Transformed(source.clone(), transform.get_inside(s)))
             }
 
-            TypeOFSource::MountedFile(_, _, _) => {
+            TypeOFSource::MountedFile { .. } => {
                 let v = vec![s.to_string()];
                 let transform = Transforms::GetInside(v);
                 let tr = TypeOFSource::Transformed(Box::new(self.clone()), transform);
@@ -310,7 +315,8 @@ impl ResolveDataSingle for TypeOFSource {
 
                 let (status, rd) = get_rawdata_status(use_url).await?;
                 if status == 209 {
-                    Ok(ResolvedData::NotAvailableYet("209".to_string()))
+                    let msg = "This topic does not have any data yet".to_string();
+                    Ok(ResolvedData::NotAvailableYet(msg))
                 } else {
                     Ok(ResolvedData::RawData(rd))
                 }
@@ -359,7 +365,7 @@ impl ResolveDataSingle for TypeOFSource {
                 }
                 not_implemented!("MountedDir:\n{self:#?}")
             }
-            TypeOFSource::MountedFile(_, filename, _) => {
+            TypeOFSource::MountedFile { filename, .. } => {
                 let data = std::fs::read(filename)?;
                 let content_type = mime_guess::from_path(&filename)
                     .first()
@@ -439,7 +445,7 @@ pub async fn resolve_proxied(op: &OtherProxied) -> DTPSR<ResolvedData> {
 impl DataProps for TypeOFSource {
     fn get_properties(&self) -> TopicProperties {
         match self {
-            TypeOFSource::Digest(_, _) => TopicProperties {
+            TypeOFSource::Digest(..) => TopicProperties {
                 streamable: false,
                 pushable: false,
                 readable: true,
@@ -464,7 +470,7 @@ impl DataProps for TypeOFSource {
                 }
             }
             TypeOFSource::MountedDir(_, _, props) => props.clone(),
-            TypeOFSource::MountedFile(_, _, props) => props.clone(),
+            TypeOFSource::MountedFile { properties, .. } => properties.clone(),
             TypeOFSource::Index(s) => s.get_properties(),
             TypeOFSource::Aliased(_, _) => {
                 todo!("get_properties for {self:#?} with {self:?}")
@@ -497,16 +503,24 @@ pub struct DataStream {
 }
 // use tokio::stream::StreamExt;
 
+async fn get_data_stream_from_url(con: &TypeOfConnection) -> DTPSR<DataStream> {
+    todo!("not implemented");
+}
+
 impl TypeOFSource {
     #[async_recursion]
     pub async fn get_data_stream(&self, presented_as: &str, ssa: ServerStateAccess) -> DTPSR<DataStream> {
         match self {
             TypeOFSource::Digest(_, _) => {
                 not_implemented!("get_stream for {self:#?} with {self:?}")
-                // let _x = self.resolve_data_single(presented_as, ssa).await?;
             }
-            TypeOFSource::ForwardedQueue(_q) => {
-                not_implemented!("get_stream for {self:#?} with {self:?}")
+            TypeOFSource::ForwardedQueue(q) => {
+                // not_implemented!("get_stream for {self:#?} with {self:?}")
+                let use_url = {
+                    let ss = ssa.lock().await;
+                    ss.proxied_topics.get(&q.my_topic_name).unwrap().data_url.clone()
+                };
+                get_data_stream_from_url(&use_url).await
             }
             TypeOFSource::OurQueue(topic_name, ..) => {
                 let (rx, first, channel_info) = {
@@ -539,7 +553,7 @@ impl TypeOFSource {
             TypeOFSource::MountedDir(_, _, _props) => {
                 not_implemented!("get_stream for {self:#?} with {self:?}")
             }
-            TypeOFSource::MountedFile(_, _, _props) => {
+            TypeOFSource::MountedFile { .. } => {
                 not_implemented!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::Index(_s) => {
@@ -1265,16 +1279,16 @@ impl TypeOFSource {
                     topics,
                 })
             }
-            TypeOFSource::MountedFile(_, _, _) => {
+            TypeOFSource::MountedFile { .. } => {
                 not_implemented!("get_meta_index: {self:?}")
             }
-            TypeOFSource::Index(_) => {
+            TypeOFSource::Index(..) => {
                 not_implemented!("get_meta_index: {self:?}")
             }
-            TypeOFSource::Aliased(_, _) => {
+            TypeOFSource::Aliased(..) => {
                 not_implemented!("get_meta_index: {self:?}")
             }
-            TypeOFSource::History(_) => {
+            TypeOFSource::History(..) => {
                 not_implemented!("get_meta_index: {self:?}")
             }
         };
@@ -1654,32 +1668,32 @@ impl Patchable for TypeOFSource {
                     patch_our_queue(ss_mutex, patch, topic_name).await
                 }
             }
-            TypeOFSource::MountedDir(_, _, _) => {
+            TypeOFSource::MountedDir(..) => {
                 not_implemented!("patch for {self:#?} with {self:?}")
             }
-            TypeOFSource::MountedFile(_, _, _) => {
+            TypeOFSource::MountedFile { .. } => {
                 not_implemented!("patch for {self:#?} with {self:?}")
             }
             TypeOFSource::Compose(sc) => patch_composition(ss_mutex, patch, sc).await,
             TypeOFSource::Transformed(ts_inside, transform) => {
                 patch_transformed(ss_mutex, presented_as, patch, ts_inside, transform).await
             }
-            TypeOFSource::Digest(_, _) => {
+            TypeOFSource::Digest(..) => {
                 not_implemented!("patch for {self:#?} with {self:?}")
             }
-            TypeOFSource::Deref(_) => {
+            TypeOFSource::Deref(..) => {
                 not_implemented!("patch for {self:#?} with {self:?}")
             }
-            TypeOFSource::Index(_) => {
+            TypeOFSource::Index(..) => {
                 not_implemented!("patch for {self:#?} with {self:?}")
             }
-            TypeOFSource::Aliased(_, _) => {
+            TypeOFSource::Aliased(..) => {
                 not_implemented!("patch for {self:#?} with {self:?}")
             }
-            TypeOFSource::History(_) => {
+            TypeOFSource::History(..) => {
                 not_implemented!("patch for {self:#?} with {self:?}")
             }
-            TypeOFSource::OtherProxied(_) => {
+            TypeOFSource::OtherProxied(..) => {
                 not_implemented!("patch for {self:#?} with {self:?}")
             }
         }

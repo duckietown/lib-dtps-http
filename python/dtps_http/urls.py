@@ -37,8 +37,9 @@ else:
     from urllib3.util import Url as URL
 
 URLIndexer = NewType("URLIndexer", URL)
-URLTopic = NewType("URLTopic", URL)
-URLWS = NewType("URL_WEBSOCKETS", URL)
+# URLTopic = NewType("URLTopic", URL)
+URLTopic = URL
+URLWS = NewType("URLWS", URL)
 URLWSInline = NewType("URLWSInline", URLWS)
 URLWSOffline = NewType("URLWSOffline", URLWS)
 
@@ -54,7 +55,7 @@ def parse_url_unescape(s: URLString) -> URL:
         path = ""
     else:
         path = parsed.path
-    res = Url(
+    res = Url(  # type: ignore
         scheme=parsed.scheme,
         host=unquote(parsed.host) if parsed.host is not None else None,
         port=parsed.port,
@@ -62,7 +63,7 @@ def parse_url_unescape(s: URLString) -> URL:
         query=parsed.query,
     )
 
-    return res
+    return cast(URL, res)
 
 
 def url_to_string(url: URL) -> URLString:

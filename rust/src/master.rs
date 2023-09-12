@@ -31,7 +31,6 @@ use warp::{
     hyper::Body,
     reply::Response,
     ws::Message as WarpMessage,
-    Error,
 };
 
 use crate::{
@@ -59,6 +58,11 @@ use crate::{
     serve_static_file_path,
     utils_headers,
     utils_mime,
+    websocket_signals::{
+        FinishedMsg,
+        WarningMsg,
+    },
+    DTPSError,
     DataProps,
     DataStream,
     GetMeta,
@@ -186,26 +190,22 @@ pub async fn serve_master_patch(
     let content_type = get_header_with_default(&headers, CONTENT_TYPE, OCTET_STREAM);
     let result = if content_type == CONTENT_TYPE_PATCH_JSON {
         let r = serde_json::from_slice::<json_patch::Patch>(&data);
-        debug_with_info!("orig: {:?}", data);
-        debug_with_info!("Parsed patch: {:?}", r);
+        // debug_with_info!("orig: {:?}", data);
+        // debug_with_info!("Parsed patch: {:?}", r);
         match r {
             Ok(x) => x,
-            Err(_) => {
-                let s = format!("Cannot parse the patch as JSON: {:?}", data);
+            Err(e) => {
+                let s = format!("Cannot parse the patch as JSON: {data:?}\n{e}");
                 error_with_info!("{s}");
-                let res = http::Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from(s.to_string()))
-                    .unwrap();
-                return Ok(res);
+                return DTPSError::from(e).into();
             }
         }
     } else if content_type == CONTENT_TYPE_PATCH_CBOR {
         let r = serde_cbor::from_slice::<json_patch::Patch>(&data);
         match r {
             Ok(x) => x,
-            Err(_) => {
-                let s = format!("Cannot parse the patch as JSON: {:?}", data);
+            Err(e) => {
+                let s = format!("Cannot parse the patch as JSON: {data:?}\n{e}");
                 error_with_info!("{s}");
                 let res = http::Response::builder()
                     .status(StatusCode::BAD_REQUEST)
@@ -341,7 +341,7 @@ pub async fn serve_master_head(
             //
             // not_supported
         }
-        TypeOFSource::MountedFile(_, _, _) => {
+        TypeOFSource::MountedFile { .. } => {
             // error_with_info!("HEAD not supported for path = {path_str}, ds = {ds:?}");
 
             // not_supported
@@ -791,11 +791,31 @@ pub async fn handle_websocket_data_stream(
         Some(x) => x,
     };
     loop {
-        let r = stream.recv().await?;
-
-        let for_this = get_series_of_messages_for_notification_(send_data, &r).await;
-        send_as_ws_cbor(&for_this, ws_tx).await?;
+        match stream.recv().await {
+            Ok(r) => {
+                let for_this = get_series_of_messages_for_notification_(send_data, &r).await;
+                // fixme: we need to reserve the blobs when we send it
+                send_as_ws_cbor(&for_this, ws_tx).await?;
+            }
+            Err(e) => match e {
+                RecvError::Closed => {
+                    let msgs = vec![MsgServerToClient::FinishedMsg(FinishedMsg {
+                        comment: "finished".to_string(),
+                    })];
+                    send_as_ws_cbor(&msgs, ws_tx).await?;
+                    break;
+                }
+                RecvError::Lagged(n) => {
+                    let msgs = vec![MsgServerToClient::WarningMsg(WarningMsg {
+                        comment: format!("Skipped {n} messages."),
+                    })];
+                    send_as_ws_cbor(&msgs, ws_tx).await?;
+                    continue;
+                }
+            },
+        };
     }
+    ws_tx.close().await?;
     Ok(())
 }
 

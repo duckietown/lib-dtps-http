@@ -1,7 +1,7 @@
 from dataclasses import field
-from typing import Dict, Optional
+from typing import Dict, Optional, Union, List
 
-from multidict import CIMultiDict
+from multidict import CIMultiDict, CIMultiDictProxy
 from pydantic.dataclasses import dataclass
 
 __all__ = ["LinkHeader", "get_link_headers", "put_link_header"]
@@ -41,9 +41,10 @@ class LinkHeader:
         return cls(url, rel, attributes)
 
 
-def get_link_headers(h: CIMultiDict[str]) -> Dict[str, LinkHeader]:
+def get_link_headers(h: Union[CIMultiDict[str], CIMultiDictProxy[str]]) -> Dict[str, LinkHeader]:
     res: Dict[str, LinkHeader] = {}
-    for l in h.getall("Link", []):
+    default: List[str] = []
+    for l in h.getall("Link", default):
         lh = LinkHeader.parse(l)
         res[lh.rel] = lh
     return res

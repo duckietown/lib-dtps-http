@@ -1,16 +1,14 @@
 import json
 from dataclasses import asdict
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import cbor2
 from multidict import CIMultiDict
 from pydantic import TypeAdapter
 from pydantic.dataclasses import dataclass
-
 from .constants import HEADER_LINK_BENCHMARK, MIME_TEXT
 from .types import ContentType, NodeID, SourceID, TopicNameS, TopicNameV, URLString
-from .urls import URL
-
+from .urls import URL, URLIndexer
 
 __all__ = [
     "ChannelInfo",
@@ -18,10 +16,13 @@ __all__ = [
     "Chunk",
     "Clocks",
     "ContentInfo",
+    "DataFromChannel",
     "DataReady",
+    "DataSaved",
     "ForwardingStep",
     "History",
     "LinkBenchmark",
+    "ListenURLEvents",
     "Metadata",
     "MinMax",
     "RawData",
@@ -33,6 +34,7 @@ __all__ = [
     "TopicsIndex",
     "TransportData",
     "channel_msgs_parse",
+    "is_structure",
 ]
 
 
@@ -174,6 +176,16 @@ class DataDesc:
 
 
 @dataclass
+class DataSaved:
+    index: int
+    time_inserted: int
+    digest: str
+    content_type: ContentType
+    content_length: int
+    clocks: "Clocks"
+
+
+@dataclass
 class ContentInfo:
     accept: Dict[str, DataDesc]
     storage: DataDesc
@@ -212,7 +224,7 @@ class TopicsIndex:
                 raise AssertionError(msg)
 
     @classmethod
-    def from_json(cls, s: object) -> "TopicsIndex":
+    def from_json(cls, s: Any) -> "TopicsIndex":
         wire = TopicsIndexWire.from_json(s)
         return wire.to_topics_index()
 
@@ -228,7 +240,7 @@ class TopicsIndexWire:
     topics: Dict[TopicNameS, TopicRef]
 
     @classmethod
-    def from_json(cls, s: object) -> "TopicsIndexWire":
+    def from_json(cls, s: Any) -> "TopicsIndexWire":
         return TypeAdapter(cls).validate_python(s)
 
     def to_topics_index(self) -> "TopicsIndex":
@@ -320,6 +332,12 @@ class DataReady:
         return TypeAdapter(cls).validate_python(struct)
 
 
+@dataclass
+class DataFromChannel:
+    data_ready: DataReady
+    raw_data: RawData
+
+
 # @dataclass
 # class History:
 #     available: Dict[int, DataReady]
@@ -327,13 +345,28 @@ class DataReady:
 History = Dict[int, DataReady]
 
 
-def channel_msgs_parse(d: bytes) -> Union[ChannelInfo, DataReady, Chunk]:
+@dataclass
+class WarningMsg:
+    comment: str
+
+
+@dataclass
+class ErrorMsg:
+    comment: str
+
+
+@dataclass
+class FinishedMsg:
+    comment: str
+
+
+def channel_msgs_parse(d: bytes) -> "ChannelMsgs":
     struct = cbor2.loads(d)
     if not isinstance(struct, dict):
         msg = "Expected a dictionary here"
         raise ValueError(f"{msg}: {d}\n{struct}")
 
-    for T in (ChannelInfo, DataReady, Chunk):
+    for T in (ChannelInfo, DataReady, Chunk, FinishedMsg, ErrorMsg, WarningMsg):
         if T.__name__ in struct:
             return TypeAdapter(T).validate_python(struct[T.__name__])
 
@@ -354,6 +387,10 @@ class Metadata:
 
 @dataclass
 class Registration:
-    switchboard_url: "URL"
+    switchboard_url: "URLIndexer"
     topic: TopicNameV
     namespace: TopicNameV
+
+
+ChannelMsgs = Union[ChannelInfo, DataReady, Chunk, FinishedMsg, ErrorMsg, WarningMsg]
+ListenURLEvents = Union[DataFromChannel, WarningMsg, ErrorMsg, FinishedMsg]

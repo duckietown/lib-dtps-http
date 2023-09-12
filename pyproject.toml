@@ -25,24 +25,21 @@ pymdown-extensions = "^10"
 aiopubsub = "^3"
 methodtools = "^0.4"
 pydantic = "^2.3"
-urlib3 = "^2"
+#urlib3 = "*"
 psutil = "^5"
 
 # other dependencies: aiohttp-devtools pre-commit mkdocs mkdocs-material mkdocstrings[python]
+rich = "^13.5.2"
 
 
 [tool.poetry.scripts]
-#dtps-server-example-clock = 'dtps_http_programs:clock_main'
-#dtps-client-stats = 'dtps_http_programs:dtps_stats_main'
-#dtps-proxy = 'dtps_http_programs:dtps_proxy_main'
-#dtps-send-continuous = 'dtps_http_programs:dtps_send_continuous_main'
-
 
 dtps-http-py-server-example-clock = 'dtps_http_programs:clock_main'
 dtps-http-py-client-stats = 'dtps_http_programs:dtps_stats_main'
 dtps-http-py-proxy = 'dtps_http_programs:dtps_proxy_main'
 dtps-http-py-send-continuous = 'dtps_http_programs:dtps_send_continuous_main'
 dtps-http-py-manual-filter = 'dtps_http_programs:dtps_example_manual_filter_main'
+dtps-http-py-listen= 'dtps_http_programs:dtps_listen_main'
 
 
 [tool.poetry-dynamic-versioning]

@@ -260,12 +260,21 @@ pub async fn listen_events_websocket(con: TypeOfConnection, tx: UnboundedSender<
                 let msg_from_server = receive_from_server(&mut rx).await?;
 
                 let chunk = match msg_from_server {
-                    Some(MsgServerToClient::DataReady(..) | MsgServerToClient::ChannelInfo(..)) | None => {
-                        // pragma: no cover
-                        let s = format!("{prefix}: unexpected message : {msg_from_server:#?}");
-                        return DTPSError::other(s);
+                    None => {
+                        break;
                     }
-                    Some(MsgServerToClient::Chunk(chunk)) => chunk,
+                    Some(x) => match x {
+                        MsgServerToClient::Chunk(chunk) => chunk,
+
+                        MsgServerToClient::DataReady(..)
+                        | MsgServerToClient::ChannelInfo(..)
+                        | MsgServerToClient::WarningMsg(..)
+                        | MsgServerToClient::ErrorMsg(..)
+                        | MsgServerToClient::FinishedMsg(..) => {
+                            let s = format!("{prefix}: unexpected message : {x:#?}");
+                            return DTPSError::other(s);
+                        }
+                    },
                 };
 
                 let data = chunk.data;

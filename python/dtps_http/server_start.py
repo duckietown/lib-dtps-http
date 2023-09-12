@@ -13,9 +13,10 @@ import psutil
 from aiohttp import web
 
 from . import logger
-from .urls import parse_url_unescape
+from .urls import URLIndexer, parse_url_unescape
 from .server import DTPSServer
-from .structures import Registration, TopicNameV
+from .structures import Registration
+from .types import TopicNameV
 
 __all__ = [
     "app_start",
@@ -74,20 +75,24 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[List
     no_alternatives = parsed.no_alternatives
 
     tunnel = parsed.tunnel
-    registrations = []
+    registrations: list[Registration] = []
     if parsed.register_switchboard is not None:
+        switchboard_url = URLIndexer(parse_url_unescape(parsed.register_switchboard))
         if parsed.register_topic is None:
             msg = "Please specify --register-topic"
             logger.error(msg)
             sys.exit(msg)
 
+        if parsed.register_namespace is not None:
+            namespace = TopicNameV.root()
+        else:
+            namespace = TopicNameV.from_dash_sep(parsed.register_namespace)
+
         registrations.append(
             Registration(
-                switchboard_url=parse_url_unescape(parsed.register_switchboard),
+                switchboard_url=switchboard_url,
                 topic=TopicNameV.from_dash_sep(parsed.register_topic),
-                namespace=TopicNameV.from_dash_sep(parsed.register_namespace)
-                if parsed.register_namespace is not None
-                else None,
+                namespace=namespace,
             )
         )
 
@@ -217,7 +222,7 @@ async def app_start(
             sys.exit(1)
         logger.info("not starting TCP server. Use --tcp-port to start one.")
 
-    unix_paths = []
+    unix_paths: list[str] = []
 
     tmpdir = tempfile.gettempdir()
     unix_paths.append(os.path.join(tmpdir, f"dtps-{s.node_id}"))
