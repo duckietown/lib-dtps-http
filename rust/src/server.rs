@@ -564,16 +564,13 @@ pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> Ha
 pub fn get_channel_info_message(oq: &ObjectQueue) -> ChannelInfo {
     let num_total;
     let newest;
-    let oldest;
-    match oq.stored.first() {
-        None => {
-            oldest = None;
-        }
+    let oldest = match oq.stored.first() {
+        None => None,
         Some(first) => {
             let d = oq.saved.get(first).unwrap();
-            oldest = Some(ChannelInfoDesc::new(d.index, d.time_inserted));
+            Some(ChannelInfoDesc::new(d.index, d.time_inserted))
         }
-    }
+    };
 
     match oq.stored.last() {
         None => {
@@ -604,7 +601,7 @@ pub fn get_dataready(this_one: &DataSaved) -> DataReady {
     }];
 
     let nchunks = 0;
-    let dr2 = DataReady {
+    DataReady {
         origin_node: this_one.origin_node.clone(),
         unique_id: this_one.unique_id.clone(),
         sequence: this_one.index,
@@ -615,8 +612,7 @@ pub fn get_dataready(this_one: &DataSaved) -> DataReady {
         clocks: this_one.clocks.clone(),
         availability,
         chunks_arriving: nchunks,
-    };
-    dr2
+    }
 }
 
 pub async fn get_series_of_messages_for_notification_(
@@ -666,7 +662,7 @@ pub async fn get_series_of_messages_for_notification_(
             i: 0,
             n: nchunks,
             index: 0,
-            data: Bytes::from(content.clone()),
+            data: content.clone(),
         });
         out.push(chunk);
     }
@@ -683,13 +679,13 @@ pub async fn handle_websocket_queue(
         let mut starting_messaging = vec![];
 
         // important: release the lock
-        let (rx, inot) = {
+        let rx = {
             let (rx, inot) = {
                 let ss0 = ssa.lock().await;
 
-                let oq: &ObjectQueue = ss0.get_queue(&topic_name)?;
+                let oq = ss0.get_queue(&topic_name)?;
 
-                let channel_info_message = MsgServerToClient::ChannelInfo(get_channel_info_message(&oq));
+                let channel_info_message = MsgServerToClient::ChannelInfo(get_channel_info_message(oq));
                 starting_messaging.push(channel_info_message);
 
                 let inot = ss0.get_last_insert(&topic_name)?;
@@ -701,11 +697,11 @@ pub async fn handle_websocket_queue(
                 let mut ss0 = ssa.lock().await;
 
                 let mut for_this =
-                    get_series_of_messages_for_notification_(send_data, &x, AVAILABILITY_LENGTH_SEC, &mut ss0).await;
+                    get_series_of_messages_for_notification_(send_data, x, AVAILABILITY_LENGTH_SEC, &mut ss0).await;
                 starting_messaging.append(&mut for_this);
             }
 
-            (rx, inot)
+            rx
         };
 
         send_as_ws_cbor(&starting_messaging, ws_tx).await?;
@@ -770,19 +766,18 @@ pub async fn handle_topic_post(
     //
     // let byte_vector: Vec<u8> = data.to_vec().clone();
 
-    let ds = ss.publish(&topic_name, &rd.content, &rd.content_type, None)?;
+    let ds = ss.publish(topic_name, &rd.content, &rd.content_type, None)?;
 
-    return Ok(construct_response_cbor(&ds));
+    Ok(construct_response_cbor(&ds))
 }
 
 pub fn construct_response_cbor<T: Serialize>(ob: &T) -> http::Response<Body> {
     let ds_cbor = serde_cbor::to_vec(&ob).unwrap();
-    let res = http::Response::builder()
+    http::Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, CONTENT_TYPE_CBOR)
         .body(Body::from(ds_cbor))
-        .unwrap();
-    res
+        .unwrap()
 }
 
 async fn handler_topic_html_summary(
@@ -821,10 +816,10 @@ async fn handler_topic_html_summary(
     let format_elapsed = |a| -> String { utils::format_nanos(now - a) };
 
     let data_or_digest = |data: &DataSaved| -> PreEscaped<String> {
-        let printable = match data.content_type.as_str() {
-            "application/yaml" | "application/x-yaml" | "text/yaml" | "text/vnd.yaml" | "application/json" => true,
-            _ => false,
-        };
+        let printable = matches!(
+            data.content_type.as_str(),
+            "application/yaml" | "application/x-yaml" | "text/yaml" | "text/vnd.yaml" | "application/json"
+        );
         let url = format_digest_path(&data.digest, &data.content_type);
 
         if data.content_length <= data.digest.len() {
@@ -844,7 +839,7 @@ async fn handler_topic_html_summary(
     };
     let mut latencies: Vec<i64> = vec![];
     for i in &x.stored {
-        let data = x.saved.get(&i).unwrap();
+        let data = x.saved.get(i).unwrap();
         if x.saved.contains_key(&(i - 1)) {
             let data_prev = x.saved.get(&(i - 1)).unwrap();
             latencies.push(data.time_inserted - data_prev.time_inserted);
@@ -854,7 +849,7 @@ async fn handler_topic_html_summary(
     }
 
     let x = make_html(
-        &topic_name.as_relative_url(),
+        topic_name.as_relative_url(),
         html! {
 
 

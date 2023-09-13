@@ -133,12 +133,7 @@ async fn get_stream_compose_data(
             Ok(x) => x,
             Err(e) => match e {
                 DTPSError::NotImplemented(_) => {
-                    warn_with_info!(
-                        "Not implemented get_data_stream() for component {:?}:\n{:?}\n{:?}",
-                        k,
-                        v,
-                        e
-                    );
+                    warn_with_info!("Not implemented get_data_stream() for component {k:?}:\n{v:?}\n{e:?}");
                     continue;
                 }
                 _ => {
@@ -186,7 +181,7 @@ async fn get_stream_compose_data(
         clocks: clocks0.clone(),
         content_type: first_val.content_type.clone(),
         content_length: first_val.content.len(),
-        digest: first_val.digest().clone(),
+        digest: first_val.digest(),
     };
     let handle_merge = tokio::spawn(put_together(
         first.clone(),
@@ -371,7 +366,7 @@ async fn put_together(
 ) -> DTPSR<()> {
     if let CBORValue::Map(..) = first {
     } else {
-        return Err(DTPSError::Other(format!("First value is not a map")));
+        return Err(DTPSError::Other(format!("First value {first:?} is not a map")));
     };
     let mut index = 1;
     loop {
@@ -466,7 +461,7 @@ async fn get_stream_compose_meta(
         out_stream_sender,
         sc.topic_name.clone(),
         presented_as.to_string(),
-        unique_id.clone(),
+        unique_id,
         Some(in0.clone()),
     );
     // let handle1 = tokio::spawn(show_errors(
@@ -506,7 +501,7 @@ fn filter_transform(in1: InsertNotification, t: &Transforms, unique_id: String) 
         clocks: ds.clocks.clone(),
         content_type: rd.content_type.clone(),
         content_length: rd.content.len(),
-        digest: rd.digest().clone(),
+        digest: rd.digest(),
     };
     // FIXME: need to save the blob
     Ok(InsertNotification {
@@ -547,7 +542,7 @@ async fn get_stream_transform(
         receiver,
         out_stream_sender,
         transform.clone(),
-        unique_id.clone(),
+        unique_id,
         Some(in0.clone()),
     );
     handles.push(tokio::spawn(future));
@@ -571,7 +566,7 @@ async fn get_stream_transform(
 
 fn filter_index(data1: &TopicsIndexWire, prefix: TopicName, presented_as: String) -> DTPSR<TopicsIndexWire> {
     let con = TypeOfConnection::Relative(presented_as, None);
-    let data1 = TopicsIndexInternal::from_wire(&data1, &con);
+    let data1 = TopicsIndexInternal::from_wire(data1, &con);
     let mut data2 = TopicsIndexInternal::default();
     for (k, v) in data1.topics.iter() {
         match is_prefix_of(prefix.as_components(), k.as_components()) {
@@ -596,7 +591,7 @@ fn filter_func(
     // let f = |x: &TopicsIndexWire| filter_index(x, prefix, presented_as).unwrap();
 
     let v1 = in1.raw_data.interpret::<TopicsIndexWire>()?;
-    let v2 = filter_index(&v1, prefix.clone(), presented_as.clone())?;
+    let v2 = filter_index(&v1, prefix, presented_as)?;
     let rd = RawData::represent_as_cbor_ct(v2, CONTENT_TYPE_DTPS_INDEX_CBOR)?;
     //
     // adapt_cbor_map(&in1, f, CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(), "filtered".to_string())
@@ -610,7 +605,7 @@ fn filter_func(
         clocks: ds.clocks.clone(),
         content_type: rd.content_type.clone(),
         content_length: rd.content.len(),
-        digest: rd.digest().clone(),
+        digest: rd.digest(),
     };
     Ok(InsertNotification {
         data_saved,
@@ -621,8 +616,8 @@ fn filter_func(
 pub fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<ResolvedData> {
     let d = match data {
         Regular(d) => d,
-        NotAvailableYet(s) => return Ok(NotAvailableYet(s.clone())),
-        NotFound(s) => return Ok(NotFound(s.clone())),
+        NotAvailableYet(s) => return Ok(NotAvailableYet(s)),
+        NotFound(s) => return Ok(NotFound(s)),
         ResolvedData::RawData(rd) => rd.get_as_cbor()?,
     };
     Ok(ResolvedData::Regular(transform.apply(d)?))
