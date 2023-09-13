@@ -83,7 +83,7 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[List
             logger.error(msg)
             sys.exit(msg)
 
-        if parsed.register_namespace is not None:
+        if parsed.register_namespace is None:
             namespace = TopicNameV.root()
         else:
             namespace = TopicNameV.from_dash_sep(parsed.register_namespace)
