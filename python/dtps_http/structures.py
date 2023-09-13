@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 
 import cbor2
 from multidict import CIMultiDict
-from pydantic import TypeAdapter
+from pydantic import parse_obj_as
 from pydantic.dataclasses import dataclass
 
 from .constants import HEADER_LINK_BENCHMARK, MIME_TEXT
@@ -178,6 +178,22 @@ class DataDesc:
 
 
 @dataclass
+class MinMax:
+    min: int
+    max: int
+
+
+@dataclass
+class Clocks:
+    logical: Dict[str, MinMax]
+    wall: Dict[str, MinMax]
+
+    @classmethod
+    def empty(cls) -> "Clocks":
+        return Clocks(logical={}, wall={})
+
+
+@dataclass
 class DataSaved:
     index: int
     time_inserted: int
@@ -243,7 +259,7 @@ class TopicsIndexWire:
 
     @classmethod
     def from_json(cls, s: Any) -> "TopicsIndexWire":
-        return TypeAdapter(cls).validate_python(s)
+        return parse_obj_as(cls, s)
 
     def to_topics_index(self) -> "TopicsIndex":
         topics: Dict[TopicNameV, TopicRef] = {}
@@ -277,7 +293,7 @@ class ChannelInfo:
     @classmethod
     def from_cbor(cls, s: bytes) -> "ChannelInfo":
         struct = cbor2.loads(s)
-        return TypeAdapter(cls).validate_python(struct)
+        return parse_obj_as(cls, struct)
 
 
 @dataclass
@@ -291,23 +307,7 @@ class Chunk:
     @classmethod
     def from_cbor(cls, s: bytes) -> "Chunk":
         struct = cbor2.loads(s)
-        return TypeAdapter(cls).validate_python(struct)
-
-
-@dataclass
-class MinMax:
-    min: int
-    max: int
-
-
-@dataclass
-class Clocks:
-    logical: Dict[str, MinMax]
-    wall: Dict[str, MinMax]
-
-    @classmethod
-    def empty(cls) -> "Clocks":
-        return Clocks(logical={}, wall={})
+        return parse_obj_as(cls, struct)
 
 
 @dataclass
@@ -326,12 +326,12 @@ class DataReady:
     @classmethod
     def from_json_string(cls, s: str) -> "DataReady":
         struct = json.loads(s)
-        return TypeAdapter(cls).validate_python(struct)
+        return parse_obj_as(cls, struct)
 
     @classmethod
     def from_cbor(cls, s: bytes) -> "DataReady":
         struct = cbor2.loads(s)
-        return TypeAdapter(cls).validate_python(struct)
+        return parse_obj_as(cls, struct)
 
 
 @dataclass
@@ -372,7 +372,9 @@ def channel_msgs_parse(d: bytes) -> "ChannelMsgs":
     for T in (ChannelInfo, DataReady, Chunk, FinishedMsg, ErrorMsg, WarningMsg, SilenceMsg):
         if T.__name__ in struct:
             # noinspection PyTypeChecker
-            return TypeAdapter(T).validate_python(struct[T.__name__])
+            # return TypeAdapter(T).validate_python(struct[T.__name__])
+            data = struct[T.__name__]
+            return parse_obj_as(T, data)
 
     raise ValueError(f"unexpected value {struct}")
 
