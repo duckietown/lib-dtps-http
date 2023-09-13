@@ -44,6 +44,7 @@ use crate::{
     context,
     debug_with_info,
     error_with_info,
+    get_content_type,
     info_with_info,
     internal_assertion,
     join_ext,
@@ -340,15 +341,6 @@ pub enum TypeOfResource {
     Other,
     DTPSTopic,
     DTPSIndex { node_id: String },
-}
-
-pub fn get_content_type<T>(resp: &http::Response<T>) -> String {
-    let content_type = resp
-        .headers()
-        .get("content-type")
-        .map(|x| x.to_str().unwrap().to_string())
-        .unwrap_or("application/octet-stream".to_string());
-    content_type
 }
 
 pub async fn sniff_type_resource(con: &TypeOfConnection) -> DTPSR<TypeOfResource> {
