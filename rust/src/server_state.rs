@@ -68,6 +68,7 @@ use crate::{
     FoundMetadata,
     InsertNotification,
     LinkBenchmark,
+    ListenURLEvents,
     NodeAppData,
     ObjectQueue,
     RawData,
@@ -1271,7 +1272,15 @@ pub async fn observe_node_proxy(
     let inline_url = md.events_data_inline_url.unwrap().clone();
     let (_handle, mut stream) = get_events_stream_inline(&inline_url).await;
 
-    while let Some(notification) = stream.next().await {
+    while let Some(lue) = stream.next().await {
+        let notification = match lue {
+            ListenURLEvents::DataFromChannel(not) => not,
+            ListenURLEvents::WarningMsg(_)
+            | ListenURLEvents::ErrorMsg(_)
+            | ListenURLEvents::FinishedMsg(_)
+            | ListenURLEvents::SilenceMsg(_) => continue,
+        };
+
         let x0: TopicsIndexWire = serde_cbor::from_slice(&notification.raw_data.content).unwrap();
         let ti = TopicsIndexInternal::from_wire(&x0, &url);
 

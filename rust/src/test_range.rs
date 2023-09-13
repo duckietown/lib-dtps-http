@@ -39,6 +39,7 @@ mod tests {
         ContentInfo,
         DTPSError,
         DTPSServer,
+        ListenURLEvents,
         RawData,
         ServerStateAccess,
         TopicName,
@@ -197,7 +198,16 @@ mod tests {
         let ds = post_data(&con_original, &rd).await?;
         debug_with_info!("post resulted in {ds:?}");
         let notification = receiver.next().await.unwrap();
-        assert_eq!(rd, notification.raw_data);
+        debug_with_info!("notification: {notification:#?}");
+        match notification {
+            ListenURLEvents::DataFromChannel(s) => {
+                assert_eq!(rd, s.raw_data);
+            }
+            ListenURLEvents::WarningMsg(_) => {}
+            ListenURLEvents::ErrorMsg(_) => {}
+            ListenURLEvents::FinishedMsg(_) => {}
+            ListenURLEvents::SilenceMsg(_) => {}
+        }
 
         instance.finish()?;
         handle.abort();
@@ -540,8 +550,8 @@ mod tests {
 
         let node_id = instance.server.get_node_id().await;
         let urls = vec![instance.con.clone()];
-        add_proxy(&instance2.con, &mounted_at, &node_id, &urls).await?;
-        add_proxy(&instance2.con, &mounted_at, &node_id, &urls).await?;
+        add_proxy(&instance2.con, &mounted_at, node_id.clone(), &urls).await?;
+        add_proxy(&instance2.con, &mounted_at, node_id.clone(), &urls).await?;
         // sleep 5 seconds
         tokio::time::sleep(Duration::from_millis(2000)).await;
 

@@ -56,13 +56,17 @@ use crate::{
     put_header_accept,
     put_header_content_type,
     time_nanos,
+    warn_with_info,
     DTPSError,
     DataFromChannel,
     DataSaved,
+    ErrorMsg,
+    FinishedMsg,
     FoundMetadata,
     History,
     LinkBenchmark,
     LinkHeader,
+    ListenURLEvents,
     MsgServerToClient,
     ProxyJob,
     RawData,
@@ -71,17 +75,7 @@ use crate::{
     TopicsIndexInternal,
     TopicsIndexWire,
     TypeOfConnection,
-    TypeOfConnection::{
-        Relative,
-        Same,
-        TCP,
-        UNIX,
-    },
-    UrlResult::{
-        Accessible,
-        Inaccessible,
-        WrongNodeAnswering,
-    },
+    WarningMsg,
     CONTENT_TYPE_DTPS_INDEX,
     CONTENT_TYPE_DTPS_INDEX_CBOR,
     CONTENT_TYPE_PATCH_JSON,
@@ -99,7 +93,7 @@ use crate::{
 /// Note: need to have use futures::{StreamExt} in scope to use this
 pub async fn get_events_stream_inline(
     url: &TypeOfConnection,
-) -> (JoinHandle<DTPSR<()>>, UnboundedReceiverStream<DataFromChannel>) {
+) -> (JoinHandle<DTPSR<()>>, UnboundedReceiverStream<ListenURLEvents>) {
     let (tx, rx) = mpsc::unbounded_channel();
     let inline_url = url.clone();
     let handle = tokio::spawn(listen_events_websocket(inline_url, tx));
@@ -116,36 +110,49 @@ pub async fn estimate_latencies(which: TopicName, md: FoundMetadata) {
 
     let mut latencies_ns = Vec::new();
     let mut index = 0;
-    while let Some(notification) = stream.next().await {
+    while let Some(lue) = stream.next().await {
         // convert a string to integer
+        match lue {
+            ListenURLEvents::DataFromChannel(notification) => {
+                let string = String::from_utf8(notification.raw_data.content.to_vec()).unwrap();
 
-        let string = String::from_utf8(notification.raw_data.content.to_vec()).unwrap();
-
-        // let nanos = serde_json::from_slice::<u128>(&notification.rd.content).unwrap();
-        let nanos: u128 = string.parse().unwrap();
-        let nanos_here = time_nanos();
-        let diff = nanos_here - nanos;
-        if index > 0 {
-            // ignore the first one
-            latencies_ns.push(diff);
-        }
-        if latencies_ns.len() > 10 {
-            latencies_ns.remove(0);
-        }
-        if !latencies_ns.is_empty() {
-            let latencies_sum_ns: u128 = latencies_ns.iter().sum();
-            let latencies_mean_ns = (latencies_sum_ns) / (latencies_ns.len() as u128);
-            let latencies_min_ns = *latencies_ns.iter().min().unwrap();
-            let latencies_max_ns = *latencies_ns.iter().max().unwrap();
-            info_with_info!(
-                "{:?} latency: {:.3}ms   (last {} : mean: {:.3}ms  min: {:.3}ms  max {:.3}ms )",
-                which,
-                ms_from_ns(diff),
-                latencies_ns.len(),
-                ms_from_ns(latencies_mean_ns),
-                ms_from_ns(latencies_min_ns),
-                ms_from_ns(latencies_max_ns)
-            );
+                // let nanos = serde_json::from_slice::<u128>(&notification.rd.content).unwrap();
+                let nanos: u128 = string.parse().unwrap();
+                let nanos_here = time_nanos();
+                let diff = nanos_here - nanos;
+                if index > 0 {
+                    // ignore the first one
+                    latencies_ns.push(diff);
+                }
+                if latencies_ns.len() > 10 {
+                    latencies_ns.remove(0);
+                }
+                if !latencies_ns.is_empty() {
+                    let latencies_sum_ns: u128 = latencies_ns.iter().sum();
+                    let latencies_mean_ns = (latencies_sum_ns) / (latencies_ns.len() as u128);
+                    let latencies_min_ns = *latencies_ns.iter().min().unwrap();
+                    let latencies_max_ns = *latencies_ns.iter().max().unwrap();
+                    info_with_info!(
+                        "{:?} latency: {:.3}ms   (last {} : mean: {:.3}ms  min: {:.3}ms  max {:.3}ms )",
+                        which,
+                        ms_from_ns(diff),
+                        latencies_ns.len(),
+                        ms_from_ns(latencies_mean_ns),
+                        ms_from_ns(latencies_min_ns),
+                        ms_from_ns(latencies_max_ns)
+                    );
+                }
+            }
+            ListenURLEvents::WarningMsg(msg) => {
+                warn_with_info!("{}", msg.to_string());
+            }
+            ListenURLEvents::ErrorMsg(msg) => {
+                error_with_info!("{}", msg.to_string());
+            }
+            ListenURLEvents::FinishedMsg(msg) => {
+                info_with_info!("finished: {}", msg.comment);
+            }
+            ListenURLEvents::SilenceMsg(_) => {}
         }
 
         index += 1;
@@ -203,7 +210,7 @@ pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<Option<MsgServe
     Ok(Some(msg_from_server))
 }
 
-pub async fn listen_events_websocket(con: TypeOfConnection, tx: UnboundedSender<DataFromChannel>) -> DTPSR<()> {
+pub async fn listen_events_websocket(con: TypeOfConnection, tx: UnboundedSender<ListenURLEvents>) -> DTPSR<()> {
     let wsc = open_websocket_connection(&con).await?;
     let prefix = format!("listen_events_websocket({con})");
     // debug_with_info!("starting to listen to events for {} on {:?}", con, read);
@@ -290,17 +297,10 @@ pub async fn listen_events_websocket(con: TypeOfConnection, tx: UnboundedSender<
             content: Bytes::from(content),
             content_type,
         };
-        let notification = DataFromChannel {
-            data_ready: dr,
-            raw_data: rd,
-        };
+        let notification = ListenURLEvents::DataFromChannel(DataFromChannel::new(dr, rd));
 
-        match tx.send(notification) {
-            Ok(_) => {}
-            Err(_) => {
-                // this is not an error, it just means that the receiver has been dropped
-                break;
-            }
+        if tx.send(notification).is_err() {
+            break;
         }
     }
     Ok(())
@@ -442,23 +442,23 @@ pub enum UrlResult {
 pub async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResult {
     let md = get_metadata(con).await;
     let complexity = match con {
-        TCP(_) => 2,
-        UNIX(_) => 1,
-        Relative(_, _) => {
+        TypeOfConnection::TCP(_) => 2,
+        TypeOfConnection::UNIX(_) => 1,
+        TypeOfConnection::Relative(_, _) => {
             panic!("unexpected relative url here: {}", con);
         }
-        Same() => {
+        TypeOfConnection::Same() => {
             panic!("not expected here {}", con);
         }
         TypeOfConnection::File(..) => 0,
     };
     let reliability_percent = match con {
-        TCP(_) => 70,
-        UNIX(_) => 90,
-        Relative(_, _) => {
+        TypeOfConnection::TCP(_) => 70,
+        TypeOfConnection::UNIX(_) => 90,
+        TypeOfConnection::Relative(_, _) => {
             panic!("unexpected relative url here: {}", con);
         }
-        Same() => {
+        TypeOfConnection::Same() => {
             panic!("not expected here {}", con);
         }
         TypeOfConnection::File(..) => 100,
@@ -467,13 +467,13 @@ pub async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResul
         Err(err) => {
             let s = format!("cannot get metadata for {:?}: {}", con, err);
 
-            Inaccessible(s)
+            UrlResult::Inaccessible(s)
         }
         Ok(md_) => match md_.answering {
-            None => WrongNodeAnswering,
+            None => UrlResult::WrongNodeAnswering,
             Some(answering) => {
                 if answering != expect_node_id {
-                    WrongNodeAnswering
+                    UrlResult::WrongNodeAnswering
                 } else {
                     let latency_ns = md_.latency_ns;
                     let lb = LinkBenchmark {
@@ -483,7 +483,7 @@ pub async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResul
                         reliability_percent,
                         hops: 1,
                     };
-                    Accessible(lb)
+                    UrlResult::Accessible(lb)
                 }
             }
         },
@@ -512,13 +512,13 @@ pub async fn compute_best_alternative(
         };
 
         match result {
-            Inaccessible(why) => {
+            UrlResult::Inaccessible(why) => {
                 debug_with_info!("-> Inaccessible: {}", why);
             }
-            WrongNodeAnswering => {
+            UrlResult::WrongNodeAnswering => {
                 debug_with_info!("-> Wrong node answering");
             }
-            Accessible(link_benchmark) => {
+            UrlResult::Accessible(link_benchmark) => {
                 debug_with_info!("-> Accessible: {:?}", link_benchmark);
                 possible_urls.push(alternative.clone());
                 possible_stats.push(link_benchmark);
@@ -571,8 +571,8 @@ pub async fn make_request(
     accept: Option<&str>,
 ) -> DTPSR<Response> {
     let use_url = match conbase {
-        TCP(url) => url.clone().to_string(),
-        UNIX(uc) => {
+        TypeOfConnection::TCP(url) => url.clone().to_string(),
+        TypeOfConnection::UNIX(uc) => {
             context!(check_unix_socket(&uc.socket_name), "cannot use unix socket {uc}",)?;
 
             let h = hex::encode(&uc.socket_name);
@@ -586,10 +586,10 @@ pub async fn make_request(
             }
         }
 
-        Relative(_, _) => {
+        TypeOfConnection::Relative(_, _) => {
             return internal_assertion!("cannot handle a relative url get_metadata: {conbase}");
         }
-        Same() => {
+        TypeOfConnection::Same() => {
             return internal_assertion!("!!! not expected to reach here: {conbase}");
         }
         TypeOfConnection::File(..) => {
@@ -765,7 +765,7 @@ pub async fn delete_topic(conbase: &TypeOfConnection, topic_name: &TopicName) ->
 }
 
 pub fn escape_json_patch(s: &str) -> String {
-    s.replace("~", "~0").replace("/", "~1")
+    s.replace('~', "~0").replace('/', "~1")
 }
 
 pub fn unescape_json_patch(s: &str) -> String {

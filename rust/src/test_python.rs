@@ -21,6 +21,7 @@ use crate::{
     DTPSError,
     DataFromChannel,
     FoundMetadata,
+    ListenURLEvents,
     TopicName,
     TypeOfConnection,
     DTPSR,
@@ -121,7 +122,7 @@ fn check_complete_metadata(md: &FoundMetadata) -> DTPSR<()> {
 
 async fn read_notifications(
     handle: JoinHandle<DTPSR<()>>,
-    mut stream: UnboundedReceiverStream<DataFromChannel>,
+    mut stream: UnboundedReceiverStream<ListenURLEvents>,
     nmin: usize,
 ) -> DTPSR<()> {
     let mut i = 0;

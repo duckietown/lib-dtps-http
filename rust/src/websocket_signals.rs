@@ -10,62 +10,6 @@ use crate::{
     RawData,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum MsgClientToServer {
-    RawData(RawData),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Constructor, PartialEq)]
-pub struct ChannelInfoDesc {
-    pub sequence: usize,
-    pub time_inserted: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ChannelInfo {
-    pub queue_created: i64,
-    pub num_total: usize,
-    pub newest: Option<ChannelInfoDesc>,
-    pub oldest: Option<ChannelInfoDesc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Chunk {
-    pub digest: String,
-    pub i: usize,
-    pub n: usize,
-    pub index: usize,
-    pub data: Bytes,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FinishedMsg {
-    pub comment: String,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SilenceMsg {
-    pub dt: f32,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ErrorMsg {
-    pub comment: String,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct WarningMsg {
-    pub comment: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum MsgServerToClient {
-    DataReady(DataReady),
-    ChannelInfo(ChannelInfo),
-    Chunk(Chunk),
-    WarningMsg(WarningMsg),
-    ErrorMsg(ErrorMsg),
-    FinishedMsg(FinishedMsg),
-    SilenceMsg(SilenceMsg),
-}
-
 #[cfg(test)]
 mod test {
     use serde_cbor::{
@@ -76,6 +20,7 @@ mod test {
     use crate::{
         info_with_info,
         init_logging,
+        MsgServerToClient,
     };
 
     // create a test that checks the serialization of MsgServerToClient to CBOR

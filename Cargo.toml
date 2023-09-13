@@ -80,6 +80,12 @@ path = "rust/bin/clock.rs"
 
 
 [[bin]]
+name = "dtps-http-rs-listen"
+path = "rust/bin/listen.rs"
+
+
+
+[[bin]]
 name = "dtps-http-rs-client-stats"
 path = "rust/bin/stats.rs"
 

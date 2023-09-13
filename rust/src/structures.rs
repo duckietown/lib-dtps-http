@@ -1,3 +1,5 @@
+use bytes::Bytes;
+use derive_more::Constructor;
 use std::collections::{
     HashMap,
     HashSet,
@@ -19,11 +21,92 @@ use crate::{
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, PartialEq)]
 pub struct RawData {
-    pub content: bytes::Bytes,
+    pub content: Bytes,
     pub content_type: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum MsgClientToServer {
+    RawData(RawData),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Constructor, PartialEq)]
+pub struct ChannelInfoDesc {
+    pub sequence: usize,
+    pub time_inserted: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChannelInfo {
+    pub queue_created: i64,
+    pub num_total: usize,
+    pub newest: Option<ChannelInfoDesc>,
+    pub oldest: Option<ChannelInfoDesc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Chunk {
+    pub digest: String,
+    pub i: usize,
+    pub n: usize,
+    pub index: usize,
+    pub data: Bytes,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FinishedMsg {
+    pub comment: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SilenceMsg {
+    pub dt: f32,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ErrorMsg {
+    pub comment: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WarningMsg {
+    pub comment: String,
+}
+
+impl WarningMsg {
+    pub fn to_string(&self) -> String {
+        format!("Channel warning: {}", self.comment)
+    }
+}
+impl ErrorMsg {
+    pub fn to_string(&self) -> String {
+        format!("Channel error: {}", self.comment)
+    }
+}
+
+/// These are the raw messages that are sent over the websocket.
+/// The API will mask things like DataReady and Chunk and in the end
+/// The user will get one of ListenURLEvents.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum MsgServerToClient {
+    DataReady(DataReady),
+    ChannelInfo(ChannelInfo),
+    Chunk(Chunk),
+    WarningMsg(WarningMsg),
+    ErrorMsg(ErrorMsg),
+    FinishedMsg(FinishedMsg),
+    SilenceMsg(SilenceMsg),
+}
+
+/// These are the messages that a user of the API will get when,
+/// for example, listening to a URL.
 #[derive(Debug, PartialEq, Clone)]
+pub enum ListenURLEvents {
+    DataFromChannel(DataFromChannel),
+    WarningMsg(WarningMsg),
+    ErrorMsg(ErrorMsg),
+    FinishedMsg(FinishedMsg),
+    SilenceMsg(SilenceMsg),
+}
+
+#[derive(Debug, PartialEq, Clone, Constructor)]
 pub struct DataFromChannel {
     pub data_ready: DataReady,
     pub raw_data: RawData,
@@ -41,6 +124,21 @@ pub struct DataSaved {
     pub digest: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct DataReady {
+    pub origin_node: String,
+    pub unique_id: String,
+    pub sequence: usize,
+    pub time_inserted: i64,
+    pub clocks: Clocks,
+    pub content_type: String,
+    pub content_length: usize,
+    pub digest: String,
+
+    pub availability: Vec<ResourceAvailabilityWire>,
+    pub chunks_arriving: usize,
+}
+
 #[derive(Debug, Clone)]
 pub enum ResolvedData {
     RawData(RawData),
@@ -53,20 +151,6 @@ pub enum ResolvedData {
 pub struct ResourceAvailabilityWire {
     pub url: String,
     pub available_until: f64,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct DataReady {
-    pub origin_node: String,
-    pub unique_id: String,
-    pub sequence: usize,
-    pub time_inserted: i64,
-    pub digest: String,
-    pub content_type: String,
-    pub content_length: usize,
-    pub clocks: Clocks,
-    pub availability: Vec<ResourceAvailabilityWire>,
-    pub chunks_arriving: usize,
 }
 
 // #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
