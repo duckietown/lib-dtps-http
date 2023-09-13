@@ -197,7 +197,7 @@ mod tests {
         let ds = post_data(&con_original, &rd).await?;
         debug_with_info!("post resulted in {ds:?}");
         let notification = receiver.next().await.unwrap();
-        assert_eq!(rd, notification.rd);
+        assert_eq!(rd, notification.raw_data);
 
         instance.finish()?;
         handle.abort();

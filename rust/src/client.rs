@@ -56,6 +56,7 @@ use crate::{
     put_header_content_type,
     time_nanos,
     DTPSError,
+    DataFromChannel,
     DataReady,
     DataSaved,
     FoundMetadata,
@@ -98,7 +99,7 @@ use crate::{
 /// Note: need to have use futures::{StreamExt} in scope to use this
 pub async fn get_events_stream_inline(
     url: &TypeOfConnection,
-) -> (JoinHandle<DTPSR<()>>, UnboundedReceiverStream<Notification>) {
+) -> (JoinHandle<DTPSR<()>>, UnboundedReceiverStream<DataFromChannel>) {
     let (tx, rx) = mpsc::unbounded_channel();
     let inline_url = url.clone();
     let handle = tokio::spawn(listen_events_websocket(inline_url, tx));
@@ -118,7 +119,7 @@ pub async fn estimate_latencies(which: TopicName, md: FoundMetadata) {
     while let Some(notification) = stream.next().await {
         // convert a string to integer
 
-        let string = String::from_utf8(notification.rd.content.to_vec()).unwrap();
+        let string = String::from_utf8(notification.raw_data.content.to_vec()).unwrap();
 
         // let nanos = serde_json::from_slice::<u128>(&notification.rd.content).unwrap();
         let nanos: u128 = string.parse().unwrap();
@@ -159,12 +160,6 @@ pub async fn estimate_latencies(which: TopicName, md: FoundMetadata) {
 
 pub fn ms_from_ns(ns: u128) -> f64 {
     (ns as f64) / 1_000_000.0
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct Notification {
-    pub dr: DataReady,
-    pub rd: RawData,
 }
 
 pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<Option<MsgServerToClient>> {
@@ -209,7 +204,7 @@ pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<Option<MsgServe
     Ok(Some(msg_from_server))
 }
 
-pub async fn listen_events_websocket(con: TypeOfConnection, tx: UnboundedSender<Notification>) -> DTPSR<()> {
+pub async fn listen_events_websocket(con: TypeOfConnection, tx: UnboundedSender<DataFromChannel>) -> DTPSR<()> {
     let wsc = open_websocket_connection(&con).await?;
     let prefix = format!("listen_events_websocket({con})");
     // debug_with_info!("starting to listen to events for {} on {:?}", con, read);
@@ -296,7 +291,10 @@ pub async fn listen_events_websocket(con: TypeOfConnection, tx: UnboundedSender<
             content: Bytes::from(content),
             content_type,
         };
-        let notification = Notification { dr, rd };
+        let notification = DataFromChannel {
+            data_ready: dr,
+            raw_data: rd,
+        };
 
         match tx.send(notification) {
             Ok(_) => {}

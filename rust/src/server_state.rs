@@ -1207,7 +1207,7 @@ pub async fn observe_node_proxy(
     let (_handle, mut stream) = get_events_stream_inline(&inline_url).await;
 
     while let Some(notification) = stream.next().await {
-        let x0: TopicsIndexWire = serde_cbor::from_slice(&notification.rd.content).unwrap();
+        let x0: TopicsIndexWire = serde_cbor::from_slice(&notification.raw_data.content).unwrap();
         let ti = TopicsIndexInternal::from_wire(&x0, &url);
 
         {

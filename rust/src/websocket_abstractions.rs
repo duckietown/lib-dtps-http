@@ -45,17 +45,15 @@ use crate::{
     not_implemented,
     not_reachable,
     show_errors,
-    structures::{
-        TypeOfConnection,
-        TypeOfConnection::{
-            Relative,
-            TCP,
-            UNIX,
-        },
-    },
     DTPSError,
     ServerStateAccess,
-    TypeOfConnection::Same,
+    TypeOfConnection,
+    TypeOfConnection::{
+        Relative,
+        Same,
+        TCP,
+        UNIX,
+    },
     UnixCon,
     DTPSR,
 };

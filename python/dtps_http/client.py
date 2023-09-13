@@ -161,7 +161,7 @@ class DTPSClient:
                 res = cbor2.loads(res_bytes)
 
             alternatives0 = cast(List[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION, []))
-            where_this_available: list[URL] = [url]
+            where_this_available: List[URL] = [url]
             for a in alternatives0:
                 try:
                     x = parse_url_unescape(a)

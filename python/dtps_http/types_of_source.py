@@ -1,7 +1,7 @@
 import json
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, replace
-from typing import Any, Dict, Optional, Sequence, Tuple, TYPE_CHECKING, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING, Union
 
 from aiohttp import web
 
@@ -131,9 +131,9 @@ def get_inside(
 
     if isinstance(ob, dict):
         if first not in ob:
-            keys: list[Any] = list(ob.keys())
+            keys: List[Any] = list(ob.keys())
             raise KeyError(
-                f"cannot get_inside({components!r}) of dict with keys {list(ob)!r}\ncontext: "
+                f"cannot get_inside({components!r}) of dict with keys {keys!r}\ncontext: "
                 f"{context!r}\noriginal:\n{original_ob!r}"
             )
         v: Any = ob[first]

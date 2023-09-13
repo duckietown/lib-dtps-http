@@ -119,7 +119,6 @@ impl Transforms {
 #[derive(Debug, Clone)]
 pub struct SourceComposition {
     pub topic_name: TopicName,
-    // pub is_root: bool,
     pub compose: HashMap<Vec<String>, Box<TypeOFSource>>,
     pub unique_id: String,
     pub origin_node: String,

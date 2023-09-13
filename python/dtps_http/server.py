@@ -363,7 +363,7 @@ class DTPSServer:
         self.tasks.append(task)
 
     def _update_lists(self):
-        topics: list[TopicNameV] = []
+        topics: List[TopicNameV] = []
         topics.extend(self._oqs.keys())
         topics.extend(self._forwarded.keys())
         self._oqs[TOPIC_LIST].publish_json(sorted([_.as_relative_url() for _ in topics]))

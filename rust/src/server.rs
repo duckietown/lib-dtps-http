@@ -19,7 +19,6 @@ use futures::{
     StreamExt,
 };
 use indent::indent_all_with;
-
 use maplit::hashmap;
 use maud::{
     html,
@@ -108,6 +107,7 @@ use crate::{
     },
     DTPSError,
     TopicName,
+    TypeOfConnection,
     DTPSR,
 };
 

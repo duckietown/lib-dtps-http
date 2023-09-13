@@ -1,8 +1,9 @@
+use std::num::ParseIntError;
+
 use maud::{
     html,
     PreEscaped,
 };
-use std::num::ParseIntError;
 
 use crate::{
     debug_with_info,

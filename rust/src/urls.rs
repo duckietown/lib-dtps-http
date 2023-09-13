@@ -3,17 +3,15 @@ use url::Url;
 use crate::{
     info_with_info,
     normalize_path,
-    structures::{
-        TypeOfConnection,
-        TypeOfConnection::{
-            Relative,
-            TCP,
-            UNIX,
-        },
-        UnixCon,
-    },
     DTPSError,
     FilePaths,
+    TypeOfConnection,
+    TypeOfConnection::{
+        Relative,
+        TCP,
+        UNIX,
+    },
+    UnixCon,
     DTPSR,
 };
 
@@ -172,58 +170,7 @@ pub fn parse_url_ext(mut s0: &str) -> DTPSR<TypeOfConnection> {
     }
 }
 
-impl TypeOfConnection {
-    pub fn join(&self, s: &str) -> DTPSR<TypeOfConnection> {
-        join_ext(&self, s)
-    }
-}
-
-pub fn join_con(a: &str, b: &TypeOfConnection) -> DTPSR<TypeOfConnection> {
-    match b {
-        TCP(_) => Ok(b.clone()),
-        UNIX(_) => Ok(b.clone()),
-        Relative(path2, query2) => {
-            let (path3, _query3) = join_path(a, path2.as_str());
-            Ok(Relative(path3, query2.clone()))
-        }
-
-        TypeOfConnection::Same() => Ok(Relative(a.to_string(), None)),
-        TypeOfConnection::File(hostname, path) => {
-            // let (path3, query3) = join_path(a, path.add_prefix(a)as_str());
-            Ok(TypeOfConnection::File(hostname.clone(), path.add_prefix(a)))
-        }
-    }
-}
-
-pub fn join_ext(conbase: &TypeOfConnection, s: &str) -> DTPSR<TypeOfConnection> {
-    if s.contains("://") {
-        parse_url_ext(s)
-    } else {
-        match conbase.clone() {
-            TypeOfConnection::TCP(mut url) => {
-                let (path2, query2) = join_path(url.path(), s);
-                url.set_path(&path2);
-                url.set_query(query2.as_deref());
-                Ok(TCP(url))
-            }
-            TypeOfConnection::Relative(path, _query) => {
-                let (path2, query2) = join_path(path.as_str(), s);
-                Ok(Relative(path2, query2))
-            }
-            TypeOfConnection::UNIX(mut uc) => {
-                let (path2, query2) = join_path(uc.path.as_str(), s);
-                uc.path = path2;
-                uc.query = query2;
-                Ok(UNIX(uc))
-            }
-
-            TypeOfConnection::Same() => Ok(Relative(s.to_string(), None)),
-            TypeOfConnection::File(hostname, path) => Ok(TypeOfConnection::File(hostname, path.join(s))),
-        }
-    }
-}
-
-fn join_path(base: &str, s: &str) -> (String, Option<String>) {
+pub fn join_path(base: &str, s: &str) -> (String, Option<String>) {
     // split the query
     let (query, s) = match s.find("?") {
         Some(i) => (Some(s[i + 1..].to_string()), s[..i].to_string()),

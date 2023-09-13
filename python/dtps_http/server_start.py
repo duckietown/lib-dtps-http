@@ -75,7 +75,7 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[List
     no_alternatives = parsed.no_alternatives
 
     tunnel = parsed.tunnel
-    registrations: list[Registration] = []
+    registrations: List[Registration] = []
     if parsed.register_switchboard is not None:
         switchboard_url = URLIndexer(parse_url_unescape(parsed.register_switchboard))
         if parsed.register_topic is None:
@@ -222,7 +222,7 @@ async def app_start(
             sys.exit(1)
         logger.info("not starting TCP server. Use --tcp-port to start one.")
 
-    unix_paths: list[str] = []
+    unix_paths: List[str] = []
 
     tmpdir = tempfile.gettempdir()
     unix_paths.append(os.path.join(tmpdir, f"dtps-{s.node_id}"))

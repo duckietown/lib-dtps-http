@@ -304,8 +304,6 @@ pub async fn serve_master_head(
             let h = resp.headers_mut();
             utils_headers::put_source_headers(h, &tr.origin_node, &tr.unique_id);
             utils_headers::put_meta_headers(h, &ds.get_properties());
-            // let suffix = topic_name.as_relative_url();
-            // put_alternative_locations(&ss, h, &suffix);
             {
                 let ss = ss_mutex.lock().await;
                 utils_headers::put_common_headers(&ss, h);
@@ -395,10 +393,10 @@ fn path_normalize(path: &warp::path::FullPath) -> String {
     } else {
         path_str.to_string()
     };
-
-    if path_str != new_path {
-        // debug_with_info!("serve_master: path={:?} => {:?} ", path, new_path);
-    }
+    //
+    // if path_str != new_path {
+    //     // debug_with_info!("serve_master: path={:?} => {:?} ", path, new_path);
+    // }
 
     new_path
 }
@@ -450,31 +448,31 @@ pub async fn serve_master_get(
         }
     }
 
-    if false {
-        if !path_components.contains(&STATIC_PREFIX.to_string()) {
-            let good_url = get_good_url_for_components(&path_components);
-            if good_url != path_str {
-                let good_relative_url = format!("./{}/", path_components.last().unwrap());
-
-                debug_with_info!(
-                    "Redirecting\n - {}\n->  {};\n rel = {}\n",
-                    path_str,
-                    good_url,
-                    good_relative_url
-                );
-
-                let text_response = format!("Redirecting to {}", good_url);
-                let res = http::Response::builder()
-                    .status(StatusCode::MOVED_PERMANENTLY)
-                    .header(header::LOCATION, good_relative_url)
-                    .body(Body::from(text_response))
-                    .unwrap();
-
-                // TODO: renable
-                return Ok(res);
-            }
-        }
-    }
+    // if false {
+    //     if !path_components.contains(&STATIC_PREFIX.to_string()) {
+    //         let good_url = get_good_url_for_components(&path_components);
+    //         if good_url != path_str {
+    //             let good_relative_url = format!("./{}/", path_components.last().unwrap());
+    //
+    //             debug_with_info!(
+    //                 "Redirecting\n - {}\n->  {};\n rel = {}\n",
+    //                 path_str,
+    //                 good_url,
+    //                 good_relative_url
+    //             );
+    //
+    //             let text_response = format!("Redirecting to {}", good_url);
+    //             let res = http::Response::builder()
+    //                 .status(StatusCode::MOVED_PERMANENTLY)
+    //                 .header(header::LOCATION, good_relative_url)
+    //                 .body(Body::from(text_response))
+    //                 .unwrap();
+    //
+    //             // TODO: renable
+    //             return Ok(res);
+    //         }
+    //     }
+    // }
     let ds = {
         let ss = ss_mutex.lock().await;
         interpret_path(&path_str, &query, &referrer, &ss).await
@@ -488,17 +486,7 @@ pub async fn serve_master_get(
         Ok(x) => x,
         Err(s) => {
             return s.into();
-        } //
-          //     let desc = format!();
-          //     // escape special characters
-          //     let code = s.status_code();
-          //     let desc = format!("{code}\n\n{desc}");
-          //     let res = http::Response::builder()
-          //         .status(s.status_code())
-          //         .body(Body::from(strip(desc)))
-          //         .unwrap();
-          //     return Ok(res);
-          // }
+        }
     };
     let rd: RawData = match resd {
         ResolvedData::RawData(rd) => rd,
@@ -536,9 +524,6 @@ pub async fn serve_master_get(
             html! {}
         }
     };
-
-    // let x = ds.get_meta_index(&path_str, ss_mutex.clone()).await?;
-    // let ds_props = &(x.topics.get(&TopicName::root()).unwrap().properties);
 
     let ds_props = ds.get_properties();
     return visualize_data(
@@ -820,23 +805,7 @@ pub async fn handle_websocket_data_stream(
 //     }
 //     Ok(())
 // }
-//
-// fn warp_from_tungstenite(msg: TungsteniteMessage) -> DTPSR<WarpMessage> {
-//     match msg {
-//         TungsteniteMessage::Text(text) => Ok(WarpMessage::text(text)),
-//         TungsteniteMessage::Binary(data) => Ok(WarpMessage::binary(data)),
-//         TungsteniteMessage::Ping(data) => Ok(WarpMessage::ping(data)),
-//         TungsteniteMessage::Pong(data) => Ok(WarpMessage::pong(data)),
-//         TungsteniteMessage::Close(Some(frame)) => {
-//             let code: u16 = frame.code.into();
-//             Ok(WarpMessage::close_with(code, frame.reason))
-//         }
-//         TungsteniteMessage::Close(None) => Ok(WarpMessage::close()),
-//         TungsteniteMessage::Frame(..) => {
-//             return not_implemented!("we should never get here: {msg}");
-//         }
-//     }
-// }
+//w
 
 pub fn make_index_html(index: &TopicsIndexInternal) -> PreEscaped<String> {
     let mut keys: Vec<&str> = index.topics.keys().map(|k| k.as_relative_url()).collect();
