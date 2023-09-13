@@ -58,7 +58,6 @@ use crate::{
     time_nanos,
     DTPSError,
     DataFromChannel,
-    DataReady,
     DataSaved,
     FoundMetadata,
     History,

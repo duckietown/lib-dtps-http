@@ -7,7 +7,6 @@ use std::{
     sync::Arc as StdArc,
 };
 
-use bytes::Bytes;
 use chrono::Local;
 use clap::Parser;
 use futures::{

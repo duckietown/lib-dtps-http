@@ -3,7 +3,6 @@ use std::{
         min,
         Ordering,
     },
-    fmt::Display,
     ops::Add,
 };
 

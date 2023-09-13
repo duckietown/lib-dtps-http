@@ -1,40 +1,14 @@
 use std::{
-    collections::{
-        HashMap,
-        HashSet,
-    },
     fmt,
     fmt::Display,
-    ops::Add,
     path::PathBuf,
 };
 
-use bytes::Bytes;
-use derive_more::Constructor;
-use maplit::hashmap;
-use schemars::{
-    schema::RootSchema,
-    JsonSchema,
-};
-use serde::{
-    Deserialize,
-    Serialize,
-};
-use serde_cbor::Value as CBORValue;
-use sha256::digest;
 use url::Url;
 
 use crate::{
-    divide_in_components,
-    identify_presentation,
     join_path,
     parse_url_ext,
-    ContentPresentation,
-    DTPSError,
-    LinkBenchmark,
-    TopicName,
-    CONTENT_TYPE_CBOR,
-    CONTENT_TYPE_JSON,
     DTPSR,
 };
 

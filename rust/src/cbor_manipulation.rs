@@ -1,12 +1,9 @@
-use std::num::ParseIntError;
-
 use maud::{
     html,
     PreEscaped,
 };
 
 use crate::{
-    debug_with_info,
     identify_presentation,
     utils_mime,
     utils_yaml::generate_html_from_cbor,

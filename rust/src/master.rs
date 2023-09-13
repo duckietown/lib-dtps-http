@@ -3,7 +3,6 @@ use std::{
     string::ToString,
 };
 
-use anyhow::Context;
 use bytes::Bytes;
 use futures::{
     stream::SplitSink,
@@ -14,18 +13,12 @@ use maud::{
     html,
     PreEscaped,
 };
-use strip_ansi_escapes::strip;
-use tokio::{
-    spawn,
-    sync::broadcast::error::RecvError,
-};
+
+use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tungstenite::{
-    http::{
-        HeaderMap,
-        StatusCode,
-    },
-    Message as TungsteniteMessage,
+use tungstenite::http::{
+    HeaderMap,
+    StatusCode,
 };
 use warp::{
     http::header,
@@ -35,25 +28,17 @@ use warp::{
 };
 
 use crate::{
-    context,
     debug_with_info,
     display_printable,
     divide_in_components,
-    do_receiving,
     error_with_info,
     get_accept_header,
-    get_good_url_for_components,
     get_header_with_default,
-    get_metadata,
     get_series_of_messages_for_notification_,
     handle_topic_post,
-    handle_websocket_queue,
     interpret_path,
     make_html,
     make_request,
-    not_available,
-    not_implemented,
-    open_websocket_connection,
     put_alternative_locations,
     receive_from_websocket,
     send_as_ws_cbor,

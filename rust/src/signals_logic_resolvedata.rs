@@ -1,64 +1,23 @@
 use std::{
-    cmp::{
-        max,
-        min,
-    },
     collections::{
         BTreeMap,
         HashMap,
-        HashSet,
     },
-    fmt::Debug,
     path::PathBuf,
 };
 
 use anyhow::Context;
-use async_recursion::async_recursion;
+
 use async_trait::async_trait;
 use bytes::Bytes;
-use chrono::Local;
-use futures::StreamExt;
-use json_patch::{
-    patch,
-    Patch,
-    PatchOperation,
-};
-use maplit::hashmap;
-use schemars::JsonSchema;
-use serde::{
-    Deserialize,
-    Serialize,
-};
-use serde_cbor::{
-    Value as CBORValue,
-    Value::{
-        Null as CBORNull,
-        Text as CBORText,
-    },
-};
-use tokio::{
-    sync::broadcast::{
-        error::RecvError,
-        Receiver,
-        Sender,
-    },
-    task::JoinHandle,
-};
 
 use crate::{
     client::get_rawdata_status,
     context,
     debug_with_info,
-    divide_in_components,
-    error_with_info,
-    get_channel_info_message,
     get_dataready,
-    get_inside,
     get_rawdata,
-    is_prefix_of,
-    merge_clocks,
     not_implemented,
-    parse_url_ext,
     signals_logic::{
         GetMeta,
         OtherProxied,
@@ -67,21 +26,8 @@ use crate::{
         TypeOFSource,
     },
     signals_logic_streams::transform,
-    unescape_json_patch,
-    utils,
     utils_cbor::putinside,
-    warn_with_info,
-    ChannelInfo,
-    Clocks,
-    ContentInfo,
-    DTPSError,
     DataReady,
-    DataSaved,
-    ForwardingStep,
-    InsertNotification,
-    LinkBenchmark,
-    OtherProxyInfo,
-    ProxyJob,
     RawData,
     ResolvedData,
     ResolvedData::{
@@ -89,23 +35,12 @@ use crate::{
         NotFound,
         Regular,
     },
-    ServerState,
     ServerStateAccess,
     TopicName,
     TopicProperties,
-    TopicReachabilityInternal,
-    TopicRefAdd,
-    TopicRefInternal,
-    TopicsIndexInternal,
-    TopicsIndexWire,
-    TypeOfConnection,
-    TypeOfConnection::Relative,
     CONTENT_TYPE_DTPS_INDEX_CBOR,
     CONTENT_TYPE_TOPIC_HISTORY_CBOR,
     DTPSR,
-    REL_URL_META,
-    TOPIC_PROXIED,
-    URL_HISTORY,
 };
 
 #[async_trait]

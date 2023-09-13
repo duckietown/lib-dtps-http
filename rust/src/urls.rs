@@ -7,7 +7,6 @@ use crate::{
     FilePaths,
     TypeOfConnection,
     TypeOfConnection::{
-        Relative,
         TCP,
         UNIX,
     },
