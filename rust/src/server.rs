@@ -69,42 +69,46 @@ use crate::{
     cloudflare::open_cloudflare,
     constants::*,
     debug_with_info,
+    divide_in_components,
+    epoch,
     error_other,
     error_with_info,
     format_digest_path,
+    format_nanos,
     handle_rejection,
+    handle_websocket_generic2,
     html_utils::make_html,
     info_with_info,
     interpret_path,
     invalid_input,
-    master::{
-        handle_websocket_generic2,
-        serve_master_get,
-        serve_master_head,
-        serve_master_patch,
-        serve_master_post,
-    },
-    object_queues::*,
     parse_url_ext,
-    server_state::*,
-    structures::*,
-    utils,
-    utils::divide_in_components,
+    put_common_headers,
+    put_header_content_type,
+    put_header_location,
+    serve_master_get,
+    serve_master_head,
+    serve_master_patch,
+    serve_master_post,
+    show_errors,
+    sniff_and_start_proxy,
     utils_headers,
-    utils_headers::{
-        put_common_headers,
-        put_header_content_type,
-        put_header_location,
-    },
     warn_with_info,
-    websocket_signals::{
-        ChannelInfo,
-        ChannelInfoDesc,
-        Chunk,
-        MsgClientToServer,
-        MsgServerToClient,
-    },
+    ChannelInfo,
+    ChannelInfoDesc,
+    Chunk,
+    ComponentStatusNotification,
     DTPSError,
+    DataReady,
+    DataSaved,
+    InsertNotification,
+    MsgClientToServer,
+    MsgServerToClient,
+    ObjectQueue,
+    RawData,
+    ResourceAvailabilityWire,
+    ServerState,
+    Status,
+    StatusSummary,
     TopicName,
     TypeOfConnection,
     DTPSR,
@@ -317,7 +321,7 @@ impl DTPSServer {
             let stream = UnixListenerStream::new(listener);
             let handle = spawn(warp::serve(the_routes.clone()).run_incoming(stream));
             // info_with_info!("Listening on {:?}", unix_path);
-            let unix_url = format!("http+unix://{}/", unix_path.replace("/", "%2F"));
+            let unix_url = format!("http+unix://{}/", unix_path.replace('/', "%2F"));
             {
                 let mut s = ssa.lock().await;
                 s.info(format!("Listening on {:?}", unix_path));
@@ -596,7 +600,7 @@ pub fn get_channel_info_message(oq: &ObjectQueue) -> ChannelInfo {
 pub fn get_dataready(this_one: &DataSaved) -> DataReady {
     let availability = vec![ResourceAvailabilityWire {
         url: format_digest_path(&this_one.digest, &this_one.content_type),
-        available_until: utils::epoch() + 60.0,
+        available_until: epoch() + 60.0,
     }];
 
     let nchunks = 0;
@@ -625,10 +629,11 @@ pub async fn get_series_of_messages_for_notification_(
     let the_availability = if send_data {
         vec![]
     } else {
-        vec![ResourceAvailabilityWire {
+        let vec1 = vec![ResourceAvailabilityWire {
             url: format_digest_path(&this_one.digest, &this_one.content_type),
-            available_until: utils::epoch() + delta_availability,
-        }]
+            available_until: epoch() + delta_availability,
+        }];
+        vec1
     };
 
     ss.save_blob_for_time(
@@ -807,7 +812,7 @@ async fn handler_topic_html_summary(
     };
     let now = Local::now().timestamp_nanos();
 
-    let format_elapsed = |a| -> String { utils::format_nanos(now - a) };
+    let format_elapsed = |a| -> String { format_nanos(now - a) };
 
     let data_or_digest = |data: &DataSaved| -> PreEscaped<String> {
         let printable = matches!(
@@ -888,7 +893,7 @@ async fn handler_topic_html_summary(
                         tr {
                             td { (data.index) }
                             td { (format_elapsed(data.time_inserted)) }
-                            td { (utils::format_nanos(latencies[i]))}
+                            td { (format_nanos(latencies[i]))}
                             td { code {(data.content_type)} }
                             td { (data.content_length) }
                             td { code { (data_or_digest(data)) } }
@@ -1000,7 +1005,7 @@ pub struct TopicAlias {
 impl TopicAlias {
     /// Parses a string of the form `a/b -> c/d`
     pub fn from_string(s: &str) -> DTPSR<Self> {
-        match s.find("=") {
+        match s.find('=') {
             None => {
                 invalid_input!("Cannot find -> in string {s:?}")
             }
@@ -1046,6 +1051,7 @@ pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {
         if parts.len() != 2 {
             return error_other(format!("Invalid proxy specification: {}", p));
         }
+        #[allow(clippy::get_first)]
         let name = parts.get(0).unwrap();
         let value = parts.get(1).unwrap();
         let url = parse_url_ext(value)?;

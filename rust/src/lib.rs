@@ -99,5 +99,5 @@ mod signals_logic_resolve;
 mod test_python;
 #[cfg(test)]
 mod test_range;
-
+use master::*;
 use signals_logic_resolve::*;

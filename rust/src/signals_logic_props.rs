@@ -1,10 +1,8 @@
 use crate::{
-    signals_logic::{
-        DataProps,
-        SourceComposition,
-        TypeOFSource,
-    },
+    DataProps,
+    SourceComposition,
     TopicProperties,
+    TypeOFSource,
 };
 
 impl DataProps for TypeOFSource {

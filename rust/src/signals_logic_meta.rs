@@ -12,26 +12,24 @@ use maplit::hashmap;
 use crate::{
     debug_with_info,
     not_implemented,
-    signals_logic::{
-        DataProps,
-        GetMeta,
-        SourceComposition,
-        TypeOFSource,
-        MASK_ORIGIN,
-    },
     urls::make_relative,
     ContentInfo,
     DTPSError,
+    DataProps,
     ForwardingStep,
+    GetMeta,
     LinkBenchmark,
     ServerStateAccess,
+    SourceComposition,
     TopicName,
     TopicReachabilityInternal,
     TopicRefInternal,
     TopicsIndexInternal,
+    TypeOFSource,
     TypeOfConnection,
     TypeOfConnection::Relative,
     DTPSR,
+    MASK_ORIGIN,
 };
 
 async fn get_sc_meta(
