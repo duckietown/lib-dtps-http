@@ -112,7 +112,7 @@ use crate::{
 
 const AVAILABILITY_LENGTH_SEC: f64 = 60.0;
 
-pub type HandlersResponse = Result<http::Response<hyper::Body>, Rejection>;
+pub type HandlersResponse = Result<http::Response<Body>, Rejection>;
 pub type ServerStateAccess = StdArc<TokioMutex<ServerState>>;
 
 pub struct DTPSServer {
@@ -217,7 +217,7 @@ impl DTPSServer {
                         Some(x) => x != 0,
                         None => false,
                     };
-                    let path = path.to_string();
+
                     ws.on_upgrade(move |socket| handle_websocket_generic2(path, socket, state1, send_data))
                 }
             });
@@ -242,7 +242,7 @@ impl DTPSServer {
                 let s1 = format!("http://localhost:{}{}", address.port(), "/");
                 s.add_advertise_url(&s1)?;
 
-                let s2 = address.to_string().clone();
+                let s2 = address.to_string();
                 if !s2.contains("0.0.0.0") {
                     s.add_advertise_url(&s2)?;
                 }
@@ -260,7 +260,7 @@ impl DTPSServer {
                 s.add_advertise_url(&x)?;
             }
 
-            handles.push(tokio::spawn(tcp_server));
+            handles.push(spawn(tcp_server));
         }
 
         // if tunnel is given ,start
@@ -295,10 +295,10 @@ impl DTPSServer {
             // remove the socket if it exists
             if the_path.exists() {
                 warn_with_info!("removing existing socket: {:?}", unix_path);
-                std::fs::remove_file(&unix_path).unwrap();
+                std::fs::remove_file(unix_path).unwrap();
             }
 
-            let listener = match UnixListener::bind(&unix_path) {
+            let listener = match UnixListener::bind(unix_path) {
                 Ok(l) => l,
 
                 Err(e) => {
@@ -332,7 +332,7 @@ impl DTPSServer {
             1.0,
         ));
 
-        if self.initial_proxy.len() > 0 {
+        if !self.initial_proxy.is_empty() {
             // let s = ssa.lock().await;
             // let mut i = 0;
             for (k, v) in self.initial_proxy.clone() {
@@ -360,7 +360,7 @@ impl DTPSServer {
                 con.target.clone(),
             );
 
-            let handle = tokio::spawn(show_errors(Some(ssa.clone()), component_name.to_dash_sep(), fut));
+            let handle = spawn(show_errors(Some(ssa.clone()), component_name.to_dash_sep(), fut));
             handles.push(handle);
         }
 
@@ -372,7 +372,7 @@ impl DTPSServer {
         };
 
         let ssa2 = ssa.clone();
-        handles.push(tokio::spawn(show_errors(
+        handles.push(spawn(show_errors(
             Some(ssa.clone()),
             "collect_statuses".to_string(),
             collect_statuses(ssa2, rx),
@@ -437,9 +437,9 @@ impl DTPSServer {
     pub async fn add_proxied(&mut self, mounted_at: &TopicName, url: TypeOfConnection) -> DTPSR<JoinHandle<()>> {
         let ssa = self.get_lock();
 
-        let future = sniff_and_start_proxy(mounted_at.clone(), url.clone(), ssa.clone());
-        let handle = tokio::spawn(show_errors(
-            Some(ssa.clone()),
+        let future = sniff_and_start_proxy(mounted_at.clone(), url, ssa.clone());
+        let handle = spawn(show_errors(
+            Some(ssa),
             format!("proxied/{mounted_at}", mounted_at = mounted_at.as_dash_sep()),
             future,
         ));
@@ -495,7 +495,7 @@ pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> Ha
             let components = divide_in_components(topic_name, '.');
             for c in components {
                 url.push_str(&c);
-                url.push_str("/");
+                url.push('/');
             }
             topic2url.push((topic_name, url));
         }
@@ -785,12 +785,7 @@ async fn handler_topic_html_summary(
 ) -> Result<http::Response<Body>, Rejection> {
     let ss = ss_mutex.lock().await;
 
-    let x: &ObjectQueue;
-    match ss.oqs.get(topic_name) {
-        None => return Err(warp::reject::not_found()),
-
-        Some(y) => x = y,
-    }
+    let x = ss.get_queue(topic_name)?;
 
     let (default_content_type, initial_value) = match x.stored.last() {
         None => ("application/yaml".to_string(), "{}".to_string()),
@@ -981,7 +976,7 @@ impl TopicConnection {
     pub fn from_string(s: &str) -> DTPSR<Self> {
         match s.find("->") {
             None => {
-                return invalid_input!("Cannot find -> in string {s:?}");
+                invalid_input!("Cannot find -> in string {s:?}")
             }
             Some(i) => {
                 // divide in 2
@@ -1007,7 +1002,7 @@ impl TopicAlias {
     pub fn from_string(s: &str) -> DTPSR<Self> {
         match s.find("=") {
             None => {
-                return invalid_input!("Cannot find -> in string {s:?}");
+                invalid_input!("Cannot find -> in string {s:?}")
             }
             Some(i) => {
                 // divide in 2
@@ -1027,7 +1022,7 @@ pub fn address_from_host_port(host: &str, port: u16) -> DTPSR<SocketAddr> {
 
     let s: Result<SocketAddr, _> = hoststring.parse();
     match s {
-        Ok(x) => return Ok(x),
+        Ok(x) => Ok(x),
         Err(e) => {
             debug_with_info!("Cannot parse {}: {}", hoststring, e);
             error_other(format!("Cannot parse {}: {}", hoststring, e))
@@ -1056,18 +1051,18 @@ pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {
         let url = parse_url_ext(value)?;
         proxy.insert(name.to_string(), url);
     }
-    if proxy.len() != 0 {
+    if !proxy.is_empty() {
         debug_with_info!("Proxy:\n{:#?}", proxy);
     }
     let topic_connections = args
         .connect
         .iter()
-        .map(|x| TopicConnection::from_string(&x).unwrap())
+        .map(|x| TopicConnection::from_string(x).unwrap())
         .collect::<Vec<TopicConnection>>();
     let aliases = args
         .alias
         .iter()
-        .map(|x| TopicAlias::from_string(&x).unwrap())
+        .map(|x| TopicAlias::from_string(x).unwrap())
         .collect::<Vec<TopicAlias>>();
     DTPSServer::new(
         listen_address,
@@ -1102,7 +1097,7 @@ pub fn receive_from_websocket<T: DeserializeOwned + Clone + Send + 'static>(
 ) -> (UnboundedReceiverStream<T>, JoinHandle<()>) {
     let (tx, rx) = mpsc::unbounded_channel();
 
-    let handle = tokio::spawn(show_errors(None, "websocket".to_string(), pull_(ws_rx, tx)));
+    let handle = spawn(show_errors(None, "websocket".to_string(), pull_(ws_rx, tx)));
 
     let stream = UnboundedReceiverStream::new(rx);
     (stream, handle)

@@ -33,7 +33,6 @@ use tokio_tungstenite::{
 use tungstenite::{
     error::ProtocolError,
     handshake::client::Request,
-    Error,
     Message as TM,
 };
 use url::Url;
@@ -158,7 +157,7 @@ impl AnySocketConnection {
         ));
 
         let handle2 = tokio::spawn(show_errors(
-            ssa.clone(),
+            ssa,
             "sender".to_string(),
             write_websocket_stream(outgoing_receiver, sink),
         ));
@@ -200,13 +199,13 @@ async fn read_websocket_stream<S: Debug, T: StreamExt<Item = Result<S, tungsteni
                     }
                     Err(e) => {
                         match &e {
-                            Error::ConnectionClosed | Error::AlreadyClosed => {
+                            tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => {
                                 break;
                             }
-                            Error::Io(_) => {}
-                            Error::Tls(_) => {}
-                            Error::Capacity(_) => {}
-                            Error::Protocol(p) => match &p {
+                            tungstenite::Error::Io(_) => {}
+                            tungstenite::Error::Tls(_) => {}
+                            tungstenite::Error::Capacity(_) => {}
+                            tungstenite::Error::Protocol(p) => match &p {
                                 ProtocolError::WrongHttpMethod => {}
                                 ProtocolError::WrongHttpVersion => {}
                                 ProtocolError::MissingConnectionUpgradeHeader => {}
@@ -236,11 +235,11 @@ async fn read_websocket_stream<S: Debug, T: StreamExt<Item = Result<S, tungsteni
                                 ProtocolError::InvalidOpcode(_) => {}
                                 ProtocolError::InvalidCloseSequence => {}
                             },
-                            Error::SendQueueFull(_) => {}
-                            Error::Utf8 => {}
-                            Error::Url(_) => {}
-                            Error::Http(_) => {}
-                            Error::HttpFormat(_) => {}
+                            tungstenite::Error::SendQueueFull(_) => {}
+                            tungstenite::Error::Utf8 => {}
+                            tungstenite::Error::Url(_) => {}
+                            tungstenite::Error::Http(_) => {}
+                            tungstenite::Error::HttpFormat(_) => {}
                         }
                         error_with_info!("error in read_websocket_stream: {:?}", e);
                         break;
@@ -296,7 +295,7 @@ impl GenericSocketConnection for AnySocketConnection {
     }
 
     fn get_handles(&self) -> &Vec<JoinHandle<()>> {
-        return &self.mmpc.handles;
+        &self.mmpc.handles
     }
 }
 
@@ -311,15 +310,12 @@ pub async fn open_websocket_connection_tcp(url: &Url) -> DTPSR<Box<dyn GenericSo
         panic!("unexpected scheme: {}", url.scheme());
     }
     let connection_res = connect_async(url.clone()).await;
-    let connection;
-    match connection_res {
-        Ok(c) => {
-            connection = c;
-        }
+    let connection = match connection_res {
+        Ok(c) => c,
         Err(err) => {
             return not_reachable!("could not connect to {url}: tungstenite {:?}", err);
         }
-    }
+    };
     let (ws_stream, response) = connection;
 
     let tcp = AnySocketConnection::from_tcp(ws_stream, response);

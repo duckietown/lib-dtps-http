@@ -96,7 +96,7 @@ impl FoundMetadata {
             None => {
                 let base = self.base_url.to_string();
                 let msg = format!("Metadata says this is not a DTPS node:\nconbase: {base}");
-                return Err(anyhow::anyhow!(msg).into());
+                Err(anyhow::anyhow!(msg).into())
             }
             Some(x) => Ok(x.clone()),
         }
@@ -111,7 +111,7 @@ pub fn get_url_from_topic_name(topic_name: &str) -> String {
 pub fn make_rel_url(a: &Vec<String>) -> String {
     let mut url = String::new();
     for c in a {
-        url.push_str(&c);
+        url.push_str(c);
         url.push_str("/");
     }
     url

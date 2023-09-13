@@ -29,7 +29,7 @@ pub fn get_result_to_put(
     let mut current: &mut serde_cbor::value::Value = result_dict;
     for component in &prefix[..prefix.len() - 1] {
         if let serde_cbor::value::Value::Map(inside) = current {
-            let the_key = CBORText(component.clone().into());
+            let the_key = CBORText(component.clone());
             if !inside.contains_key(&the_key) {
                 inside.insert(the_key.clone(), serde_cbor::value::Value::Map(BTreeMap::new()));
             }
@@ -50,7 +50,7 @@ pub fn putinside(result_dict: &mut serde_cbor::value::Value, prefix: &Vec<String
         panic!("not a map");
     };
 
-    let key_to_put = CBORText(prefix.last().unwrap().clone().into());
+    let key_to_put = CBORText(prefix.last().unwrap().clone());
     let key_to_put2 = CBORText(format!("{}?", prefix.last().unwrap()));
 
     match what {
@@ -60,7 +60,7 @@ pub fn putinside(result_dict: &mut serde_cbor::value::Value, prefix: &Vec<String
         NotAvailableYet(x) => {
             // TODO: do more here
             where_to_put.insert(key_to_put, CBORNull);
-            where_to_put.insert(key_to_put2, CBORText(x.into()));
+            where_to_put.insert(key_to_put2, CBORText(x));
         }
         NotFound(_) => {}
         ResolvedData::RawData(rd) => {
@@ -78,7 +78,7 @@ pub fn putinside(result_dict: &mut serde_cbor::value::Value, prefix: &Vec<String
 pub fn get_inside(context: Vec<String>, data: &serde_cbor::Value, path: &Vec<String>) -> DTPSR<serde_cbor::Value> {
     debug_with_info!("get_inside: context: {:?}, data: {:?}, path: {:?}", context, data, path);
     let current = data;
-    if path.len() == 0 {
+    if path.is_empty() {
         return Ok(current.clone());
     }
     let context_s = format!("Context: {}\n", context.join(""));
@@ -136,5 +136,5 @@ pub fn get_inside(context: Vec<String>, data: &serde_cbor::Value, path: &Vec<Str
             return DTPSError::other(s);
         }
     };
-    return get_inside(new_context, &inside, &path);
+    get_inside(new_context, inside, &path)
 }

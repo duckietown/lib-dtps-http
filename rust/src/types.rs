@@ -138,7 +138,7 @@ impl TopicName {
     pub fn from_components(v: &Vec<String>) -> Self {
         let components = v.clone();
 
-        let relative_url = if components.len() == 0 {
+        let relative_url = if components.is_empty() {
             "".to_string()
         } else {
             components.join("/") + "/"
@@ -151,7 +151,7 @@ impl TopicName {
         }
     }
     pub fn add_prefix(&self, v: &Vec<String>) -> Self {
-        let a = vec_concat(&v, &self.components);
+        let a = vec_concat(v, &self.components);
         TopicName::from_components(&a)
     }
 }

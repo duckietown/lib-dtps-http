@@ -98,7 +98,7 @@ mod test {
             chunks_arriving: 0,
         });
         let bytes = to_vec(&msg).unwrap();
-        let value: serde_cbor::Value = serde_cbor::from_slice(&bytes).unwrap();
+        let value: serde_cbor::Value = from_slice(&bytes).unwrap();
         info_with_info!("value: {:#?}", value);
         let msg2: MsgServerToClient = from_slice(&bytes).unwrap();
         assert_eq!(msg, msg2);

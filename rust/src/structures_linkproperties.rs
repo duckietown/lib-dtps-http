@@ -58,7 +58,7 @@ impl Add for LinkBenchmark {
 
 impl PartialOrd<Self> for LinkBenchmark {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        return Some(self.cmp(other));
+        Some(self.cmp(other))
     }
 }
 

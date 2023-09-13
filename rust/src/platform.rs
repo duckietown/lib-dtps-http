@@ -27,7 +27,5 @@ pub fn get_other_addresses() -> Vec<String> {
 #[cfg(not(target_os = "linux"))]
 pub fn get_other_addresses() -> Vec<String> {
     debug_with_info!("You are not running Linux - ignoring other addresses");
-    let mut ret = Vec::new();
-    ret.push("localhost".to_string());
-    ret
+    vec!["localhost".to_string()]
 }

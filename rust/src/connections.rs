@@ -111,7 +111,7 @@ impl TypeOfConnection {
     }
 
     pub fn unix_socket(path: &str) -> Self {
-        return Self::UNIX(UnixCon::from_path(path));
+        Self::UNIX(UnixCon::from_path(path))
     }
     pub fn to_string(&self) -> String {
         match self {
@@ -143,7 +143,7 @@ impl TypeOfConnection {
     }
 }
 
-impl fmt::Display for TypeOfConnection {
+impl Display for TypeOfConnection {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             TypeOfConnection::File(hostname, path) => {
@@ -161,7 +161,7 @@ impl fmt::Display for TypeOfConnection {
 
 impl TypeOfConnection {
     pub fn join(&self, s: &str) -> DTPSR<TypeOfConnection> {
-        join_ext(&self, s)
+        join_ext(self, s)
     }
 }
 

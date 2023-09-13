@@ -132,7 +132,7 @@ pub async fn estimate_latencies(which: TopicName, md: FoundMetadata) {
         if latencies_ns.len() > 10 {
             latencies_ns.remove(0);
         }
-        if latencies_ns.len() > 0 {
+        if !latencies_ns.is_empty() {
             let latencies_sum_ns: u128 = latencies_ns.iter().sum();
             let latencies_mean_ns = (latencies_sum_ns) / (latencies_ns.len() as u128);
             let latencies_min_ns = *latencies_ns.iter().min().unwrap();
@@ -169,7 +169,7 @@ pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<Option<MsgServe
             return match e {
                 RecvError::Closed => Ok(None),
                 RecvError::Lagged(_) => {
-                    let s = format!("lagged");
+                    let s = "lagged".to_string();
                     DTPSError::other(s)
                 }
             };
@@ -182,11 +182,10 @@ pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<Option<MsgServe
     }
     let data = msg.clone().into_data();
 
-    let msg_from_server: MsgServerToClient;
-    match serde_cbor::from_slice::<MsgServerToClient>(&data) {
+    let msg_from_server: MsgServerToClient = match serde_cbor::from_slice::<MsgServerToClient>(&data) {
         Ok(dr_) => {
             // debug_with_info!("dr: {:#?}", dr_);
-            msg_from_server = dr_;
+            dr_
         }
         Err(e) => {
             // pragma: no cover
@@ -331,7 +330,7 @@ pub async fn interpret_resp(con: &TypeOfConnection, resp: Response) -> DTPSR<Raw
         let as_s = resp.status().as_str().to_string();
         let content = hyper::body::to_bytes(resp.into_body()).await?;
         let string = String::from_utf8(content.to_vec()).unwrap();
-        return Err(DTPSError::FailedRequest(url, code, as_s, string));
+        Err(DTPSError::FailedRequest(url, code, as_s, string))
     }
 }
 
@@ -397,7 +396,7 @@ pub async fn get_history(con: &TypeOfConnection) -> DTPSR<History> {
             let s = format!("cannot parse as CBOR:\n{:#?}", value);
             error_with_info!("{}", s);
             error_with_info!("content: {:#?}", e);
-            return DTPSError::other(s);
+            DTPSError::other(s)
         }
     }
 }
@@ -468,28 +467,26 @@ pub async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResul
         Err(err) => {
             let s = format!("cannot get metadata for {:?}: {}", con, err);
 
-            Inaccessible(s.to_string())
+            Inaccessible(s)
         }
-        Ok(md_) => {
-            return match md_.answering {
-                None => WrongNodeAnswering,
-                Some(answering) => {
-                    if answering != expect_node_id {
-                        WrongNodeAnswering
-                    } else {
-                        let latency_ns = md_.latency_ns;
-                        let lb = LinkBenchmark {
-                            complexity,
-                            bandwidth: 100_000_000,
-                            latency_ns,
-                            reliability_percent,
-                            hops: 1,
-                        };
-                        Accessible(lb)
-                    }
+        Ok(md_) => match md_.answering {
+            None => WrongNodeAnswering,
+            Some(answering) => {
+                if answering != expect_node_id {
+                    WrongNodeAnswering
+                } else {
+                    let latency_ns = md_.latency_ns;
+                    let lb = LinkBenchmark {
+                        complexity,
+                        bandwidth: 100_000_000,
+                        latency_ns,
+                        reliability_percent,
+                        hops: 1,
+                    };
+                    Accessible(lb)
                 }
-            };
-        }
+            }
+        },
     }
 }
 
@@ -524,12 +521,12 @@ pub async fn compute_best_alternative(
             Accessible(link_benchmark) => {
                 debug_with_info!("-> Accessible: {:?}", link_benchmark);
                 possible_urls.push(alternative.clone());
-                possible_stats.push(link_benchmark.into());
+                possible_stats.push(link_benchmark);
             }
         }
     }
     // if no alternative is accessible, return None
-    if possible_urls.len() == 0 {
+    if possible_urls.is_empty() {
         return Err(DTPSError::ResourceNotReachable(
             "no alternative are accessible".to_string(),
         ));
@@ -549,7 +546,7 @@ pub async fn compute_best_alternative(
         best_url,
         possible_stats[min_index]
     );
-    return Ok(best_url);
+    Ok(best_url)
 }
 
 fn check_unix_socket(file_path: &str) -> DTPSR<()> {
@@ -710,7 +707,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     let get_if_exists = |w: &str| -> Option<TypeOfConnection> {
         if let Some(l) = links.get(w) {
             let url = l.url.clone();
-            let url = join_ext(&conbase, &url).ok()?;
+            let url = join_ext(conbase, &url).ok()?;
             Some(url)
         } else {
             None
@@ -741,11 +738,11 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
 pub async fn create_topic(conbase: &TypeOfConnection, topic_name: &TopicName, tr: &TopicRefAdd) -> DTPSR<()> {
     let mut path: String = String::new();
     for t in topic_name.as_components() {
-        path.push_str("/");
+        path.push('/');
         path.push_str(t);
     }
 
-    let value = serde_json::to_value(&tr)?;
+    let value = serde_json::to_value(tr)?;
 
     let add_operation = AddOperation { path, value };
     let operation1 = PatchOperation::Add(add_operation);
@@ -756,7 +753,7 @@ pub async fn create_topic(conbase: &TypeOfConnection, topic_name: &TopicName, tr
 pub async fn delete_topic(conbase: &TypeOfConnection, topic_name: &TopicName) -> DTPSR<()> {
     let mut path: String = String::new();
     for t in topic_name.as_components() {
-        path.push_str("/");
+        path.push('/');
         path.push_str(t);
     }
 
@@ -778,15 +775,15 @@ pub fn unescape_json_patch(s: &str) -> String {
 pub async fn add_proxy(
     conbase: &TypeOfConnection,
     mountpoint: &TopicName,
-    node_id: &String,
-    urls: &Vec<TypeOfConnection>,
+    node_id: String,
+    urls: &[TypeOfConnection],
 ) -> DTPSR<()> {
     let node_id = node_id.clone();
     let urls = urls.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     let pj = ProxyJob { node_id, urls };
 
     let mut path: String = String::new();
-    path.push_str("/");
+    path.push('/');
     path.push_str(escape_json_patch(mountpoint.as_dash_sep()).as_str());
     debug_with_info!("patch path: {}", path);
     let value = serde_json::to_value(&pj)?;
@@ -802,7 +799,7 @@ pub async fn add_proxy(
 
 pub async fn remove_proxy(conbase: &TypeOfConnection, mountpoint: &TopicName) -> DTPSR<()> {
     let mut path: String = String::new();
-    path.push_str("/");
+    path.push('/');
     path.push_str(escape_json_patch(mountpoint.as_dash_sep()).as_str());
 
     let remove_operation = RemoveOperation { path };
@@ -829,15 +826,15 @@ pub async fn patch_data(conbase: &TypeOfConnection, patch: &JsonPatch) -> DTPSR<
     if !status.is_success() {
         let desc = status.as_str();
         let msg = format!("cannot patch:\nurl: {conbase}\n---\n{desc}");
-        return Err(DTPSError::FailedRequest(
+        Err(DTPSError::FailedRequest(
             msg,
             status.as_u16(),
             conbase.to_string(),
             desc.to_string(),
-        ));
+        ))
+    } else {
+        Ok(())
     }
-
-    Ok(())
 }
 
 fn string_from_header_value(header_value: &hyper::header::HeaderValue) -> String {

@@ -20,8 +20,8 @@ use crate::{
 impl RawData {
     pub fn new<S: AsRef<[u8]>, T: AsRef<str>>(content: S, content_type: T) -> RawData {
         RawData {
-            content: Bytes::from(content.as_ref().to_vec().clone()).clone(),
-            content_type: content_type.as_ref().to_string().clone(),
+            content: Bytes::from(content.as_ref().to_vec()),
+            content_type: content_type.as_ref().to_string(),
         }
     }
     pub fn cbor<S: AsRef<[u8]>>(content: S) -> RawData {
@@ -42,7 +42,7 @@ impl RawData {
         Ok(RawData::new(serde_cbor::to_vec(&x)?, CONTENT_TYPE_CBOR))
     }
     pub fn represent_as_cbor_ct<T: Serialize>(x: T, ct: &str) -> DTPSR<Self> {
-        Ok(RawData::new(serde_cbor::to_vec(&x)?, ct.to_string()))
+        Ok(RawData::new(serde_cbor::to_vec(&x)?, ct))
     }
     pub fn from_cbor_value(x: &serde_cbor::Value) -> DTPSR<Self> {
         Ok(RawData::cbor(serde_cbor::to_vec(x)?))

@@ -521,7 +521,7 @@ impl ServerState {
         };
         self.proxied.insert(topic_name.clone(), fi);
 
-        return Ok(());
+        Ok(())
     }
     pub fn remove_proxy_connection(&mut self, topic_name: &TopicName) -> DTPSR<()> {
         if !self.proxied.contains_key(topic_name) {
@@ -537,7 +537,7 @@ impl ServerState {
                 true
             }
         });
-        return Ok(());
+        Ok(())
     }
 
     pub fn new_proxy_topic(
@@ -577,7 +577,7 @@ impl ServerState {
         topic_name: &TopicName,
         fp: FilePaths,
     ) -> DTPSR<()> {
-        if self.local_dirs.contains_key(&topic_name) {
+        if self.local_dirs.contains_key(topic_name) {
             return Err(DTPSError::TopicAlreadyExists(topic_name.to_relative_url()));
         }
 
@@ -588,7 +588,7 @@ impl ServerState {
 
         // let local_dir = PathBuf::from(path);
         debug_with_info!("New local folder {:?} -> {:?}", topic_name, local_dir.to_str());
-        let uuid = get_queue_id(&self.node_id, &topic_name);
+        let uuid = get_queue_id(&self.node_id, topic_name);
         self.local_dirs.insert(
             topic_name.clone(),
             LocalDirInfo {
@@ -624,13 +624,13 @@ impl ServerState {
         if self.oqs.contains_key(topic_name) {
             return Err(DTPSError::TopicAlreadyExists(topic_name.to_relative_url()));
         }
-        let uuid = get_queue_id(&self.node_id, &topic_name);
-        let app_data = app_data.unwrap_or_else(HashMap::new);
+        let uuid = get_queue_id(&self.node_id, topic_name);
+        let app_data = app_data.unwrap_or_default();
 
         let origin_node = self.node_id.clone();
         let now = Local::now().timestamp_nanos();
         let tr = TopicRefInternal {
-            unique_id: uuid.to_string(),
+            unique_id: uuid,
             origin_node,
             app_data,
             created: now,
@@ -694,13 +694,13 @@ impl ServerState {
         content_type: C,
         clocks: Option<Clocks>,
     ) -> DTPSR<DataSaved> {
-        if !self.oqs.contains_key(&topic_name) {
+        if !self.oqs.contains_key(topic_name) {
             return Err(DTPSError::TopicNotFound(topic_name.to_relative_url()));
         }
 
         let data0 = RawData::new(content, content_type);
 
-        let oq = self.oqs.get_mut(&topic_name).unwrap();
+        let oq = self.oqs.get_mut(topic_name).unwrap();
         let (data, ds, dropped_digests) = oq.push(&data0, clocks)?;
         // Note: we now transform the data (possibly) to the expected content type
         let new_digest = ds.digest.clone();
@@ -857,7 +857,7 @@ impl ServerState {
         clocks: Option<Clocks>,
     ) -> DTPSR<DataSaved> {
         let data_cbor = serde_cbor::to_vec(object)?;
-        return self.publish_cbor(topic_name, &data_cbor, clocks);
+        self.publish_cbor(topic_name, &data_cbor, clocks)
     }
 
     pub fn publish_cbor(&mut self, topic_name: &TopicName, content: &[u8], clocks: Option<Clocks>) -> DTPSR<DataSaved> {
@@ -894,6 +894,7 @@ impl ServerState {
         self.publish(topic_name, &bytesdata, CONTENT_TYPE_PLAIN, clocks)
     }
 
+    //noinspection RsConstantConditionIf
     pub fn create_topic_index(&self) -> TopicsIndexInternal {
         let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
 
@@ -1007,7 +1008,7 @@ impl ServerState {
 
             topics.insert(topic_name.clone(), tr);
         }
-        for (alias, _original) in &self.aliases {
+        for alias in self.aliases.keys() {
             let tr = TopicRefInternal {
                 unique_id: "".to_string(),
                 origin_node: "".to_string(),
@@ -1309,7 +1310,7 @@ pub fn add_from_response(
             continue;
         }
 
-        if tr.reachability.len() == 0 {
+        if tr.reachability.is_empty() {
             return DTPSError::not_reachable(format!(
                 "topic {:?} of subscription {:?} is not reachable:\n{:#?}",
                 its_topic_name, mounted_at, tr
@@ -1319,7 +1320,7 @@ pub fn add_from_response(
 
         s.new_proxy_topic(
             mounted_at,
-            &its_topic_name,
+            its_topic_name,
             &available_as,
             tr,
             reachability_we_used.clone(),

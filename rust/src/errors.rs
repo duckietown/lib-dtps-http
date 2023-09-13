@@ -137,9 +137,9 @@ impl DTPSError {
         let s = self.to_string();
         let res = http::Response::builder()
             .status(self.status_code())
-            .body(Body::from(s.to_string()))
+            .body(Body::from(s))
             .unwrap();
-        return Ok(res);
+        Ok(res)
     }
 }
 impl Into<HandlersResponse> for DTPSError {
@@ -175,10 +175,7 @@ impl DTPSError {
     }
 
     pub fn is_temp_env_error(&self) -> bool {
-        match self {
-            DTPSError::TopicNotFound(_) => false,
-            _ => true,
-        }
+        !matches!(self, DTPSError::TopicNotFound(_))
     }
 }
 

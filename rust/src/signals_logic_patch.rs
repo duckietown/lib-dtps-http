@@ -41,7 +41,7 @@ impl Patchable for TypeOFSource {
             }
             TypeOFSource::OurQueue(topic_name, ..) => {
                 if topic_name.as_dash_sep() == TOPIC_PROXIED {
-                    patch_proxied(ss_mutex, &topic_name, patch).await
+                    patch_proxied(ss_mutex, topic_name, patch).await
                 } else {
                     patch_our_queue(ss_mutex, patch, topic_name).await
                 }
@@ -163,7 +163,7 @@ async fn patch_composition(ss_mutex: ServerStateAccess, patch: &Patch, sc: &Sour
 pub fn topic_name_from_json_pointer(path: &str) -> DTPSR<TopicName> {
     let mut components = Vec::new();
     for p in path.split('/') {
-        if p.len() == 0 {
+        if p.is_empty() {
             continue;
         }
         components.push(p.to_string());

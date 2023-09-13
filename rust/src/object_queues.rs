@@ -101,8 +101,8 @@ impl ObjectQueue {
             unique_id: self.tr.unique_id.clone(),
             index: this_seq,
             time_inserted: now,
-            clocks: clocks.clone(),
-            digest: digest.clone(),
+            clocks,
+            digest,
             content_type: data.content_type.clone(),
             content_length: data.content.len(),
         };
@@ -127,11 +127,11 @@ impl ObjectQueue {
             };
             self.tx_notification.send(notification).unwrap(); // can only fail if there are no receivers
         }
-        return Ok((data, saved_data, dropped));
+        Ok((data, saved_data, dropped))
     }
 
     pub fn subscribe_insert_notification(&self) -> broadcast::Receiver<InsertNotification> {
-        return self.tx_notification.subscribe();
+        self.tx_notification.subscribe()
     }
 
     fn current_clocks(&self, now: i64) -> Clocks {
@@ -143,7 +143,7 @@ impl ObjectQueue {
             let based_on = this_seq - 1;
             clocks.logical.insert(my_id.clone(), MinMax::new(based_on, based_on));
         }
-        clocks.wall.insert(my_id.clone(), MinMax::new(now, now));
+        clocks.wall.insert(my_id, MinMax::new(now, now));
         clocks
     }
 }

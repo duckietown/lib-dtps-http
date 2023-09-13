@@ -408,7 +408,7 @@ mod tests {
 }
 
 pub fn format_digest_path(digest: &str, content_type: &str) -> String {
-    return format!("!/:ipfs/{}/{}/", digest, content_type.replace("/", "_"));
+    format!("!/:ipfs/{}/{}/", digest, content_type.replace("/", "_"))
 }
 
 pub fn make_relative(base: &str, url: &str) -> String {
@@ -417,8 +417,7 @@ pub fn make_relative(base: &str, url: &str) -> String {
     // }
     let base = url::Url::parse(&format!("http://example.org/{base}")).unwrap();
     let target = url::Url::parse(&format!("http://example.org/{url}")).unwrap();
-    let rurl = base.make_relative(&target).unwrap();
-    rurl
+    base.make_relative(&target).unwrap()
 }
 
 #[cfg(test)]

@@ -13,7 +13,6 @@ use maud::{
     html,
     PreEscaped,
 };
-
 use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tungstenite::http::{
@@ -81,7 +80,7 @@ pub async fn serve_master_post(
     query: HashMap<String, String>,
     ss_mutex: ServerStateAccess,
     headers: HeaderMap,
-    data: hyper::body::Bytes,
+    data: Bytes,
 ) -> HandlersResponse {
     let path_str = path_normalize(&path);
     let referrer = get_referrer(&headers);
@@ -92,7 +91,7 @@ pub async fn serve_master_post(
     };
 
     let content_type = get_header_with_default(&headers, CONTENT_TYPE, CONTENT_TYPE_OCTET_STREAM);
-    let byte_vector: Vec<u8> = data.to_vec().clone();
+    let byte_vector: Vec<u8> = data.to_vec();
     let rd = RawData::new(byte_vector, content_type);
 
     let ds = match matched {
@@ -106,7 +105,7 @@ pub async fn serve_master_post(
         error_with_info!(" {s}");
         let res = http::Response::builder()
             .status(StatusCode::METHOD_NOT_ALLOWED)
-            .body(Body::from(s.to_string()))
+            .body(Body::from(s))
             .unwrap();
         return Ok(res);
     }
@@ -145,7 +144,7 @@ pub async fn serve_master_post(
             error_with_info!("{s}");
             let res = http::Response::builder()
                 .status(StatusCode::METHOD_NOT_ALLOWED)
-                .body(Body::from(s.to_string()))
+                .body(Body::from(s))
                 .unwrap();
             Ok(res)
         }
@@ -157,7 +156,7 @@ pub async fn serve_master_patch(
     query: HashMap<String, String>,
     ss_mutex: ServerStateAccess,
     headers: HeaderMap,
-    data: hyper::body::Bytes,
+    data: Bytes,
 ) -> HandlersResponse {
     let path_str = path_normalize(&path);
     let referrer = get_referrer(&headers);
@@ -189,7 +188,7 @@ pub async fn serve_master_patch(
                 error_with_info!("{s}");
                 let res = http::Response::builder()
                     .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from(s.to_string()))
+                    .body(Body::from(s))
                     .unwrap();
                 return Ok(res);
             }
@@ -199,7 +198,7 @@ pub async fn serve_master_patch(
         error_with_info!("{s}");
         let res = http::Response::builder()
             .status(StatusCode::METHOD_NOT_ALLOWED)
-            .body(Body::from(s.to_string()))
+            .body(Body::from(s))
             .unwrap();
         return Ok(res);
     };
@@ -215,13 +214,13 @@ pub async fn serve_master_patch(
         error_with_info!(" {s}");
         let res = http::Response::builder()
             .status(StatusCode::METHOD_NOT_ALLOWED)
-            .body(Body::from(s.to_string()))
+            .body(Body::from(s))
             .unwrap();
         return Ok(res);
     }
 
     let x = ds.patch(&path_str, ss_mutex.clone(), &result).await;
-    return match x {
+    match x {
         Ok(_) => {
             let res = http::Response::builder()
                 .status(StatusCode::OK)
@@ -237,7 +236,7 @@ pub async fn serve_master_patch(
                 .unwrap();
             Ok(res)
         }
-    };
+    }
 }
 
 pub async fn serve_master_head(
@@ -261,13 +260,12 @@ pub async fn serve_master_head(
     // debug_with_info!("serve_master_head: ds: {:?}", ds);
     match &ds {
         TypeOFSource::OurQueue(topic_name, _) => {
-            let x: &ObjectQueue;
             let ss = ss_mutex.lock().await;
-            match ss.oqs.get(&topic_name) {
+            let x: &ObjectQueue = match ss.oqs.get(topic_name) {
                 None => return Err(warp::reject::not_found()),
 
-                Some(y) => x = y,
-            }
+                Some(y) => y,
+            };
             let empty_vec: Vec<u8> = Vec::new();
             let mut resp = Response::new(Body::from(empty_vec));
             let h = resp.headers_mut();
@@ -276,8 +274,8 @@ pub async fn serve_master_head(
             utils_headers::put_source_headers(h, &x.tr.origin_node, &x.tr.unique_id);
 
             let suffix = topic_name.as_relative_url();
-            put_alternative_locations(&ss, h, &suffix);
-            return Ok(resp.into());
+            put_alternative_locations(&ss, h, suffix);
+            return Ok(resp);
         }
         TypeOFSource::ForwardedQueue(fq) => {
             let tr = {
@@ -294,7 +292,7 @@ pub async fn serve_master_head(
                 let ss = ss_mutex.lock().await;
                 utils_headers::put_common_headers(&ss, h);
             }
-            return Ok(resp.into());
+            return Ok(resp);
         }
 
         TypeOFSource::MountedDir(_, _, _) => {
@@ -363,28 +361,21 @@ fn path_normalize(path: &warp::path::FullPath) -> String {
     //     return Ok(res);
     // }
 
-    let new_path = if path_str.contains(pat) {
+    if path_str.contains(pat) {
         // only preserve the part after the !/
 
         let index = path_str.rfind(pat).unwrap();
         let path_str2 = &path_str[index + pat.len() - 1..];
 
-        let res = path_str2.to_string().replace("/!!", "/!");
+        path_str2.to_string().replace("/!!", "/!")
 
         // debug_with_info!(
         //     "serve_master: normalizing /!/:\n   {:?}\n-> {:?} ",
         //     path, res
         // );
-        res
     } else {
         path_str.to_string()
-    };
-    //
-    // if path_str != new_path {
-    //     // debug_with_info!("serve_master: path={:?} => {:?} ", path, new_path);
-    // }
-
-    new_path
+    }
 }
 
 const STATIC_PREFIX: &str = "static";
@@ -422,7 +413,7 @@ pub async fn serve_master_get(
     match path_components.first() {
         None => {}
         Some(first) => {
-            if first == &STATIC_PREFIX {
+            if first == STATIC_PREFIX {
                 let pathstr = path_str;
 
                 // find "static/" in path and give the rest
@@ -512,7 +503,7 @@ pub async fn serve_master_get(
     };
 
     let ds_props = ds.get_properties();
-    return visualize_data(
+    visualize_data(
         &ds_props,
         path_str.to_string(),
         extra_html,
@@ -521,7 +512,7 @@ pub async fn serve_master_get(
         headers,
         ss_mutex,
     )
-    .await;
+    .await
 }
 
 fn make_friendly_visualization(
@@ -585,7 +576,7 @@ fn make_friendly_visualization(
     let headers = resp.headers_mut();
 
     utils_headers::put_header_content_type(headers, "text/html");
-    return Ok(resp);
+    Ok(resp)
 }
 
 pub async fn visualize_data(
@@ -615,7 +606,7 @@ pub async fn visualize_data(
             utils_headers::put_common_headers(&ss, h);
         }
         // debug_with_info!("the response is {resp:?}");
-        Ok(resp.into())
+        Ok(resp)
     }
 }
 
@@ -624,7 +615,7 @@ pub async fn handle_websocket_generic2(
     ws: warp::ws::WebSocket,
     state: ServerStateAccess,
     send_data: bool,
-) -> () {
+) {
     debug_with_info!("WEBSOCKET {path} send_data={send_data}");
     let (mut ws_tx, ws_rx) = ws.split();
     let (receiver, join_handle) = receive_from_websocket(ws_rx);
@@ -813,7 +804,7 @@ pub fn make_index_html(index: &TopicsIndexInternal) -> PreEscaped<String> {
             for j in 0..i + 1 {
                 v.push(components[j].clone());
             }
-            if v.len() == 0 {
+            if v.is_empty() {
                 continue;
             }
             if !all_comps.contains(&v) {
@@ -822,20 +813,20 @@ pub fn make_index_html(index: &TopicsIndexInternal) -> PreEscaped<String> {
         }
     }
     for topic_vecs in all_comps.iter() {
-        if topic_vecs.len() == 0 {
+        if topic_vecs.is_empty() {
             continue;
         }
         let mut url = String::new();
         for c in topic_vecs {
-            url.push_str(&c);
-            url.push_str("/");
+            url.push_str(c);
+            url.push('/');
         }
 
         let topic_name = TopicName::from_components(topic_vecs).to_relative_url();
         topic2url.push((topic_name, url));
     }
 
-    let x = make_html(
+    make_html(
         "index",
         html! {
             dl {
@@ -860,6 +851,5 @@ pub fn make_index_html(index: &TopicsIndexInternal) -> PreEscaped<String> {
             }
 
         },
-    );
-    x
+    )
 }

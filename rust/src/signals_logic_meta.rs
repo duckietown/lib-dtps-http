@@ -52,10 +52,10 @@ async fn get_sc_meta(
 
             let _url = a.as_relative_url();
 
-            let a_with_prefix = a.add_prefix(&prefix);
+            let a_with_prefix = a.add_prefix(prefix);
 
             let rurl = a_with_prefix.as_relative_url();
-            let _b2 = b.add_path(&rurl);
+            let _b2 = b.add_path(rurl);
 
             topics.insert(a_with_prefix, tr);
         }
@@ -132,10 +132,10 @@ impl TypeOFSource {
                     tr.reachability.clear();
                 }
                 tr.reachability.push(TopicReachabilityInternal {
-                    con: TypeOfConnection::Relative(rurl.to_string(), None),
-                    answering: node_id.clone(),
+                    con: Relative(rurl, None),
+                    answering: node_id,
                     forwarders: the_forwarders,
-                    benchmark: link_benchmark_total.clone(),
+                    benchmark: link_benchmark_total,
                 });
 
                 topics.insert(TopicName::root(), tr);
@@ -168,8 +168,8 @@ impl TypeOFSource {
                 let rurl = make_relative(&presented_url[1..], topic_url);
                 // debug_with_info!("topic_url = {topic_url} presented = {presented_url} rulr = {rurl}");
                 tr.reachability.push(TopicReachabilityInternal {
-                    con: TypeOfConnection::Relative(rurl, None),
-                    answering: node_id.clone(),
+                    con: Relative(rurl, None),
+                    answering: node_id,
                     forwarders: vec![],
                     benchmark: LinkBenchmark::identity(), //ok
                 });
@@ -211,7 +211,7 @@ impl TypeOFSource {
                         content_info: ContentInfo::generic(),
                     };
                     tr.reachability.push(TopicReachabilityInternal {
-                        con: TypeOfConnection::Relative(filename.clone(), None),
+                        con: Relative(filename.clone(), None),
                         answering: "".to_string(),
                         forwarders: vec![],
                         benchmark: LinkBenchmark::identity(), //ok

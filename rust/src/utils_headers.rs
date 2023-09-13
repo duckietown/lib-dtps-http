@@ -168,7 +168,7 @@ pub fn get_accept_header(headers: &HeaderMap) -> Vec<String> {
     match accept_header {
         Some(x) => {
             let accept_header = x.to_str().unwrap();
-            let accept_header = accept_header.split(",").map(|x| x.trim().to_string()).collect();
+            let accept_header = accept_header.split(',').map(|x| x.trim().to_string()).collect();
             accept_header
         }
         None => vec![],

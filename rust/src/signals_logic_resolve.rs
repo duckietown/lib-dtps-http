@@ -40,7 +40,7 @@ pub async fn interpret_path(
     ss: &ServerState,
 ) -> DTPSR<TypeOFSource> {
     // debug_with_info!("interpret_path: path: {}", path);
-    let path_components0 = divide_in_components(&path, '/');
+    let path_components0 = divide_in_components(path, '/');
     let path_components = path_components0.clone();
     let ends_with_dash = path.ends_with('/');
 
@@ -109,7 +109,7 @@ pub async fn interpret_path(
             let digest = path_components.get(1).unwrap();
             let content_type = path_components.get(2).unwrap();
             let content_type = content_type.replace("_", "/");
-            Ok(TypeOFSource::Digest(digest.to_string(), content_type.to_string()))
+            Ok(TypeOFSource::Digest(digest.to_string(), content_type))
         };
     }
 
@@ -117,10 +117,10 @@ pub async fn interpret_path(
         for (mounted_at, info) in &ss.proxied_other {
             if let Some((_, b)) = is_prefix_of(mounted_at.as_components(), &path_components) {
                 let mut path_and_query = b.join("/");
-                if ends_with_dash && b.len() > 0 {
+                if ends_with_dash && !b.is_empty() {
                     path_and_query.push('/');
                 }
-                path_and_query.push_str(&utils::format_query(&query));
+                path_and_query.push_str(&utils::format_query(query));
 
                 let other = OtherProxied {
                     // reached_at: mounted_at.clone(),
@@ -132,7 +132,7 @@ pub async fn interpret_path(
         }
     }
 
-    let all_sources = iterate_type_of_sources(&ss, true);
+    let all_sources = iterate_type_of_sources(ss, true);
     resolve(&ss.node_id, &path_components, ends_with_dash, &all_sources)
 }
 
@@ -263,7 +263,7 @@ fn resolve_extra_components(source: &TypeOFSource, rest: &Vec<String>) -> DTPSR<
     let mut cur = source.clone();
     for a in rest.iter() {
         cur = context!(
-            cur.get_inside(&a),
+            cur.get_inside(a),
             "interpret_path: cannot match for {a:?} rest: {rest:?}",
         )?;
     }

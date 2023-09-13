@@ -172,7 +172,7 @@ impl TopicRefInternal {
             let t = topic_reachability_internal.add_path(rel);
             reachability.push(t);
         }
-        return Self {
+        Self {
             unique_id: self.unique_id.clone(),
             origin_node: self.origin_node.clone(),
             app_data: Default::default(),
@@ -180,7 +180,7 @@ impl TopicRefInternal {
             reachability,
             properties: self.properties.clone(),
             content_info: self.content_info.clone(),
-        };
+        }
     }
 }
 
@@ -221,13 +221,13 @@ impl ContentInfo {
             examples: vec![],
         };
         ContentInfo {
-            accept: hashmap! {"".to_string() => dd.clone()},
+            accept: hashmap! {"".to_string() => dd},
             storage: DataDesc {
                 content_type: ct.clone(),
-                jschema: jschema.clone(),
+                jschema,
                 examples: vec![],
             },
-            produces_content_type: vec![ct.clone()],
+            produces_content_type: vec![ct],
         }
     }
 
@@ -255,7 +255,7 @@ impl TopicReachabilityInternal {
                 TypeOfConnection::UNIX(_) => self.con.clone(),
                 TypeOfConnection::Same() => self.con.clone(),
                 TypeOfConnection::File(..) => self.con.clone(),
-                TypeOfConnection::Relative(_, query) => TypeOfConnection::Relative(use_patch.clone(), query.clone()),
+                TypeOfConnection::Relative(_, query) => TypeOfConnection::Relative(use_patch, query.clone()),
             },
         };
 

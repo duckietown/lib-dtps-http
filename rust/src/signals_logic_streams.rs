@@ -19,11 +19,7 @@ use serde_cbor::{
     Value as CBORValue,
     Value::Null as CBORNull,
 };
-use tokio::sync::broadcast::{
-    error::RecvError,
-    Receiver,
-    Sender,
-};
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::{
     debug_with_info,
@@ -32,33 +28,26 @@ use crate::{
     is_prefix_of,
     merge_clocks,
     not_implemented,
-    signals_logic::{
-        ActualUpdate,
-        DataStream,
-        GetStream,
-        SourceComposition,
-        Transforms,
-        TypeOFSource,
-    },
-    utils_cbor::putinside,
+    putinside,
     warn_with_info,
+    ActualUpdate,
     ChannelInfo,
     Clocks,
     DTPSError,
     DataSaved,
+    DataStream,
+    GetStream,
     InsertNotification,
     RawData,
     ResolvedData,
-    ResolvedData::{
-        NotAvailableYet,
-        NotFound,
-        Regular,
-    },
     ServerStateAccess,
+    SourceComposition,
     TopicName,
     TopicProperties,
     TopicsIndexInternal,
     TopicsIndexWire,
+    Transforms,
+    TypeOFSource,
     TypeOfConnection,
     CONTENT_TYPE_DTPS_INDEX_CBOR,
     DTPSR,
@@ -128,7 +117,7 @@ async fn get_stream_compose_data(
         }
     }
 
-    let first_val = crate::RawData::from_cbor_value(&first)?;
+    let first_val = RawData::from_cbor_value(&first)?;
     let data_saved = DataSaved {
         origin_node: "".to_string(),
         unique_id: "".to_string(),
@@ -260,8 +249,8 @@ async fn listen_to_updates(
 }
 
 async fn filter_stream<T, U, F, G>(
-    mut receiver: Receiver<T>,
-    sender: Sender<U>,
+    mut receiver: tokio::sync::broadcast::Receiver<T>,
+    sender: tokio::sync::broadcast::Sender<U>,
     f: F,
     filter_same: bool,
     mut last: Option<U>,
@@ -378,8 +367,8 @@ async fn put_together(
 }
 
 async fn transform_for(
-    receiver: Receiver<InsertNotification>,
-    out_stream_sender: Sender<InsertNotification>,
+    receiver: tokio::sync::broadcast::Receiver<InsertNotification>,
+    out_stream_sender: tokio::sync::broadcast::Sender<InsertNotification>,
     prefix: TopicName,
     presented_as: String,
     unique_id: String,
@@ -467,8 +456,8 @@ fn filter_transform(in1: InsertNotification, t: &Transforms, unique_id: String) 
 }
 
 async fn apply_transformer(
-    receiver: Receiver<InsertNotification>,
-    out_stream_sender: Sender<InsertNotification>,
+    receiver: tokio::sync::broadcast::Receiver<InsertNotification>,
+    out_stream_sender: tokio::sync::broadcast::Sender<InsertNotification>,
     transform: Transforms,
     unique_id: String,
     first: Option<InsertNotification>,
@@ -571,9 +560,9 @@ fn filter_func(
 
 pub fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<ResolvedData> {
     let d = match data {
-        Regular(d) => d,
-        NotAvailableYet(s) => return Ok(NotAvailableYet(s)),
-        NotFound(s) => return Ok(NotFound(s)),
+        ResolvedData::Regular(d) => d,
+        ResolvedData::NotAvailableYet(s) => return Ok(ResolvedData::NotAvailableYet(s)),
+        ResolvedData::NotFound(s) => return Ok(ResolvedData::NotFound(s)),
         ResolvedData::RawData(rd) => rd.get_as_cbor()?,
     };
     Ok(ResolvedData::Regular(transform.apply(d)?))

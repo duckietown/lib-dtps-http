@@ -415,7 +415,7 @@ mod tests {
             value: serde_json::Value::String("new".to_string()),
         };
         let operation = PatchOperation::Replace(replace);
-        let patch = json_patch::Patch(vec![operation]);
+        let patch = Patch(vec![operation]);
         patch_data(&con_original, &patch).await?;
 
         // now test something that should fail
@@ -424,7 +424,7 @@ mod tests {
             value: serde_json::Value::String("new".to_string()),
         };
         let operation = PatchOperation::Replace(replace);
-        let patch = json_patch::Patch(vec![operation]);
+        let patch = Patch(vec![operation]);
         patch_data(&con_original, &patch).await.expect_err("should fail");
 
         // now let's see if we can replace entirely
@@ -434,7 +434,7 @@ mod tests {
             value: json!({"A": {"B": ["C", "D"]}}),
         };
         let operation = PatchOperation::Replace(replace);
-        let patch = json_patch::Patch(vec![operation]);
+        let patch = Patch(vec![operation]);
         patch_data(&con_original, &patch).await?;
 
         // now check the addressing
@@ -449,7 +449,7 @@ mod tests {
         };
         let operation1 = PatchOperation::Add(add_operation1);
         let operation2 = PatchOperation::Add(add_operation2);
-        let patch = json_patch::Patch(vec![operation1, operation2]);
+        let patch = Patch(vec![operation1, operation2]);
         patch_data(&b_address, &patch).await?;
 
         instance.finish()?;

@@ -61,9 +61,9 @@ mod tests {
 }
 
 pub async fn check_server(con: &TypeOfConnection) -> DTPSR<()> {
-    let md = get_metadata(&con).await?;
+    let md = get_metadata(con).await?;
     info_with_info!("metadata: {:#?}", md);
-    let index = get_index(&con).await?;
+    let index = get_index(con).await?;
 
     info_with_info!("index: {:#?}", index);
 
@@ -86,7 +86,7 @@ pub async fn check_server(con: &TypeOfConnection) -> DTPSR<()> {
     let clock = index.topics.get(&topic_clock).unwrap();
     let r = clock.reachability.get(0).unwrap();
     let md = get_metadata(&r.con).await?;
-    if md.events_data_inline_url == None {
+    if md.events_data_inline_url.is_none() {
         return Err(DTPSError::from("events_data_inline_url is None"));
     }
     let (handle, stream) = get_events_stream_inline(&md.events_data_inline_url.unwrap()).await;
@@ -165,7 +165,7 @@ async fn check_topic(topic: TopicName, con: TypeOfConnection) -> DTPSR<()> {
     info_with_info!("{topic:#?}: {md:#?}");
 
     // check_complete_metadata(&md)?;
-    if md.meta_url == None {
+    if md.meta_url.is_none() {
         return Err(DTPSError::from(format!("{:?}: meta is None", topic.as_dash_sep())));
     }
 

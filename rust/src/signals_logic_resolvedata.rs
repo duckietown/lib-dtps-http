@@ -30,11 +30,6 @@ use crate::{
     DataReady,
     RawData,
     ResolvedData,
-    ResolvedData::{
-        NotAvailableYet,
-        NotFound,
-        Regular,
-    },
     ServerStateAccess,
     TopicName,
     TopicProperties,
@@ -112,7 +107,7 @@ impl ResolveDataSingle for TypeOFSource {
             }
             TypeOFSource::MountedFile { filename, .. } => {
                 let data = std::fs::read(filename)?;
-                let content_type = mime_guess::from_path(&filename)
+                let content_type = mime_guess::from_path(filename)
                     .first()
                     .unwrap_or(mime::APPLICATION_OCTET_STREAM);
                 let rd = RawData::new(data, content_type);
@@ -175,7 +170,7 @@ pub async fn resolve_proxied(op: &OtherProxied) -> DTPSR<ResolvedData> {
 
     let rest = &op.path_and_query;
 
-    let con = con0.join(&rest)?;
+    let con = con0.join(rest)?;
 
     debug_with_info!("Proxied: {:?} -> {:?}", con0, con);
 
@@ -187,14 +182,17 @@ pub async fn resolve_proxied(op: &OtherProxied) -> DTPSR<ResolvedData> {
 async fn resolve_our_queue(topic_name: &TopicName, ss_mutex: ServerStateAccess) -> DTPSR<ResolvedData> {
     let ss = ss_mutex.lock().await;
     if !ss.oqs.contains_key(topic_name) {
-        return Ok(NotFound(format!("No queue with name {:?}", topic_name.as_dash_sep())));
+        return Ok(ResolvedData::NotFound(format!(
+            "No queue with name {:?}",
+            topic_name.as_dash_sep()
+        )));
     }
     let oq = ss.oqs.get(topic_name).unwrap();
 
     return match oq.stored.last() {
         None => {
             let s = format!("No data in queue {:?}", topic_name.as_dash_sep());
-            Ok(NotAvailableYet(s))
+            Ok(ResolvedData::NotAvailableYet(s))
         }
         Some(v) => {
             let data_saved = oq.saved.get(v).unwrap();
@@ -223,5 +221,5 @@ async fn single_compose(
         putinside(&mut result_dict, prefix, value)?;
     }
 
-    Ok(Regular(result_dict))
+    Ok(ResolvedData::Regular(result_dict))
 }

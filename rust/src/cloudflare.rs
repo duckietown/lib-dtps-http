@@ -34,7 +34,7 @@ pub async fn open_cloudflare(port: u16, tunnel_file: &str, cloudflare_executable
         "http2",
         // "--no-autoupdate",
         "--cred-file",
-        &tunnel_file,
+        tunnel_file,
         "--url",
         &hoststring_127,
         &tunnel_info.TunnelID,
@@ -47,9 +47,8 @@ pub async fn open_cloudflare(port: u16, tunnel_file: &str, cloudflare_executable
         .spawn()
         .expect("Failed to start ping process");
 
-    let handle = spawn(async move {
+    spawn(async move {
         let output = child.wait().await;
         error_with_info!("tunnel exited: {:?}", output);
-    });
-    handle
+    })
 }

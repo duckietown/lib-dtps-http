@@ -61,21 +61,18 @@ pub async fn reply_for_dir(path: &str) -> Result<Response<Body>, Rejection> {
         }}
 
     };
-    let markup = x.into_string().clone();
+    let markup = x.into_string();
     let resp = Response::new(Body::from(markup));
 
     Ok(resp)
 }
 
 pub async fn serve_static_file_path(path: &str) -> HandlersResponse {
-    if path == "" {
+    if path.is_empty() {
         return reply_for_dir(path).await;
     }
-    let _dir = match STATIC_FILES.get_dir(path) {
-        Some(_dir) => {
-            return reply_for_dir(path).await;
-        }
-        None => {}
+    if let Some(_dir) = STATIC_FILES.get_dir(path) {
+        return reply_for_dir(path).await;
     };
 
     // debug_with_info!("serve_static_file: path={}", path);
