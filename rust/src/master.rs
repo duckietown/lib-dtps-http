@@ -58,6 +58,7 @@ use crate::{
     receive_from_websocket,
     send_as_ws_cbor,
     serve_static_file_path,
+    signals_logic::GetStream,
     utils_headers,
     utils_mime,
     websocket_signals::{
@@ -82,12 +83,12 @@ use crate::{
     TopicsIndexInternal,
     TypeOFSource,
     CONTENT_TYPE,
+    CONTENT_TYPE_OCTET_STREAM,
     CONTENT_TYPE_PATCH_CBOR,
     CONTENT_TYPE_PATCH_JSON,
     CONTENT_TYPE_YAML,
     DTPSR,
     JAVASCRIPT_SEND,
-    OCTET_STREAM,
 };
 
 pub async fn serve_master_post(
@@ -105,7 +106,7 @@ pub async fn serve_master_post(
         interpret_path(&path_str, &query, &referrer, &ss).await
     };
 
-    let content_type = get_header_with_default(&headers, CONTENT_TYPE, OCTET_STREAM);
+    let content_type = get_header_with_default(&headers, CONTENT_TYPE, CONTENT_TYPE_OCTET_STREAM);
     let byte_vector: Vec<u8> = data.to_vec().clone();
     let rd = RawData::new(byte_vector, content_type);
 
@@ -181,7 +182,7 @@ pub async fn serve_master_patch(
         interpret_path(&path_str, &query, &referrer, &ss).await
     };
 
-    let content_type = get_header_with_default(&headers, CONTENT_TYPE, OCTET_STREAM);
+    let content_type = get_header_with_default(&headers, CONTENT_TYPE, CONTENT_TYPE_OCTET_STREAM);
     let result = if content_type == CONTENT_TYPE_PATCH_JSON {
         let r = serde_json::from_slice::<json_patch::Patch>(&data);
         // debug_with_info!("orig: {:?}", data);

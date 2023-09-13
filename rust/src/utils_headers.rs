@@ -13,11 +13,11 @@ use crate::{
     TopicProperties,
     CONTENT_TYPE,
     CONTENT_TYPE_DTPS_INDEX_CBOR,
+    CONTENT_TYPE_OCTET_STREAM,
     EVENTS_SUFFIX,
     HEADER_DATA_ORIGIN_NODE_ID,
     HEADER_DATA_UNIQUE_ID,
     HEADER_NODE_ID,
-    OCTET_STREAM,
     REL_EVENTS_DATA,
     REL_EVENTS_NODATA,
     REL_HISTORY,
@@ -179,5 +179,5 @@ pub fn get_content_type<T>(resp: &http::Response<T>) -> String {
     resp.headers()
         .get(CONTENT_TYPE)
         .map(|x| x.to_str().unwrap().to_string())
-        .unwrap_or(OCTET_STREAM.to_string())
+        .unwrap_or(CONTENT_TYPE_OCTET_STREAM.to_string())
 }

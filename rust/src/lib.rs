@@ -68,6 +68,9 @@ pub mod platform;
 pub mod server;
 pub mod server_state;
 pub mod signals_logic;
+pub mod signals_logic_patch;
+mod signals_logic_resolvedata;
+mod signals_logic_streams;
 pub mod static_files;
 pub mod structures;
 pub mod structures_rawdata;
@@ -75,18 +78,29 @@ pub mod structures_topicref;
 pub mod types;
 pub mod urls;
 pub mod utils;
+mod utils_cbor;
 pub mod utils_headers;
 pub mod utils_mime;
 mod utils_yaml;
 pub mod websocket_abstractions;
 pub mod websocket_signals;
 
-#[cfg(test)]
-mod test_python;
-#[cfg(test)]
-mod test_range;
+use signals_logic_patch::*;
+use signals_logic_resolvedata::*;
+use signals_logic_streams::*;
+use utils_cbor::*;
 
 pub mod built_info {
     // The file has been placed there by the build script.
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }
+
+mod signals_logic_meta;
+mod signals_logic_props;
+mod signals_logic_resolve;
+#[cfg(test)]
+mod test_python;
+#[cfg(test)]
+mod test_range;
+use signals_logic_props::*;
+use signals_logic_resolve::*;

@@ -88,6 +88,7 @@ use crate::{
     CONTENT_TYPE_YAML,
     DTPSR,
     MASK_ORIGIN,
+    TOPIC_CONNECTIONS,
     TOPIC_LIST_AVAILABILITY,
     TOPIC_LIST_CLOCK,
     TOPIC_LIST_NAME,
@@ -104,6 +105,52 @@ pub struct ProxyJob {
 }
 
 type Proxied = HashMap<String, ProxyJob>;
+
+use std::str::FromStr;
+
+#[derive(Debug, PartialEq)]
+pub enum ServiceMode {
+    /// Ignore messages that were produced while we were disconnected
+    BestEffort,
+    /// Make sure to send all messages by asking history if some was missing
+    AllMessages,
+    /// At the beginning, get all the history as well (if history supported)
+    AllMessagesSinceStart,
+}
+
+impl FromStr for ServiceMode {
+    type Err = DTPSError;
+
+    fn from_str(s: &str) -> DTPSR<Self> {
+        match s {
+            "BestEffort" => Ok(Self::BestEffort),
+            "AllMessages" => Ok(Self::AllMessages),
+            "AllMessagesSinceStart" => Ok(Self::AllMessagesSinceStart),
+            _ => DTPSError::other(format!("Unknown service mode: {:?}", s)),
+        }
+    }
+}
+
+impl ServiceMode {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::BestEffort => "BestEffort",
+            Self::AllMessages => "AllMessages",
+            Self::AllMessagesSinceStart => "AllMessagesSinceStart",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+pub struct ConnectionJob {
+    /// Source topic (dash separated)
+    pub source: String,
+    /// Target topic (dash separated)
+    pub target: String,
+    pub service_mode: String,
+}
+
+type Connections = HashMap<String, ConnectionJob>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LogEntry {
@@ -379,6 +426,25 @@ impl ServerState {
         )?;
         ss.publish_json(&TopicName::from_dash_sep(TOPIC_PROXIED)?, "{}", None)?;
 
+        let p = TopicProperties {
+            streamable: true,
+            pushable: false,
+            readable: true,
+            immutable: false,
+            has_history: true,
+            patchable: true,
+        };
+
+        ss.new_topic(
+            &TopicName::from_dash_sep(TOPIC_CONNECTIONS)?,
+            None,
+            CONTENT_TYPE_JSON,
+            &p,
+            Some(schema_for!(Connections)),
+            Some(1),
+        )?;
+        ss.publish_json(&TopicName::from_dash_sep(TOPIC_CONNECTIONS)?, "{}", None)?;
+
         Ok(ss)
     }
     pub fn add_alias(&mut self, new: &TopicName, existing: &TopicName) {
@@ -440,7 +506,7 @@ impl ServerState {
         let future = observe_node_proxy(topic_name.clone(), cons.clone(), expect_node_id, ssa.clone());
 
         let handle = tokio::spawn(show_errors(
-            Some(ssa.clone()),
+            Some(ssa),
             format!(
                 "observe_node_proxy: {topic_name}",
                 topic_name = topic_name.as_dash_sep()
@@ -464,7 +530,7 @@ impl ServerState {
         debug_with_info!("Removing proxy connection {:?}", topic_name);
         self.proxied.remove(topic_name);
         self.proxied_topics.retain(|k, _| {
-            if let Some(_) = is_prefix_of(topic_name.as_components(), k.as_components()) {
+            if is_prefix_of(topic_name.as_components(), k.as_components()).is_some() {
                 debug_with_info!("Removing proxy topic {:?}", k);
                 false
             } else {
@@ -873,14 +939,12 @@ impl ServerState {
         }
 
         for (topic_name, pinfo) in self.proxied_other.iter() {
-            let mut forwarders = vec![];
-
-            forwarders.push(ForwardingStep {
+            let forwarders = vec![ForwardingStep {
                 forwarding_node: self.node_id.clone(),
                 forwarding_node_connects_to: pinfo.con.to_string(),
 
                 performance: LinkBenchmark::identity(), // TODO:
-            });
+            }];
 
             let prop = TopicProperties {
                 streamable: false,

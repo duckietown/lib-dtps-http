@@ -411,3 +411,24 @@ mod tests {
 pub fn format_digest_path(digest: &str, content_type: &str) -> String {
     return format!("!/:ipfs/{}/{}/", digest, content_type.replace("/", "_"));
 }
+
+pub fn make_relative(base: &str, url: &str) -> String {
+    // if base.starts_with("/") || url.starts_with("/") {
+    //     return DTPSError::invalid_input!("neither should start with /: {base:?} {url:?}")
+    // }
+    let base = url::Url::parse(&format!("http://example.org/{base}")).unwrap();
+    let target = url::Url::parse(&format!("http://example.org/{url}")).unwrap();
+    let rurl = base.make_relative(&target).unwrap();
+    rurl
+}
+
+#[cfg(test)]
+mod test {
+    use super::make_relative;
+
+    #[test]
+    fn t1() {
+        assert_eq!(make_relative("clock5/:meta/", "clock5/"), "../");
+        assert_eq!(make_relative("clock5/", "clock5/:meta/"), ":meta/");
+    }
+}
