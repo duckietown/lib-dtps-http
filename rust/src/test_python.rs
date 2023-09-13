@@ -67,13 +67,6 @@ pub async fn check_server(con: &TypeOfConnection) -> DTPSR<()> {
 
     info_with_info!("index: {:#?}", index);
 
-    // let mut topics: HashSet<TopicName> = index.topics.keys().cloned().collect();
-    // for topic in topics.clone().iter() {
-    //     for prefix in topic.prefixes() {
-    //         topics.insert(prefix.clone());
-    //     }
-    // }
-
     let mut handles: Vec<JoinHandle<DTPSR<()>>> = vec![];
 
     for (topic, data) in &index.topics {
@@ -82,13 +75,6 @@ pub async fn check_server(con: &TypeOfConnection) -> DTPSR<()> {
         let handle = tokio::spawn(check_topic(topic.clone(), r0.con.clone()));
 
         handles.push(handle);
-
-        //
-        // info_with_info!("metadata: {:#?}", md);
-        // let index = get_index(&con).await?;
-        // info_with_info!("index: {:#?}", index);
-        // let data = get_data(&con, &topic).await?;
-        // info_with_info!("data: {:#?}", data);
     }
 
     // wait for all handles to finish
@@ -115,19 +101,19 @@ pub async fn check_server(con: &TypeOfConnection) -> DTPSR<()> {
 }
 
 fn check_complete_metadata(md: &FoundMetadata) -> DTPSR<()> {
-    if md.answering == None {
+    if md.answering.is_none() {
         return Err(DTPSError::from("answering is None"));
     }
-    if md.events_url == None {
+    if md.events_url.is_none() {
         return Err(DTPSError::from("events_url is None"));
     }
-    if md.events_data_inline_url == None {
+    if md.events_data_inline_url.is_none() {
         return Err(DTPSError::from("events_data_inline_url is None"));
     }
-    if md.meta_url == None {
+    if md.meta_url.is_none() {
         return Err(DTPSError::from("meta is None"));
     }
-    if md.history_url == None {
+    if md.history_url.is_none() {
         return Err(DTPSError::from("history_url is None"));
     }
     Ok(())
