@@ -668,7 +668,7 @@ pub async fn handle_websocket_generic2(
 pub async fn handle_websocket_generic2_(
     path: String,
     ws_tx: &mut SplitSink<warp::ws::WebSocket, WarpMessage>,
-    receiver: UnboundedReceiverStream<MsgClientToServer>,
+    _receiver: UnboundedReceiverStream<MsgClientToServer>,
     state: ServerStateAccess,
     send_data: bool,
 ) -> DTPSR<()> {

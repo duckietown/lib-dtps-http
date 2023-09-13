@@ -623,6 +623,6 @@ pub fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<ResolvedDa
     Ok(ResolvedData::Regular(transform.apply(d)?))
 }
 
-async fn get_data_stream_from_url(con: &TypeOfConnection) -> DTPSR<DataStream> {
+async fn get_data_stream_from_url(_con: &TypeOfConnection) -> DTPSR<DataStream> {
     todo!("not implemented");
 }
