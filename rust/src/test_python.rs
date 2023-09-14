@@ -9,6 +9,7 @@ use tokio::{
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::{
+    client::get_rawdata_accept,
     debug_with_info,
     get_events_stream_inline,
     get_history,
@@ -155,10 +156,11 @@ async fn read_notifications(
 
 async fn check_topic(topic: TopicName, con: TypeOfConnection) -> DTPSR<()> {
     debug_with_info!("check_topic {topic:?}...");
-    let _data = get_rawdata(&con).await?;
-
-    let resp = make_request(&con, hyper::Method::GET, b"", None, Some("text/html")).await?;
-    let x = interpret_resp(&con, resp).await?;
+    let x = get_rawdata_accept(&con, Some("text/html")).await?;
+    //
+    // let resp = make_request(&con, hyper::Method::GET, b"", None, Some("text/html")).await?;
+    // let x = interpret_resp(&con, resp).await?;
+    // debug_with_info!("check_topic {topic:?}... {x:?}");
     assert_eq!(x.content_type, "text/html", "ok {}", con);
 
     let md = get_metadata(&con).await?;

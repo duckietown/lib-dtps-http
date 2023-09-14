@@ -5,7 +5,6 @@ use std::{
 
 use anyhow::Context;
 use async_recursion::async_recursion;
-
 use maplit::hashmap;
 
 use crate::{
@@ -37,6 +36,7 @@ pub async fn interpret_path(
     referrer: &Option<String>,
     ss: &ServerState,
 ) -> DTPSR<TypeOFSource> {
+    let _ = referrer;
     // debug_with_info!("interpret_path: path: {}", path);
     let path_components0 = divide_in_components(path, '/');
     let path_components = path_components0.clone();
@@ -52,7 +52,7 @@ pub async fn interpret_path(
             let i = path_components.iter().position(|x| x == &deref).unwrap();
             let before = path_components.get(0..i).unwrap().to_vec();
             let after = path_components.get(i + 1..).unwrap().to_vec();
-            debug_with_info!("interpret_path: before: {:?} after: {:?}", before, after);
+            // debug_with_info!("interpret_path: before: {:?} after: {:?}", before, after);
 
             let before2 = before.join("/") + "/";
             let interpret_before = interpret_path(&before2, query, referrer, ss).await?;
@@ -66,7 +66,7 @@ pub async fn interpret_path(
                     ));
                 }
             };
-            return resolve_extra_components(&first_part, &after);
+            return resolve_extra_components(&first_part, &after, ends_with_dash);
         }
     }
     {
@@ -76,13 +76,13 @@ pub async fn interpret_path(
             let i = path_components.iter().position(|x| x == &history_marker).unwrap();
             let before = path_components.get(0..i).unwrap().to_vec();
             let after = path_components.get(i + 1..).unwrap().to_vec();
-            debug_with_info!("interpret_path: before: {:?} after: {:?}", before, after);
+            // debug_with_info!("interpret_path: before: {:?} after: {:?}", before, after);
 
             let before2 = before.join("/") + "/";
             let interpret_before = interpret_path(&before2, query, referrer, ss).await?;
 
             let first_part = TypeOFSource::History(Box::new(interpret_before));
-            return resolve_extra_components(&first_part, &after);
+            return resolve_extra_components(&first_part, &after, ends_with_dash);
         }
     }
     {
@@ -96,7 +96,7 @@ pub async fn interpret_path(
             let interpret_before = interpret_path(&before2, query, referrer, ss).await?;
 
             let first_part = TypeOFSource::Index(Box::new(interpret_before));
-            return resolve_extra_components(&first_part, &after);
+            return resolve_extra_components(&first_part, &after, ends_with_dash);
         }
     }
 
@@ -106,7 +106,7 @@ pub async fn interpret_path(
         } else {
             let digest = path_components.get(1).unwrap();
             let content_type = path_components.get(2).unwrap();
-            let content_type = content_type.replace("_", "/");
+            let content_type = content_type.replace('_', "/");
             Ok(TypeOFSource::Digest(digest.to_string(), content_type))
         };
     }
@@ -137,7 +137,7 @@ pub async fn interpret_path(
 fn resolve(
     origin_node: &str,
     path_components: &Vec<String>,
-    _ends_with_dash: bool,
+    ends_with_dash: bool,
     all_sources: &[(TopicName, TypeOFSource)],
 ) -> DTPSR<TypeOFSource> {
     let mut subtopics: Vec<(TopicName, Vec<String>, Vec<String>, TypeOFSource)> = vec![];
@@ -159,7 +159,7 @@ fn resolve(
         match is_prefix_of(topic_components, path_components) {
             None => {}
             Some((_, rest)) => {
-                return resolve_extra_components(source, &rest);
+                return resolve_extra_components(source, &rest, ends_with_dash);
             }
         };
 
@@ -170,7 +170,7 @@ fn resolve(
 
             Some(rest) => rest,
         };
-
+        if !ends_with_dash {}
         // debug_with_info!("pushing: {k:?}");
         subtopics.push((k.clone(), matched, rest, source.clone()));
     }
@@ -182,6 +182,10 @@ fn resolve(
             path_components, subtopics_vec
         );
         error_with_info!("{}", s);
+        return Err(DTPSError::TopicNotFound(s));
+    }
+    if !ends_with_dash {
+        let s = "Expected to end with dash".to_string();
         return Err(DTPSError::TopicNotFound(s));
     }
     let y = path_components.join("/");
@@ -257,11 +261,11 @@ pub fn iterate_type_of_sources(s: &ServerState, add_aliases: bool) -> Vec<(Topic
     res
 }
 
-fn resolve_extra_components(source: &TypeOFSource, rest: &Vec<String>) -> DTPSR<TypeOFSource> {
+fn resolve_extra_components(source: &TypeOFSource, rest: &Vec<String>, ends_with_dash: bool) -> DTPSR<TypeOFSource> {
     let mut cur = source.clone();
     for a in rest.iter() {
         cur = context!(
-            cur.get_inside(a),
+            cur.get_inside(a, ends_with_dash),
             "interpret_path: cannot match for {a:?} rest: {rest:?}",
         )?;
     }
@@ -269,7 +273,7 @@ fn resolve_extra_components(source: &TypeOFSource, rest: &Vec<String>) -> DTPSR<
 }
 
 impl TypeOFSource {
-    pub fn get_inside(&self, s: &str) -> DTPSR<Self> {
+    pub fn get_inside(&self, s: &str, ends_with_dash: bool) -> DTPSR<Self> {
         match self {
             TypeOFSource::ForwardedQueue(_q) => Ok(TypeOFSource::Transformed(
                 Box::new(self.clone()),
@@ -277,7 +281,12 @@ impl TypeOFSource {
             )),
             TypeOFSource::OurQueue(..) => {
                 // TODO: this is where you would check the schema
-                // not_implemented!("get_inside for {self:#?} with {s:?}")
+                if !ends_with_dash {
+                    return Err(DTPSError::TopicNotFound(format!(
+                        "Expected to end with dash: {:#?}",
+                        self
+                    )));
+                }
                 Ok(TypeOFSource::Transformed(
                     Box::new(self.clone()),
                     Transforms::GetInside(vec![s.to_string()]),
@@ -288,6 +297,12 @@ impl TypeOFSource {
                 let inside = p.join(s);
                 if inside.exists() {
                     if inside.is_dir() {
+                        if !ends_with_dash {
+                            return Err(DTPSError::TopicNotFound(format!(
+                                "Directory expected to end with dash: {:#?}",
+                                self
+                            )));
+                        }
                         Ok(TypeOFSource::MountedDir(
                             topic_name.clone(),
                             inside.to_str().unwrap().to_string(),

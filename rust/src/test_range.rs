@@ -320,58 +320,67 @@ mod tests {
     #[rstest]
     #[awt]
     #[tokio::test]
-    async fn check_proxy_websocket_01(#[future] instance: TestFixture, #[future] instance2: TestFixture) -> DTPSR<()> {
+    async fn check_websocket_01_root(#[future] instance: TestFixture, #[future] instance2: TestFixture) -> DTPSR<()> {
         check_proxy_websocket(instance, instance2, "").await
     }
 
     #[rstest]
     #[awt]
     #[tokio::test]
-    async fn check_proxy_websocket_02(#[future] instance: TestFixture, #[future] instance2: TestFixture) -> DTPSR<()> {
+    async fn check_websocket_02_root_deref(
+        #[future] instance: TestFixture,
+        #[future] instance2: TestFixture,
+    ) -> DTPSR<()> {
         check_proxy_websocket(instance, instance2, ":deref/").await
     }
+
     #[rstest]
     #[awt]
     #[tokio::test]
-    async fn check_proxy_websocket_03(#[future] instance: TestFixture, #[future] instance2: TestFixture) -> DTPSR<()> {
+    async fn check_websocket_03_mounted(
+        #[future] instance: TestFixture,
+        #[future] instance2: TestFixture,
+    ) -> DTPSR<()> {
         check_proxy_websocket(instance, instance2, "mounted/").await
     }
+
     #[rstest]
     #[awt]
     #[tokio::test]
-    async fn check_proxy_websocket_04_mounted_dtps_clock(
+    async fn check_websocket_04_mounted_dtps_clock(
         #[future] instance: TestFixture,
         #[future] instance2: TestFixture,
     ) -> DTPSR<()> {
         check_proxy_websocket(instance, instance2, "mounted/dtps/clock/").await
     }
+
     #[rstest]
     #[awt]
     #[tokio::test]
-    async fn check_proxy_websocket_05_dtps_clock(
+    async fn check_websocket_05_dtps_clock(
         #[future] instance: TestFixture,
         #[future] instance2: TestFixture,
     ) -> DTPSR<()> {
         check_proxy_websocket(instance, instance2, "dtps/clock/").await
     }
+
     #[rstest]
     #[awt]
     #[tokio::test]
-    async fn check_proxy_websocket_06_dtps(
-        #[future] instance: TestFixture,
-        #[future] instance2: TestFixture,
-    ) -> DTPSR<()> {
+    async fn check_websocket_06_dtps(#[future] instance: TestFixture, #[future] instance2: TestFixture) -> DTPSR<()> {
         check_proxy_websocket(instance, instance2, "dtps/").await
     }
+
     #[rstest]
     #[awt]
     #[tokio::test]
-    async fn check_proxy_websocket_04_mounted_dtps(
+    async fn check_websocket_04_mounted_dtps(
         #[future] instance: TestFixture,
         #[future] instance2: TestFixture,
     ) -> DTPSR<()> {
         check_proxy_websocket(instance, instance2, "mounted/dtps/").await
     }
+
     async fn check_proxy_websocket(instance: TestFixture, mut instance2: TestFixture, path: &str) -> DTPSR<()> {
         init_logging();
 
@@ -391,11 +400,15 @@ mod tests {
         ];
 
         // create process given by command above
-        let mut child = Command::new(cmd[0]).args(&cmd[1..]).spawn().unwrap();
+        let output = Command::new(cmd[0]).args(&cmd[1..]).output().await?;
 
-        let status = child.wait().await?;
+        let status = output.status;
+        let stderr = String::from_utf8_lossy(&output.stderr);
         if !status.success() {
-            return DTPSError::other(format!("child process failed with error {status}"));
+            // print stderr if process failed
+            error_with_info!("status {status} stderr:\n{stderr}");
+
+            return DTPSError::other(format!("child process failed with error {status}:\n{stderr}"));
         }
 
         instance.finish()?;

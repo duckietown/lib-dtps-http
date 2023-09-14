@@ -149,10 +149,10 @@ mod tests {
 
     #[test]
     fn link_parse_1() {
-        let s = "<:events?send_data=1>; rel=dtps-events-inline-data; type=websocket";
+        let s = "<:events/?send_data=1>; rel=dtps-events-inline-data; type=websocket";
         let found = LinkHeader::from_header_value(s);
         let expected = LinkHeader {
-            url: ":events?send_data=1".to_string(),
+            url: ":events/?send_data=1".to_string(),
             attributes: hashmap! {
                 "rel".to_string() => "dtps-events-inline-data".to_string(),
                 "type".to_string() => "websocket".to_string(),

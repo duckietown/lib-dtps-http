@@ -48,43 +48,65 @@ async function handle_response(r) {
 
 }
 
-function subscribeWebSocket(url, fieldId) {
+function subscribeWebSocket(url, fieldId, data_field) {
     // Initialize a new WebSocket connection
     let socket = new WebSocket(url);
+    let field = document.getElementById(fieldId);
 
     // Connection opened
     socket.addEventListener('open', function (event) {
-        console.log('WebSocket connection established');
-       let field = document.getElementById(fieldId);
-
+        console.log('WebSocket connection established', event);
+        let field = document.getElementById(fieldId);
         if (field) {
             field.textContent = 'WebSocket connection established';
         }
     });
 
+    let i = 0;
     // Listen for messages
     socket.addEventListener('message', async function (event) {
         console.log('Message from server: ', event);
+        // Find the field by ID and update its content
+
         let message0 = await convert(event);
+
 
         if ('DataReady' in message0) {
             let dr = message0['DataReady']
 
-            let now = (performance.now() + performance.timeOrigin) * 1000.0* 1000.0;
+            let now = (performance.now() + performance.timeOrigin) * 1000.0 * 1000.0;
             let diff = now - dr.time_inserted;
 
             let diff_ms = diff / 1000.0 / 1000.0;
             // console.log("diff", now, dr.time_inserted, diff);
 
-            let s = "Received this notification with " + diff_ms.toFixed(3) + " ms latency:\n";
+            let s = "Received this notification with " + diff_ms.toFixed(3) + " ms latency:\n\n";
             // console.log('Message from server: ', message);
 
-            // Find the field by ID and update its content
-            let field = document.getElementById(fieldId);
             if (field) {
                 // field.textContent = s + JSON.stringify(message0, null, 4);
                 field.textContent = s + jsyaml.dump(message0);
             }
+
+            let availability = dr.availability[0].url;
+            // console.log("availability", availability);
+            // download from the url
+            let data = await fetch(availability);
+            let blob = await data.blob();
+            let content_type = data.headers.get('Content-Type');
+
+            let interpreted = await interpret_blob(blob, content_type);
+            console.log("interpreted", interpreted);
+
+            let data_field_ = document.getElementById(data_field);
+            if (i > 0) {
+                if (data_field_) {
+                    data_field_.textContent = jsyaml.dump(interpreted);
+                }
+            }
+
+            i += 1;
+
         } else if ('ChannelInfo' in message0) {
             console.log("ChannelInfo", message0);
             let field = document.getElementById(fieldId);
@@ -99,8 +121,8 @@ function subscribeWebSocket(url, fieldId) {
 
     // Connection closed
     socket.addEventListener('close', function (event) {
-        console.log('WebSocket connection closed');
-         let field = document.getElementById(fieldId);
+        console.log('WebSocket connection closed', event);
+        let field = document.getElementById(fieldId);
         if (field) {
             field.textContent = field.textContent + '\nWebSocket connection CLOSED';
         }
@@ -109,7 +131,7 @@ function subscribeWebSocket(url, fieldId) {
     // Connection error
     socket.addEventListener('error', function (event) {
         console.error('WebSocket error: ', event);
-           let field = document.getElementById(fieldId);
+        let field = document.getElementById(fieldId);
         if (field) {
             field.textContent = 'WebSocket error';
         }
@@ -126,13 +148,30 @@ async function convert(event) {
             return CBOR.decode(arrayBuffer);
         } catch (error) {
             console.error('Error reading blob: ', error);
-            return  {'Error': error};
+            return {'Error': error};
         }
     } else {
         console.error('Unknown data type: ', event.data);
-        return  {'Unknown data type': event.data};
+        return {'Unknown data type': event.data};
     }
 
+}
+
+async function interpret_blob(data, content_type) {
+    if (content_type.indexOf('cbor') >= 0) {
+        let content = await data.arrayBuffer();
+        return CBOR.decode(content);
+    } else if (content_type.indexOf('json') >= 0) {
+        let content = await data.text();
+        return JSON.parse(content);
+    } else if (content_type.indexOf('yaml') >= 0) {
+        let content = await data.text();
+        return jsyaml.load(content)
+    } else if (content_type.indexOf('text') >= 0) {
+        return await data.text();
+    } else {
+        return content_type + ' ' + data.toString();
+    }
 }
 
 function readFileAsArrayBuffer(blob) {
@@ -148,9 +187,9 @@ function readFileAsArrayBuffer(blob) {
 
 
 document.addEventListener("DOMContentLoaded", function () {
-    let s = ((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + window.location.pathname + ":events";
+    let s = ((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + window.location.pathname + ":events/";
 
     console.log("subscribing to: ", s);
 
-    subscribeWebSocket(s, 'result');
+    subscribeWebSocket(s, 'result', 'data_field');
 });

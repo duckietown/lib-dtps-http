@@ -92,6 +92,7 @@ pub mod built_info {
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }
 
+mod internal_jobs;
 mod signals_logic_meta;
 mod signals_logic_props;
 mod signals_logic_resolve;
@@ -99,5 +100,7 @@ mod signals_logic_resolve;
 mod test_python;
 #[cfg(test)]
 mod test_range;
+use internal_jobs::*;
+
 use master::*;
 use signals_logic_resolve::*;

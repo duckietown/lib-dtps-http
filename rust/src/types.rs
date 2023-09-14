@@ -30,7 +30,7 @@ use crate::{
 };
 
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct TopicName {
+pub struct CompositeName {
     /// ["a", "b", "c"]
     components: Vec<String>,
     /// "a/b/c/"
@@ -39,7 +39,7 @@ pub struct TopicName {
     dash_sep: String,
 }
 
-impl Serialize for TopicName {
+impl Serialize for CompositeName {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -47,8 +47,9 @@ impl Serialize for TopicName {
         serializer.serialize_str(self.as_dash_sep())
     }
 }
-impl<'de> Deserialize<'de> for TopicName {
-    fn deserialize<D>(deserializer: D) -> Result<TopicName, D::Error>
+
+impl<'de> Deserialize<'de> for CompositeName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -56,20 +57,8 @@ impl<'de> Deserialize<'de> for TopicName {
         Ok(Self::from_dash_sep(s).unwrap())
     }
 }
-impl JsonSchema for TopicName {
-    fn schema_name() -> String {
-        "TopicName".to_string()
-    }
 
-    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
-        let mut schema_object = SchemaObject::default();
-        schema_object.metadata().description = Some("dash separate topic name (empty string=root)".to_string());
-        schema_object.string(); //chemars::schema::SimpleTypes::String);
-        Schema::Object(schema_object)
-    }
-}
-
-impl Debug for TopicName {
+impl Debug for CompositeName {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let a = "Topic(".green();
         let b = ")".green();
@@ -86,7 +75,7 @@ impl Debug for TopicName {
     }
 }
 
-impl TopicName {
+impl CompositeName {
     /// Gives a list of components, e.g. "a/b/c" -> ["a", "b", "c"]
     pub fn as_components(&self) -> &Vec<String> {
         &self.components
@@ -132,11 +121,15 @@ impl TopicName {
     }
 
     pub fn root() -> Self {
-        Self::from_components(&vec![])
+        Self::from_components(&[])
     }
 
-    pub fn from_components(v: &Vec<String>) -> Self {
-        let components = v.clone();
+    pub fn from_components_str(v: &[&str]) -> Self {
+        let v = v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        Self::from_components(&v)
+    }
+    pub fn from_components(v: &[String]) -> Self {
+        let components = Vec::from(v);
 
         let relative_url = if components.is_empty() {
             "".to_string()
@@ -144,30 +137,47 @@ impl TopicName {
             components.join("/") + "/"
         };
         let dash_sep = components.join("/");
-        TopicName {
+        Self {
             components,
             relative_url,
             dash_sep,
         }
     }
-    pub fn add_prefix(&self, v: &Vec<String>) -> Self {
+    pub fn add_prefix(&self, v: &[String]) -> Self {
         let a = vec_concat(v, &self.components);
-        TopicName::from_components(&a)
+        Self::from_components(&a)
     }
 }
 
-impl Add for TopicName {
-    type Output = TopicName;
+impl Add for CompositeName {
+    type Output = Self;
 
-    fn add(self, other: Self) -> TopicName {
+    fn add(self, other: Self) -> Self {
         other.add_prefix(&self.components)
     }
 }
 
-impl<'a> Add for &'a TopicName {
-    type Output = TopicName;
+impl<'a> Add for &'a CompositeName {
+    type Output = CompositeName;
 
     fn add(self, other: Self) -> Self::Output {
         other.add_prefix(&self.components)
+    }
+}
+// #[derive(Clone, PartialEq, Eq, Hash)]
+// pub struct TopicName(CompositeName);
+
+pub type TopicName = CompositeName;
+
+impl JsonSchema for TopicName {
+    fn schema_name() -> String {
+        "TopicName".to_string()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        let mut schema_object = SchemaObject::default();
+        schema_object.metadata().description = Some("dash separate topic name (empty string=root)".to_string());
+        schema_object.string(); //chemars::schema::SimpleTypes::String);
+        Schema::Object(schema_object)
     }
 }

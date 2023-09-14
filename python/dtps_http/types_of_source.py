@@ -15,6 +15,8 @@ from .structures import (
     TopicRef,
     TopicsIndex,
 )
+from .urls import get_relative_url
+
 from .types import ContentType, NodeID, SourceID, TopicNameV
 
 __all__ = [
@@ -28,8 +30,6 @@ __all__ = [
     "Transformed",
     "TypeOfSource",
 ]
-
-from .urls import get_relative_url
 
 
 @dataclass
@@ -212,14 +212,13 @@ class ForwardedQueue(Source):
     async def get_resolved_data(
         self, request: web.Request, presented_as: str, server: "DTPSServer"
     ) -> "ResolvedData":
-        # resp = await server.serve_get_proxied(request, server._forwarded[self.topic_name])
         url_data = server._forwarded[self.topic_name].forward_url_data
-        from dtps_http import DTPSClient
+        from dtps_http import DTPSClient, my_raise_for_status
 
         async with DTPSClient.create() as dtpsclient:
             async with dtpsclient.my_session(url_data) as (session2, use_url2):
                 async with session2.get(use_url2) as resp_data:
-                    resp_data.raise_for_status()
+                    await my_raise_for_status(resp_data)
                     data = await resp_data.read()
                     content_type = ContentType(resp_data.content_type)
                     data = RawData(content_type=content_type, content=data)

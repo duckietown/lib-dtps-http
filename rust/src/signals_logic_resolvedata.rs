@@ -7,19 +7,20 @@ use std::{
 };
 
 use anyhow::Context;
-
 use async_trait::async_trait;
 use bytes::Bytes;
+use http::StatusCode;
 
 use crate::{
-    client::get_rawdata_status,
     context,
     debug_with_info,
+    error_with_info,
     get_dataready,
     get_rawdata,
+    get_rawdata_status,
     not_implemented,
+    putinside,
     signals_logic_streams::transform,
-    utils_cbor::putinside,
     DataReady,
     GetMeta,
     OtherProxied,
@@ -51,7 +52,9 @@ impl ResolveDataSingle for TypeOFSource {
                 let use_url = &ss.proxied_topics.get(&q.my_topic_name).unwrap().data_url;
 
                 let (status, rd) = get_rawdata_status(use_url).await?;
-                if status == 209 {
+
+                // debug_with_info!("ForwardedQueue: {:?} -> {:?} -> {use_url:?} -> {status:?} -> {rd:?}", q.my_topic_name, q.his_topic_name);
+                if status == StatusCode::NO_CONTENT {
                     let msg = "This topic does not have any data yet".to_string();
                     Ok(ResolvedData::NotAvailableYet(msg))
                 } else {
@@ -74,8 +77,7 @@ impl ResolveDataSingle for TypeOFSource {
             }
             TypeOFSource::Transformed(source, transforms) => {
                 let data = source.resolve_data_single(presented_as, ss_mutex.clone()).await?;
-
-                transform(data, transforms)
+                transform(data.clone(), transforms)
             }
             TypeOFSource::Deref(sc) => single_compose(sc, presented_as, ss_mutex).await,
             TypeOFSource::OtherProxied(op) => resolve_proxied(op).await,
@@ -215,7 +217,11 @@ async fn single_compose(
 
     for (prefix, source) in &sc.compose {
         let ss_i = ss_mutex.clone();
-        let value = source.resolve_data_single(presented_as, ss_i).await?;
+        let value = context!(
+            source.resolve_data_single(presented_as, ss_i).await,
+            "Cannot resolve data for prefix {:#?}",
+            prefix
+        )?;
         putinside(&mut result_dict, prefix, value)?;
     }
 

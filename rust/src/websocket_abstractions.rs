@@ -33,6 +33,7 @@ use tokio_tungstenite::{
 use tungstenite::{
     error::ProtocolError,
     handshake::client::Request,
+    Error,
     Message as TM,
 };
 use url::Url;
@@ -235,11 +236,12 @@ async fn read_websocket_stream<S: Debug, T: StreamExt<Item = Result<S, tungsteni
                                 ProtocolError::InvalidOpcode(_) => {}
                                 ProtocolError::InvalidCloseSequence => {}
                             },
-                            tungstenite::Error::SendQueueFull(_) => {}
+                            // tungstenite::Error::SendQueueFull(_) => {}
                             tungstenite::Error::Utf8 => {}
                             tungstenite::Error::Url(_) => {}
                             tungstenite::Error::Http(_) => {}
                             tungstenite::Error::HttpFormat(_) => {}
+                            Error::WriteBufferFull(_) => {}
                         }
                         error_with_info!("error in read_websocket_stream: {:?}", e);
                         break;
@@ -355,12 +357,15 @@ pub async fn open_websocket_connection_unix(uc: &UnixCon) -> DTPSR<Box<dyn Gener
         .body(())
         .unwrap();
     let (socket_stream, response) = {
-        let config = WebSocketConfig {
-            max_send_queue: None,
-            max_message_size: None,
-            max_frame_size: None,
-            accept_unmasked_frames: false,
-        };
+        let config = WebSocketConfig::default();
+        //
+        //     max_send_queue: None,
+        //     write_buffer_size: 0,
+        //     max_write_buffer_size: 0,
+        //     max_message_size: None,
+        //     max_frame_size: None,
+        //     accept_unmasked_frames: false,
+        // };
         match client_async_with_config(request, stream, Some(config)).await {
             Ok(s) => s,
             Err(err) => {

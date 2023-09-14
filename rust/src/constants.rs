@@ -1,4 +1,6 @@
 pub static CONTENT_TYPE: &str = "content-type";
+
+pub static CONTENT_TYPE_TEXT_HTML: &str = "text/html";
 pub static CONTENT_TYPE_DTPS_INDEX: &str = "application/vnd.dt.dtps-index";
 pub static CONTENT_TYPE_DTPS_INDEX_CBOR: &str = "application/vnd.dt.dtps-index+cbor";
 pub static CONTENT_TYPE_TOPIC_HISTORY_CBOR: &str = "application/vnd.dt.dtps-history+cbor";

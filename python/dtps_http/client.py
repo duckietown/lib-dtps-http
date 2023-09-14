@@ -22,7 +22,14 @@ from typing import (
 
 import aiohttp
 import cbor2
-from aiohttp import ClientWebSocketResponse, TCPConnector, UnixConnector, WSMessage
+from aiohttp import (
+    ClientResponseError,
+    ClientWebSocketResponse,
+    TCPConnector,
+    UnixConnector,
+    WSCloseCode,
+    WSMessage,
+)
 from tcp_latency import measure_latency
 
 from . import logger
@@ -73,6 +80,7 @@ from .utils import async_error_catcher_iterator, method_lru_cache
 
 __all__ = [
     "DTPSClient",
+    "my_raise_for_status",
 ]
 
 U = TypeVar("U", bound=URL)
@@ -145,11 +153,11 @@ class DTPSClient:
             t.cancel()
         await self.S.aclose()
 
-    async def ask_topics(self, url: URLIndexer) -> Dict[TopicNameV, TopicRef]:
-        url = self._look_cache(url)
+    async def ask_topics(self, url0: URLIndexer) -> Dict[TopicNameV, TopicRef]:
+        url = self._look_cache(url0)
         async with self.my_session(url) as (session, use_url):
             async with session.get(use_url) as resp:
-                resp.raise_for_status()
+                await my_raise_for_status(resp, url0)
                 # answering = resp.headers.get(HEADER_NODE_ID)
 
                 #  logger.debug(f"ask topics {resp.headers}")
@@ -199,7 +207,7 @@ class DTPSClient:
 
         async with self.my_session(url) as (session, use_url):
             async with session.post(use_url, data=rd.content, headers=headers) as resp:
-                resp.raise_for_status()
+                await my_raise_for_status(resp, url0)
                 assert resp.status == 200, resp
                 await self.prefer_alternative(url, resp)  # just memorize
 
@@ -555,7 +563,8 @@ class DTPSClient:
 
                     #      return FoundMetadata([], None, None, None)
                     logger.info(f"headers {url0}: {resp.headers}")
-                    resp.raise_for_status()
+
+                    await my_raise_for_status(resp, url0)
 
                     #  assert resp.status == 200, resp
 
@@ -712,8 +721,18 @@ class DTPSClient:
                             continue
                     else:
                         wmsg = await ws.receive()
+                    if wmsg.type == aiohttp.WSMsgType.CLOSE:  # aiohttp-specific
+                        yield FinishedMsg("closed")
+                        break
+                    elif wmsg.type == aiohttp.WSMsgType.CLOSING:  # aiohttp-specific
+                        yield FinishedMsg("closing")
+                        break
+                    elif wmsg.type == aiohttp.WSMsgType.ERROR:
+                        if raise_on_error:
+                            raise Exception(str(wmsg.data))
+                        yield ErrorMsg(str(wmsg.data))
 
-                    if wmsg.type == aiohttp.WSMsgType.BINARY:
+                    elif wmsg.type == aiohttp.WSMsgType.BINARY:
                         try:
                             cm = channel_msgs_parse(wmsg.data)
                         except Exception as e:
@@ -774,71 +793,90 @@ class DTPSClient:
                 headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())
                 logger.info(f"websocket to {url_websockets} ready\n{headers}")
 
-                while True:
-                    if ws.closed:
-                        break
-                    if add_silence is not None:
-                        try:
-                            msg = await asyncio.wait_for(ws.receive(), timeout=add_silence)
-                        except asyncio.exceptions.TimeoutError:
-                            logger.debug(f"add_silence {add_silence} expired")
-                            yield SilenceMsg(add_silence)
-                            continue
-                    else:
-                        msg = await ws.receive()
-
-                    if msg.type == aiohttp.WSMsgType.CLOSE:
-                        break
-                    if msg.type == aiohttp.WSMsgType.BINARY:
-                        try:
-                            cm = channel_msgs_parse(msg.data)
-                        except Exception as e:
-                            logger.error(f"error in parsing {msg.data!r}: {e.__class__.__name__} {e!r}")
-                            continue
-                    else:
-                        logger.error(f"unexpected message type {msg.type} {msg.data!r}")
-                        continue
-
-                    if isinstance(cm, DataReady):
-                        dr = cm
-                        if dr.chunks_arriving == 0:
-                            logger.error(f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}")
-                            if raise_on_error:
-                                raise AssertionError(
-                                    f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}"
-                                )
-
-                        #  create a byte array initialized at
-
-                        data = b""
-                        for _ in range(dr.chunks_arriving):
+                try:
+                    while True:
+                        if ws.closed:
+                            break
+                        if add_silence is not None:
+                            try:
+                                msg = await asyncio.wait_for(ws.receive(), timeout=add_silence)
+                            except asyncio.exceptions.TimeoutError:
+                                logger.debug(f"add_silence {add_silence} expired")
+                                yield SilenceMsg(add_silence)
+                                continue
+                        else:
                             msg = await ws.receive()
 
-                            cm = channel_msgs_parse(msg.data)
-
-                            if isinstance(cm, Chunk):
-                                data += cm.data
-                            else:
-                                logger.error(f"unexpected message {msg!r}")
-                                continue
-
-                        if len(data) != dr.content_length:
-                            logger.error(f"unexpected data length {len(data)} != {dr.content_length}\n{dr}")
+                        if msg.type == aiohttp.WSMsgType.CLOSE:  # aiohttp-specific
+                            yield FinishedMsg("closed")
+                            break
+                        elif msg.type == aiohttp.WSMsgType.CLOSING:  # aiohttp-specific
+                            yield FinishedMsg("closing")
+                            break
+                        elif msg.type == aiohttp.WSMsgType.ERROR:
                             if raise_on_error:
-                                raise AssertionError(
-                                    f"unexpected data length {len(data)} != {dr.content_length}"
+                                raise Exception(str(msg.data))
+                            yield ErrorMsg(str(msg.data))
+
+                        elif msg.type == aiohttp.WSMsgType.BINARY:
+                            try:
+                                cm = channel_msgs_parse(msg.data)
+                            except Exception as e:
+                                logger.error(f"error in parsing {msg.data!r}: {e.__class__.__name__} {e!r}")
+                                continue
+                        else:
+                            logger.error(f"unexpected message type {msg.type} {msg.data!r}")
+                            continue
+
+                        if isinstance(cm, DataReady):
+                            dr = cm
+                            if dr.chunks_arriving == 0:
+                                logger.error(f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}")
+                                if raise_on_error:
+                                    raise AssertionError(
+                                        f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}"
+                                    )
+
+                            #  create a byte array initialized at
+
+                            data = b""
+                            for _ in range(dr.chunks_arriving):
+                                msg = await ws.receive()
+
+                                cm = channel_msgs_parse(msg.data)
+
+                                if isinstance(cm, Chunk):
+                                    data += cm.data
+                                else:
+                                    logger.error(f"unexpected message {msg!r}")
+                                    continue
+
+                            if len(data) != dr.content_length:
+                                logger.error(
+                                    f"unexpected data length {len(data)} != {dr.content_length}\n{dr}"
                                 )
+                                if raise_on_error:
+                                    raise AssertionError(
+                                        f"unexpected data length {len(data)} != {dr.content_length}"
+                                    )
 
-                        raw_data = RawData(content_type=dr.content_type, content=data)
-                        x = DataFromChannel(dr, raw_data)
-                        yield x
+                            raw_data = RawData(content_type=dr.content_type, content=data)
+                            x = DataFromChannel(dr, raw_data)
+                            yield x
 
-                    elif isinstance(cm, ChannelInfo):
-                        logger.info(f"channel info {cm}")
-                    elif isinstance(cm, (WarningMsg, ErrorMsg, FinishedMsg)):
-                        yield cm
-                    else:
-                        logger.error(f"unexpected message {cm!r}")
+                        elif isinstance(cm, ChannelInfo):
+                            logger.info(f"channel info {cm}")
+                        elif isinstance(cm, (WarningMsg, ErrorMsg, FinishedMsg)):
+                            yield cm
+                        else:
+                            logger.error(f"unexpected message {cm!r}")
+                except Exception as e:
+                    msg = str(e)[:100]
+                    await ws.close(code=WSCloseCode.ABNORMAL_CLOSURE, message=msg.encode())
+                    logger.error(f"error in websocket {traceback.format_exc()}")
+                    raise
+                else:
+                    await ws.close(code=WSCloseCode.OK)
 
     @asynccontextmanager
     async def push_through_websocket(
@@ -958,3 +996,20 @@ async def _listen_and_callback(it: AsyncIterator[ListenURLEvents], cb: Callable[
     async for lue in it:
         if isinstance(lue, DataFromChannel):
             cb(lue.raw_data)
+
+
+async def my_raise_for_status(resp, url0) -> None:
+    if not resp.ok:
+        # reason should always be not None for a started response
+        assert resp.reason is not None
+        msg = await resp.read()
+        # msg = msg.decode("utf-8")
+        message = f"url0: {url0}\n{resp.reason}\n---\n{msg}---"
+        resp.release()
+        raise ClientResponseError(
+            resp.request_info,
+            resp.history,
+            status=resp.status,
+            message=message,
+            headers=resp.headers,
+        )

@@ -1,81 +1,104 @@
 /* Reset some default styles */
 html, body {
-  margin: 0;
-  padding: 0;
-  font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    font-family: Arial, sans-serif;
 }
 
 /* Set a background color */
 body {
-  background-color: #F5F5F5;
-  padding: 2em;
+    background-color: #F5F5F5;
+    padding: 2em;
 }
 
 /* Style headings */
 h1 {
-  color: #333333;
+    color: #333333;
 }
 
 h2 {
-  color: #555555;
+    color: #555555;
 }
 
 /* Style paragraphs */
 p {
-  color: #666666;
+    color: #666666;
 }
 
 /* Style links */
 a {
-  color: #007BFF;
-  text-decoration: none;
+    color: #007BFF;
+    text-decoration: none;
 }
 
 a:hover {
-  text-decoration: underline;
+    text-decoration: underline;
 }
 
 /* Style buttons */
 .button {
-  display: inline-block;
-  padding: 10px 20px;
-  background-color: #007BFF;
-  color: #FFFFFF;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
+    display: inline-block;
+    padding: 10px 20px;
+    background-color: #007BFF;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
 }
 
 .button:hover {
-  background-color: #0056b3;
+    background-color: #0056b3;
 }
 
-table.history  td {background: #fdf}
-table.history td:nth-child(2n) {background: #dff}
+table.history td {
+    background: #fdf
+}
+
+table.history td:nth-child(2n) {
+    background: #dff
+}
 
 table.history td {
     padding: 0.5em;
 }
+
 table.Map td {
-  vertical-align: top;
-  border: solid 1px white;
-  background-color: #ddd;
+    vertical-align: top;
+    border: solid 1px white;
+    background-color: #ddd;
 }
+
 table.Map {
-  /*display: block;*/
-  /*padding-left: 2em;*/
+    /*display: block;*/
+    /*padding-left: 2em;*/
 }
 
 table.array {
-  counter-reset: rowNumber -1;
+    counter-reset: rowNumber -1;
 }
 
 table.array > tbody > tr {
-  counter-increment: rowNumber;
+    counter-increment: rowNumber;
 }
 
 table.array > tbody > tr::before {
-  content: "#" counter(rowNumber);
-  min-width: 1em;
-  margin-right: 0.5em;
+    content: "#" counter(rowNumber);
+    min-width: 1em;
+    margin-right: 0.5em;
+}
+
+
+pre#result {
+    background-color: #eee;
+    padding: 10px;
+    border: 1px solid #999;
+    border-radius: 5px;
+}
+
+
+pre#data_field {
+    background-color: #eee;
+    padding: 10px;
+    border: 1px solid #999;
+    border-radius: 5px;
 }

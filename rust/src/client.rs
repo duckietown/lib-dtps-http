@@ -318,6 +318,11 @@ pub async fn get_rawdata(con: &TypeOfConnection) -> DTPSR<RawData> {
     interpret_resp(con, resp).await
 }
 
+pub async fn get_rawdata_accept(con: &TypeOfConnection, accept: Option<&str>) -> DTPSR<RawData> {
+    let resp = make_request(con, hyper::Method::GET, b"", None, accept).await?;
+    // TODO: send more headers
+    interpret_resp(con, resp).await
+}
 pub async fn interpret_resp(con: &TypeOfConnection, resp: Response) -> DTPSR<RawData> {
     if resp.status().is_success() {
         let content_type = get_content_type(&resp);
@@ -785,7 +790,6 @@ pub async fn add_proxy(
     let mut path: String = String::new();
     path.push('/');
     path.push_str(escape_json_patch(mountpoint.as_dash_sep()).as_str());
-    debug_with_info!("patch path: {}", path);
     let value = serde_json::to_value(&pj)?;
 
     let add_operation = AddOperation { path, value };

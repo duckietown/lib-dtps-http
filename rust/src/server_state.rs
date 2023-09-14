@@ -10,6 +10,7 @@ use std::{
         Path,
         PathBuf,
     },
+    pin::Pin,
 };
 
 use anyhow::Context;
@@ -107,7 +108,9 @@ pub struct ProxyJob {
 
 type Proxied = HashMap<String, ProxyJob>;
 
+use crate::internal_jobs::InternalJobManager;
 use std::str::FromStr;
+use tokio::sync::broadcast::error::RecvError;
 
 #[derive(Debug, PartialEq)]
 pub enum ServiceMode {
@@ -204,7 +207,6 @@ pub struct SavedBlob {
     // will not be removed until who_needs_it is empty and the deadline has passed
     pub deadline: i64,
 }
-
 #[derive(Debug)]
 pub struct ServerState {
     pub node_started: i64,
@@ -233,6 +235,8 @@ pub struct ServerState {
     status_rx: mpsc::UnboundedReceiver<ComponentStatusNotification>,
 
     pub aliases: HashMap<TopicName, TopicName>,
+
+    pub job_manager: InternalJobManager,
 }
 
 /// Taken from this: http://supervisord.org/subprocess.html
@@ -302,12 +306,10 @@ impl ServerState {
             Some(x) => x,
             None => HashMap::new(),
         };
-        // let node_id = Uuid::new_v4().to_string();
         let node_id = format!("rust-{}", get_random_node_id());
 
         let mut oqs: HashMap<TopicName, ObjectQueue> = HashMap::new();
 
-        // let link_benchmark = LinkBenchmark::identity();
         let now = Local::now().timestamp_nanos();
         let app_data = node_app_data.clone();
         let tr = TopicRefInternal {
@@ -347,7 +349,9 @@ impl ServerState {
             status_tx,
             status_rx,
             aliases: HashMap::new(),
+            job_manager: InternalJobManager::new(),
         };
+
         let p = TopicProperties {
             streamable: true,
             pushable: false,
@@ -365,6 +369,7 @@ impl ServerState {
             None,
             Some(10),
         )?;
+
         ss.new_topic(
             &TopicName::from_dash_sep(TOPIC_LIST_CLOCK)?,
             None,
@@ -1009,22 +1014,32 @@ impl ServerState {
 
             topics.insert(topic_name.clone(), tr);
         }
-        for alias in self.aliases.keys() {
-            let tr = TopicRefInternal {
-                unique_id: "".to_string(),
-                origin_node: "".to_string(),
-                app_data: Default::default(),
-                reachability: vec![],
-                created: 0,
-                properties: TopicProperties {
-                    streamable: false,
-                    pushable: false,
-                    readable: false,
-                    immutable: false,
-                    has_history: false,
-                    patchable: false,
-                },
-                content_info: ContentInfo::generic(), // TODO: we should put content info of original
+        for (alias, target) in self.aliases.iter() {
+            let tr = if topics.contains_key(target) {
+                let mut orig = topics.get(target).unwrap().clone();
+                orig.app_data.insert("aliased_to".to_string(), target.to_relative_url());
+                orig
+            } else {
+                TopicRefInternal {
+                    unique_id: "".to_string(),   // FIXME
+                    origin_node: "".to_string(), // FIXME
+                    app_data: hashmap! {
+                        "aliased_to".to_string() => target.to_relative_url(),
+                        "comment".to_string() => "Target not existing yet.".to_string(),
+                    },
+                    reachability: vec![], // not reachable
+                    created: 0,
+                    properties: TopicProperties {
+                        // all false
+                        streamable: false,
+                        pushable: false,
+                        readable: false,
+                        immutable: false,
+                        has_history: false,
+                        patchable: false,
+                    },
+                    content_info: ContentInfo::generic(),
+                }
             };
             topics.insert(alias.clone(), tr);
         }

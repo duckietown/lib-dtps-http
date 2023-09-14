@@ -15,9 +15,12 @@ use maud::{
 };
 use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tungstenite::http::{
-    HeaderMap,
-    StatusCode,
+use tungstenite::{
+    http::{
+        HeaderMap,
+        StatusCode,
+    },
+    protocol::frame::coding::CloseCode,
 };
 use warp::{
     http::header,
@@ -68,6 +71,7 @@ use crate::{
     CONTENT_TYPE_OCTET_STREAM,
     CONTENT_TYPE_PATCH_CBOR,
     CONTENT_TYPE_PATCH_JSON,
+    CONTENT_TYPE_TEXT_HTML,
     CONTENT_TYPE_YAML,
     DTPSR,
     JAVASCRIPT_SEND,
@@ -243,6 +247,8 @@ pub async fn serve_master_head(
     ss_mutex: ServerStateAccess,
     headers: HeaderMap,
 ) -> HandlersResponse {
+    debug_with_info!("HEAD {} ", path.as_str());
+
     let path_str = path_normalize(&path);
     // debug_with_info!("serve_master_head: path_str: {}", path_str);
     let referrer = get_referrer(&headers);
@@ -253,7 +259,10 @@ pub async fn serve_master_head(
 
     let ds = match matched {
         Ok(ds) => ds,
-        Err(s) => return s.into(),
+        Err(s) => {
+            // error_with_info!("serve_master_head: {path:?} matched error: {s}");
+            return s.into();
+        }
     };
     // debug_with_info!("serve_master_head: ds: {:?}", ds);
     match &ds {
@@ -335,29 +344,24 @@ pub async fn serve_master_head(
             // not_supported
         }
     }
-
-    serve_master_get(path, query, ss_mutex, headers).await
+    debug_with_info!("HEAD not supported for path = {path_str}, ds = {ds:?}");
+    let x = serve_master_get(path, query, ss_mutex, headers).await;
+    // debug_with_info!("response: {x:?}");
+    // match x {
+    //     Ok(r) => {
+    //         let mut resp = r.into_response();
+    //         let h = resp.headers_mut();
+    //         h.insert(header::CONTENT_LENGTH, "0".parse().unwrap());
+    //         Ok(resp)
+    //     }
+    //     Err(e) => Err(e),
+    // }
+    x
 }
 
 fn path_normalize(path: &warp::path::FullPath) -> String {
     let path_str = path.as_str();
     let pat = "/!/";
-
-    // if path_str.starts_with(pat)  {
-    //     // only preserve the part after the !/
-    //     let new_path_str = &path_str[pat.len()..];
-    //
-    //     let text_response = format!("Redirecting to {:?} -> {:?} ", path_str, new_path_str);
-    //
-    //     debug_with_info!("serve_master: removing initial /!/ directly ={:?} => {:?} ", path, new_path_str);
-    //
-    //     let res = http::Response::builder()
-    //         .status(StatusCode::MOVED_PERMANENTLY)
-    //         .header(header::LOCATION, new_path_str)
-    //         .body(Body::from(text_response))
-    //         .unwrap();
-    //     return Ok(res);
-    // }
 
     if path_str.contains(pat) {
         // only preserve the part after the !/
@@ -471,8 +475,17 @@ pub async fn serve_master_get(
             RawData::cbor(bytes)
         }
         ResolvedData::NotAvailableYet(s) => {
+            let accept_headers: Vec<String> = get_accept_header(&headers);
+
+            let use_content_type = if accept_headers.contains(&"text/html".to_string()) {
+                CONTENT_TYPE_TEXT_HTML
+            } else {
+                CONTENT_TYPE_OCTET_STREAM
+            };
+
             let res = http::Response::builder()
                 .status(StatusCode::NO_CONTENT)
+                .header(header::CONTENT_TYPE, use_content_type)
                 .body(Body::from(s))
                 .unwrap();
             return Ok(res);
@@ -480,6 +493,7 @@ pub async fn serve_master_get(
         ResolvedData::NotFound(s) => {
             let res = http::Response::builder()
                 .status(StatusCode::NOT_FOUND) //ok
+                .header(header::CONTENT_TYPE, "text/plain")
                 .body(Body::from(s))
                 .unwrap();
             return Ok(res);
@@ -560,7 +574,8 @@ fn make_friendly_visualization(
                 script type="text/javascript" { (js) };
             }
 
-            pre {
+            h3 { "data received " }
+            pre id="data_field" {
                 code {
                     (display)
                 }
@@ -619,17 +634,25 @@ pub async fn handle_websocket_generic2(
     let (receiver, join_handle) = receive_from_websocket(ws_rx);
 
     match handle_websocket_generic2_(path, &mut ws_tx, receiver, state, send_data).await {
-        Ok(_) => (),
+        Ok(_) => {
+            let msg = WarpMessage::close_with(CloseCode::Normal, "ok");
+            let _ = ws_tx.send(msg).await.map_err(|e| {
+                debug_with_info!("Cannot send closing code: {:?}", e);
+            });
+        }
         Err(e) => {
-            let close_code: u16 = 1006; // Close codes 4000-4999 are available for private use
+            // let close_code: u16 = 4006; // Close codes 4000-4999 are available for private use
             let s = format!("handle_websocket_generic2: {}", e);
             debug_with_info!("{s}");
 
-            let msg = WarpMessage::text("closing with error");
-            let _ = ws_tx.send(msg).await.map_err(|e| {
-                debug_with_info!("Cannot send closing error: {:?}", e);
-            });
-            let msg = WarpMessage::close_with(close_code, s);
+            // send_as_ws_cbor(&for_this, &ws_tx).await?;
+            // let msg = WarpMessage::text("closing with error");
+            // let _ = ws_tx.send(msg).await.map_err(|e| {
+            //     debug_with_info!("Cannot send closing error: {:?}", e);
+            // });
+            // get firsrt 16 chars
+            let reason = s.chars().take(16).collect::<String>();
+            let msg = WarpMessage::close_with(CloseCode::Error, reason);
             let _ = ws_tx.send(msg).await.map_err(|e| {
                 debug_with_info!("Cannot send closing error: {:?}", e);
             });

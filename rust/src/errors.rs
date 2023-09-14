@@ -132,6 +132,7 @@ impl From<&String> for DTPSError {
         DTPSError::Other(item.to_string())
     }
 }
+
 impl DTPSError {
     pub fn as_handler_response(&self) -> HandlersResponse {
         let s = self.to_string();
@@ -142,6 +143,7 @@ impl DTPSError {
         Ok(res)
     }
 }
+
 impl Into<HandlersResponse> for DTPSError {
     fn into(self) -> HandlersResponse {
         self.as_handler_response()
@@ -233,40 +235,46 @@ macro_rules! info_with_info {
 #[macro_export]
 macro_rules! context {
     ($t: expr,  $($u:expr),* $(,)?) => {{
-        ($t).context( crate::add_info!($($u),*) )
+        ($t).context( $crate::add_info!($($u),*) )
     }};
 }
+
 #[macro_export]
 macro_rules! internal_assertion {
     ($($u:expr),* $(,)?) => {{
-        crate::DTPSError::internal_assertion(crate::add_info!($($u),*) )
+        $crate::DTPSError::internal_assertion($crate::add_info!($($u),*) )
     }};
 }
 
 #[macro_export]
 macro_rules! not_implemented {
     ($($u:expr),* $(,)?) => {{
-        crate::DTPSError::not_implemented(crate::add_info!($($u),*) )
-    }};
+        {
+            $crate::error_with_info!("Not implemented: {}", $crate::add_info!($($u),*) );
+            $crate::DTPSError::not_implemented($crate::add_info!($($u),*) )
+        }
+
+    }
+    };
 }
 #[macro_export]
 macro_rules! not_available {
     ($($u:expr),* $(,)?) => {{
-        crate::DTPSError::not_available(crate::add_info!($($u),*) )
+        $crate::DTPSError::not_available($crate::add_info!($($u),*) )
     }};
 }
 
 #[macro_export]
 macro_rules! invalid_input {
     ($($u:expr),* $(,)?) => {{
-        crate::DTPSError::invalid_input(crate::add_info!($($u),*) )
+        $crate::DTPSError::invalid_input($crate::add_info!($($u),*) )
     }};
 }
 
 #[macro_export]
 macro_rules! not_reachable {
     ($($u:expr),* $(,)?) => {{
-        crate::DTPSError::not_reachable(crate::add_info!($($u),*) )
+        $crate::DTPSError::not_reachable($crate::add_info!($($u),*) )
     }};
 }
 

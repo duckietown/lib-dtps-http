@@ -156,14 +156,12 @@ async fn get_stream_compose_data(
 
 #[async_trait]
 impl GetStream for TypeOFSource {
-    // #[async_recursion]
     async fn get_data_stream(&self, presented_as: &str, ssa: ServerStateAccess) -> DTPSR<DataStream> {
         match self {
-            TypeOFSource::Digest(_, _) => {
+            TypeOFSource::Digest(..) => {
                 not_implemented!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::ForwardedQueue(q) => {
-                // not_implemented!("get_stream for {self:#?} with {self:?}")
                 let use_url = {
                     let ss = ssa.lock().await;
                     ss.proxied_topics.get(&q.my_topic_name).unwrap().data_url.clone()
@@ -180,7 +178,7 @@ impl GetStream for TypeOFSource {
                     let channel_info = get_channel_info_message(oq);
                     (rx, first, channel_info)
                 };
-
+                // debug_with_info!("get_data_stream() for {topic_name:?} with {first:?}");
                 Ok(DataStream {
                     channel_info,
                     first,
@@ -190,27 +188,25 @@ impl GetStream for TypeOFSource {
             }
 
             TypeOFSource::Compose(sc) => get_stream_compose_meta(presented_as, ssa, sc).await,
-            TypeOFSource::Transformed(tos, tr) => {
-                get_stream_transform(presented_as, ssa, tos, tr).await
-                // not_implemented!("get_stream for {self:#?} with {self:?}")
-            }
+            TypeOFSource::Transformed(tos, tr) => get_stream_transform(presented_as, ssa, tos, tr).await,
+
             TypeOFSource::Deref(d) => get_stream_compose_data(presented_as, ssa, d).await,
-            TypeOFSource::OtherProxied(_) => {
+            TypeOFSource::OtherProxied(..) => {
                 not_implemented!("get_stream for {self:#?} with {self:?}")
             }
-            TypeOFSource::MountedDir(_, _, _props) => {
+            TypeOFSource::MountedDir(..) => {
                 not_implemented!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::MountedFile { .. } => {
                 not_implemented!("get_stream for {self:#?} with {self:?}")
             }
-            TypeOFSource::Index(_s) => {
+            TypeOFSource::Index(..) => {
                 not_implemented!("get_stream for {self:#?} with {self:?}")
             }
-            TypeOFSource::Aliased(_, _) => {
+            TypeOFSource::Aliased(..) => {
                 not_implemented!("get_stream for {self:#?} with {self:?}")
             }
-            TypeOFSource::History(_) => {
+            TypeOFSource::History(..) => {
                 not_implemented!("get_stream for {self:#?} with {self:?}")
             }
         }
@@ -409,10 +405,6 @@ async fn get_stream_compose_meta(
         unique_id,
         Some(in0.clone()),
     );
-    // let handle1 = tokio::spawn(show_errors(
-    //     Some(ssa.clone()),
-    //     "receiver".to_string(), future,
-    // ));
     handles.push(tokio::spawn(future));
 
     let queue_created: i64 = Local::now().timestamp_nanos();
@@ -533,14 +525,10 @@ fn filter_func(
     presented_as: String,
     unique_id: String,
 ) -> DTPSR<InsertNotification> {
-    // let f = |x: &TopicsIndexWire| filter_index(x, prefix, presented_as).unwrap();
-
     let v1 = in1.raw_data.interpret::<TopicsIndexWire>()?;
     let v2 = filter_index(&v1, prefix, presented_as)?;
     let rd = RawData::represent_as_cbor_ct(v2, CONTENT_TYPE_DTPS_INDEX_CBOR)?;
-    //
-    // adapt_cbor_map(&in1, f, CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(), "filtered".to_string())
-    // not_implemented!("filter_func")
+
     let ds = &in1.data_saved;
     let data_saved = DataSaved {
         origin_node: ds.origin_node.clone(),
@@ -569,5 +557,5 @@ pub fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<ResolvedDa
 }
 
 async fn get_data_stream_from_url(_con: &TypeOfConnection) -> DTPSR<DataStream> {
-    todo!("not implemented");
+    not_implemented!("get_data_stream_from_url")
 }

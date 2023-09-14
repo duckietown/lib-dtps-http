@@ -31,7 +31,10 @@ use serde::{
 };
 use serde_yaml;
 use tokio::{
-    net::UnixListener,
+    net::{
+        TcpListener,
+        UnixListener,
+    },
     signal::unix::SignalKind,
     spawn,
     sync::{
@@ -61,6 +64,7 @@ use tungstenite::http::{
 use warp::{
     hyper::Body,
     reply::Response,
+    Error,
     Filter,
     Rejection,
 };
@@ -79,6 +83,7 @@ use crate::{
     handle_websocket_generic2,
     html_utils::make_html,
     info_with_info,
+    internal_jobs::JobFunctionType,
     interpret_path,
     invalid_input,
     parse_url_ext,
@@ -91,6 +96,7 @@ use crate::{
     serve_master_post,
     show_errors,
     sniff_and_start_proxy,
+    types::CompositeName,
     utils_headers,
     warn_with_info,
     ChannelInfo,
@@ -174,6 +180,12 @@ impl DTPSServer {
             .and(clone_access.clone())
             .and(warp::header::headers_cloned())
             .and_then(serve_master_get);
+        let master_route_head = warp::path::full()
+            .and(warp::query::<HashMap<String, String>>())
+            .and(warp::head())
+            .and(clone_access.clone())
+            .and(warp::header::headers_cloned())
+            .and_then(serve_master_head);
 
         let master_route_post = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
@@ -182,13 +194,6 @@ impl DTPSServer {
             .and(warp::header::headers_cloned())
             .and(warp::body::bytes())
             .and_then(serve_master_post);
-
-        let master_route_head = warp::path::full()
-            .and(warp::query::<HashMap<String, String>>())
-            .and(warp::head())
-            .and(clone_access.clone())
-            .and(warp::header::headers_cloned())
-            .and_then(serve_master_head);
 
         let master_route_patch = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
@@ -235,25 +240,70 @@ impl DTPSServer {
 
         let mut handles = vec![];
 
+        let ssa = self.get_lock();
+
+        let rx = {
+            let ss = ssa.lock().await;
+            let tsn = TopicName::from_dash_sep(TOPIC_STATE_NOTIFICATION)?;
+            let oq = ss.oqs.get(&tsn).unwrap();
+            oq.subscribe_insert_notification()
+        };
+
+        let ssa2 = ssa.clone();
+        handles.push(spawn(show_errors(
+            Some(ssa.clone()),
+            "collect_statuses".to_string(),
+            collect_statuses(ssa2, rx),
+        )));
+
         if let Some(address) = self.listen_address {
-            let tcp_server = warp::serve(the_routes.clone()).run(address);
+            let the_routes_cloned = the_routes.clone();
+            let serve_job: JobFunctionType = Box::new(move || {
+                let the_routes_cloned = the_routes_cloned.clone();
+
+                Box::pin(async move {
+                    {
+                        #[allow(clippy::let_unit_value)]
+                        match TcpListener::bind(&address).await {
+                            Ok(_) => {
+                                // The port is available, proceed to start the Warp server
+                            }
+                            Err(e) => {
+                                // The port is already in use, handle the error gracefully
+                                warn_with_info!("Failed to bind to address {}: {}", address, e);
+                                return Ok(());
+                            }
+                        };
+                    }
+
+                    warp::serve(the_routes_cloned).run(address).await;
+                    Ok(())
+                })
+            });
 
             {
-                let mut s = self.mutex.lock().await;
+                let mut ss = self.mutex.lock().await;
+                let job_name = CompositeName::from_dash_sep("server/tcp")?;
+                ss.job_manager
+                    .add_job(&job_name, "TCP server", serve_job, false, true, 5.0, self.mutex.clone())?;
+            }
+
+            {
+                let mut ss = self.mutex.lock().await;
 
                 info_with_info!("Listening on port {}", address.port());
 
                 let s1 = format!("http://localhost:{}{}", address.port(), "/");
-                s.add_advertise_url(&s1)?;
+                ss.add_advertise_url(&s1)?;
 
                 let s2 = address.to_string();
                 if !s2.contains("0.0.0.0") {
-                    s.add_advertise_url(&s2)?;
+                    ss.add_advertise_url(&s2)?;
                 }
 
                 for host in platform::get_other_addresses() {
                     let x = format!("http://{}:{}{}", host, address.port(), "/");
-                    s.add_advertise_url(&x)?;
+                    ss.add_advertise_url(&x)?;
                 }
 
                 use crate::platform;
@@ -261,10 +311,8 @@ impl DTPSServer {
                 let hostname = gethostname();
                 let hostname = hostname.to_string_lossy();
                 let x = format!("http://{}:{}{}", hostname, address.port(), "/");
-                s.add_advertise_url(&x)?;
+                ss.add_advertise_url(&x)?;
             }
-
-            handles.push(spawn(tcp_server));
         }
 
         // if tunnel is given ,start
@@ -302,32 +350,74 @@ impl DTPSServer {
                 std::fs::remove_file(unix_path).unwrap();
             }
 
-            let listener = match UnixListener::bind(unix_path) {
-                Ok(l) => l,
-
-                Err(e) => {
-                    error_with_info!("error binding to unix socket {}: {:?}", unix_path, e);
-                    error_with_info!("note that this is not supported on Docker+OS X");
-                    if i == 0 {
-                        // this is our default
-                        continue;
-                    } else {
-                        error_with_info!("Returning error because this was specified by user.");
-                        return Err(e.into());
-                    }
-                }
-            };
-
-            let stream = UnixListenerStream::new(listener);
-            let handle = spawn(warp::serve(the_routes.clone()).run_incoming(stream));
-            // info_with_info!("Listening on {:?}", unix_path);
+            let the_routes_cloned = the_routes.clone();
             let unix_url = format!("http+unix://{}/", unix_path.replace('/', "%2F"));
+
+            let unix_path = unix_path.clone();
+            let serve_job: JobFunctionType = Box::new(move || {
+                let the_routes_cloned = the_routes_cloned.clone();
+                let unix_path = unix_path.clone();
+                Box::pin(async move {
+                    let listener = match UnixListener::bind(unix_path.clone()) {
+                        Ok(l) => l,
+
+                        Err(e) => {
+                            let msg = format!("error binding to unix socket {}: {:?}", unix_path, e);
+                            error_with_info!("note that this is not supported on Docker+OS X");
+                            return Err(msg);
+                        }
+                    };
+
+                    let stream = UnixListenerStream::new(listener);
+
+                    warp::serve(the_routes_cloned).run_incoming(stream).await;
+                    Ok(())
+                })
+            });
+            {
+                let mut ss = self.mutex.lock().await;
+                let job_name = CompositeName::from_dash_sep(format!("server/unix/{i}"))?;
+
+                ss.job_manager.add_job(
+                    &job_name,
+                    "Unix server",
+                    serve_job,
+                    false,
+                    true,
+                    5.0,
+                    self.mutex.clone(),
+                )?;
+            }
+
             {
                 let mut s = ssa.lock().await;
-                s.info(format!("Listening on {:?}", unix_path));
+                // s.info(format!("Listening on {:?}", unix_path));
                 s.add_advertise_url(&unix_url.to_string())?;
             }
-            handles.push(handle);
+        }
+
+        let ssa_job = self.get_lock();
+        let clock_job: JobFunctionType = Box::new(move || {
+            let ssa = ssa_job.clone();
+            Box::pin(async move {
+                let topic_name = TopicName::from_relative_url(TOPIC_LIST_CLOCK).unwrap();
+                clock_go(ssa.clone(), topic_name, 1.0).await;
+                Ok(())
+            })
+        });
+        {
+            let mut ss = self.mutex.lock().await;
+            let job_name = CompositeName::from_dash_sep("internal/clock")?;
+
+            ss.job_manager.add_job(
+                &job_name,
+                "clock update server",
+                clock_job,
+                true,
+                true,
+                5.0,
+                self.mutex.clone(),
+            )?;
         }
 
         spawn(clock_go(
@@ -348,14 +438,14 @@ impl DTPSServer {
             info_with_info!("Proxies started");
         }
         {
-            let ss = ssa.lock().await;
+            let ss = self.mutex.lock().await;
             info_with_info!(
                 "Server started. Advertised URLs: \n{}\n",
                 indent_all_with(" ", ss.get_advertise_urls().join("\n"))
             );
         }
         for (i, con) in self.topic_connections.iter().enumerate() {
-            let component_name = TopicName::from_components(&vec!["connections".to_string(), format!("{i}")]);
+            let component_name = TopicName::from_components(&["connections".to_string(), format!("{i}")]);
 
             let fut = start_connection(
                 ssa.clone(),
@@ -367,20 +457,6 @@ impl DTPSServer {
             let handle = spawn(show_errors(Some(ssa.clone()), component_name.to_dash_sep(), fut));
             handles.push(handle);
         }
-
-        let rx = {
-            let ss = ssa.lock().await;
-            let tsn = TopicName::from_dash_sep(TOPIC_STATE_NOTIFICATION)?;
-            let oq = ss.oqs.get(&tsn).unwrap();
-            oq.subscribe_insert_notification()
-        };
-
-        let ssa2 = ssa.clone();
-        handles.push(spawn(show_errors(
-            Some(ssa.clone()),
-            "collect_statuses".to_string(),
-            collect_statuses(ssa2, rx),
-        )));
 
         Ok(handles)
     }
@@ -740,8 +816,6 @@ pub async fn send_as_ws_cbor<T: Serialize>(
 ) -> DTPSR<()> {
     for x in data {
         let bytes = serde_cbor::to_vec(&x).unwrap();
-        // let value2: serde_cbor::Value = serde_cbor::from_slice(&bytes).unwrap();
-        // debug_with_info!("send_as_ws_cbor: {:?}", value2);
         let message = warp::ws::Message::binary(bytes);
 
         ws_tx.send(message).await?;
@@ -1167,15 +1241,13 @@ pub async fn do_receiving(
             Some(MsgClientToServer::RawData(rd)) => {
                 let mut ss0 = ss_mutex.lock().await;
 
-                // let oq: &ObjectQueue=  ss0.oqs.get(topic_name.as_str()).unwrap();
-
                 let _ds = ss0.publish(&topic_name, &rd.content, &rd.content_type, None);
             }
         }
     }
 }
 
-async fn collect_statuses(ssa: ServerStateAccess, mut rx: Receiver<InsertNotification>) -> DTPSR<()> {
+pub async fn collect_statuses(ssa: ServerStateAccess, mut rx: Receiver<InsertNotification>) -> DTPSR<()> {
     let mut cur = StatusSummary {
         components: Default::default(),
         comments: Default::default(),

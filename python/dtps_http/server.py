@@ -265,6 +265,8 @@ class DTPSServer:
         routes.get("/{topic:.*}/data/{digest}/")(self.serve_data_get)
         routes.post("/{topic:.*}")(self.serve_post)
         routes.get("/{topic:.*}")(self.serve_get)
+        # mount a static directory for the web interface
+        self.app.add_routes([web.static("/static", "./static")])
         self.app.add_routes(routes)
 
         self.hub = Hub()
@@ -588,14 +590,13 @@ class DTPSServer:
                 html_index = f"""
                 <html lang="en">
                 <head>
-                <style>
-                pre {{ 
-                    background-color: #eee;
-                    padding: 10px;
-                    border: 1px solid #999;
-                    border-radius: 5px; 
-                }}
+                <style> 
                 </style>
+                <link rel="stylesheet" href="/static/style.css">
+                
+                <script src="https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.min.js"></script>
+                <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+                <script src="/static/send.js"></script>
                 <title>DTPS server</title>
                 </head>
                 <body>
@@ -879,18 +880,16 @@ class DTPSServer:
         headers: CIMultiDict[str] = CIMultiDict()
 
         yaml_str = rd.get_as_yaml()
+        # language=html
         html_index = f"""
-        <html>
-        <head>
-        <style>
-        pre {{ 
-            background-color: #eee;
-            padding: 10px;
-            border: 1px solid #999;
-            border-radius: 5px; 
-        }}
-        </style>
+        <html lang="en">
+        <head> 
         <title>{title}</title>
+          <link rel="stylesheet" href="/static/style.css">
+                <script src="/static/send.js"></script>
+                
+                <script src="https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.min.js"></script>
+                <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
         </head>
         <body>
         <h1>{title}</h1>
@@ -899,7 +898,7 @@ class DTPSServer:
 
         <p>Original content type: <code>{rd.content_type}</code></p>
 
-        <pre><code>{yaml_str}</code></pre>
+        <pre id="data_field"><code>{yaml_str}</code></pre>
 
         """
         return web.Response(body=html_index, content_type="text/html", headers=headers)
@@ -908,12 +907,6 @@ class DTPSServer:
         self, request: web.Request, title: str, rd: Union[RawData, NotAvailableYet], headers: CIMultiDict[str]
     ) -> web.StreamResponse:
         accept_headers = request.headers.get("accept", "")
-        # headers: CIMultiDict[str] = CIMultiDict()
-        # self._add_own_headers(headers)
-        # put_meta_headers(headers)
-        # add_nocache_headers(headers)
-        # multidict_update(headers, self.get_headers_alternatives(request))
-        # logger.info(f'request headers: {dict(request.headers)}')
         accepts_html = "text/html" in accept_headers
         if isinstance(rd, RawData):
             if rd.content_type != "text/html" and accepts_html and is_structure(rd.content_type):
@@ -922,8 +915,9 @@ class DTPSServer:
                 return web.Response(body=rd.content, content_type=rd.content_type, headers=headers)
         elif isinstance(rd, NotAvailableYet):
             if accepts_html:
+                # language=html
                 html_index = f"""
-<html>
+<html lang="en">
 <head>
 <style>
 pre {{ 
@@ -944,30 +938,12 @@ pre {{
 </html>
 
                         """
-                return web.Response(body=html_index, content_type="text/html", status=209, headers=headers)
+                return web.Response(body=html_index, content_type="text/html", status=204, headers=headers)
             else:
-                return web.Response(body=None, content_type=None, status=209, headers=headers)
+                return web.Response(body=None, content_type=None, status=204, headers=headers)
 
         else:
             raise AssertionError(f"Cannot handle {rd!r}")
-
-    #  headers[HEADER_DATA_UNIQUE_ID] = oq.tr.unique_id
-    #  headers[HEADER_DATA_ORIGIN_NODE_ID] = oq.tr.origin_node
-    #  headers[HEADER_NODE_ID] = self.node_id
-
-    #  try:
-    #      data = oq.last_data()
-    #  except KeyError:
-    #      return web.Response(body=None, headers=headers, status=209)
-    #  209 = no content
-
-    #  lb = LinkBenchmark.identity()
-    #  lb.fill_headers(headers)
-    #
-    #  return web.Response(body=data.content, headers=headers, content_type=data.content_type)
-
-    #
-    # @async_error_catcher
 
     @async_error_catcher
     async def serve_get_proxied(self, request: web.Request, fd: ForwardedTopic) -> web.StreamResponse:
@@ -1075,7 +1051,8 @@ pre {{
             headers: CIMultiDict[str] = CIMultiDict()
 
             self._add_own_headers(headers)
-            raise web.HTTPNotFound(headers=headers)
+            msg = f"Cannot resolve topic: {request.url}\ntopic: {topic_name_s!r}"
+            raise web.HTTPNotFound(text=msg, headers=headers)
 
         logger.info(
             f"serve_events: {topic_name.as_dash_sep()} send_data={send_data} headers={request.headers}"
