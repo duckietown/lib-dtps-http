@@ -1,0 +1,17 @@
+# Table of contents
+# Learn more at https://jupyterbook.org/customize/toc.html
+
+format: jb-book
+root: intro
+parts:
+    - caption: Part One
+      maxdepth: 2
+      numbered: False
+      chapters:
+          - file: part_1/index
+          - file: part_1/about
+          - file: part_1/client
+          - file: part_1/client-tutorial
+          - file: part_1/protocol
+          - file: part_1/server
+          - file: part_1/server-tutorial
