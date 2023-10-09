@@ -31,3 +31,10 @@ In this configuration, because of the `--mask-origin` argument, the proxies will
 
 Without the `--mask-origin` argument, the alternative URLS will be publicized, 
 and tthe client will realize that if can access the server directly.
+
+
+## Documentation
+
+Run the following command to build the documentation,
+
+    dts docs build
