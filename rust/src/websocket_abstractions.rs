@@ -1,28 +1,61 @@
 use std::fmt::Debug;
 
 use async_trait::async_trait;
-use base64;
-use base64::{engine::general_purpose, Engine as _};
-use futures::stream::{SplitSink, SplitStream};
-use futures::{SinkExt, StreamExt};
-use log::info;
+use base64::{
+    self,
+    engine::general_purpose,
+    Engine as _, // keep
+};
+use futures::{
+    stream::{
+        SplitSink,
+        SplitStream,
+    },
+    SinkExt,
+    StreamExt,
+};
 use rand::Rng;
-use tokio::net::{TcpStream, UnixStream};
-use tokio::sync::broadcast;
-use tokio::task::JoinHandle;
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
-use tokio_tungstenite::{client_async_with_config, connect_async, MaybeTlsStream, WebSocketStream};
-use tungstenite::error::ProtocolError;
-use tungstenite::handshake::client::Request;
-use tungstenite::{Error, Message as TM};
+use tokio::{
+    net::{
+        TcpStream,
+        UnixStream,
+    },
+    sync::broadcast,
+    task::JoinHandle,
+};
+use tokio_tungstenite::{
+    client_async_with_config,
+    connect_async,
+    tungstenite::protocol::WebSocketConfig,
+    MaybeTlsStream,
+    WebSocketStream,
+};
+use tungstenite::{
+    error::ProtocolError,
+    handshake::client::Request,
+    Error,
+    Message as TM,
+};
 use url::Url;
 
-use crate::structures::TypeOfConnection;
-use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
-use crate::TypeOfConnection::Same;
 use crate::{
-    debug_with_info, error_with_info, not_implemented, not_reachable, show_errors, DTPSError,
-    ServerStateAccess, UnixCon, DTPSR,
+    debug_with_info,
+    error_with_info,
+    info_with_info,
+    not_implemented,
+    not_reachable,
+    show_errors,
+    DTPSError,
+    ServerStateAccess,
+    TypeOfConnection,
+    TypeOfConnection::{
+        Relative,
+        Same,
+        TCP,
+        UNIX,
+    },
+    UnixCon,
+    DTPSR,
 };
 
 #[async_trait]
@@ -35,10 +68,8 @@ pub trait GenericSocketConnection: Send + Sync {
     fn get_handles(&self) -> &Vec<JoinHandle<()>>;
 }
 
-pub async fn open_websocket_connection(
-    con: &TypeOfConnection,
-) -> DTPSR<Box<dyn GenericSocketConnection>> {
-    info!("open_websocket_connection: {:#?}", con);
+pub async fn open_websocket_connection(con: &TypeOfConnection) -> DTPSR<Box<dyn GenericSocketConnection>> {
+    info_with_info!("open_websocket_connection: {:#?}", con.to_string());
     match con {
         TCP(url) => open_websocket_connection_tcp(url).await,
         TypeOfConnection::File(_, _) => {
@@ -127,7 +158,7 @@ impl AnySocketConnection {
         ));
 
         let handle2 = tokio::spawn(show_errors(
-            ssa.clone(),
+            ssa,
             "sender".to_string(),
             write_websocket_stream(outgoing_receiver, sink),
         ));
@@ -154,7 +185,7 @@ async fn read_websocket_stream<S: Debug, T: StreamExt<Item = Result<S, tungsteni
     loop {
         match source.next().await {
             Some(msgr) => {
-                // info!("received message: {:?}", msg);
+                // info_with_info!("received message: {:?}", msg);
                 match msgr {
                     Ok(msg) => {
                         if incoming_sender.receiver_count() > 0 {
@@ -169,13 +200,13 @@ async fn read_websocket_stream<S: Debug, T: StreamExt<Item = Result<S, tungsteni
                     }
                     Err(e) => {
                         match &e {
-                            Error::ConnectionClosed | Error::AlreadyClosed => {
+                            tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => {
                                 break;
                             }
-                            Error::Io(_) => {}
-                            Error::Tls(_) => {}
-                            Error::Capacity(_) => {}
-                            Error::Protocol(p) => match &p {
+                            tungstenite::Error::Io(_) => {}
+                            tungstenite::Error::Tls(_) => {}
+                            tungstenite::Error::Capacity(_) => {}
+                            tungstenite::Error::Protocol(p) => match &p {
                                 ProtocolError::WrongHttpMethod => {}
                                 ProtocolError::WrongHttpVersion => {}
                                 ProtocolError::MissingConnectionUpgradeHeader => {}
@@ -205,11 +236,12 @@ async fn read_websocket_stream<S: Debug, T: StreamExt<Item = Result<S, tungsteni
                                 ProtocolError::InvalidOpcode(_) => {}
                                 ProtocolError::InvalidCloseSequence => {}
                             },
-                            Error::SendQueueFull(_) => {}
-                            Error::Utf8 => {}
-                            Error::Url(_) => {}
-                            Error::Http(_) => {}
-                            Error::HttpFormat(_) => {}
+                            // tungstenite::Error::SendQueueFull(_) => {}
+                            tungstenite::Error::Utf8 => {}
+                            tungstenite::Error::Url(_) => {}
+                            tungstenite::Error::Http(_) => {}
+                            tungstenite::Error::HttpFormat(_) => {}
+                            Error::WriteBufferFull(_) => {}
                         }
                         error_with_info!("error in read_websocket_stream: {:?}", e);
                         break;
@@ -265,7 +297,7 @@ impl GenericSocketConnection for AnySocketConnection {
     }
 
     fn get_handles(&self) -> &Vec<JoinHandle<()>> {
-        return &self.mmpc.handles;
+        &self.mmpc.handles
     }
 }
 
@@ -280,35 +312,25 @@ pub async fn open_websocket_connection_tcp(url: &Url) -> DTPSR<Box<dyn GenericSo
         panic!("unexpected scheme: {}", url.scheme());
     }
     let connection_res = connect_async(url.clone()).await;
-    // debug!("connection: {:#?}", connection);
-    let connection;
-    match connection_res {
-        Ok(c) => {
-            connection = c;
-        }
+    let connection = match connection_res {
+        Ok(c) => c,
         Err(err) => {
             return not_reachable!("could not connect to {url}: tungstenite {:?}", err);
         }
-    }
+    };
     let (ws_stream, response) = connection;
-    // debug!("TCP response: {:#?}", response);
 
     let tcp = AnySocketConnection::from_tcp(ws_stream, response);
 
     Ok(Box::new(tcp))
 }
 
-pub async fn open_websocket_connection_unix(
-    uc: &UnixCon,
-) -> DTPSR<Box<dyn GenericSocketConnection>> {
+pub async fn open_websocket_connection_unix(uc: &UnixCon) -> DTPSR<Box<dyn GenericSocketConnection>> {
     let stream_res = UnixStream::connect(uc.socket_name.clone()).await;
     let stream = match stream_res {
         Ok(s) => s,
         Err(err) => {
-            return DTPSError::not_reachable(format!(
-                "could not connect to {}: {}",
-                uc.socket_name, err
-            ));
+            return DTPSError::not_reachable(format!("could not connect to {}: {}", uc.socket_name, err));
         }
     };
     // let ready = stream.ready(Interest::WRITABLE).await.unwrap();
@@ -335,25 +357,25 @@ pub async fn open_websocket_connection_unix(
         .body(())
         .unwrap();
     let (socket_stream, response) = {
-        let config = WebSocketConfig {
-            max_send_queue: None,
-            max_message_size: None,
-            max_frame_size: None,
-            accept_unmasked_frames: false,
-        };
+        let config = WebSocketConfig::default();
+        //
+        //     max_send_queue: None,
+        //     write_buffer_size: 0,
+        //     max_write_buffer_size: 0,
+        //     max_message_size: None,
+        //     max_frame_size: None,
+        //     accept_unmasked_frames: false,
+        // };
         match client_async_with_config(request, stream, Some(config)).await {
             Ok(s) => s,
             Err(err) => {
                 error_with_info!("could not connect to {}: {}", uc.socket_name, err);
-                return DTPSError::other(format!(
-                    "could not connect to {}: {}",
-                    uc.socket_name, err
-                ));
+                return DTPSError::other(format!("could not connect to {}: {}", uc.socket_name, err));
             }
         }
     };
 
-    // debug!("WS response: {:#?}", response);
+    // debug_with_info!("WS response: {:#?}", response);
     // use_stream = EitherStream::UnixStream(socket_stream);
     let res = AnySocketConnection::from_unix(None, socket_stream, response);
     return Ok(Box::new(res));

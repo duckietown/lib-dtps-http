@@ -1,9 +1,16 @@
-use std::cmp::{min, Ordering};
-use std::fmt::Display;
-use std::ops::Add;
+use std::{
+    cmp::{
+        min,
+        Ordering,
+    },
+    ops::Add,
+};
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize,
+    Serialize,
+};
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, PartialEq, Eq)]
 pub struct LinkBenchmark {
@@ -42,9 +49,8 @@ impl Add for LinkBenchmark {
             complexity: self.complexity + rhs.complexity,
             bandwidth: min(self.bandwidth, rhs.bandwidth),
             latency_ns: self.latency_ns + rhs.latency_ns,
-            reliability_percent: ((self.reliability_percent as u32)
-                * (rhs.reliability_percent as u32)
-                / (100 * 100)) as u8,
+            reliability_percent: ((self.reliability_percent as u32) * (rhs.reliability_percent as u32) / (100 * 100))
+                as u8,
             hops: self.hops + rhs.hops,
         }
     }
@@ -52,7 +58,7 @@ impl Add for LinkBenchmark {
 
 impl PartialOrd<Self> for LinkBenchmark {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        return Some(self.cmp(other));
+        Some(self.cmp(other))
     }
 }
 
@@ -60,11 +66,7 @@ impl Ord for LinkBenchmark {
     fn cmp(&self, other: &Self) -> Ordering {
         self.complexity
             .cmp(&other.complexity)
-            .then_with(|| {
-                self.bandwidth
-                    .partial_cmp(&other.bandwidth)
-                    .unwrap_or(Ordering::Equal)
-            })
+            .then_with(|| self.bandwidth.partial_cmp(&other.bandwidth).unwrap_or(Ordering::Equal))
             .then_with(|| {
                 self.latency_ns
                     .partial_cmp(&other.latency_ns)

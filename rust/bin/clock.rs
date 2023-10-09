@@ -1,14 +1,24 @@
 extern crate dtps_http;
 
 use chrono::prelude::*;
-use log::error;
 use schemars::schema_for;
-use tokio::spawn;
-use tokio::time::{interval, Duration};
+use tokio::{
+    spawn,
+    time::{
+        interval,
+        Duration,
+    },
+};
 
 use dtps_http::{
-    create_server_from_command_line, init_logging, show_errors, ServerStateAccess, TopicName,
-    TopicProperties, DTPSR,
+    create_server_from_command_line,
+    error_with_info,
+    init_logging,
+    show_errors,
+    ServerStateAccess,
+    TopicName,
+    TopicProperties,
+    DTPSR,
 };
 
 async fn clock_go(state: ServerStateAccess, topic_name: &str, interval_s: f32) -> DTPSR<()> {
@@ -38,7 +48,7 @@ async fn clock_go(state: ServerStateAccess, topic_name: &str, interval_s: f32) -
         let s = format!("{}", now);
         let _inserted = ss.publish_json(&TopicName::from_relative_url(topic_name)?, &s, None)?;
 
-        // debug!("inserted {}: {:?}", topic_name, inserted);
+        // debug_with_info!("inserted {}: {:?}", topic_name, inserted);
     }
     // Ok(())
 }
@@ -73,7 +83,7 @@ async fn main() -> () {
     match clock().await {
         Ok(_) => return,
         Err(e) => {
-            error!("Error in serving:\n{:?}", e);
+            error_with_info!("Error in serving:\n{:?}", e);
 
             // error!("Source: {}", e.source().unwrap());
 

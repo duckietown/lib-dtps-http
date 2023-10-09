@@ -65,7 +65,10 @@ async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> Non
 
             url = cast(URLTopic, await dtpsclient.choose_best(desc.reachability))
             t = await dtpsclient.listen_url(
-                url, functools.partial(new_observation, name), inline_data=inline_data
+                url,
+                functools.partial(new_observation, name),
+                inline_data=inline_data,
+                raise_on_error=False,
             )
             subcriptions.append(t)
 

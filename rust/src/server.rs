@@ -1,60 +1,129 @@
-use std::collections::HashMap;
-use std::env;
-use std::net::SocketAddr;
-use std::path::Path;
-use std::string::ToString;
-use std::sync::Arc as StdArc;
+use std::{
+    collections::HashMap,
+    env,
+    net::SocketAddr,
+    path::Path,
+    string::ToString,
+    sync::Arc as StdArc,
+};
 
-use bytes::Bytes;
 use chrono::Local;
 use clap::Parser;
-use futures::stream::{SplitSink, SplitStream};
-use futures::{SinkExt, StreamExt};
+use futures::{
+    stream::{
+        SplitSink,
+        SplitStream,
+    },
+    SinkExt,
+    StreamExt,
+};
 use indent::indent_all_with;
-use log::{debug, error, info, warn};
 use maplit::hashmap;
-use maud::PreEscaped;
-use maud::{html, DOCTYPE};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use maud::{
+    html,
+    PreEscaped,
+    DOCTYPE,
+};
+use serde::{
+    de::DeserializeOwned,
+    Deserialize,
+    Serialize,
+};
 use serde_yaml;
-use tokio::net::UnixListener;
-use tokio::signal::unix::SignalKind;
-use tokio::spawn;
-use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::broadcast::Receiver;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::Mutex as TokioMutex;
-use tokio::task::JoinHandle;
-use tokio::time::{interval, Duration};
-use tokio_stream::wrappers::{UnboundedReceiverStream, UnixListenerStream};
-use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
-use warp::hyper::Body;
-use warp::reply::Response;
-use warp::{Filter, Rejection};
+use tokio::{
+    net::{
+        TcpListener,
+        UnixListener,
+    },
+    signal::unix::SignalKind,
+    spawn,
+    sync::{
+        broadcast::{
+            error::RecvError,
+            Receiver,
+        },
+        mpsc,
+        mpsc::UnboundedSender,
+        Mutex as TokioMutex,
+    },
+    task::JoinHandle,
+    time::{
+        interval,
+        Duration,
+    },
+};
+use tokio_stream::wrappers::{
+    UnboundedReceiverStream,
+    UnixListenerStream,
+};
+use tungstenite::http::{
+    HeaderMap,
+    HeaderValue,
+    StatusCode,
+};
+use warp::{
+    hyper::Body,
+    reply::Response,
+    Filter,
+    Rejection,
+};
 
-use crate::cloudflare::open_cloudflare;
-use crate::constants::*;
-use crate::html_utils::make_html;
-use crate::master::{
-    handle_websocket_generic2, serve_master_get, serve_master_head, serve_master_patch,
-    serve_master_post,
-};
-use crate::object_queues::*;
-use crate::server_state::*;
-use crate::structures::*;
-use crate::utils::divide_in_components;
-use crate::utils_headers::{put_common_headers, put_header_content_type, put_header_location};
-use crate::websocket_signals::{
-    ChannelInfo, ChannelInfoDesc, Chunk, MsgClientToServer, MsgServerToClient,
-};
 use crate::{
-    error_other, error_with_info, format_digest_path, handle_rejection, interpret_path,
-    invalid_input, parse_url_ext, utils, utils_headers, DTPSError, TopicName, DTPSR,
+    cloudflare::open_cloudflare,
+    constants::*,
+    debug_with_info,
+    divide_in_components,
+    epoch,
+    error_other,
+    error_with_info,
+    format_digest_path,
+    format_nanos,
+    handle_rejection,
+    handle_websocket_generic2,
+    html_utils::make_html,
+    info_with_info,
+    internal_jobs::JobFunctionType,
+    interpret_path,
+    invalid_input,
+    parse_url_ext,
+    put_common_headers,
+    put_header_content_type,
+    put_header_location,
+    serve_master_get,
+    serve_master_head,
+    serve_master_patch,
+    serve_master_post,
+    server_state::ConnectionJob,
+    show_errors,
+    sniff_and_start_proxy,
+    types::CompositeName,
+    utils_headers,
+    warn_with_info,
+    ChannelInfo,
+    ChannelInfoDesc,
+    Chunk,
+    ComponentStatusNotification,
+    DTPSError,
+    DataReady,
+    DataSaved,
+    InsertNotification,
+    ListenURLEvents,
+    MsgClientToServer,
+    MsgServerToClient,
+    ObjectQueue,
+    RawData,
+    ResourceAvailabilityWire,
+    ServerState,
+    Status,
+    StatusSummary,
+    TopicName,
+    TypeOfConnection,
+    DTPSR,
 };
 
-pub type HandlersResponse = Result<http::Response<hyper::Body>, Rejection>;
+const AVAILABILITY_LENGTH_SEC: f64 = 60.0;
+
+pub type HandlersResponse = Result<http::Response<Body>, Rejection>;
 pub type ServerStateAccess = StdArc<TokioMutex<ServerState>>;
 
 pub struct DTPSServer {
@@ -64,7 +133,7 @@ pub struct DTPSServer {
     pub cloudflare_executable: String,
     pub unix_path: Option<String>,
     initial_proxy: HashMap<String, TypeOfConnection>,
-    topic_connections: Vec<TopicConnection>,
+    topic_connections: Vec<ConnectionJob>,
 }
 
 impl DTPSServer {
@@ -74,7 +143,7 @@ impl DTPSServer {
         cloudflare_executable: String,
         unix_path: Option<String>,
         initial_proxy: HashMap<String, TypeOfConnection>,
-        topic_connections: Vec<TopicConnection>,
+        topic_connections: Vec<ConnectionJob>,
         aliases: Vec<TopicAlias>,
     ) -> DTPSR<Self> {
         let mut ss = ServerState::new(None)?;
@@ -98,15 +167,13 @@ impl DTPSServer {
         // get current pid
         let pid = std::process::id();
         if pid == 1 {
-            warn!(
-                "WARNING: Running as PID 1. This is not recommended because CTRL-C may not work."
-            );
-            warn!("If running through `docker run`, use `docker run --init` to avoid this.")
+            warn_with_info!("WARNING: Running as PID 1. This is not recommended because CTRL-C may not work.");
+            warn_with_info!("If running through `docker run`, use `docker run --init` to avoid this.")
         }
 
-        let server_state_access: ServerStateAccess = self.mutex.clone();
+        let ssa: ServerStateAccess = self.mutex.clone();
 
-        let clone_access = warp::any().map(move || server_state_access.clone());
+        let clone_access = warp::any().map(move || ssa.clone());
 
         let master_route_get = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
@@ -115,6 +182,13 @@ impl DTPSServer {
             .and(warp::header::headers_cloned())
             .and_then(serve_master_get);
 
+        let master_route_head = warp::path::full()
+            .and(warp::query::<HashMap<String, String>>())
+            .and(warp::head())
+            .and(clone_access.clone())
+            .and(warp::header::headers_cloned())
+            .and_then(serve_master_head);
+
         let master_route_post = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
             .and(warp::post())
@@ -122,13 +196,6 @@ impl DTPSServer {
             .and(warp::header::headers_cloned())
             .and(warp::body::bytes())
             .and_then(serve_master_post);
-
-        let master_route_head = warp::path::full()
-            .and(warp::query::<HashMap<String, String>>())
-            .and(warp::head())
-            .and(clone_access.clone())
-            .and(warp::header::headers_cloned())
-            .and_then(serve_master_head);
 
         let master_route_patch = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
@@ -146,10 +213,10 @@ impl DTPSServer {
                 if last == Some(&EVENTS_SUFFIX.to_string()) {
                     let start = path.as_str().rfind(EVENTS_SUFFIX).unwrap();
                     let part = &path.as_str()[..start];
-                    // debug!("websocket raw {path1:?} -> {part:?}");
+                    // debug_with_info!("websocket raw {path1:?} -> {part:?}");
                     Ok(part.to_string())
                 } else {
-                    Err(warp::reject::not_found()) // should be not_available
+                    Err(warp::reject::reject())
                 }
             })
             .and(clone_access.clone())
@@ -161,10 +228,8 @@ impl DTPSServer {
                         Some(x) => x != 0,
                         None => false,
                     };
-                    let path = path.to_string();
-                    ws.on_upgrade(move |socket| {
-                        handle_websocket_generic2(path, socket, state1, send_data)
-                    })
+
+                    ws.on_upgrade(move |socket| handle_websocket_generic2(path, socket, state1, send_data))
                 }
             });
 
@@ -177,25 +242,70 @@ impl DTPSServer {
 
         let mut handles = vec![];
 
+        let ssa = self.get_lock();
+
+        let rx = {
+            let ss = ssa.lock().await;
+            let tsn = TopicName::from_dash_sep(TOPIC_STATE_NOTIFICATION)?;
+            let oq = ss.oqs.get(&tsn).unwrap();
+            oq.subscribe_insert_notification()
+        };
+
+        let ssa2 = ssa.clone();
+        handles.push(spawn(show_errors(
+            Some(ssa.clone()),
+            "collect_statuses".to_string(),
+            collect_statuses(ssa2, rx),
+        )));
+
         if let Some(address) = self.listen_address {
-            let tcp_server = warp::serve(the_routes.clone()).run(address);
+            let the_routes_cloned = the_routes.clone();
+            let serve_job: JobFunctionType = Box::new(move || {
+                let the_routes_cloned = the_routes_cloned.clone();
+
+                Box::pin(async move {
+                    {
+                        #[allow(clippy::let_unit_value)]
+                        match TcpListener::bind(&address).await {
+                            Ok(_) => {
+                                // The port is available, proceed to start the Warp server
+                            }
+                            Err(e) => {
+                                // The port is already in use, handle the error gracefully
+                                warn_with_info!("Failed to bind to address {}: {}", address, e);
+                                return Ok(());
+                            }
+                        };
+                    }
+
+                    warp::serve(the_routes_cloned).run(address).await;
+                    Ok(())
+                })
+            });
 
             {
-                let mut s = self.mutex.lock().await;
+                let mut ss = self.mutex.lock().await;
+                let job_name = CompositeName::from_dash_sep("server/tcp")?;
+                ss.job_manager
+                    .add_job(&job_name, "TCP server", serve_job, false, true, 5.0, self.mutex.clone())?;
+            }
 
-                info!("Listening on port {}", address.port());
+            {
+                let mut ss = self.mutex.lock().await;
+
+                info_with_info!("Listening on port {}", address.port());
 
                 let s1 = format!("http://localhost:{}{}", address.port(), "/");
-                s.add_advertise_url(&s1)?;
+                ss.add_advertise_url(&s1)?;
 
-                let s2 = address.to_string().clone();
+                let s2 = address.to_string();
                 if !s2.contains("0.0.0.0") {
-                    s.add_advertise_url(&s2)?;
+                    ss.add_advertise_url(&s2)?;
                 }
 
                 for host in platform::get_other_addresses() {
                     let x = format!("http://{}:{}{}", host, address.port(), "/");
-                    s.add_advertise_url(&x)?;
+                    ss.add_advertise_url(&x)?;
                 }
 
                 use crate::platform;
@@ -203,16 +313,12 @@ impl DTPSServer {
                 let hostname = gethostname();
                 let hostname = hostname.to_string_lossy();
                 let x = format!("http://{}:{}{}", hostname, address.port(), "/");
-                s.add_advertise_url(&x)?;
+                ss.add_advertise_url(&x)?;
             }
-
-            handles.push(tokio::spawn(tcp_server));
         }
 
         // if tunnel is given ,start
-        if let (Some(tunnel_file), Some(address)) =
-            (&self.cloudflare_tunnel_name, self.listen_address)
-        {
+        if let (Some(tunnel_file), Some(address)) = (&self.cloudflare_tunnel_name, self.listen_address) {
             let port = address.port();
             let handle = open_cloudflare(port, tunnel_file, &self.cloudflare_executable).await;
 
@@ -234,44 +340,86 @@ impl DTPSServer {
 
         for (i, unix_path) in unix_paths.iter().enumerate() {
             let the_path = Path::new(&unix_path);
-            warn!("Opening socket on: {the_path:?}");
+            warn_with_info!("Opening socket on: {the_path:?}");
             let dirname = the_path.parent().unwrap();
             if !dirname.exists() {
-                warn!("Creating dirname: {dirname:?}");
+                warn_with_info!("Creating dirname: {dirname:?}");
                 std::fs::create_dir_all(dirname).unwrap();
             }
             // remove the socket if it exists
             if the_path.exists() {
-                warn!("removing existing socket: {:?}", unix_path);
-                std::fs::remove_file(&unix_path).unwrap();
+                warn_with_info!("removing existing socket: {:?}", unix_path);
+                std::fs::remove_file(unix_path).unwrap();
             }
 
-            let listener = match UnixListener::bind(&unix_path) {
-                Ok(l) => l,
+            let the_routes_cloned = the_routes.clone();
+            let unix_url = format!("http+unix://{}/", unix_path.replace('/', "%2F"));
 
-                Err(e) => {
-                    error_with_info!("error binding to unix socket {}: {:?}", unix_path, e);
-                    error_with_info!("note that this is not supported on Docker+OS X");
-                    if i == 0 {
-                        // this is our default
-                        continue;
-                    } else {
-                        error_with_info!("Returning error because this was specified by user.");
-                        return Err(e.into());
-                    }
-                }
-            };
+            let unix_path = unix_path.clone();
+            let serve_job: JobFunctionType = Box::new(move || {
+                let the_routes_cloned = the_routes_cloned.clone();
+                let unix_path = unix_path.clone();
+                Box::pin(async move {
+                    let listener = match UnixListener::bind(unix_path.clone()) {
+                        Ok(l) => l,
 
-            let stream = UnixListenerStream::new(listener);
-            let handle = spawn(warp::serve(the_routes.clone()).run_incoming(stream));
-            // info!("Listening on {:?}", unix_path);
-            let unix_url = format!("http+unix://{}/", unix_path.replace("/", "%2F"));
+                        Err(e) => {
+                            let msg = format!("error binding to unix socket {}: {:?}", unix_path, e);
+                            error_with_info!("note that this is not supported on Docker+OS X");
+                            return Err(msg);
+                        }
+                    };
+
+                    let stream = UnixListenerStream::new(listener);
+
+                    warp::serve(the_routes_cloned).run_incoming(stream).await;
+                    Ok(())
+                })
+            });
+            {
+                let mut ss = self.mutex.lock().await;
+                let job_name = CompositeName::from_dash_sep(format!("server/unix/{i}"))?;
+
+                ss.job_manager.add_job(
+                    &job_name,
+                    "Unix server",
+                    serve_job,
+                    false,
+                    true,
+                    5.0,
+                    self.mutex.clone(),
+                )?;
+            }
+
             {
                 let mut s = ssa.lock().await;
-                s.info(format!("Listening on {:?}", unix_path));
+                // s.info(format!("Listening on {:?}", unix_path));
                 s.add_advertise_url(&unix_url.to_string())?;
             }
-            handles.push(handle);
+        }
+
+        let ssa_job = self.get_lock();
+        let clock_job: JobFunctionType = Box::new(move || {
+            let ssa = ssa_job.clone();
+            Box::pin(async move {
+                let topic_name = TopicName::from_relative_url(TOPIC_LIST_CLOCK).unwrap();
+                clock_go(ssa.clone(), topic_name, 1.0).await;
+                Ok(())
+            })
+        });
+        {
+            let mut ss = self.mutex.lock().await;
+            let job_name = CompositeName::from_dash_sep("internal/clock")?;
+
+            ss.job_manager.add_job(
+                &job_name,
+                "clock update server",
+                clock_job,
+                true,
+                true,
+                5.0,
+                self.mutex.clone(),
+            )?;
         }
 
         spawn(clock_go(
@@ -280,56 +428,33 @@ impl DTPSServer {
             1.0,
         ));
 
-        if self.initial_proxy.len() > 0 {
+        if !self.initial_proxy.is_empty() {
             // let s = ssa.lock().await;
-            let mut i = 0;
+            // let mut i = 0;
             for (k, v) in self.initial_proxy.clone() {
                 let mounted_at = TopicName::from_relative_url(&k)?;
                 self.add_proxied(&mounted_at, v.clone()).await?;
 
-                i += 1;
+                // i += 1;
             }
-            info!("Proxies started");
+            info_with_info!("Proxies started");
         }
         {
-            let ss = ssa.lock().await;
-            info!(
+            let ss = self.mutex.lock().await;
+            info_with_info!(
                 "Server started. Advertised URLs: \n{}\n",
                 indent_all_with(" ", ss.get_advertise_urls().join("\n"))
             );
         }
+
         for (i, con) in self.topic_connections.iter().enumerate() {
-            let component_name =
-                TopicName::from_components(&vec!["connections".to_string(), format!("{i}")]);
+            let component_name = TopicName::from_components(&["connections".to_string(), format!("{i}")]);
 
-            let fut = start_connection(
-                ssa.clone(),
-                component_name.clone(),
-                con.source.clone(),
-                con.target.clone(),
-            );
+            let mut ss = self.mutex.lock().await;
 
-            let handle = tokio::spawn(show_errors(
-                Some(ssa.clone()),
-                component_name.to_dash_sep(),
-                fut,
-            ));
-            handles.push(handle);
+            ss.add_topic_to_topic_connection(&component_name, con, ssa.clone())
+                .await?;
         }
-
-        let rx = {
-            let ss = ssa.lock().await;
-            let tsn = TopicName::from_dash_sep(TOPIC_STATE_NOTIFICATION)?;
-            let oq = ss.oqs.get(&tsn).unwrap();
-            oq.subscribe_insert_notification()
-        };
-
-        let ssa2 = ssa.clone();
-        handles.push(tokio::spawn(show_errors(
-            Some(ssa.clone()),
-            "collect_statuses".to_string(),
-            collect_statuses(ssa2, rx),
-        )));
 
         Ok(handles)
     }
@@ -340,25 +465,25 @@ impl DTPSServer {
         let mut sig_int = tokio::signal::unix::signal(SignalKind::interrupt())?;
 
         let pid = std::process::id();
-        info!("PID: {}", pid);
+        info_with_info!("PID: {}", pid);
         let res: DTPSR<()>;
         tokio::select! {
 
             _ = sig_int.recv() => {
-                info!("SIGINT received");
+                info_with_info!("SIGINT received");
                     res = Err(DTPSError::Interrupted);
             },
             _ = sig_hup.recv() => {
-                info!("SIGHUP received: gracefully shutting down");
+                info_with_info!("SIGHUP received: gracefully shutting down");
                 res = Ok(());
             },
             _ = sig_term.recv() => {
-                info!("SIGTERM received: gracefully shutting down");
+                info_with_info!("SIGTERM received: gracefully shutting down");
                 res = Ok(());
 
             },
                 // _ = futures::future::join_all(&handles) => {
-                //     info!("shutdown received");
+                //     info_with_info!("shutdown received");
                 //     // return Err("shutdown received".into());
                 // },
         }
@@ -387,49 +512,18 @@ impl DTPSServer {
         ss.node_id.clone()
     }
 
-    pub async fn add_proxied(
-        &mut self,
-        mounted_at: &TopicName,
-        url: TypeOfConnection,
-    ) -> DTPSR<JoinHandle<()>> {
+    pub async fn add_proxied(&mut self, mounted_at: &TopicName, url: TypeOfConnection) -> DTPSR<JoinHandle<()>> {
         let ssa = self.get_lock();
 
-        let future = sniff_and_start_proxy(mounted_at.clone(), url.clone(), ssa.clone());
-        let handle = tokio::spawn(show_errors(
-            Some(ssa.clone()),
-            format!(
-                "proxied/{mounted_at}",
-                mounted_at = mounted_at.as_dash_sep()
-            ),
+        let future = sniff_and_start_proxy(mounted_at.clone(), url, ssa.clone());
+        let handle = spawn(show_errors(
+            Some(ssa),
+            format!("proxied/{mounted_at}", mounted_at = mounted_at.as_dash_sep()),
             future,
         ));
 
         Ok(handle)
     }
-}
-
-pub async fn start_connection(
-    ssa: ServerStateAccess,
-    component_name: TopicName,
-    source: TopicName,
-    target: TopicName,
-) -> DTPSR<()> {
-    let (source, target) = {
-        let mut ss = ssa.lock().await;
-        ss.send_status_notification(&component_name, Status::STARTING, None)?;
-
-        let source = interpret_path(source.as_relative_url(), &hashmap! {}, &None, &ss).await?;
-        let target = interpret_path(target.as_relative_url(), &hashmap! {}, &None, &ss).await?;
-        (source, target)
-    };
-    debug!("Connecting source {source:?} with {target:?}");
-
-    {
-        let mut ss = ssa.lock().await;
-        ss.send_status_notification(&component_name, Status::STOPPED, None)?;
-    }
-
-    Ok(())
 }
 
 pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> HandlersResponse {
@@ -455,7 +549,7 @@ pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> Ha
             let components = divide_in_components(topic_name, '.');
             for c in components {
                 url.push_str(&c);
-                url.push_str("/");
+                url.push('/');
             }
             topic2url.push((topic_name, url));
         }
@@ -523,16 +617,13 @@ pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> Ha
 pub fn get_channel_info_message(oq: &ObjectQueue) -> ChannelInfo {
     let num_total;
     let newest;
-    let oldest;
-    match oq.stored.first() {
-        None => {
-            oldest = None;
-        }
+    let oldest = match oq.stored.first() {
+        None => None,
         Some(first) => {
             let d = oq.saved.get(first).unwrap();
-            oldest = Some(ChannelInfoDesc::new(d.index, d.time_inserted));
+            Some(ChannelInfoDesc::new(d.index, d.time_inserted))
         }
-    }
+    };
 
     match oq.stored.last() {
         None => {
@@ -559,11 +650,11 @@ pub fn get_channel_info_message(oq: &ObjectQueue) -> ChannelInfo {
 pub fn get_dataready(this_one: &DataSaved) -> DataReady {
     let availability = vec![ResourceAvailabilityWire {
         url: format_digest_path(&this_one.digest, &this_one.content_type),
-        available_until: utils::epoch() + 60.0,
+        available_until: epoch() + 60.0,
     }];
 
     let nchunks = 0;
-    let dr2 = DataReady {
+    DataReady {
         origin_node: this_one.origin_node.clone(),
         unique_id: this_one.unique_id.clone(),
         sequence: this_one.index,
@@ -574,24 +665,33 @@ pub fn get_dataready(this_one: &DataSaved) -> DataReady {
         clocks: this_one.clocks.clone(),
         availability,
         chunks_arriving: nchunks,
-    };
-    dr2
+    }
 }
 
 pub async fn get_series_of_messages_for_notification_(
     send_data: bool,
     insert_notification: &InsertNotification,
+    delta_availability: f64,
+    ss: &mut ServerState,
 ) -> Vec<MsgServerToClient> {
     let this_one = &insert_notification.data_saved;
     let mut out = vec![];
     let the_availability = if send_data {
         vec![]
     } else {
-        vec![ResourceAvailabilityWire {
+        let vec1 = vec![ResourceAvailabilityWire {
             url: format_digest_path(&this_one.digest, &this_one.content_type),
-            available_until: utils::epoch() + 60.0,
-        }]
+            available_until: epoch() + delta_availability,
+        }];
+        vec1
     };
+
+    ss.save_blob_for_time(
+        &this_one.digest,
+        &insert_notification.raw_data.content,
+        delta_availability,
+    );
+
     let nchunks = if send_data { 1 } else { 0 };
     let dr2 = DataReady {
         origin_node: this_one.origin_node.clone(),
@@ -616,7 +716,7 @@ pub async fn get_series_of_messages_for_notification_(
             i: 0,
             n: nchunks,
             index: 0,
-            data: Bytes::from(content.clone()),
+            data: content.clone(),
         });
         out.push(chunk);
     }
@@ -625,7 +725,7 @@ pub async fn get_series_of_messages_for_notification_(
 
 pub async fn handle_websocket_queue(
     ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
-    state: ServerStateAccess,
+    ssa: ServerStateAccess,
     topic_name: TopicName,
     send_data: bool,
 ) -> DTPSR<()> {
@@ -633,20 +733,33 @@ pub async fn handle_websocket_queue(
         let mut starting_messaging = vec![];
 
         // important: release the lock
-        let ss0 = state.lock().await;
+        let rx = {
+            let (rx, inot) = {
+                let ss0 = ssa.lock().await;
 
-        let oq: &ObjectQueue = ss0.get_queue(&topic_name)?;
+                let oq = ss0.get_queue(&topic_name)?;
 
-        let channel_info_message = MsgServerToClient::ChannelInfo(get_channel_info_message(&oq));
-        starting_messaging.push(channel_info_message);
+                let channel_info_message = MsgServerToClient::ChannelInfo(get_channel_info_message(oq));
+                starting_messaging.push(channel_info_message);
 
-        if let Some(x) = ss0.get_last_insert(&topic_name)? {
-            let mut for_this = get_series_of_messages_for_notification_(send_data, &x).await;
-            starting_messaging.append(&mut for_this);
-        }
+                let inot = ss0.get_last_insert(&topic_name)?;
+                let rx = oq.subscribe_insert_notification();
+                (rx, inot)
+            };
+
+            if let Some(x) = &inot {
+                let mut ss0 = ssa.lock().await;
+
+                let mut for_this =
+                    get_series_of_messages_for_notification_(send_data, x, AVAILABILITY_LENGTH_SEC, &mut ss0).await;
+                starting_messaging.append(&mut for_this);
+            }
+
+            rx
+        };
+
         send_as_ws_cbor(&starting_messaging, ws_tx).await?;
-
-        oq.subscribe_insert_notification()
+        rx
     };
     loop {
         let r = match rx2.recv().await {
@@ -656,13 +769,32 @@ pub async fn handle_websocket_queue(
                     break;
                 }
                 RecvError::Lagged(_) => {
-                    warn!("Lagged");
+                    warn_with_info!("Lagged");
                     continue;
                 }
             },
         };
+        let for_this = {
+            match r {
+                ListenURLEvents::InsertNotification(not) => {
+                    let mut ss = ssa.lock().await;
 
-        let for_this = get_series_of_messages_for_notification_(send_data, &r).await;
+                    get_series_of_messages_for_notification_(send_data, &not, AVAILABILITY_LENGTH_SEC, &mut ss).await
+                }
+                ListenURLEvents::WarningMsg(m) => {
+                    vec![MsgServerToClient::WarningMsg(m)]
+                }
+                ListenURLEvents::ErrorMsg(m) => {
+                    vec![MsgServerToClient::ErrorMsg(m)]
+                }
+                ListenURLEvents::FinishedMsg(m) => {
+                    vec![MsgServerToClient::FinishedMsg(m)]
+                }
+                ListenURLEvents::SilenceMsg(m) => {
+                    vec![MsgServerToClient::SilenceMsg(m)]
+                }
+            }
+        };
         send_as_ws_cbor(&for_this, ws_tx).await?;
     }
     Ok(())
@@ -674,8 +806,6 @@ pub async fn send_as_ws_cbor<T: Serialize>(
 ) -> DTPSR<()> {
     for x in data {
         let bytes = serde_cbor::to_vec(&x).unwrap();
-        // let value2: serde_cbor::Value = serde_cbor::from_slice(&bytes).unwrap();
-        // debug!("send_as_ws_cbor: {:?}", value2);
         let message = warp::ws::Message::binary(bytes);
 
         ws_tx.send(message).await?;
@@ -704,19 +834,18 @@ pub async fn handle_topic_post(
     //
     // let byte_vector: Vec<u8> = data.to_vec().clone();
 
-    let ds = ss.publish(&topic_name, &rd.content, &rd.content_type, None)?;
+    let ds = ss.publish(topic_name, &rd.content, &rd.content_type, None)?;
 
-    return Ok(construct_response_cbor(&ds));
+    Ok(construct_response_cbor(&ds))
 }
 
 pub fn construct_response_cbor<T: Serialize>(ob: &T) -> http::Response<Body> {
     let ds_cbor = serde_cbor::to_vec(&ob).unwrap();
-    let res = http::Response::builder()
+    http::Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, CONTENT_TYPE_CBOR)
         .body(Body::from(ds_cbor))
-        .unwrap();
-    res
+        .unwrap()
 }
 
 async fn handler_topic_html_summary(
@@ -725,12 +854,7 @@ async fn handler_topic_html_summary(
 ) -> Result<http::Response<Body>, Rejection> {
     let ss = ss_mutex.lock().await;
 
-    let x: &ObjectQueue;
-    match ss.oqs.get(topic_name) {
-        None => return Err(warp::reject::not_found()),
-
-        Some(y) => x = y,
-    }
+    let x = ss.get_queue(topic_name)?;
 
     let (default_content_type, initial_value) = match x.stored.last() {
         None => ("application/yaml".to_string(), "{}".to_string()),
@@ -744,9 +868,7 @@ async fn handler_topic_html_summary(
                 Some(c) => c,
             };
             let initial = match l.content_type.as_str() {
-                "application/yaml" | "application/json" => {
-                    String::from_utf8(content.to_vec()).unwrap()
-                }
+                "application/yaml" | "application/json" => String::from_utf8(content.to_vec()).unwrap(),
                 _ => "{}".to_string(),
             };
             (l.content_type.clone(), initial)
@@ -754,14 +876,13 @@ async fn handler_topic_html_summary(
     };
     let now = Local::now().timestamp_nanos();
 
-    let format_elapsed = |a| -> String { utils::format_nanos(now - a) };
+    let format_elapsed = |a| -> String { format_nanos(now - a) };
 
     let data_or_digest = |data: &DataSaved| -> PreEscaped<String> {
-        let printable = match data.content_type.as_str() {
-            "application/yaml" | "application/x-yaml" | "text/yaml" | "text/vnd.yaml"
-            | "application/json" => true,
-            _ => false,
-        };
+        let printable = matches!(
+            data.content_type.as_str(),
+            "application/yaml" | "application/x-yaml" | "text/yaml" | "text/vnd.yaml" | "application/json"
+        );
         let url = format_digest_path(&data.digest, &data.content_type);
 
         if data.content_length <= data.digest.len() {
@@ -781,7 +902,7 @@ async fn handler_topic_html_summary(
     };
     let mut latencies: Vec<i64> = vec![];
     for i in &x.stored {
-        let data = x.saved.get(&i).unwrap();
+        let data = x.saved.get(i).unwrap();
         if x.saved.contains_key(&(i - 1)) {
             let data_prev = x.saved.get(&(i - 1)).unwrap();
             latencies.push(data.time_inserted - data_prev.time_inserted);
@@ -791,7 +912,7 @@ async fn handler_topic_html_summary(
     }
 
     let x = make_html(
-        &topic_name.as_relative_url(),
+        topic_name.as_relative_url(),
         html! {
 
 
@@ -836,7 +957,7 @@ async fn handler_topic_html_summary(
                         tr {
                             td { (data.index) }
                             td { (format_elapsed(data.time_inserted)) }
-                            td { (utils::format_nanos(latencies[i]))}
+                            td { (format_nanos(latencies[i]))}
                             td { code {(data.content_type)} }
                             td { (data.content_length) }
                             td { code { (data_or_digest(data)) } }
@@ -862,11 +983,7 @@ pub const JAVASCRIPT_SEND: &str = r##"
 
 "##;
 
-pub fn put_alternative_locations(
-    ss: &ServerState,
-    headers: &mut HeaderMap<HeaderValue>,
-    suffix: &str,
-) {
+pub fn put_alternative_locations(ss: &ServerState, headers: &mut HeaderMap<HeaderValue>, suffix: &str) {
     for x in ss.get_advertise_urls().iter() {
         let x_suff = format!("{}{}", x, suffix);
         put_header_content_type(headers, "text/html");
@@ -918,32 +1035,6 @@ pub struct ServerArgs {
 }
 
 #[derive(Debug, Clone)]
-pub struct TopicConnection {
-    pub source: TopicName,
-    pub target: TopicName,
-}
-
-impl TopicConnection {
-    /// Parses a string of the form `a/b -> c/d`
-    pub fn from_string(s: &str) -> DTPSR<Self> {
-        match s.find("->") {
-            None => {
-                return invalid_input!("Cannot find -> in string {s:?}");
-            }
-            Some(i) => {
-                // divide in 2
-                let before = s[..i].trim();
-                let after = s[i + "->".len()..].trim();
-                let source = TopicName::from_dash_sep(before)?;
-                let target = TopicName::from_dash_sep(after)?;
-
-                Ok(Self { source, target })
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct TopicAlias {
     pub new: TopicName,
     pub existing: TopicName,
@@ -952,9 +1043,9 @@ pub struct TopicAlias {
 impl TopicAlias {
     /// Parses a string of the form `a/b -> c/d`
     pub fn from_string(s: &str) -> DTPSR<Self> {
-        match s.find("=") {
+        match s.find('=') {
             None => {
-                return invalid_input!("Cannot find -> in string {s:?}");
+                invalid_input!("Cannot find -> in string {s:?}")
             }
             Some(i) => {
                 // divide in 2
@@ -974,9 +1065,9 @@ pub fn address_from_host_port(host: &str, port: u16) -> DTPSR<SocketAddr> {
 
     let s: Result<SocketAddr, _> = hoststring.parse();
     match s {
-        Ok(x) => return Ok(x),
+        Ok(x) => Ok(x),
         Err(e) => {
-            debug!("Cannot parse {}: {}", hoststring, e);
+            debug_with_info!("Cannot parse {}: {}", hoststring, e);
             error_other(format!("Cannot parse {}: {}", hoststring, e))
         }
     }
@@ -986,10 +1077,7 @@ pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {
     let args = ServerArgs::parse();
 
     let listen_address = if args.tcp_port > 0 {
-        Some(address_from_host_port(
-            args.tcp_host.as_str(),
-            args.tcp_port,
-        )?)
+        Some(address_from_host_port(args.tcp_host.as_str(), args.tcp_port)?)
     } else {
         None
     };
@@ -1001,23 +1089,24 @@ pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {
         if parts.len() != 2 {
             return error_other(format!("Invalid proxy specification: {}", p));
         }
+        #[allow(clippy::get_first)]
         let name = parts.get(0).unwrap();
         let value = parts.get(1).unwrap();
         let url = parse_url_ext(value)?;
         proxy.insert(name.to_string(), url);
     }
-    if proxy.len() != 0 {
-        debug!("Proxy:\n{:#?}", proxy);
+    if !proxy.is_empty() {
+        debug_with_info!("Proxy:\n{:#?}", proxy);
     }
     let topic_connections = args
         .connect
         .iter()
-        .map(|x| TopicConnection::from_string(&x).unwrap())
-        .collect::<Vec<TopicConnection>>();
+        .map(|x| ConnectionJob::from_string(x).unwrap())
+        .collect::<Vec<ConnectionJob>>();
     let aliases = args
         .alias
         .iter()
-        .map(|x| TopicAlias::from_string(&x).unwrap())
+        .map(|x| TopicAlias::from_string(x).unwrap())
         .collect::<Vec<TopicAlias>>();
     DTPSServer::new(
         listen_address,
@@ -1043,7 +1132,7 @@ async fn clock_go(state: ServerStateAccess, topic_name: TopicName, interval_s: f
         let s = format!("{}", now);
         let _inserted = ss.publish_json(&topic_name, &s, None);
 
-        // debug!("inserted {}: {:?}", topic_name, inserted);
+        // debug_with_info!("inserted {}: {:?}", topic_name, inserted);
     }
 }
 
@@ -1052,7 +1141,7 @@ pub fn receive_from_websocket<T: DeserializeOwned + Clone + Send + 'static>(
 ) -> (UnboundedReceiverStream<T>, JoinHandle<()>) {
     let (tx, rx) = mpsc::unbounded_channel();
 
-    let handle = tokio::spawn(show_errors(None, "websocket".to_string(), pull_(ws_rx, tx)));
+    let handle = spawn(show_errors(None, "websocket".to_string(), pull_(ws_rx, tx)));
 
     let stream = UnboundedReceiverStream::new(rx);
     (stream, handle)
@@ -1065,7 +1154,7 @@ pub async fn pull_<T: DeserializeOwned + Clone + Send>(
     loop {
         match ws_rx.next().await {
             None => {
-                // debug!("ws_rx.next() returned None");
+                // debug_with_info!("ws_rx.next() returned None");
                 // finished = true;
                 break;
             }
@@ -1074,33 +1163,23 @@ pub async fn pull_<T: DeserializeOwned + Clone + Send>(
                     let raw_data = msg.as_bytes().to_vec().clone();
                     // let v: serde_cbor::Value = serde_cbor::from_slice(&raw_data).unwrap();
                     //
-                    // debug!("ws_rx.next() returned {:#?}", v);
+                    // debug_with_info!("ws_rx.next() returned {:#?}", v);
                     //
 
                     let ms: T = match serde_cbor::from_slice(raw_data.as_slice()) {
                         Ok(x) => x,
                         Err(err) => {
-                            debug!("ws_rx.next() cannot interpret error {:#?}", err);
+                            debug_with_info!("ws_rx.next() cannot interpret error {:#?}", err);
                             continue;
                         }
                     };
                     // let c = serde_cbor::to_vec(&ms).unwrap();
+
                     tx.send(ms.clone()).unwrap();
-                    // debug!("ws_rx.next() returned {:#?}", ms);
-                    // match ms {
-                    //     MsgClientToServer::RawData(rd) => {
-                    //         let mut ss0 = ss_mutex.lock().await;
-                    //
-                    //         // let oq: &ObjectQueue=  ss0.oqs.get(topic_name.as_str()).unwrap();
-                    //
-                    //         let _ds =
-                    //             ss0.publish(&topic_name, &rd.content, &rd.content_type, None);
-                    //     }
-                    // }
                 }
             }
             Some(Err(err)) => {
-                debug!("ws_rx.next() returned error {:#?}", err);
+                debug_with_info!("ws_rx.next() returned error {:#?}", err);
                 // match err {
                 //     Error { .. } => {}
                 // }
@@ -1119,14 +1198,12 @@ pub async fn do_receiving(
     loop {
         match receiver.next().await {
             None => {
-                debug!("do_receiving: receiver.next() returned None");
+                debug_with_info!("do_receiving: receiver.next() returned None");
                 // finished = true;
                 break;
             }
             Some(MsgClientToServer::RawData(rd)) => {
                 let mut ss0 = ss_mutex.lock().await;
-
-                // let oq: &ObjectQueue=  ss0.oqs.get(topic_name.as_str()).unwrap();
 
                 let _ds = ss0.publish(&topic_name, &rd.content, &rd.content_type, None);
             }
@@ -1134,10 +1211,7 @@ pub async fn do_receiving(
     }
 }
 
-async fn collect_statuses(
-    ssa: ServerStateAccess,
-    mut rx: Receiver<InsertNotification>,
-) -> DTPSR<()> {
+pub async fn collect_statuses(ssa: ServerStateAccess, mut rx: Receiver<ListenURLEvents>) -> DTPSR<()> {
     let mut cur = StatusSummary {
         components: Default::default(),
         comments: Default::default(),
@@ -1150,46 +1224,55 @@ async fn collect_statuses(
         ss.publish_object_as_cbor(&res, &cur, None)?;
     }
     loop {
-        let inot = match rx.recv().await {
-            Ok(inot) => inot,
+        let lue = match rx.recv().await {
+            Ok(lue) => lue,
             Err(e) => match e {
                 RecvError::Closed => {
-                    debug!("collect_statuses: finished collecting");
+                    debug_with_info!("collect_statuses: finished collecting");
                     break;
                 }
                 RecvError::Lagged(_) => {
-                    error!("collect_statuses: lagged");
+                    error_with_info!("collect_statuses: lagged");
                     continue;
                 }
             },
         };
-        let csn0 = inot.raw_data.interpret::<ComponentStatusNotification>();
 
-        let csn = if let Err(e) = csn0 {
-            error!("Cannot parse status notification: {:?}", e);
-            continue;
-        } else {
-            csn0.unwrap()
-        };
+        match lue {
+            ListenURLEvents::InsertNotification(inot) => {
+                let csn0 = inot.raw_data.interpret::<ComponentStatusNotification>();
 
-        cur.incorporate(csn);
-        {
-            let mut ss = ssa.lock().await;
-            let r = ss.publish_object_as_cbor(&res, &cur, None);
-            if let Err(e) = r {
-                error!("Cannot publish status summary: {:?}", e);
-                continue;
-            }
-        }
+                let csn = if let Err(e) = csn0 {
+                    error_with_info!("Cannot parse status notification: {:?}", e);
+                    continue;
+                } else {
+                    csn0.unwrap()
+                };
 
-        {
-            let mut ss = ssa.lock().await;
-            match ss.publish_object_as_cbor(&res, &cur, None) {
-                Ok(_) => {}
-                Err(e) => {
-                    error!("Cannot publish status summary: {:?}", e);
+                cur.incorporate(csn);
+                {
+                    let mut ss = ssa.lock().await;
+                    let r = ss.publish_object_as_cbor(&res, &cur, None);
+                    if let Err(e) = r {
+                        error_with_info!("Cannot publish status summary: {:?}", e);
+                        continue;
+                    }
+                }
+
+                {
+                    let mut ss = ssa.lock().await;
+                    match ss.publish_object_as_cbor(&res, &cur, None) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            error_with_info!("Cannot publish status summary: {:?}", e);
+                        }
+                    }
                 }
             }
+            ListenURLEvents::WarningMsg(_) => {} // TODO: do something?
+            ListenURLEvents::ErrorMsg(_) => {}
+            ListenURLEvents::FinishedMsg(_) => {}
+            ListenURLEvents::SilenceMsg(_) => {}
         }
     }
 

@@ -1,11 +1,34 @@
-use futures::{SinkExt, StreamExt};
-use tokio::process::Command;
-use tokio::task::JoinHandle;
+use futures::{
+    SinkExt,
+    StreamExt,
+};
+use tokio::{
+    process::Command,
+    sync::broadcast::{
+        error::RecvError,
+        Receiver as BroadcastReceiver,
+    },
+    task::JoinHandle,
+};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::{
-    get_events_stream_inline, get_history, get_index, get_metadata, get_rawdata, interpret_resp,
-    make_request, DTPSError, FoundMetadata, Notification, TopicName, TypeOfConnection, DTPSR,
+    client::get_rawdata_accept,
+    debug_with_info,
+    get_events_stream_inline,
+    get_history,
+    get_index,
+    get_metadata,
+    get_rawdata,
+    info_with_info,
+    interpret_resp,
+    make_request,
+    DTPSError,
+    FoundMetadata,
+    ListenURLEvents,
+    TopicName,
+    TypeOfConnection,
+    DTPSR,
     TOPIC_LIST_CLOCK,
 };
 
@@ -13,14 +36,17 @@ use crate::{
 mod tests {
     use std::fmt::Debug;
 
-    use crate::{init_logging, TypeOfConnection};
+    use crate::{
+        init_logging,
+        TypeOfConnection,
+    };
 
     use super::*;
 
     #[tokio::test]
     async fn test_python1() -> DTPSR<()> {
         init_logging();
-        let path = "/tmp/ex1";
+        let path = "/tmp/dtps-tests/test_python1/socket";
         let cmd = vec!["dtps-http-py-server-example-clock", "--unix-path", path];
 
         // create process given by command above
@@ -40,18 +66,11 @@ mod tests {
 }
 
 pub async fn check_server(con: &TypeOfConnection) -> DTPSR<()> {
-    let md = get_metadata(&con).await?;
-    log::info!("metadata: {:#?}", md);
-    let index = get_index(&con).await?;
+    let md = get_metadata(con).await?;
+    info_with_info!("metadata: {:#?}", md);
+    let index = get_index(con).await?;
 
-    log::info!("index: {:#?}", index);
-
-    // let mut topics: HashSet<TopicName> = index.topics.keys().cloned().collect();
-    // for topic in topics.clone().iter() {
-    //     for prefix in topic.prefixes() {
-    //         topics.insert(prefix.clone());
-    //     }
-    // }
+    info_with_info!("index: {:#?}", index);
 
     let mut handles: Vec<JoinHandle<DTPSR<()>>> = vec![];
 
@@ -61,13 +80,6 @@ pub async fn check_server(con: &TypeOfConnection) -> DTPSR<()> {
         let handle = tokio::spawn(check_topic(topic.clone(), r0.con.clone()));
 
         handles.push(handle);
-
-        //
-        // log::info!("metadata: {:#?}", md);
-        // let index = get_index(&con).await?;
-        // log::info!("index: {:#?}", index);
-        // let data = get_data(&con, &topic).await?;
-        // log::info!("data: {:#?}", data);
     }
 
     // wait for all handles to finish
@@ -79,7 +91,7 @@ pub async fn check_server(con: &TypeOfConnection) -> DTPSR<()> {
     let clock = index.topics.get(&topic_clock).unwrap();
     let r = clock.reachability.get(0).unwrap();
     let md = get_metadata(&r.con).await?;
-    if md.events_data_inline_url == None {
+    if md.events_data_inline_url.is_none() {
         return Err(DTPSError::from("events_data_inline_url is None"));
     }
     let (handle, stream) = get_events_stream_inline(&md.events_data_inline_url.unwrap()).await;
@@ -92,50 +104,56 @@ pub async fn check_server(con: &TypeOfConnection) -> DTPSR<()> {
 
     Ok(())
 }
-
-fn check_complete_metadata(md: &FoundMetadata) -> DTPSR<()> {
-    if md.answering == None {
-        return Err(DTPSError::from("answering is None"));
-    }
-    if md.events_url == None {
-        return Err(DTPSError::from("events_url is None"));
-    }
-    if md.events_data_inline_url == None {
-        return Err(DTPSError::from("events_data_inline_url is None"));
-    }
-    if md.meta_url == None {
-        return Err(DTPSError::from("meta is None"));
-    }
-    if md.history_url == None {
-        return Err(DTPSError::from("history_url is None"));
-    }
-    Ok(())
-}
+//
+// fn check_complete_metadata(md: &FoundMetadata) -> DTPSR<()> {
+//     if md.answering.is_none() {
+//         return Err(DTPSError::from("answering is None"));
+//     }
+//     if md.events_url.is_none() {
+//         return Err(DTPSError::from("events_url is None"));
+//     }
+//     if md.events_data_inline_url.is_none() {
+//         return Err(DTPSError::from("events_data_inline_url is None"));
+//     }
+//     if md.meta_url.is_none() {
+//         return Err(DTPSError::from("meta is None"));
+//     }
+//     if md.history_url.is_none() {
+//         return Err(DTPSError::from("history_url is None"));
+//     }
+//     Ok(())
+// }
 
 async fn read_notifications(
     handle: JoinHandle<DTPSR<()>>,
-    mut stream: UnboundedReceiverStream<Notification>,
+    mut rx: BroadcastReceiver<ListenURLEvents>,
     nmin: usize,
 ) -> DTPSR<()> {
     let mut i = 0;
     loop {
-        let ne = stream.next().await;
-        match ne {
-            None => {
-                log::debug!("finished stream");
-                break;
-            }
-            Some(notification) => {
-                log::debug!("clock notification: {:#?}", notification);
+        match rx.recv().await {
+            Ok(x) => {
+                debug_with_info!("clock notification: {:#?}", x);
 
                 i += 1;
             }
-        }
+            Err(e) => {
+                match e {
+                    RecvError::Closed => {
+                        debug_with_info!("finished stream");
+
+                        break;
+                    }
+                    RecvError::Lagged(_) => continue, // TODO: warning
+                }
+            }
+        };
+
         if i >= nmin {
             break;
         }
     }
-    drop(stream);
+    drop(rx);
     handle.await??;
 
     if i < nmin {
@@ -146,34 +164,32 @@ async fn read_notifications(
 }
 
 async fn check_topic(topic: TopicName, con: TypeOfConnection) -> DTPSR<()> {
-    log::debug!("check_topic {topic:?}...");
-    let _data = get_rawdata(&con).await?;
-
-    let resp = make_request(&con, hyper::Method::GET, b"", None, Some("text/html")).await?;
-    let x = interpret_resp(&con, resp).await?;
+    debug_with_info!("check_topic {topic:?}...");
+    let x = get_rawdata_accept(&con, Some("text/html")).await?;
+    //
+    // let resp = make_request(&con, hyper::Method::GET, b"", None, Some("text/html")).await?;
+    // let x = interpret_resp(&con, resp).await?;
+    // debug_with_info!("check_topic {topic:?}... {x:?}");
     assert_eq!(x.content_type, "text/html", "ok {}", con);
 
     let md = get_metadata(&con).await?;
 
-    log::info!("{topic:#?}: {md:#?}");
+    info_with_info!("{topic:#?}: {md:#?}");
 
     // check_complete_metadata(&md)?;
-    if md.meta_url == None {
-        return Err(DTPSError::from(format!(
-            "{:?}: meta is None",
-            topic.as_dash_sep()
-        )));
+    if md.meta_url.is_none() {
+        return Err(DTPSError::from(format!("{:?}: meta is None", topic.as_dash_sep())));
     }
 
     let index = get_index(&md.meta_url.unwrap()).await?;
-    log::debug!("check_topic {topic:?} {index:?}");
+    debug_with_info!("check_topic {topic:?} {index:?}");
 
     if let Some(x) = &md.history_url {
         let history = get_history(x).await?;
-        log::debug!("check_topic {topic:?} {history:?}");
+        debug_with_info!("check_topic {topic:?} {history:?}");
     }
 
-    log::debug!("check_topic {topic:?} OK");
+    debug_with_info!("check_topic {topic:?} OK");
 
     Ok(())
 }

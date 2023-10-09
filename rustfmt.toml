@@ -1,0 +1,5 @@
+#rustfmt.toml
+
+imports_layout = "Vertical"
+imports_granularity = "Crate"
+max_width = 120

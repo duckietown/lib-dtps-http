@@ -15,6 +15,7 @@ from dtps_http import (
     URLString,
 )
 from dtps_http.server import DataSaved
+from dtps_http import InsertNotification
 from . import logger
 
 __all__ = [
@@ -33,8 +34,11 @@ async def main():
     if metadata.events_data_inline_url is None:
         raise AssertionError
 
-    async for metadata, data in client.listen_url_events(metadata.events_data_inline_url, inline_data=True):
-        await client.publish(URL_OUT, data)
+    async for d in client.listen_url_events(
+        metadata.events_data_inline_url, raise_on_error=False, inline_data=True, add_silence=None
+    ):
+        if isinstance(d, InsertNotification):
+            await client.publish(URL_OUT, d.raw_data)
 
 
 # in = my topic, out = arbitrary
@@ -55,15 +59,18 @@ async def on_startup2_mixed(s: DTPSServer) -> None:
     if metadata.events_data_inline_url is None:
         raise AssertionError
 
-    async for metadata, data in client.listen_url_events(metadata.events_data_inline_url, inline_data=True):
-        await client.publish(URL_OUT, data)
+    async for d in client.listen_url_events(
+        metadata.events_data_inline_url, raise_on_error=False, inline_data=True, add_silence=None
+    ):
+        if isinstance(d, InsertNotification):
+            await client.publish(URL_OUT, d.raw_data)
 
     @async_error_catcher
     async def on_received_in(q: ObjectQueue, i: int) -> None:
         saved: DataSaved = q.saved[i]
-        data: RawData = q.get(saved.digest)
+        data_: RawData = q.get(saved.digest)
 
-        await client.publish(URL_OUT, data)
+        await client.publish(URL_OUT, data_)
 
     queue_in.subscribe(on_received_in)
 

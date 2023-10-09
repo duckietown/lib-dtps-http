@@ -1,9 +1,18 @@
-use log::info;
 use url::Url;
 
-use crate::structures::TypeOfConnection::{Relative, TCP, UNIX};
-use crate::structures::{TypeOfConnection, UnixCon};
-use crate::{normalize_path, DTPSError, FilePaths, DTPSR};
+use crate::{
+    info_with_info,
+    normalize_path,
+    DTPSError,
+    FilePaths,
+    TypeOfConnection,
+    TypeOfConnection::{
+        TCP,
+        UNIX,
+    },
+    UnixCon,
+    DTPSR,
+};
 
 fn get_scheme_part(s0: &str) -> Option<&str> {
     let scheme_end = s0.find("://")?;
@@ -99,7 +108,7 @@ pub fn parse_url_ext(mut s0: &str) -> DTPSR<TypeOfConnection> {
                 query,
             };
 
-            info!("UnixCon: parsed {:?} as {:?}", s, con);
+            info_with_info!("UnixCon: parsed {:?} as {:?}", s, con);
             return Ok(UNIX(con));
         }
 
@@ -129,7 +138,7 @@ pub fn parse_url_ext(mut s0: &str) -> DTPSR<TypeOfConnection> {
                 query,
             };
 
-            info!("UnixCon: parsed {:?} as {:?}", s, con);
+            info_with_info!("UnixCon: parsed {:?} as {:?}", s, con);
             Ok(UNIX(con))
         } else {
             let path_start = after_scheme.rfind('/').unwrap();
@@ -160,60 +169,7 @@ pub fn parse_url_ext(mut s0: &str) -> DTPSR<TypeOfConnection> {
     }
 }
 
-impl TypeOfConnection {
-    pub fn join(&self, s: &str) -> DTPSR<TypeOfConnection> {
-        join_ext(&self, s)
-    }
-}
-
-pub fn join_con(a: &str, b: &TypeOfConnection) -> DTPSR<TypeOfConnection> {
-    match b {
-        TCP(_) => Ok(b.clone()),
-        UNIX(_) => Ok(b.clone()),
-        Relative(path2, query2) => {
-            let (path3, _query3) = join_path(a, path2.as_str());
-            Ok(Relative(path3, query2.clone()))
-        }
-
-        TypeOfConnection::Same() => Ok(Relative(a.to_string(), None)),
-        TypeOfConnection::File(hostname, path) => {
-            // let (path3, query3) = join_path(a, path.add_prefix(a)as_str());
-            Ok(TypeOfConnection::File(hostname.clone(), path.add_prefix(a)))
-        }
-    }
-}
-
-pub fn join_ext(conbase: &TypeOfConnection, s: &str) -> DTPSR<TypeOfConnection> {
-    if s.contains("://") {
-        parse_url_ext(s)
-    } else {
-        match conbase.clone() {
-            TypeOfConnection::TCP(mut url) => {
-                let (path2, query2) = join_path(url.path(), s);
-                url.set_path(&path2);
-                url.set_query(query2.as_deref());
-                Ok(TCP(url))
-            }
-            TypeOfConnection::Relative(path, _query) => {
-                let (path2, query2) = join_path(path.as_str(), s);
-                Ok(Relative(path2, query2))
-            }
-            TypeOfConnection::UNIX(mut uc) => {
-                let (path2, query2) = join_path(uc.path.as_str(), s);
-                uc.path = path2;
-                uc.query = query2;
-                Ok(UNIX(uc))
-            }
-
-            TypeOfConnection::Same() => Ok(Relative(s.to_string(), None)),
-            TypeOfConnection::File(hostname, path) => {
-                Ok(TypeOfConnection::File(hostname, path.join(s)))
-            }
-        }
-    }
-}
-
-fn join_path(base: &str, s: &str) -> (String, Option<String>) {
+pub fn join_path(base: &str, s: &str) -> (String, Option<String>) {
     // split the query
     let (query, s) = match s.find("?") {
         Some(i) => (Some(s[i + 1..].to_string()), s[..i].to_string()),
@@ -255,10 +211,12 @@ fn normalize_dot_dot(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use log::debug;
     use rstest::rstest;
 
-    use crate::FilePaths;
+    use crate::{
+        debug_with_info,
+        FilePaths,
+    };
 
     use super::*;
 
@@ -295,7 +253,7 @@ mod tests {
         // without end /
         let s = "http+unix://%2Fsockets%2Fargo%2Fnode1%2F_node";
         let x = super::parse_url_ext(s).unwrap();
-        debug!("test_p1 {s:?} {x:?}");
+        debug_with_info!("test_p1 {s:?} {x:?}");
         assert_eq!(
             x,
             super::TypeOfConnection::UNIX(super::UnixCon {
@@ -312,7 +270,7 @@ mod tests {
         // without end /
         let s = "http+unix://[/sockets/argo/node1/_node]/the/path";
         let x = super::parse_url_ext(s).unwrap();
-        debug!("test_p1 {s:?} {x:?}");
+        debug_with_info!("test_p1 {s:?} {x:?}");
         assert_eq!(
             x,
             super::TypeOfConnection::UNIX(super::UnixCon {
@@ -328,7 +286,7 @@ mod tests {
     fn url_parse_3() {
         let s = "file:///abs/file";
         let x = super::parse_url_ext(s).unwrap();
-        // debug!("test_p1 {s:?} {x:?}");
+        // debug_with_info!("test_p1 {s:?} {x:?}");
         assert_eq!(
             x,
             super::TypeOfConnection::File(None, FilePaths::Absolute("/abs/file".to_string()))
@@ -360,7 +318,7 @@ mod tests {
     fn url_parse_4b() {
         let s = "./reldir/";
         let x = super::parse_url_ext(s).unwrap();
-        debug!("test_p1 {s:?} {x:?}");
+        debug_with_info!("test_p1 {s:?} {x:?}");
         assert_eq!(
             x,
             super::TypeOfConnection::File(None, FilePaths::Relative("reldir".to_string()))
@@ -450,5 +408,25 @@ mod tests {
 }
 
 pub fn format_digest_path(digest: &str, content_type: &str) -> String {
-    return format!("!/:ipfs/{}/{}/", digest, content_type.replace("/", "_"));
+    format!("!/:ipfs/{}/{}/", digest, content_type.replace("/", "_"))
+}
+
+pub fn make_relative(base: &str, url: &str) -> String {
+    // if base.starts_with("/") || url.starts_with("/") {
+    //     return DTPSError::invalid_input!("neither should start with /: {base:?} {url:?}")
+    // }
+    let base = url::Url::parse(&format!("http://example.org/{base}")).unwrap();
+    let target = url::Url::parse(&format!("http://example.org/{url}")).unwrap();
+    base.make_relative(&target).unwrap()
+}
+
+#[cfg(test)]
+mod test {
+    use super::make_relative;
+
+    #[test]
+    fn t1() {
+        assert_eq!(make_relative("clock5/:meta/", "clock5/"), "../");
+        assert_eq!(make_relative("clock5/", "clock5/:meta/"), ":meta/");
+    }
 }

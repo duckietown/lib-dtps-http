@@ -1,19 +1,25 @@
 use http::Response;
 use hyper::Body;
-use include_dir::{include_dir, Dir};
-use maud::{html, DOCTYPE};
+use include_dir::{
+    include_dir,
+    Dir,
+};
+use maud::{
+    html,
+    DOCTYPE,
+};
 use mime_guess::from_path;
-use warp::{Rejection, Reply};
+use warp::{
+    Rejection,
+    Reply,
+};
 
 use crate::HandlersResponse;
 
 // Embed the static directory into the crate
 pub const STATIC_FILES: Dir = include_dir!("$CARGO_MANIFEST_DIR/static");
 
-pub async fn serve_static_file2(
-    _s: String,
-    path: warp::path::Tail,
-) -> Result<impl Reply, Rejection> {
+pub async fn serve_static_file2(_s: String, path: warp::path::Tail) -> Result<impl Reply, Rejection> {
     serve_static_file(path).await
 }
 
@@ -55,24 +61,21 @@ pub async fn reply_for_dir(path: &str) -> Result<Response<Body>, Rejection> {
         }}
 
     };
-    let markup = x.into_string().clone();
+    let markup = x.into_string();
     let resp = Response::new(Body::from(markup));
 
     Ok(resp)
 }
 
 pub async fn serve_static_file_path(path: &str) -> HandlersResponse {
-    if path == "" {
+    if path.is_empty() {
         return reply_for_dir(path).await;
     }
-    let _dir = match STATIC_FILES.get_dir(path) {
-        Some(_dir) => {
-            return reply_for_dir(path).await;
-        }
-        None => {}
+    if let Some(_dir) = STATIC_FILES.get_dir(path) {
+        return reply_for_dir(path).await;
     };
 
-    // debug!("serve_static_file: path={}", path);
+    // debug_with_info!("serve_static_file: path={}", path);
     let file = match STATIC_FILES.get_file(path) {
         Some(file) => file,
         None => return Err(warp::reject::not_found()),

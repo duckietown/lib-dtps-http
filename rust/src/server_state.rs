@@ -1,43 +1,229 @@
-use std::collections::{HashMap, HashSet};
-use std::env;
-use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::{
+    cmp::max,
+    collections::{
+        HashMap,
+        HashSet,
+    },
+    env,
+    fmt::Debug,
+    future::Future,
+    path::{
+        Path,
+        PathBuf,
+    },
+    str::FromStr,
+    sync::Arc,
+};
+use tokio::sync::Notify;
 
 use anyhow::Context;
 use bytes::Bytes;
 use chrono::Local;
 use futures::StreamExt;
 use indent::indent_all_with;
-use log::{debug, error, info, warn};
 use maplit::hashmap;
 use path_clean::PathClean;
-use schemars::schema::RootSchema;
-use schemars::{schema_for, JsonSchema};
-use serde::{Deserialize, Serialize};
-use strum_macros::{Display, EnumString};
-use tokio::sync::broadcast::Receiver;
-use tokio::sync::mpsc;
-use tokio::time::sleep;
+use schemars::{
+    schema::RootSchema,
+    schema_for,
+    JsonSchema,
+};
+use serde::{
+    de::DeserializeOwned,
+    Deserialize,
+    Serialize,
+};
+use strum_macros::{
+    Display,
+    EnumString,
+};
+use tokio::{
+    sync::{
+        broadcast::{
+            error::RecvError,
+            Receiver,
+            Receiver as BroadcastReceiver,
+        },
+        mpsc,
+        mpsc::UnboundedSender,
+    },
+    time::sleep,
+};
 
 use crate::{
-    context, error_with_info, get_events_stream_inline, get_index, get_metadata, get_queue_id,
-    get_random_node_id, get_stats, invalid_input, is_prefix_of, not_available, not_implemented,
-    not_reachable, sniff_type_resource, Clocks, ContentInfo, DTPSError, DataSaved, FilePaths,
-    ForwardingStep, FoundMetadata, InsertNotification, LinkBenchmark, NodeAppData, ObjectQueue,
-    RawData, ServerStateAccess, TopicName, TopicProperties, TopicReachabilityInternal,
-    TopicRefInternal, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection, TypeOfResource,
-    UrlResult, CONTENT_TYPE_CBOR, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_JSON,
-    CONTENT_TYPE_PLAIN, CONTENT_TYPE_YAML, DTPSR, MASK_ORIGIN, TOPIC_LIST_AVAILABILITY,
-    TOPIC_LIST_CLOCK, TOPIC_LIST_NAME, TOPIC_LOGS, TOPIC_PROXIED, TOPIC_STATE_NOTIFICATION,
+    client::wrap_recv,
+    compute_best_alternative,
+    context,
+    debug_with_info,
+    error_with_info,
+    get_events_stream_inline,
+    get_index,
+    get_metadata,
+    get_queue_id,
+    get_random_node_id,
+    get_stats,
+    info_with_info,
+    internal_assertion,
+    internal_jobs::{
+        InternalJobManager,
+        JobFunctionType,
+    },
+    invalid_input,
+    is_prefix_of,
+    not_available,
+    not_implemented,
+    not_reachable,
+    shared_statuses::SharedStatusNotification,
+    signals_logic::{
+        GetStream,
+        Pushable,
+    },
+    signals_logic_resolve::interpret_path,
+    sniff_type_resource,
+    types::CompositeName,
+    warn_with_info,
+    Clocks,
+    ContentInfo,
+    DTPSError,
+    DataSaved,
+    FilePaths,
+    ForwardingStep,
+    FoundMetadata,
+    InsertNotification,
+    LinkBenchmark,
+    ListenURLEvents,
+    NodeAppData,
+    ObjectQueue,
+    RawData,
+    ServerStateAccess,
+    TopicName,
+    TopicProperties,
+    TopicReachabilityInternal,
+    TopicRefInternal,
+    TopicsIndexInternal,
+    TopicsIndexWire,
+    TypeOfConnection,
+    TypeOfResource,
+    UrlResult,
+    CONTENT_TYPE_CBOR,
+    CONTENT_TYPE_DTPS_INDEX_CBOR,
+    CONTENT_TYPE_JSON,
+    CONTENT_TYPE_PLAIN,
+    CONTENT_TYPE_YAML,
+    DTPSR,
+    MASK_ORIGIN,
+    TOPIC_CONNECTIONS,
+    TOPIC_LIST_AVAILABILITY,
+    TOPIC_LIST_CLOCK,
+    TOPIC_LIST_NAME,
+    TOPIC_LOGS,
+    TOPIC_PROXIED,
+    TOPIC_STATE_NOTIFICATION,
     TOPIC_STATE_SUMMARY,
 };
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 pub struct ProxyJob {
-    pub url: String,
+    pub node_id: String,
+    pub urls: Vec<String>,
 }
 
 type Proxied = HashMap<String, ProxyJob>;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ServiceMode {
+    /// Ignore messages that were produced while we were disconnected
+    BestEffort,
+    /// Make sure to send all messages by asking history if some was missing
+    AllMessages,
+    /// At the beginning, get all the history as well (if history supported)
+    AllMessagesSinceStart,
+}
+
+impl FromStr for ServiceMode {
+    type Err = DTPSError;
+
+    fn from_str(s: &str) -> DTPSR<Self> {
+        match s {
+            "BestEffort" => Ok(Self::BestEffort),
+            "AllMessages" => Ok(Self::AllMessages),
+            "AllMessagesSinceStart" => Ok(Self::AllMessagesSinceStart),
+            _ => DTPSError::other(format!("Unknown service mode: {:?}", s)),
+        }
+    }
+}
+
+impl ServiceMode {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::BestEffort => "BestEffort",
+            Self::AllMessages => "AllMessages",
+            Self::AllMessagesSinceStart => "AllMessagesSinceStart",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+pub struct ConnectionJobWire {
+    /// Source topic (dash separated)
+    pub source: String,
+    /// Target topic (dash separated)
+    pub target: String,
+    pub service_mode: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConnectionJob {
+    pub source: TopicName,
+    pub target: TopicName,
+    pub service_mode: ServiceMode,
+}
+
+type Connections = HashMap<CompositeName, ConnectionJob>;
+type ConnectionsWire = HashMap<String, ConnectionJobWire>;
+
+impl ConnectionJob {
+    pub fn from_wire(wire: &ConnectionJobWire) -> DTPSR<Self> {
+        let source = TopicName::from_dash_sep(&wire.source)?;
+        let target = TopicName::from_dash_sep(&wire.target)?;
+        let service_mode = ServiceMode::from_str(&wire.service_mode)?;
+        Ok(Self {
+            source,
+            target,
+            service_mode,
+        })
+    }
+
+    pub fn to_wire(&self) -> ConnectionJobWire {
+        ConnectionJobWire {
+            source: self.source.to_dash_sep(),
+            target: self.target.to_dash_sep(),
+            service_mode: self.service_mode.as_str().to_string(),
+        }
+    }
+
+    /// Parses a string of the form `a/b -> c/d`
+    pub fn from_string(s: &str) -> DTPSR<Self> {
+        match s.find("->") {
+            None => {
+                invalid_input!("Cannot find \"->\" in string {s:?}")
+            }
+            Some(i) => {
+                // divide in 2
+                let before = s[..i].trim();
+                let after = s[i + "->".len()..].trim();
+                let source = TopicName::from_dash_sep(before)?;
+                let target = TopicName::from_dash_sep(after)?;
+                let service_mode = ServiceMode::BestEffort;
+                Ok(Self {
+                    source,
+                    target,
+                    service_mode,
+                })
+            }
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LogEntry {
@@ -47,13 +233,14 @@ pub struct LogEntry {
 
 #[derive(Debug)]
 pub struct ForwardInfoEstablished {
+    pub using: TypeOfConnection,
     pub md: FoundMetadata,
     pub index_internal: TopicsIndexInternal,
 }
 
 #[derive(Debug)]
 pub struct ForwardInfo {
-    pub url: TypeOfConnection,
+    pub urls: Vec<TypeOfConnection>,
 
     pub handle: Option<tokio::task::JoinHandle<()>>,
     pub established: Option<ForwardInfoEstablished>,
@@ -86,6 +273,8 @@ pub struct LocalDirInfo {
 pub struct SavedBlob {
     pub content: Vec<u8>,
     pub who_needs_it: HashSet<String>,
+    // will not be removed until who_needs_it is empty and the deadline has passed
+    pub deadline: i64,
 }
 
 #[derive(Debug)]
@@ -108,6 +297,7 @@ pub struct ServerState {
     /// The proxied other resources
     pub proxied_other: HashMap<TopicName, OtherProxyInfo>,
     pub blobs: HashMap<String, SavedBlob>,
+    pub blobs_forgotten: HashMap<String, i64>,
 
     advertise_urls: Vec<String>,
 
@@ -115,6 +305,8 @@ pub struct ServerState {
     status_rx: mpsc::UnboundedReceiver<ComponentStatusNotification>,
 
     pub aliases: HashMap<TopicName, TopicName>,
+
+    pub job_manager: InternalJobManager,
 }
 
 /// Taken from this: http://supervisord.org/subprocess.html
@@ -184,12 +376,10 @@ impl ServerState {
             Some(x) => x,
             None => HashMap::new(),
         };
-        // let node_id = Uuid::new_v4().to_string();
-        let node_id = get_random_node_id();
+        let node_id = format!("rust-{}", get_random_node_id());
 
         let mut oqs: HashMap<TopicName, ObjectQueue> = HashMap::new();
 
-        // let link_benchmark = LinkBenchmark::identity();
         let now = Local::now().timestamp_nanos();
         let app_data = node_app_data.clone();
         let tr = TopicRefInternal {
@@ -206,10 +396,7 @@ impl ServerState {
                 has_history: true,
                 patchable: true,
             },
-            content_info: ContentInfo::simple(
-                CONTENT_TYPE_DTPS_INDEX_CBOR,
-                Some(schema_for!(TopicsIndexWire)),
-            ),
+            content_info: ContentInfo::simple(CONTENT_TYPE_DTPS_INDEX_CBOR, Some(schema_for!(TopicsIndexWire))),
         };
         oqs.insert(TopicName::root(), ObjectQueue::new(tr, Some(10)));
 
@@ -225,13 +412,16 @@ impl ServerState {
             proxied_other: HashMap::new(),
             proxied_topics: HashMap::new(),
             blobs: HashMap::new(),
+            blobs_forgotten: HashMap::new(),
             proxied: HashMap::new(),
             advertise_urls: vec![],
             local_dirs: HashMap::new(),
             status_tx,
             status_rx,
             aliases: HashMap::new(),
+            job_manager: InternalJobManager::new(),
         };
+
         let p = TopicProperties {
             streamable: true,
             pushable: false,
@@ -249,6 +439,7 @@ impl ServerState {
             None,
             Some(10),
         )?;
+
         ss.new_topic(
             &TopicName::from_dash_sep(TOPIC_LIST_CLOCK)?,
             None,
@@ -311,8 +502,50 @@ impl ServerState {
         )?;
         ss.publish_json(&TopicName::from_dash_sep(TOPIC_PROXIED)?, "{}", None)?;
 
+        let p = TopicProperties {
+            streamable: true,
+            pushable: false,
+            readable: true,
+            immutable: false,
+            has_history: true,
+            patchable: true,
+        };
+
+        ss.new_topic(
+            &TopicName::from_dash_sep(TOPIC_CONNECTIONS)?,
+            None,
+            CONTENT_TYPE_JSON,
+            &p,
+            Some(schema_for!(ConnectionsWire)),
+            Some(1),
+        )?;
+        ss.publish_json(&TopicName::from_dash_sep(TOPIC_CONNECTIONS)?, "{}", None)?;
+
         Ok(ss)
     }
+    /// Modifies a local queue by applying a function that acts on the deserialized value
+    pub async fn modify_topic<AT, T, F>(&mut self, topic_name: AT, f: F) -> DTPSR<DataSaved>
+    where
+        F: FnOnce(&mut T) -> DTPSR<()>,
+        AT: AsRef<TopicName>,
+        T: Serialize + DeserializeOwned + JsonSchema + Clone + Debug,
+    {
+        let last_insert = match self.get_last_insert(&topic_name)? {
+            Some(x) => x,
+            None => {
+                return Err(DTPSError::Other("Cannot get last insert".to_string()));
+            }
+        };
+        let content_type = last_insert.raw_data.content_type.clone();
+
+        let mut value = last_insert.raw_data.interpret_owned::<T>()?;
+        f(&mut value)?;
+
+        let new_data = RawData::encode_as(&value, &content_type)?;
+        // TODO: add new clocks
+        self.publish_raw_data(topic_name, &new_data, None)
+    }
+
     pub fn add_alias(&mut self, new: &TopicName, existing: &TopicName) {
         // TODO: check for errors
         self.aliases.insert(new.clone(), existing.clone());
@@ -337,45 +570,42 @@ impl ServerState {
             level: level.to_string(),
             msg,
         };
-        let x = self.publish_object_as_json(
-            &TopicName::from_relative_url(TOPIC_LOGS).unwrap(),
-            &log_entry,
-            None,
-        );
+        let x = self.publish_object_as_json(&TopicName::from_relative_url(TOPIC_LOGS).unwrap(), &log_entry, None);
         if let Err(e) = x {
-            error!("Error publishing log message: {:?}", e);
+            error_with_info!("Error publishing log message: {:?}", e);
         }
     }
     pub fn debug(&mut self, msg: String) {
-        debug!("{}", msg);
+        debug_with_info!("{}", msg);
         self.log_message(msg, "debug");
     }
     pub fn info(&mut self, msg: String) {
-        info!("{}", msg);
+        debug_with_info!("{}", msg);
         self.log_message(msg, "info");
     }
     pub fn error(&mut self, msg: String) {
-        error!("{}", msg);
+        error_with_info!("{}", msg);
 
         self.log_message(msg, "error");
     }
     pub fn warn(&mut self, msg: String) {
-        warn!("{}", msg);
+        warn_with_info!("{}", msg);
         self.log_message(msg, "warn");
     }
     pub fn add_proxy_connection(
         &mut self,
         topic_name: &TopicName,
-        con: &TypeOfConnection,
+        cons: &Vec<TypeOfConnection>,
+        expect_node_id: String,
         ssa: ServerStateAccess,
     ) -> DTPSR<()> {
         if self.proxied.contains_key(topic_name) {
             return Err(DTPSError::TopicAlreadyExists(topic_name.to_dash_sep()));
         }
-        let future = observe_node_proxy(topic_name.clone(), con.clone(), ssa.clone());
+        let future = observe_node_proxy(topic_name.clone(), cons.clone(), expect_node_id, ssa.clone());
 
         let handle = tokio::spawn(show_errors(
-            Some(ssa.clone()),
+            Some(ssa),
             format!(
                 "observe_node_proxy: {topic_name}",
                 topic_name = topic_name.as_dash_sep()
@@ -383,30 +613,129 @@ impl ServerState {
             future,
         ));
         let fi = ForwardInfo {
-            url: con.clone(),
+            urls: cons.clone(),
             handle: Some(handle),
             established: None,
             mounted_at: topic_name.clone(),
         };
         self.proxied.insert(topic_name.clone(), fi);
 
-        return Ok(());
+        Ok(())
     }
     pub fn remove_proxy_connection(&mut self, topic_name: &TopicName) -> DTPSR<()> {
         if !self.proxied.contains_key(topic_name) {
             return Err(DTPSError::TopicNotFound(topic_name.to_dash_sep()));
         }
-        debug!("Removing proxy connection {:?}", topic_name);
+        debug_with_info!("Removing proxy connection {:?}", topic_name);
         self.proxied.remove(topic_name);
         self.proxied_topics.retain(|k, _| {
-            if let Some(_) = is_prefix_of(topic_name.as_components(), k.as_components()) {
-                debug!("Removing proxy topic {:?}", k);
+            if is_prefix_of(topic_name.as_components(), k.as_components()).is_some() {
+                debug_with_info!("Removing proxy topic {:?}", k);
                 false
             } else {
                 true
             }
         });
-        return Ok(());
+        Ok(())
+    }
+
+    pub async fn remove_topic_to_topic_connection(
+        &mut self,
+        connection_name: &CompositeName,
+    ) -> DTPSR<SharedStatusNotification> {
+        let x = self.remove_topic_to_topic_connection_(connection_name).await?;
+
+        let connections_name = TopicName::from_dash_sep(TOPIC_CONNECTIONS)?;
+
+        self.modify_topic(connections_name, |connections: &mut ConnectionsWire| {
+            let connection_name = connection_name.to_dash_sep();
+            connections.remove(&connection_name);
+            Ok(())
+        })
+        .await?;
+
+        Ok(x)
+    }
+
+    pub async fn remove_topic_to_topic_connection_(
+        &mut self,
+        connection_name: &CompositeName,
+    ) -> DTPSR<SharedStatusNotification> {
+        let prefix = CompositeName::from_relative_url("connections")?;
+        let job_name = prefix + connection_name.clone();
+        self.job_manager.remove_job(&job_name)
+    }
+
+    pub async fn add_topic_to_topic_connection(
+        &mut self,
+        connection_name: &CompositeName,
+        connection_job: &ConnectionJob,
+        ssa: ServerStateAccess,
+    ) -> DTPSR<SharedStatusNotification> {
+        let x = self
+            .add_topic_to_topic_connection_(connection_name, connection_job, ssa)
+            .await?;
+
+        let connections_name = TopicName::from_dash_sep(TOPIC_CONNECTIONS)?;
+        self.modify_topic(connections_name, |connections: &mut ConnectionsWire| {
+            let connection_name = connection_name.to_dash_sep();
+            let connection = connection_job.to_wire();
+            connections.insert(connection_name, connection);
+            Ok(())
+        })
+        .await?;
+
+        Ok(x)
+    }
+
+    pub async fn add_topic_to_topic_connection_(
+        &mut self,
+        connection_name: &CompositeName,
+        connection_job: &ConnectionJob,
+        ssa: ServerStateAccess,
+    ) -> DTPSR<SharedStatusNotification> {
+        let prefix = CompositeName::from_relative_url("connections")?;
+        let job_name = prefix + connection_name.clone();
+
+        self.start_connection(&job_name, connection_name, connection_job, ssa)
+            .await
+    }
+
+    async fn start_connection(
+        &mut self,
+        job_name: &CompositeName,
+
+        connection_name: &CompositeName,
+        connection_job: &ConnectionJob,
+        ssa: ServerStateAccess,
+    ) -> DTPSR<SharedStatusNotification> {
+        let event = SharedStatusNotification::new(job_name.as_dash_sep());
+        let event_clone = event.clone();
+        let connection_name = connection_name.clone();
+        let connection_job = connection_job.clone();
+
+        let ssa2 = ssa.clone();
+        let connect_job: JobFunctionType = Box::new(move || {
+            let connection_name = connection_name.clone();
+            let connection_job = connection_job.clone();
+            let ssa = ssa.clone();
+            let event_clone = event_clone.clone();
+            Box::pin(async move {
+                let res = run_connection_job(connection_name, connection_job, ssa, event_clone).await;
+                match res {
+                    Ok(_) => {
+                        debug_with_info!("Connection job finished successfully");
+                        Ok(())
+                    }
+                    Err(e) => Err(format!("Connection job finished with error: {:?}", e)),
+                }
+            })
+        });
+
+        self.job_manager
+            .add_job(job_name, "Connection job", connect_job, true, true, 5.0, ssa2)?;
+
+        Ok(event)
     }
 
     pub fn new_proxy_topic(
@@ -436,34 +765,23 @@ impl ServerState {
                 reachability_we_used,
             },
         );
-        info!("New proxy topic {:?} -> {:?}", topic_name, its_topic_name);
+        debug_with_info!("New proxy topic {:?} -> {:?}", topic_name, its_topic_name);
         self.update_my_topic()
     }
 
-    pub fn new_filesystem_mount(
-        &mut self,
-        // from_subscription: &String,
-        topic_name: &TopicName,
-        fp: FilePaths,
-    ) -> DTPSR<()> {
-        if self.local_dirs.contains_key(&topic_name) {
+    pub fn new_filesystem_mount(&mut self, topic_name: &TopicName, fp: FilePaths) -> DTPSR<()> {
+        if self.local_dirs.contains_key(topic_name) {
             return Err(DTPSError::TopicAlreadyExists(topic_name.to_relative_url()));
         }
 
         let local_dir = match fp {
             FilePaths::Absolute(s) => PathBuf::from(s),
-            FilePaths::Relative(s) => {
-                absolute_path(s).map_err(|e| DTPSError::Other(e.to_string()))?
-            }
+            FilePaths::Relative(s) => absolute_path(s).map_err(|e| DTPSError::Other(e.to_string()))?,
         };
 
         // let local_dir = PathBuf::from(path);
-        info!(
-            "New local folder {:?} -> {:?}",
-            topic_name,
-            local_dir.to_str()
-        );
-        let uuid = get_queue_id(&self.node_id, &topic_name);
+        debug_with_info!("New local folder {:?} -> {:?}", topic_name, local_dir.to_str());
+        let uuid = get_queue_id(&self.node_id, topic_name);
         self.local_dirs.insert(
             topic_name.clone(),
             LocalDirInfo {
@@ -499,13 +817,13 @@ impl ServerState {
         if self.oqs.contains_key(topic_name) {
             return Err(DTPSError::TopicAlreadyExists(topic_name.to_relative_url()));
         }
-        let uuid = get_queue_id(&self.node_id, &topic_name);
-        let app_data = app_data.unwrap_or_else(HashMap::new);
+        let uuid = get_queue_id(&self.node_id, topic_name);
+        let app_data = app_data.unwrap_or_default();
 
         let origin_node = self.node_id.clone();
         let now = Local::now().timestamp_nanos();
         let tr = TopicRefInternal {
-            unique_id: uuid.to_string(),
+            unique_id: uuid,
             origin_node,
             app_data,
             created: now,
@@ -516,7 +834,7 @@ impl ServerState {
         let oqs = &mut self.oqs;
 
         oqs.insert(topic_name.clone(), ObjectQueue::new(tr, max_history));
-        info!("New topic: {:?}", topic_name);
+        info_with_info!("New topic: {:?}", topic_name);
 
         self.update_my_topic()
     }
@@ -525,7 +843,7 @@ impl ServerState {
         if !self.oqs.contains_key(topic_name) {
             return Err(DTPSError::TopicNotFound(topic_name.to_relative_url()));
         }
-        log::info!("Removing topic {topic_name:?}");
+        info_with_info!("Removing topic {topic_name:?}");
         let dropped_digests = {
             let mut todrop = Vec::new();
             let oq = self.oqs.get_mut(topic_name).unwrap();
@@ -549,12 +867,7 @@ impl ServerState {
         let index = index_internal.to_wire(None);
         let data_cbor = serde_cbor::to_vec(&index).unwrap();
         // self.publish(topic_name, content, CONTENT_TYPE_CBOR, clocks)content_
-        self.publish(
-            &TopicName::root(),
-            &data_cbor,
-            CONTENT_TYPE_DTPS_INDEX_CBOR,
-            None,
-        )?;
+        self.publish(&TopicName::root(), &data_cbor, CONTENT_TYPE_DTPS_INDEX_CBOR, None)?;
 
         let mut topics: Vec<String> = Vec::new();
         let oqs = &mut self.oqs;
@@ -562,15 +875,20 @@ impl ServerState {
         for topic_name in oqs.keys() {
             topics.push(topic_name.to_relative_url());
         }
-        self.publish_object_as_json(
-            &TopicName::from_relative_url(TOPIC_LIST_NAME)?,
-            &topics.clone(),
-            None,
-        )?;
+        self.publish_object_as_json(&TopicName::from_relative_url(TOPIC_LIST_NAME)?, &topics.clone(), None)?;
 
         Ok(())
     }
 
+    pub fn publish_raw_data<A: AsRef<TopicName>, B: AsRef<RawData>>(
+        &mut self,
+        topic_name: A,
+        raw_data: B,
+        clocks: Option<Clocks>,
+    ) -> DTPSR<DataSaved> {
+        let rd = raw_data.as_ref();
+        self.publish(topic_name.as_ref(), &rd.content, &rd.content_type, clocks)
+    }
     pub fn publish<B: AsRef<[u8]>, C: AsRef<str>>(
         &mut self,
         topic_name: &TopicName,
@@ -578,13 +896,13 @@ impl ServerState {
         content_type: C,
         clocks: Option<Clocks>,
     ) -> DTPSR<DataSaved> {
-        if !self.oqs.contains_key(&topic_name) {
+        if !self.oqs.contains_key(topic_name) {
             return Err(DTPSError::TopicNotFound(topic_name.to_relative_url()));
         }
 
         let data0 = RawData::new(content, content_type);
 
-        let oq = self.oqs.get_mut(&topic_name).unwrap();
+        let oq = self.oqs.get_mut(topic_name).unwrap();
         let (data, ds, dropped_digests) = oq.push(&data0, clocks)?;
         // Note: we now transform the data (possibly) to the expected content type
         let new_digest = ds.digest.clone();
@@ -592,35 +910,67 @@ impl ServerState {
         if ds.digest != data.digest() {
             panic!("Internal inconsistency: digest mismatch");
         }
-        self.save_blob(
-            &new_digest,
-            &data.content,
-            topic_name.as_dash_sep(),
-            &comment,
-        );
+        self.save_blob(&new_digest, &data.content, topic_name.as_dash_sep(), &comment);
         for digest in dropped_digests {
             self.release_blob(&digest, topic_name.as_dash_sep());
         }
+        self.cleanup_blobs();
         Ok(ds)
     }
 
+    pub fn guarantee_blob_exists(&mut self, digest: &str, seconds: f64) {
+        // debug_with_info!("Guarantee blob {digest} exists for {seconds} seconds more");
+        let now = Local::now().timestamp_nanos();
+        let deadline = now + (seconds * 1_000_000_000.0) as i64;
+        match self.blobs.get_mut(digest) {
+            None => {
+                error_with_info!("Blob {digest} not found");
+            }
+            Some(sb) => {
+                sb.deadline = max(sb.deadline, deadline);
+            }
+        }
+    }
+    pub fn cleanup_blobs(&mut self) {
+        let now = Local::now().timestamp_nanos();
+        let mut todrop = Vec::new();
+        for (digest, sb) in self.blobs.iter() {
+            let no_one_needs_it = sb.who_needs_it.is_empty();
+            let deadline_passed = now > sb.deadline;
+            if no_one_needs_it && deadline_passed {
+                todrop.push(digest.clone());
+            }
+        }
+        for digest in todrop {
+            // debug_with_info!("Dropping blob {digest} because deadline passed");
+            self.blobs.remove(&digest);
+
+            self.blobs_forgotten.insert(digest, now);
+        }
+    }
     pub fn release_blob(&mut self, digest: &str, who: &str) {
         // log::debug!("Del blob {digest} for {who:?}");
 
         match self.blobs.get_mut(digest) {
             None => {
-                log::warn!("Blob {digest} not found");
+                warn_with_info!("Blob {digest} not found");
             }
             Some(sb) => {
                 sb.who_needs_it.remove(who);
                 if sb.who_needs_it.is_empty() {
-                    self.blobs.remove(digest);
+                    let now = Local::now().timestamp_nanos();
+                    let deadline_passed = now > sb.deadline;
+                    if deadline_passed {
+                        self.blobs.remove(digest);
+                        self.blobs_forgotten.insert(digest.to_string(), now);
+                    }
                 }
             }
         }
     }
 
-    pub fn save_blob(&mut self, digest: &str, content: &[u8], who: &str, _comment: &str) {
+    pub fn save_blob(&mut self, digest: &str, content: &[u8], who: &str, comment: &str) {
+        let _ = comment;
         // log::debug!("Add blob {digest} for {who:?}: {comment}");
 
         match self.blobs.get_mut(digest) {
@@ -628,6 +978,7 @@ impl ServerState {
                 let mut sb = SavedBlob {
                     content: content.to_vec(),
                     who_needs_it: HashSet::new(),
+                    deadline: 0,
                 };
                 sb.who_needs_it.insert(who.to_string());
                 self.blobs.insert(digest.to_string(), sb);
@@ -638,21 +989,46 @@ impl ServerState {
         }
     }
 
+    pub fn save_blob_for_time(&mut self, digest: &str, content: &[u8], delta_seconds: f64) {
+        let time_nanos_delta = (delta_seconds * 1_000_000_000.0) as i64;
+        let nanos_now = Local::now().timestamp_nanos();
+        let deadline = nanos_now + time_nanos_delta;
+        match self.blobs.get_mut(digest) {
+            None => {
+                let sb = SavedBlob {
+                    content: content.to_vec(),
+                    who_needs_it: HashSet::new(),
+                    deadline,
+                };
+                self.blobs.insert(digest.to_string(), sb);
+            }
+            Some(sb) => {
+                sb.deadline = max(sb.deadline, deadline);
+            }
+        }
+    }
+
     pub fn get_blob(&self, digest: &str) -> Option<&Vec<u8>> {
         return self.blobs.get(digest).map(|v| &v.content);
     }
 
     pub fn get_blob_bytes(&self, digest: &str) -> DTPSR<Bytes> {
-        let x = self
-            .blobs
-            .get(digest)
-            .map(|v| Bytes::from(v.content.clone()));
+        let x = self.blobs.get(digest).map(|v| Bytes::from(v.content.clone()));
         match x {
             Some(v) => Ok(v),
-            None => {
-                let msg = format!("Blob {:#?} not found", digest);
-                Err(DTPSError::InternalInconsistency(msg))
-            }
+            None => match self.blobs_forgotten.get(digest) {
+                Some(ts) => {
+                    let now = Local::now().timestamp_nanos();
+                    let delta = now - ts;
+                    let seconds = delta as f64 / 1_000_000_000.0;
+                    let msg = format!("Blob {:#?} not found. It was forgotten {} seconds ago", digest, seconds);
+                    Err(DTPSError::NotAvailable(msg))
+                }
+                None => {
+                    let msg = format!("Blob {:#?} was never saved", digest);
+                    Err(DTPSError::ResourceNotFound(msg)) // should be resource not found
+                }
+            },
         }
     }
 
@@ -683,15 +1059,10 @@ impl ServerState {
         clocks: Option<Clocks>,
     ) -> DTPSR<DataSaved> {
         let data_cbor = serde_cbor::to_vec(object)?;
-        return self.publish_cbor(topic_name, &data_cbor, clocks);
+        self.publish_cbor(topic_name, &data_cbor, clocks)
     }
 
-    pub fn publish_cbor(
-        &mut self,
-        topic_name: &TopicName,
-        content: &[u8],
-        clocks: Option<Clocks>,
-    ) -> DTPSR<DataSaved> {
+    pub fn publish_cbor(&mut self, topic_name: &TopicName, content: &[u8], clocks: Option<Clocks>) -> DTPSR<DataSaved> {
         self.publish(topic_name, content, CONTENT_TYPE_CBOR, clocks)
     }
 
@@ -725,6 +1096,7 @@ impl ServerState {
         self.publish(topic_name, &bytesdata, CONTENT_TYPE_PLAIN, clocks)
     }
 
+    //noinspection RsConstantConditionIf
     pub fn create_topic_index(&self) -> TopicsIndexInternal {
         let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
 
@@ -770,14 +1142,12 @@ impl ServerState {
         }
 
         for (topic_name, pinfo) in self.proxied_other.iter() {
-            let mut forwarders = vec![];
-
-            forwarders.push(ForwardingStep {
+            let forwarders = vec![ForwardingStep {
                 forwarding_node: self.node_id.clone(),
                 forwarding_node_connects_to: pinfo.con.to_string(),
 
                 performance: LinkBenchmark::identity(), // TODO:
-            });
+            }];
 
             let prop = TopicProperties {
                 streamable: false,
@@ -840,22 +1210,32 @@ impl ServerState {
 
             topics.insert(topic_name.clone(), tr);
         }
-        for (alias, _original) in &self.aliases {
-            let tr = TopicRefInternal {
-                unique_id: "".to_string(),
-                origin_node: "".to_string(),
-                app_data: Default::default(),
-                reachability: vec![],
-                created: 0,
-                properties: TopicProperties {
-                    streamable: false,
-                    pushable: false,
-                    readable: false,
-                    immutable: false,
-                    has_history: false,
-                    patchable: false,
-                },
-                content_info: ContentInfo::generic(), // TODO: we should put content info of original
+        for (alias, target) in self.aliases.iter() {
+            let tr = if topics.contains_key(target) {
+                let mut orig = topics.get(target).unwrap().clone();
+                orig.app_data.insert("aliased_to".to_string(), target.to_relative_url());
+                orig
+            } else {
+                TopicRefInternal {
+                    unique_id: "".to_string(),   // FIXME
+                    origin_node: "".to_string(), // FIXME
+                    app_data: hashmap! {
+                        "aliased_to".to_string() => target.to_relative_url(),
+                        "comment".to_string() => "Target not existing yet.".to_string(),
+                    },
+                    reachability: vec![], // not reachable
+                    created: 0,
+                    properties: TopicProperties {
+                        // all false
+                        streamable: false,
+                        pushable: false,
+                        readable: false,
+                        immutable: false,
+                        has_history: false,
+                        patchable: false,
+                    },
+                    content_info: ContentInfo::generic(),
+                }
             };
             topics.insert(alias.clone(), tr);
         }
@@ -863,10 +1243,7 @@ impl ServerState {
         TopicsIndexInternal { topics }
     }
 
-    pub fn subscribe_insert_notification(
-        &self,
-        tn: &TopicName,
-    ) -> DTPSR<Receiver<InsertNotification>> {
+    pub fn subscribe_insert_notification(&self, tn: &TopicName) -> DTPSR<Receiver<ListenURLEvents>> {
         let q = match self.oqs.get(tn) {
             None => {
                 let s = format!("Could not find topic {}", tn.as_dash_sep());
@@ -877,8 +1254,15 @@ impl ServerState {
         Ok(q.subscribe_insert_notification())
     }
 
-    pub fn get_last_insert(&self, tn: &TopicName) -> DTPSR<Option<InsertNotification>> {
-        let q = self.get_queue(tn)?;
+    pub fn get_last_insert_assert_exists<AT: AsRef<TopicName>>(&self, topic_name: AT) -> DTPSR<InsertNotification> {
+        match self.get_last_insert(topic_name.as_ref())? {
+            None => internal_assertion!("{:?} is empty but it should never be.", topic_name.as_ref()),
+
+            Some(s) => Ok(s),
+        }
+    }
+    pub fn get_last_insert<AT: AsRef<TopicName>>(&self, topic_name: AT) -> DTPSR<Option<InsertNotification>> {
+        let q = self.get_queue(topic_name.as_ref())?;
         match q.stored.last() {
             None => Ok(None),
             Some(index) => {
@@ -886,7 +1270,9 @@ impl ServerState {
                 let digest = &data_saved.digest;
                 let content = context!(
                     self.get_blob_bytes(digest),
-                    "Error getting blob {digest} for topic {tn:?}",
+                    "Error getting blob {} for topic {:?}",
+                    digest,
+                    topic_name.as_ref().as_dash_sep(),
                 )?;
 
                 Ok(Some(InsertNotification {
@@ -928,11 +1314,7 @@ impl ServerState {
 }
 
 async fn get_proxy_info(url: &TypeOfConnection) -> DTPSR<(FoundMetadata, TopicsIndexInternal)> {
-    let md = context!(
-        get_metadata(url).await,
-        "Error getting metadata for proxied at {}",
-        url,
-    )?;
+    let md = context!(get_metadata(url).await, "Error getting metadata for proxied at {}", url,)?;
 
     let meta_url = match &md.meta_url {
         None => {
@@ -947,16 +1329,11 @@ async fn get_proxy_info(url: &TypeOfConnection) -> DTPSR<(FoundMetadata, TopicsI
     Ok((md, index_internal))
 }
 
-pub async fn show_errors<X, F: Future<Output = DTPSR<X>>>(
-    ssa: Option<ServerStateAccess>,
-    desc: String,
-    future: F,
-) {
+pub async fn show_errors<X, F: Future<Output = DTPSR<X>>>(ssa: Option<ServerStateAccess>, desc: String, future: F) {
     let tn = TopicName::from_dash_sep(&desc).unwrap();
     if let Some(ssa) = &ssa {
         let mut ss = ssa.lock().await;
-        ss.send_status_notification(&tn, Status::RUNNING, None)
-            .unwrap();
+        ss.send_status_notification(&tn, Status::RUNNING, None).unwrap();
     };
 
     let message = match future.await {
@@ -966,15 +1343,14 @@ pub async fn show_errors<X, F: Future<Output = DTPSR<X>>>(
             // let ef = format!("{}\n---\n{:?}", e, e);
             let ef = format!("{:?}", e);
             error_with_info!("Error in async {desc}:\n{}", indent_all_with("| ", &ef));
-            // error!("Error: {:#?}", e.backtrace());
+            // error_with_info!("Error: {:#?}", e.backtrace());
             Some(ef)
         }
     };
 
     if let Some(ssa) = &ssa {
         let mut ss = ssa.lock().await;
-        ss.send_status_notification(&tn, Status::EXITED, message)
-            .unwrap();
+        ss.send_status_notification(&tn, Status::EXITED, message).unwrap();
     }
 }
 
@@ -993,8 +1369,8 @@ pub async fn sniff_and_start_proxy(
         match sniff_type_resource(&url).await {
             Ok(s) => break s,
             Err(e) => {
-                warn!("Cannot sniff:\n{e:?}");
-                info!("observe_proxy: retrying in 2 seconds");
+                warn_with_info!("Cannot sniff:\n{e:?}");
+                debug_with_info!("observe_proxy: retrying in 2 seconds");
                 sleep(std::time::Duration::from_secs(2)).await;
                 continue;
             }
@@ -1006,9 +1382,10 @@ pub async fn sniff_and_start_proxy(
         TypeOfResource::DTPSTopic => {
             not_implemented!("observe_proxy: TypeOfResource::DTPSTopic")
         }
-        TypeOfResource::DTPSIndex => {
+        TypeOfResource::DTPSIndex { node_id } => {
             let mut ss = ss_mutex.lock().await;
-            ss.add_proxy_connection(&mounted_at, &url, ss_mutex.clone())?;
+            let urls = vec![url.clone()];
+            ss.add_proxy_connection(&mounted_at, &urls, node_id, ss_mutex.clone())?;
             Ok(())
             // not_implemented!("observe_proxy: TypeOfResource::DTPSIndex")
             // ss.add_proxy_connection(&subcription_name, &url, ss_mutex).await
@@ -1018,7 +1395,6 @@ pub async fn sniff_and_start_proxy(
 }
 
 pub async fn handle_proxy_other(
-    // _subcription_name: String,
     mounted_at: TopicName,
     url: TypeOfConnection,
     ss_mutex: ServerStateAccess,
@@ -1033,18 +1409,22 @@ pub async fn handle_proxy_other(
 
 pub async fn observe_node_proxy(
     mounted_at: TopicName,
-    url: TypeOfConnection,
+    cons: Vec<TypeOfConnection>,
+    expect_node_id: String,
     ss_mutex: ServerStateAccess,
 ) -> DTPSR<()> {
+    let cons_set = HashSet::from_iter(cons.clone().into_iter());
+    let url = compute_best_alternative(&cons_set, &expect_node_id).await?;
     let (md, index_internal_at_t0) = loop {
         match get_proxy_info(&url).await {
             Ok(s) => break s,
             Err(e) => {
-                warn!(
+                warn_with_info!(
                     "observe_proxy: error getting proxy info for proxied {:?}:\n{:?}",
-                    mounted_at, e
+                    mounted_at,
+                    e
                 );
-                info!("observe_proxy: retrying in 2 seconds");
+                info_with_info!("observe_proxy: retrying in 2 seconds");
                 sleep(std::time::Duration::from_secs(2)).await;
                 continue;
             }
@@ -1055,7 +1435,14 @@ pub async fn observe_node_proxy(
         None => {
             return not_available!("Nobody is answering {url:}:\n{md:?}");
         }
-        Some(n) => n.clone(),
+        Some(n) => {
+            if n != &expect_node_id {
+                return not_available!(
+                    "observe_node_proxy: invalid proxy connection: we expect {expect_node_id} but we find {n} at {url}",
+                );
+            };
+            n.clone()
+        }
     };
 
     {
@@ -1084,42 +1471,76 @@ pub async fn observe_node_proxy(
         let mut ss = ss_mutex.lock().await;
         let info = ss.proxied.get_mut(&mounted_at).unwrap();
         info.established = Some(ForwardInfoEstablished {
+            using: url.clone(),
             md: md.clone(),
             index_internal: index_internal_at_t0.clone(),
         });
     }
+
     {
         let mut ss = ss_mutex.lock().await;
         add_from_response(
             &mut ss,
-            who_answers.clone(),
+            // who_answers.clone(),
             &mounted_at,
             &index_internal_at_t0,
             link1.clone(),
-            url.to_string(),
+            // url.to_string(),
         )?;
     }
 
-    // let (tx, rx) = mpsc::unbounded_channel();
     let inline_url = md.events_data_inline_url.unwrap().clone();
-    //
-    let (_handle, mut stream) = get_events_stream_inline(&inline_url).await;
+    let (_handle, rx) = get_events_stream_inline(&inline_url).await;
 
-    while let Some(notification) = stream.next().await {
-        let x0: TopicsIndexWire = serde_cbor::from_slice(&notification.rd.content).unwrap();
+    for_each_from_stream(rx, |lue| async {
+        let notification = match lue {
+            ListenURLEvents::InsertNotification(not) => not,
+            ListenURLEvents::WarningMsg(_)
+            | ListenURLEvents::ErrorMsg(_)
+            | ListenURLEvents::FinishedMsg(_)
+            | ListenURLEvents::SilenceMsg(_) => return Ok(()),
+        };
+
+        let x0: TopicsIndexWire = serde_cbor::from_slice(&notification.raw_data.content).unwrap();
         let ti = TopicsIndexInternal::from_wire(&x0, &url);
 
         {
             let mut ss = ss_mutex.lock().await;
             add_from_response(
                 &mut ss,
-                who_answers.clone(),
+                // who_answers.clone(),
                 &mounted_at,
                 &ti,
                 link1.clone(),
-                url.to_string(),
+                // url.to_string(),
             )?;
         }
+        Ok(())
+    })
+    .await?;
+
+    Ok(())
+}
+
+pub async fn for_each_from_stream<T, F, Fut>(mut rx: BroadcastReceiver<T>, f: F) -> DTPSR<()>
+where
+    T: Clone,
+    F: Fn(T) -> Fut,
+    Fut: Future<Output = DTPSR<()>>,
+{
+    loop {
+        match rx.recv().await {
+            Ok(msg) => f(msg).await?,
+            Err(e) => {
+                match e {
+                    RecvError::Closed => break,
+                    RecvError::Lagged(_) => {
+                        debug_with_info!("lagged");
+                        continue;
+                    }
+                };
+            }
+        };
     }
 
     Ok(())
@@ -1127,13 +1548,11 @@ pub async fn observe_node_proxy(
 
 pub fn add_from_response(
     s: &mut ServerState,
-    _who_answers: String,
     mounted_at: &TopicName,
     tii: &TopicsIndexInternal,
     link_benchmark1: LinkBenchmark,
-    _connected_url: String,
 ) -> DTPSR<()> {
-    // debug!("topics_index: tii: \n{:#?}", tii);
+    // debug_with_info!("topics_index: tii: \n{:#?}", tii);
     for (its_topic_name, tr) in tii.topics.iter() {
         if its_topic_name.is_root() {
             // ok
@@ -1146,7 +1565,7 @@ pub fn add_from_response(
             continue;
         }
 
-        if tr.reachability.len() == 0 {
+        if tr.reachability.is_empty() {
             return DTPSError::not_reachable(format!(
                 "topic {:?} of subscription {:?} is not reachable:\n{:#?}",
                 its_topic_name, mounted_at, tr
@@ -1156,7 +1575,7 @@ pub fn add_from_response(
 
         s.new_proxy_topic(
             mounted_at,
-            &its_topic_name,
+            its_topic_name,
             &available_as,
             tr,
             reachability_we_used.clone(),
@@ -1177,4 +1596,80 @@ pub fn absolute_path(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     .clean();
 
     Ok(absolute_path)
+}
+
+async fn run_connection_job(
+    connection_name: CompositeName,
+    connection_job: ConnectionJob,
+    ssa: ServerStateAccess,
+    tx: SharedStatusNotification,
+) -> DTPSR<()> {
+    // TODO: check already exists or not
+    let (source, target) = {
+        let ss = ssa.lock().await;
+
+        let source = interpret_path(connection_job.source.as_relative_url(), &hashmap! {}, &None, &ss).await?;
+        let target = interpret_path(connection_job.target.as_relative_url(), &hashmap! {}, &None, &ss).await?;
+        (source, target)
+    };
+    debug_with_info!(
+        "Connection job: {}: Connecting source:\n{source:#?}\n with\n {target:#?}",
+        connection_name.as_dash_sep()
+    );
+
+    let stream1 = source.get_data_stream("not needed", ssa.clone()).await?;
+    debug_with_info!("Source stream obtained");
+
+    let mut stream1 = match stream1.stream {
+        None => {
+            let s = format!(
+                "Source {source:?} is not available as a stream for connection {}",
+                connection_name.as_dash_sep()
+            );
+            error_with_info!("{}", s);
+            tx.notify(false, &s).await?;
+            return not_available!("{}", s);
+        }
+        Some(x) => x,
+    };
+
+    tx.notify(true, "found source and target").await?;
+    while let Some(x) = wrap_recv(&mut stream1).await {
+        debug_with_info!(
+            "Connection job: {}: Got data {:?} from source {source:?} with {target:?}",
+            connection_name.as_dash_sep(),
+            x
+        );
+
+        match x {
+            ListenURLEvents::InsertNotification(inot) => {
+                target
+                    .push(ssa.clone(), &inot.raw_data, &inot.data_saved.clocks)
+                    .await?;
+            }
+            ListenURLEvents::WarningMsg(_)
+            | ListenURLEvents::ErrorMsg(_)
+            | ListenURLEvents::FinishedMsg(_)
+            | ListenURLEvents::SilenceMsg(_) => {
+                debug_with_info!("ignoring {:?}", x)
+            }
+        }
+
+        // let data = x?;
+        // let data_saved = data.data_saved;
+        // let raw_data = data.raw_data;
+        // let target = target.clone();
+        // let ssa = ssa.clone();
+        // let connection_name = connection_name.clone();
+        // let _ = tokio::spawn(async move {
+        //     let mut ss = ssa.lock().await;
+        //     let _ = ss.publish_raw_data(&target, &raw_data, None);
+        //     let _ = ss.send_status_notification(&connection_name, Status::RUNNING, None);
+        //     Ok(())
+        // });
+    }
+
+    debug_with_info!("Connection job: {}: Source stream ended", connection_name.as_dash_sep());
+
+    Ok(())
 }
