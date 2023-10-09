@@ -17,12 +17,13 @@ __all__ = [
     "Chunk",
     "Clocks",
     "ContentInfo",
-    "DataFromChannel",
     "DataReady",
     "DataSaved",
+    "ErrorMsg",
     "FinishedMsg",
     "ForwardingStep",
     "History",
+    "InsertNotification",
     "LinkBenchmark",
     "ListenURLEvents",
     "Metadata",
@@ -195,6 +196,8 @@ class Clocks:
 
 @dataclass
 class DataSaved:
+    origin_node: NodeID
+    unique_id: SourceID
     index: int
     time_inserted: int
     digest: str
@@ -333,10 +336,22 @@ class DataReady:
         struct = cbor2.loads(s)
         return parse_obj_as(cls, struct)
 
+    def as_data_saved(self) -> DataSaved:
+        return DataSaved(
+            origin_node=self.origin_node,
+            unique_id=self.unique_id,
+            index=self.sequence,
+            time_inserted=self.time_inserted,
+            digest=self.digest,
+            content_type=self.content_type,
+            content_length=self.content_length,
+            clocks=self.clocks,
+        )
+
 
 @dataclass
-class DataFromChannel:
-    data_ready: DataReady
+class InsertNotification:
+    data_saved: DataSaved
     raw_data: RawData
 
 
@@ -399,4 +414,4 @@ class Registration:
 
 
 ChannelMsgs = Union[ChannelInfo, DataReady, Chunk, FinishedMsg, ErrorMsg, WarningMsg, SilenceMsg]
-ListenURLEvents = Union[DataFromChannel, WarningMsg, ErrorMsg, FinishedMsg, SilenceMsg]
+ListenURLEvents = Union[InsertNotification, WarningMsg, ErrorMsg, FinishedMsg, SilenceMsg]

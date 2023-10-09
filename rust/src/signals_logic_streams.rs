@@ -9,12 +9,11 @@ use std::{
     },
     fmt::Debug,
 };
+use tokio::sync::broadcast::Receiver as BroadcastReceiver;
 
 use async_recursion::async_recursion;
 use async_trait::async_trait;
-
 use chrono::Local;
-
 use serde_cbor::{
     Value as CBORValue,
     Value::Null as CBORNull,
@@ -22,9 +21,14 @@ use serde_cbor::{
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::{
+    client::{
+        get_events_stream_inline,
+        get_rawdata_status,
+    },
     debug_with_info,
     error_with_info,
     get_channel_info_message,
+    get_metadata,
     is_prefix_of,
     merge_clocks,
     not_implemented,
@@ -36,11 +40,15 @@ use crate::{
     DTPSError,
     DataSaved,
     DataStream,
+    ErrorMsg,
+    FinishedMsg,
     GetStream,
     InsertNotification,
+    ListenURLEvents,
     RawData,
     ResolvedData,
     ServerStateAccess,
+    SilenceMsg,
     SourceComposition,
     TopicName,
     TopicProperties,
@@ -49,6 +57,7 @@ use crate::{
     Transforms,
     TypeOFSource,
     TypeOfConnection,
+    WarningMsg,
     CONTENT_TYPE_DTPS_INDEX_CBOR,
     DTPSR,
 };
@@ -215,21 +224,41 @@ impl GetStream for TypeOFSource {
 
 async fn listen_to_updates(
     component: Vec<String>,
-    mut rx: tokio::sync::broadcast::Receiver<InsertNotification>,
+    mut rx: BroadcastReceiver<ListenURLEvents>,
     tx: tokio::sync::broadcast::Sender<SingleUpdates>,
 ) -> DTPSR<()> {
     loop {
         match rx.recv().await {
             Ok(m) => {
-                if tx.receiver_count() > 0 {
-                    tx.send(SingleUpdates::Update(ActualUpdate {
-                        component: component.clone(),
-                        data: ResolvedData::RawData(m.raw_data),
-                        clocks: m.data_saved.clocks,
-                    }))
-                    .unwrap();
+                let component = component.clone();
+                let msgs = match m {
+                    ListenURLEvents::InsertNotification(m) => {
+                        vec![SingleUpdates::Update(ActualUpdate {
+                            component,
+                            data: ResolvedData::RawData(m.raw_data),
+                            clocks: m.data_saved.clocks,
+                        })]
+                    }
+                    ListenURLEvents::WarningMsg(m) => {
+                        vec![SingleUpdates::WarningMsg(component, m)]
+                    }
+                    ListenURLEvents::ErrorMsg(m) => {
+                        vec![SingleUpdates::ErrorMsg(component, m)]
+                    }
+                    ListenURLEvents::FinishedMsg(m) => {
+                        vec![SingleUpdates::FinishedMsg(component, m)]
+                    }
+                    ListenURLEvents::SilenceMsg(m) => {
+                        vec![SingleUpdates::SilenceMsg(component, m)]
+                    }
+                };
+                for to_send in msgs {
+                    if tx.receiver_count() > 0 {
+                        tx.send(to_send).unwrap();
+                    }
                 }
             }
+
             Err(e) => match e {
                 RecvError::Closed => {
                     break;
@@ -245,7 +274,7 @@ async fn listen_to_updates(
 }
 
 async fn filter_stream<T, U, F, G>(
-    mut receiver: tokio::sync::broadcast::Receiver<T>,
+    mut receiver: BroadcastReceiver<T>,
     sender: tokio::sync::broadcast::Sender<U>,
     f: F,
     filter_same: bool,
@@ -296,14 +325,18 @@ where
 pub enum SingleUpdates {
     Update(ActualUpdate),
     Finished(Vec<String>),
+    FinishedMsg(Vec<String>, FinishedMsg),
+    ErrorMsg(Vec<String>, ErrorMsg),
+    WarningMsg(Vec<String>, WarningMsg),
+    SilenceMsg(Vec<String>, SilenceMsg),
 }
 
 async fn put_together(
     mut first: CBORValue, // BTreeMap<CBORValue, CBORValue>,
     mut clocks0: Clocks,
     mut active_components: HashSet<Vec<String>>,
-    mut rx: tokio::sync::broadcast::Receiver<SingleUpdates>,
-    tx_out: tokio::sync::broadcast::Sender<InsertNotification>,
+    mut rx: BroadcastReceiver<SingleUpdates>,
+    tx_out: tokio::sync::broadcast::Sender<ListenURLEvents>,
 ) -> DTPSR<()> {
     if let CBORValue::Map(..) = first {
     } else {
@@ -312,7 +345,7 @@ async fn put_together(
     let mut index = 1;
     loop {
         let msg = rx.recv().await?;
-        match msg {
+        let to_send = match msg {
             SingleUpdates::Update(ActualUpdate {
                 component,
                 data,
@@ -336,14 +369,12 @@ async fn put_together(
                     content_length: rd.content.len(),
                     digest: rd.digest().clone(),
                 };
-                let notification = InsertNotification {
+                index += 1;
+
+                vec![ListenURLEvents::InsertNotification(InsertNotification {
                     data_saved,
                     raw_data: rd,
-                };
-                if tx_out.receiver_count() > 0 {
-                    tx_out.send(notification).unwrap();
-                }
-                index += 1;
+                })]
             }
             SingleUpdates::Finished(which) => {
                 if !active_components.contains(&which) {
@@ -355,6 +386,25 @@ async fn put_together(
                         break;
                     }
                 }
+                vec![]
+            }
+            SingleUpdates::FinishedMsg(comp, m) => {
+                vec![]
+            }
+            SingleUpdates::ErrorMsg(comp, m) => {
+                vec![ListenURLEvents::ErrorMsg(m)] // TODO: add component
+            }
+            SingleUpdates::WarningMsg(comp, m) => {
+                vec![ListenURLEvents::WarningMsg(m)] // TODO: add component
+            }
+            SingleUpdates::SilenceMsg(comp, m) => {
+                // TODO only if didn't send in a while
+                vec![ListenURLEvents::SilenceMsg(m)] // TODO: add component
+            }
+        };
+        for ts in to_send {
+            if tx_out.receiver_count() > 0 {
+                tx_out.send(ts).unwrap();
             }
         }
     }
@@ -363,15 +413,15 @@ async fn put_together(
 }
 
 async fn transform_for(
-    receiver: tokio::sync::broadcast::Receiver<InsertNotification>,
-    out_stream_sender: tokio::sync::broadcast::Sender<InsertNotification>,
+    receiver: BroadcastReceiver<ListenURLEvents>,
+    out_stream_sender: tokio::sync::broadcast::Sender<ListenURLEvents>,
     prefix: TopicName,
     presented_as: String,
     unique_id: String,
-    first: Option<InsertNotification>,
+    first: Option<ListenURLEvents>,
 ) -> DTPSR<()> {
-    let compare = |a: &InsertNotification, b: &InsertNotification| a.raw_data == b.raw_data;
-    let f = |in1: InsertNotification| filter_func(in1, prefix.clone(), presented_as.clone(), unique_id.clone());
+    let compare = |a: &ListenURLEvents, b: &ListenURLEvents| a == b;
+    let f = |in1: ListenURLEvents| filter_func_outer(in1, prefix.clone(), presented_as.clone(), unique_id.clone());
     filter_stream(receiver, out_stream_sender, f, true, first, compare).await
 }
 
@@ -403,7 +453,7 @@ async fn get_stream_compose_meta(
         sc.topic_name.clone(),
         presented_as.to_string(),
         unique_id,
-        Some(in0.clone()),
+        Some(ListenURLEvents::InsertNotification(in0.clone())),
     );
     handles.push(tokio::spawn(future));
 
@@ -447,15 +497,27 @@ fn filter_transform(in1: InsertNotification, t: &Transforms, unique_id: String) 
     })
 }
 
+fn filter_transform_outer(in1: ListenURLEvents, t: &Transforms, unique_id: String) -> DTPSR<ListenURLEvents> {
+    match in1 {
+        ListenURLEvents::InsertNotification(x) => {
+            Ok(ListenURLEvents::InsertNotification(filter_transform(x, t, unique_id)?))
+        }
+        ListenURLEvents::WarningMsg(_)
+        | ListenURLEvents::ErrorMsg(_)
+        | ListenURLEvents::FinishedMsg(_)
+        | ListenURLEvents::SilenceMsg(_) => Ok(in1),
+    }
+}
+
 async fn apply_transformer(
-    receiver: tokio::sync::broadcast::Receiver<InsertNotification>,
-    out_stream_sender: tokio::sync::broadcast::Sender<InsertNotification>,
+    receiver: BroadcastReceiver<ListenURLEvents>,
+    out_stream_sender: tokio::sync::broadcast::Sender<ListenURLEvents>,
     transform: Transforms,
     unique_id: String,
-    first: Option<InsertNotification>,
+    first: Option<ListenURLEvents>,
 ) -> DTPSR<()> {
-    let are_they_same = |a: &InsertNotification, b: &InsertNotification| a.raw_data == b.raw_data;
-    let f = |in1: InsertNotification| filter_transform(in1, &transform, unique_id.clone());
+    let are_they_same = |a: &ListenURLEvents, b: &ListenURLEvents| a == b;
+    let f = |in1: ListenURLEvents| filter_transform_outer(in1, &transform, unique_id.clone());
     filter_stream(receiver, out_stream_sender, f, true, first, are_they_same).await
 }
 
@@ -469,7 +531,7 @@ async fn get_stream_transform(
     let stream0 = ds0.get_data_stream(presented_as, ssa.clone()).await?;
     let mut handles = stream0.handles;
     let receiver = stream0.stream.unwrap();
-    let (out_stream_sender, out_stream_recv) = tokio::sync::broadcast::channel(1024);
+    let (out_stream_sender, out_stream_recv) = tokio::sync::broadcast::channel::<ListenURLEvents>(1024);
 
     let unique_id = "XXX".to_string();
 
@@ -480,7 +542,7 @@ async fn get_stream_transform(
         out_stream_sender,
         transform.clone(),
         unique_id,
-        Some(in0.clone()),
+        Some(ListenURLEvents::InsertNotification(in0.clone())),
     );
     handles.push(tokio::spawn(future));
 
@@ -546,6 +608,26 @@ fn filter_func(
     })
 }
 
+fn filter_func_outer(
+    in1: ListenURLEvents,
+    prefix: TopicName,
+    presented_as: String,
+    unique_id: String,
+) -> DTPSR<ListenURLEvents> {
+    match in1 {
+        ListenURLEvents::InsertNotification(x) => Ok(ListenURLEvents::InsertNotification(filter_func(
+            x,
+            prefix,
+            presented_as,
+            unique_id,
+        )?)),
+        ListenURLEvents::WarningMsg(_)
+        | ListenURLEvents::ErrorMsg(_)
+        | ListenURLEvents::FinishedMsg(_)
+        | ListenURLEvents::SilenceMsg(_) => Ok(in1),
+    }
+}
+
 pub fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<ResolvedData> {
     let d = match data {
         ResolvedData::Regular(d) => d,
@@ -556,6 +638,46 @@ pub fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<ResolvedDa
     Ok(ResolvedData::Regular(transform.apply(d)?))
 }
 
-async fn get_data_stream_from_url(_con: &TypeOfConnection) -> DTPSR<DataStream> {
-    not_implemented!("get_data_stream_from_url")
+async fn get_data_stream_from_url(con: &TypeOfConnection) -> DTPSR<DataStream> {
+    let md = get_metadata(con).await?;
+    let inline_url = md.events_data_inline_url.unwrap();
+    let (handle, stream) = get_events_stream_inline(&inline_url).await;
+
+    let handles = vec![handle];
+
+    let queue_created: i64 = Local::now().timestamp_nanos();
+    let num_total = 1;
+
+    let (status, raw_data) = get_rawdata_status(con).await?;
+    let first = if status == http::StatusCode::NO_CONTENT {
+        None
+    } else {
+        Some(InsertNotification {
+            data_saved: DataSaved {
+                // FIXME
+                origin_node: "".to_string(),
+                unique_id: "".to_string(),
+                index: 0,
+                time_inserted: 0,
+                clocks: Default::default(),
+                content_type: raw_data.content_type.clone(),
+                content_length: raw_data.content.len(),
+                digest: raw_data.digest(),
+            },
+            raw_data,
+        })
+    };
+
+    let data_stream = DataStream {
+        channel_info: ChannelInfo {
+            queue_created,
+            num_total,
+            newest: None,
+            oldest: None,
+        },
+        first,
+        stream: Some(stream),
+        handles,
+    };
+    Ok(data_stream)
 }

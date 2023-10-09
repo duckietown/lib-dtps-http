@@ -1,6 +1,7 @@
 use bytes::Bytes;
 
 use serde::{
+    de::DeserializeOwned,
     Deserialize,
     Serialize,
 };
@@ -56,6 +57,28 @@ impl RawData {
     pub fn interpret<'a, T>(&'a self) -> DTPSR<T>
     where
         T: Deserialize<'a> + Clone,
+    {
+        match self.presentation() {
+            ContentPresentation::CBOR => {
+                let v: T = serde_cbor::from_slice::<T>(&self.content)?;
+                Ok(v)
+            }
+            ContentPresentation::JSON => {
+                let v: T = serde_json::from_slice::<T>(&self.content)?;
+                Ok(v)
+            }
+            ContentPresentation::YAML => {
+                let v: T = serde_yaml::from_slice::<T>(&self.content)?;
+                Ok(v)
+            }
+            ContentPresentation::PlainText => DTPSError::other("cannot interpret plain text"),
+            ContentPresentation::Other => DTPSError::other("cannot interpret unknown content type"),
+        }
+    }
+
+    pub fn interpret_owned<T>(&self) -> DTPSR<T>
+    where
+        T: DeserializeOwned + Clone,
     {
         match self.presentation() {
             ContentPresentation::CBOR => {

@@ -95,12 +95,19 @@ pub mod built_info {
 mod internal_jobs;
 mod signals_logic_meta;
 mod signals_logic_props;
+mod signals_logic_push;
 mod signals_logic_resolve;
 #[cfg(test)]
 mod test_python;
 #[cfg(test)]
 mod test_range;
+
+mod shared_statuses;
+#[cfg(test)]
+mod test_connections;
+
 use internal_jobs::*;
+use signals_logic_push::*;
 
 use master::*;
 use signals_logic_resolve::*;

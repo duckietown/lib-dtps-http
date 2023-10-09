@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fmt::Debug,
 };
+use tokio::sync::broadcast::Receiver as BroadcastReceiver;
 
 use anyhow::Context;
 
@@ -11,6 +12,7 @@ use json_patch::Patch;
 
 use serde_cbor::Value as CBORValue;
 use tokio::task::JoinHandle;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::{
     context,
@@ -18,7 +20,9 @@ use crate::{
     ChannelInfo,
     Clocks,
     InsertNotification,
+    ListenURLEvents,
     OtherProxyInfo,
+    RawData,
     ResolvedData,
     ServerStateAccess,
     TopicName,
@@ -54,6 +58,11 @@ pub enum TypeOFSource {
 #[async_trait]
 pub trait Patchable {
     async fn patch(&self, presented_as: &str, ss_mutex: ServerStateAccess, patch: &Patch) -> DTPSR<()>;
+}
+
+#[async_trait]
+pub trait Pushable {
+    async fn push(&self, ss_mutex: ServerStateAccess, data: &RawData, clocks: &Clocks) -> DTPSR<()>;
 }
 
 #[async_trait]
@@ -121,7 +130,7 @@ pub struct DataStream {
     pub first: Option<InsertNotification>,
 
     /// The stream (or none if no more data is coming through)
-    pub stream: Option<tokio::sync::broadcast::Receiver<InsertNotification>>,
+    pub stream: Option<BroadcastReceiver<ListenURLEvents>>,
 
     /// handles of couroutines needed for making this happen
     pub handles: Vec<JoinHandle<DTPSR<()>>>,

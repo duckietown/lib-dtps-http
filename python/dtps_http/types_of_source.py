@@ -218,7 +218,7 @@ class ForwardedQueue(Source):
         async with DTPSClient.create() as dtpsclient:
             async with dtpsclient.my_session(url_data) as (session2, use_url2):
                 async with session2.get(use_url2) as resp_data:
-                    await my_raise_for_status(resp_data)
+                    await my_raise_for_status(resp_data, url_data)
                     data = await resp_data.read()
                     content_type = ContentType(resp_data.content_type)
                     data = RawData(content_type=content_type, content=data)

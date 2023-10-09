@@ -25,6 +25,7 @@ pub enum DTPSError {
 
     #[error("Not available:\n{}", indent_inside(.0))]
     NotAvailable(String),
+
     #[error("InvalidInput:\n{}", indent_inside(.0))]
     InvalidInput(String),
 
@@ -91,6 +92,9 @@ pub enum DTPSError {
     // TokioSendError(#[from] tokio::sync::broadcast::error::SendError),
     #[error(transparent)]
     MPSCError(#[from] std::sync::mpsc::RecvError),
+
+    #[error("{context}---\n{source}")]
+    Context { context: String, source: Box<DTPSError> },
 }
 
 impl DTPSError {
@@ -172,6 +176,7 @@ impl DTPSError {
     pub fn status_code(&self) -> StatusCode {
         match self {
             DTPSError::TopicNotFound(..) | DTPSError::ResourceNotFound(..) => StatusCode::NOT_FOUND,
+            DTPSError::InvalidInput(..) => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -182,6 +187,35 @@ impl DTPSError {
 }
 
 impl warp::reject::Reject for DTPSError {}
+
+impl DTPSError {
+    pub fn add_context(self, context: &str) -> Self {
+        // let c1 = indent_inside(&context.to_string());
+        let c1 = context.to_string();
+        // add endline if not present
+        let c1 = if c1.ends_with('\n') { c1 } else { format!("{}\n", c1) };
+        match self {
+            DTPSError::Context { context, source } => DTPSError::Context {
+                context: format!("{}---\n{}", c1, context),
+                source,
+            },
+            _ => DTPSError::Context {
+                context: c1,
+                source: Box::new(self),
+            },
+        }
+    }
+}
+#[macro_export]
+
+macro_rules! dtpserror_context {
+    ($expr:expr, $($u:expr),* $(,)?) => {{
+        let s = format!("{}:{}:\n{}", file!(), line!(),
+            indent::indent_all_with("| ", format!($($u),*))
+        );
+        $expr.map_err(|e| e.add_context(&s))
+    }};
+}
 
 //
 // pub fn just_log<E: Debug>(e: E) -> () {
@@ -242,6 +276,7 @@ macro_rules! context {
 #[macro_export]
 macro_rules! internal_assertion {
     ($($u:expr),* $(,)?) => {{
+        $crate::error_with_info!("INTERNAL ASSERTION: {}", $crate::add_info!($($u),*) );
         $crate::DTPSError::internal_assertion($crate::add_info!($($u),*) )
     }};
 }
@@ -278,12 +313,19 @@ macro_rules! not_reachable {
     }};
 }
 
+#[macro_export]
+macro_rules! dtpserror_other {
+    ($($u:expr),* $(,)?) => {{
+        $crate::DTPSError::other($crate::add_info!($($u),*) )
+    }};
+}
+
 pub async fn handle_rejection(err: Rejection) -> std::result::Result<impl Reply, Rejection> {
     debug_with_info!("handle_rejection: {:#?}", err);
     if let Some(custom_error) = err.find::<DTPSError>() {
         let status_code = custom_error.status_code();
 
-        let error_message = format!("{}\n\n{:#?}", status_code, custom_error);
+        let error_message = format!("Result: {}\n\n{}", status_code, custom_error);
 
         if status_code != 404 {
             error_with_info!("{}", error_message);

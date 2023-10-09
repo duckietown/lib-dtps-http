@@ -46,14 +46,17 @@ use crate::{
     send_as_ws_cbor,
     serve_static_file_path,
     utils_headers,
+    utils_headers::put_patchable_headers,
     utils_mime,
     DTPSError,
     DataProps,
     DataStream,
+    ErrorMsg,
     FinishedMsg,
     GetMeta,
     GetStream,
     HandlersResponse,
+    ListenURLEvents,
     MsgClientToServer,
     MsgServerToClient,
     ObjectQueue,
@@ -72,6 +75,7 @@ use crate::{
     CONTENT_TYPE_PATCH_CBOR,
     CONTENT_TYPE_PATCH_JSON,
     CONTENT_TYPE_TEXT_HTML,
+    CONTENT_TYPE_TEXT_PLAIN,
     CONTENT_TYPE_YAML,
     DTPSR,
     JAVASCRIPT_SEND,
@@ -231,12 +235,8 @@ pub async fn serve_master_patch(
             Ok(res)
         }
         Err(e) => {
-            error_with_info!("Patch not ok: {e:?}");
-            let res = http::Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::from(format!("Patch not ok: {e:?}")))
-                .unwrap();
-            Ok(res)
+            error_with_info!("Patch not ok: {}", e);
+            e.as_handler_response()
         }
     }
 }
@@ -264,7 +264,7 @@ pub async fn serve_master_head(
             return s.into();
         }
     };
-    // debug_with_info!("serve_master_head: ds: {:?}", ds);
+    debug_with_info!("serve_master_head: ds: {:?}", ds);
     match &ds {
         TypeOFSource::OurQueue(topic_name, _) => {
             let ss = ss_mutex.lock().await;
@@ -279,7 +279,9 @@ pub async fn serve_master_head(
             utils_headers::put_common_headers(&ss, h);
             utils_headers::put_meta_headers(h, &ds.get_properties());
             utils_headers::put_source_headers(h, &x.tr.origin_node, &x.tr.unique_id);
-
+            if topic_name.is_root() {
+                put_patchable_headers(h)?;
+            }
             let suffix = topic_name.as_relative_url();
             put_alternative_locations(&ss, h, suffix);
             return Ok(resp);
@@ -457,7 +459,7 @@ pub async fn serve_master_get(
         interpret_path(&path_str, &query, &referrer, &ss).await
     }?;
 
-    // debug_with_info!("serve_master: ds={:?} ", ds);
+    debug_with_info!("serve_master: ds={:?} ", ds);
     let r = ds.resolve_data_single(&path_str, ss_mutex.clone()).await;
     // let resd0 = context!(r, "Cannot resolve_data_single for {path_str}");
 
@@ -491,10 +493,11 @@ pub async fn serve_master_get(
             return Ok(res);
         }
         ResolvedData::NotFound(s) => {
+            let msg = format!("Not found - {s}");
             let res = http::Response::builder()
                 .status(StatusCode::NOT_FOUND) //ok
-                .header(header::CONTENT_TYPE, "text/plain")
-                .body(Body::from(s))
+                .header(header::CONTENT_TYPE, CONTENT_TYPE_TEXT_PLAIN)
+                .body(Body::from(msg))
                 .unwrap();
             return Ok(res);
         }
@@ -516,6 +519,7 @@ pub async fn serve_master_get(
 
     let ds_props = ds.get_properties();
     visualize_data(
+        &path_str,
         &ds_props,
         path_str.to_string(),
         extra_html,
@@ -593,6 +597,7 @@ fn make_friendly_visualization(
 }
 
 pub async fn visualize_data(
+    path: &str,
     properties: &TopicProperties,
     title: String,
     extra_html: PreEscaped<String>,
@@ -612,6 +617,9 @@ pub async fn visualize_data(
         let mut resp = Response::new(Body::from(content.to_vec()));
         let h = resp.headers_mut();
 
+        if path == "/" {
+            put_patchable_headers(h)?;
+        }
         utils_headers::put_header_content_type(h, content_type);
         utils_headers::put_meta_headers(h, properties);
         {
@@ -641,16 +649,12 @@ pub async fn handle_websocket_generic2(
             });
         }
         Err(e) => {
-            // let close_code: u16 = 4006; // Close codes 4000-4999 are available for private use
-            let s = format!("handle_websocket_generic2: {}", e);
+            let s = format!("handle_websocket_generic2:\n{}", e);
             debug_with_info!("{s}");
+            let msgs = vec![MsgServerToClient::ErrorMsg(ErrorMsg { comment: s.clone() })];
+            send_as_ws_cbor(&msgs, &mut ws_tx).await.unwrap();
 
-            // send_as_ws_cbor(&for_this, &ws_tx).await?;
-            // let msg = WarpMessage::text("closing with error");
-            // let _ = ws_tx.send(msg).await.map_err(|e| {
-            //     debug_with_info!("Cannot send closing error: {:?}", e);
-            // });
-            // get firsrt 16 chars
+            // get first 16 chars
             let reason = s.chars().take(16).collect::<String>();
             let msg = WarpMessage::close_with(CloseCode::Error, reason);
             let _ = ws_tx.send(msg).await.map_err(|e| {
@@ -712,10 +716,25 @@ pub async fn handle_websocket_data_stream(
     loop {
         match stream.recv().await {
             Ok(r) => {
-                let mut ss = ssa.lock().await;
+                let for_this = match r {
+                    ListenURLEvents::InsertNotification(r) => {
+                        let mut ss = ssa.lock().await;
 
-                let for_this =
-                    get_series_of_messages_for_notification_(send_data, &r, DELTA_WEBSOCKET_AVAIL, &mut ss).await;
+                        get_series_of_messages_for_notification_(send_data, &r, DELTA_WEBSOCKET_AVAIL, &mut ss).await
+                    }
+                    ListenURLEvents::WarningMsg(m) => {
+                        vec![MsgServerToClient::WarningMsg(m)]
+                    }
+                    ListenURLEvents::ErrorMsg(m) => {
+                        vec![MsgServerToClient::ErrorMsg(m)]
+                    }
+                    ListenURLEvents::FinishedMsg(m) => {
+                        vec![MsgServerToClient::FinishedMsg(m)]
+                    }
+                    ListenURLEvents::SilenceMsg(m) => {
+                        vec![MsgServerToClient::SilenceMsg(m)]
+                    }
+                };
 
                 send_as_ws_cbor(&for_this, ws_tx).await?;
             }

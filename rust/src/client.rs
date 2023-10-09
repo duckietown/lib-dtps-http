@@ -10,7 +10,6 @@ use anyhow::Context;
 use bytes::Bytes;
 use futures::StreamExt;
 use hex;
-use http::StatusCode;
 use hyper::{
     self,
     Client,
@@ -20,23 +19,21 @@ use hyperlocal::UnixClientExt;
 use json_patch::{
     AddOperation,
     Patch as JsonPatch,
+    Patch,
     PatchOperation,
     RemoveOperation,
 };
 use maplit::hashmap;
+use serde::Serialize;
 use tokio::{
-    sync::{
-        broadcast::{
-            error::RecvError,
-            Receiver,
-        },
-        mpsc,
-        mpsc::UnboundedSender,
+    sync::broadcast::{
+        error::RecvError,
+        Receiver,
+        Receiver as BroadcastReceiver,
     },
     task::JoinHandle,
     time::timeout,
 };
-use tokio_stream::wrappers::UnboundedReceiverStream;
 use tungstenite::Message as TM;
 use warp::reply::Response;
 
@@ -51,17 +48,17 @@ use crate::{
     not_available,
     not_implemented,
     not_reachable,
+    object_queues::InsertNotification,
     open_websocket_connection,
     parse_url_ext,
     put_header_accept,
     put_header_content_type,
+    server_state::ConnectionJob,
     time_nanos,
+    types::CompositeName,
     warn_with_info,
     DTPSError,
-    DataFromChannel,
     DataSaved,
-    ErrorMsg,
-    FinishedMsg,
     FoundMetadata,
     History,
     LinkBenchmark,
@@ -75,7 +72,6 @@ use crate::{
     TopicsIndexInternal,
     TopicsIndexWire,
     TypeOfConnection,
-    WarningMsg,
     CONTENT_TYPE_DTPS_INDEX,
     CONTENT_TYPE_DTPS_INDEX_CBOR,
     CONTENT_TYPE_PATCH_JSON,
@@ -83,37 +79,64 @@ use crate::{
     DTPSR,
     HEADER_CONTENT_LOCATION,
     HEADER_NODE_ID,
+    REL_CONNECTIONS,
     REL_EVENTS_DATA,
     REL_EVENTS_NODATA,
     REL_HISTORY,
     REL_META,
-    TOPIC_PROXIED,
+    REL_PROXIED,
 };
 
 /// Note: need to have use futures::{StreamExt} in scope to use this
 pub async fn get_events_stream_inline(
     url: &TypeOfConnection,
-) -> (JoinHandle<DTPSR<()>>, UnboundedReceiverStream<ListenURLEvents>) {
-    let (tx, rx) = mpsc::unbounded_channel();
+) -> (JoinHandle<DTPSR<()>>, BroadcastReceiver<ListenURLEvents>) {
+    let (tx, rx) = tokio::sync::broadcast::channel(1024);
     let inline_url = url.clone();
     let handle = tokio::spawn(listen_events_websocket(inline_url, tx));
-    let stream = UnboundedReceiverStream::new(rx);
-    (handle, stream)
+    // let stream = UnboundedReceiverStream::new(rx);
+    (handle, rx)
 }
+
+pub async fn wrap_recv<T>(r: &mut BroadcastReceiver<T>) -> Option<T>
+where
+    T: Clone,
+{
+    loop {
+        match r.recv().await {
+            Ok(x) => return Some(x),
+            Err(e) => match e {
+                RecvError::Closed => return None,
+                RecvError::Lagged(_) => {
+                    debug_with_info!("lagged");
+                    continue;
+                }
+            },
+        };
+    }
+}
+//
+// #[macro_export]
+// macro_rules! loop_broadcast_receiver {
+//     ( ($rx: ident, $value: ident) $body: block) =>  {
+//         while let Some($value) = $crate::wrap_recv(&mut $rx).await { $body }
+//     }
+// }
 
 pub async fn estimate_latencies(which: TopicName, md: FoundMetadata) {
     let inline_url = md.events_data_inline_url.unwrap().clone();
 
-    let (handle, mut stream) = get_events_stream_inline(&inline_url).await;
+    let (handle, mut rx) = get_events_stream_inline(&inline_url).await;
 
     // keep track of the latencies in a vector and compute the mean
 
     let mut latencies_ns = Vec::new();
     let mut index = 0;
-    while let Some(lue) = stream.next().await {
+
+    while let Some(lue) = wrap_recv(&mut rx).await {
         // convert a string to integer
         match lue {
-            ListenURLEvents::DataFromChannel(notification) => {
+            ListenURLEvents::InsertNotification(notification) => {
                 let string = String::from_utf8(notification.raw_data.content.to_vec()).unwrap();
 
                 // let nanos = serde_json::from_slice::<u128>(&notification.rd.content).unwrap();
@@ -210,7 +233,10 @@ pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<Option<MsgServe
     Ok(Some(msg_from_server))
 }
 
-pub async fn listen_events_websocket(con: TypeOfConnection, tx: UnboundedSender<ListenURLEvents>) -> DTPSR<()> {
+pub async fn listen_events_websocket(
+    con: TypeOfConnection,
+    tx: tokio::sync::broadcast::Sender<ListenURLEvents>,
+) -> DTPSR<()> {
     let wsc = open_websocket_connection(&con).await?;
     let prefix = format!("listen_events_websocket({con})");
     // debug_with_info!("starting to listen to events for {} on {:?}", con, read);
@@ -297,7 +323,10 @@ pub async fn listen_events_websocket(con: TypeOfConnection, tx: UnboundedSender<
             content: Bytes::from(content),
             content_type,
         };
-        let notification = ListenURLEvents::DataFromChannel(DataFromChannel::new(dr, rd));
+        let notification = ListenURLEvents::InsertNotification(InsertNotification {
+            data_saved: dr.as_data_saved(),
+            raw_data: rd,
+        });
 
         if tx.send(notification).is_err() {
             break;
@@ -306,7 +335,7 @@ pub async fn listen_events_websocket(con: TypeOfConnection, tx: UnboundedSender<
     Ok(())
 }
 
-pub async fn get_rawdata_status(con: &TypeOfConnection) -> DTPSR<(StatusCode, RawData)> {
+pub async fn get_rawdata_status(con: &TypeOfConnection) -> DTPSR<(http::StatusCode, RawData)> {
     let resp = make_request(con, hyper::Method::GET, b"", None, None).await?;
     // TODO: send more headers
     Ok((resp.status(), interpret_resp(con, resp).await?))
@@ -323,6 +352,7 @@ pub async fn get_rawdata_accept(con: &TypeOfConnection, accept: Option<&str>) ->
     // TODO: send more headers
     interpret_resp(con, resp).await
 }
+
 pub async fn interpret_resp(con: &TypeOfConnection, resp: Response) -> DTPSR<RawData> {
     if resp.status().is_success() {
         let content_type = get_content_type(&resp);
@@ -366,6 +396,13 @@ pub async fn sniff_type_resource(con: &TypeOfConnection) -> DTPSR<TypeOfResource
     }
 }
 
+pub async fn post_json<T>(con: &TypeOfConnection, value: &T) -> DTPSR<DataSaved>
+where
+    T: Serialize,
+{
+    let rd = RawData::encode_as_json(value)?;
+    post_data(con, &rd).await
+}
 pub async fn post_data(con: &TypeOfConnection, rd: &RawData) -> DTPSR<DataSaved> {
     let resp = context!(
         make_request(con, hyper::Method::POST, &rd.content, Some(&rd.content_type), None).await,
@@ -697,8 +734,6 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     for v in headers.get_all("link") {
         let link = LinkHeader::from_header_value(&string_from_header_value(v));
 
-        // debug_with_info!("Link = {link:?}");
-
         let rel = match link.get("rel") {
             None => {
                 continue;
@@ -718,14 +753,17 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
             None
         }
     };
-
+    let content_type = get_content_type(&resp);
     let events_url = get_if_exists(REL_EVENTS_NODATA);
     let events_data_inline_url = get_if_exists(REL_EVENTS_DATA);
     let meta_url = get_if_exists(REL_META);
     let history_url = get_if_exists(REL_HISTORY);
+    let connections_url = get_if_exists(REL_CONNECTIONS);
+    let proxied_url = get_if_exists(REL_PROXIED);
 
+    let base_url = conbase.clone();
     let md = FoundMetadata {
-        base_url: conbase.clone(),
+        base_url,
         alternative_urls,
         events_url,
         answering,
@@ -733,9 +771,10 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
         latency_ns,
         meta_url,
         history_url,
-        content_type: get_content_type(&resp),
+        content_type,
+        proxied_url,
+        connections_url,
     };
-    // info_with_info!("Logging metadata: {md:#?} headers {headers:#?}");
 
     Ok(md)
 }
@@ -751,7 +790,7 @@ pub async fn create_topic(conbase: &TypeOfConnection, topic_name: &TopicName, tr
 
     let add_operation = AddOperation { path, value };
     let operation1 = PatchOperation::Add(add_operation);
-    let patch = json_patch::Patch(vec![operation1]);
+    let patch = Patch(vec![operation1]);
     patch_data(conbase, &patch).await
 }
 
@@ -764,7 +803,7 @@ pub async fn delete_topic(conbase: &TypeOfConnection, topic_name: &TopicName) ->
 
     let remove_operation = RemoveOperation { path };
     let operation1 = PatchOperation::Remove(remove_operation);
-    let patch = json_patch::Patch(vec![operation1]);
+    let patch = Patch(vec![operation1]);
 
     patch_data(conbase, &patch).await
 }
@@ -783,36 +822,131 @@ pub async fn add_proxy(
     node_id: String,
     urls: &[TypeOfConnection],
 ) -> DTPSR<()> {
-    let node_id = node_id.clone();
+    let md = get_metadata(conbase).await?;
+    let url = match md.proxied_url {
+        None => {
+            return not_available!(
+                "cannot add proxy: no proxied url in metadata for {}",
+                conbase.to_string()
+            );
+        }
+        Some(url) => url,
+    };
+
+    let patch = create_add_proxy_patch(mountpoint, node_id, urls)?;
+
+    patch_data(&url, &patch).await
+}
+
+fn create_add_proxy_patch(
+    mountpoint: &TopicName,
+    node_id: String,
+    urls: &[TypeOfConnection],
+) -> Result<Patch, DTPSError> {
     let urls = urls.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     let pj = ProxyJob { node_id, urls };
 
     let mut path: String = String::new();
     path.push('/');
     path.push_str(escape_json_patch(mountpoint.as_dash_sep()).as_str());
-    let value = serde_json::to_value(&pj)?;
+    let value = serde_json::to_value(pj)?;
 
     let add_operation = AddOperation { path, value };
     let operation1 = PatchOperation::Add(add_operation);
     let patch = json_patch::Patch(vec![operation1]);
-    let tn = TopicName::from_dash_sep(TOPIC_PROXIED)?;
-
-    let proxied_topic = conbase.join(tn.as_relative_url())?;
-    patch_data(&proxied_topic, &patch).await
+    Ok(patch)
 }
 
 pub async fn remove_proxy(conbase: &TypeOfConnection, mountpoint: &TopicName) -> DTPSR<()> {
+    let md = get_metadata(conbase).await?;
+    let url = match md.proxied_url {
+        None => {
+            return not_available!(
+                "cannot remove proxy: no proxied url in metadata for {}",
+                conbase.to_string()
+            );
+        }
+        Some(url) => url,
+    };
+
+    let patch = create_remove_proxy_patch(mountpoint);
+
+    patch_data(&url, &patch).await
+}
+
+fn create_remove_proxy_patch(mountpoint: &TopicName) -> Patch {
     let mut path: String = String::new();
     path.push('/');
     path.push_str(escape_json_patch(mountpoint.as_dash_sep()).as_str());
 
     let remove_operation = RemoveOperation { path };
     let operation1 = PatchOperation::Remove(remove_operation);
-    let patch = json_patch::Patch(vec![operation1]);
-    let tn = TopicName::from_dash_sep(TOPIC_PROXIED)?;
+    json_patch::Patch(vec![operation1])
+}
 
-    let proxied_topic = conbase.join(tn.as_relative_url())?;
-    patch_data(&proxied_topic, &patch).await
+pub async fn add_tpt_connection(
+    conbase: &TypeOfConnection,
+    connection_name: &CompositeName,
+    connection_job: &ConnectionJob,
+) -> DTPSR<()> {
+    let md = get_metadata(conbase).await?;
+    let url = match md.connections_url {
+        None => {
+            return not_available!(
+                "cannot remove connection: no connections_url in metadata for {}",
+                conbase.to_string()
+            );
+        }
+        Some(url) => url,
+    };
+
+    let patch = create_add_tpt_connection_patch(connection_name, connection_job)?;
+
+    patch_data(&url, &patch).await
+}
+
+fn create_add_tpt_connection_patch(
+    connection_name: &CompositeName,
+    connection_job: &ConnectionJob,
+) -> Result<Patch, DTPSError> {
+    let mut path: String = String::new();
+    path.push('/');
+    path.push_str(escape_json_patch(connection_name.as_dash_sep()).as_str());
+
+    let wire = connection_job.to_wire();
+    let value = serde_json::to_value(wire)?;
+
+    let add_operation = AddOperation { path, value };
+    let operation1 = PatchOperation::Add(add_operation);
+    let patch = json_patch::Patch(vec![operation1]);
+    Ok(patch)
+}
+
+pub async fn remove_tpt_connection(conbase: &TypeOfConnection, connection_name: &CompositeName) -> DTPSR<()> {
+    let md = get_metadata(conbase).await?;
+    let url = match md.connections_url {
+        None => {
+            return not_available!(
+                "cannot remove connection: no connections_url in metadata for {}",
+                conbase.to_string()
+            );
+        }
+        Some(url) => url,
+    };
+
+    let patch = create_remove_tpt_connection_patch(connection_name);
+
+    patch_data(&url, &patch).await
+}
+
+fn create_remove_tpt_connection_patch(connection_name: &CompositeName) -> Patch {
+    let mut path: String = String::new();
+    path.push('/');
+    path.push_str(escape_json_patch(connection_name.as_dash_sep()).as_str());
+
+    let remove_operation = RemoveOperation { path };
+    let operation1 = PatchOperation::Remove(remove_operation);
+    json_patch::Patch(vec![operation1])
 }
 
 pub async fn patch_data(conbase: &TypeOfConnection, patch: &JsonPatch) -> DTPSR<()> {

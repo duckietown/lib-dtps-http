@@ -15,7 +15,7 @@ from dtps_http import (
     URLString,
 )
 from dtps_http.server import DataSaved
-from dtps_http.structures import DataFromChannel
+from dtps_http import InsertNotification
 from . import logger
 
 __all__ = [
@@ -37,7 +37,7 @@ async def main():
     async for d in client.listen_url_events(
         metadata.events_data_inline_url, raise_on_error=False, inline_data=True, add_silence=None
     ):
-        if isinstance(d, DataFromChannel):
+        if isinstance(d, InsertNotification):
             await client.publish(URL_OUT, d.raw_data)
 
 
@@ -62,7 +62,7 @@ async def on_startup2_mixed(s: DTPSServer) -> None:
     async for d in client.listen_url_events(
         metadata.events_data_inline_url, raise_on_error=False, inline_data=True, add_silence=None
     ):
-        if isinstance(d, DataFromChannel):
+        if isinstance(d, InsertNotification):
             await client.publish(URL_OUT, d.raw_data)
 
     @async_error_catcher

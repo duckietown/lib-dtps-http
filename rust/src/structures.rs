@@ -1,10 +1,10 @@
-use bytes::Bytes;
-use derive_more::Constructor;
 use std::collections::{
     HashMap,
     HashSet,
 };
 
+use bytes::Bytes;
+use derive_more::Constructor;
 use schemars::JsonSchema;
 use serde::{
     Deserialize,
@@ -14,6 +14,7 @@ use serde_cbor::Value as CBORValue;
 
 use crate::{
     divide_in_components,
+    object_queues::InsertNotification,
     Clocks,
     TypeOfConnection,
     DTPSR,
@@ -23,6 +24,12 @@ use crate::{
 pub struct RawData {
     pub content: Bytes,
     pub content_type: String,
+}
+
+impl AsRef<RawData> for RawData {
+    fn as_ref(&self) -> &RawData {
+        &self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -57,14 +64,17 @@ pub struct Chunk {
 pub struct FinishedMsg {
     pub comment: String,
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SilenceMsg {
     pub dt: f32,
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ErrorMsg {
     pub comment: String,
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WarningMsg {
     pub comment: String,
@@ -75,6 +85,7 @@ impl WarningMsg {
         format!("Channel warning: {}", self.comment)
     }
 }
+
 impl ErrorMsg {
     pub fn to_string(&self) -> String {
         format!("Channel error: {}", self.comment)
@@ -86,12 +97,15 @@ impl ErrorMsg {
 /// The user will get one of ListenURLEvents.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum MsgServerToClient {
-    DataReady(DataReady),
     ChannelInfo(ChannelInfo),
+    //
+    DataReady(DataReady),
     Chunk(Chunk),
+    //
     WarningMsg(WarningMsg),
     ErrorMsg(ErrorMsg),
     FinishedMsg(FinishedMsg),
+    //
     SilenceMsg(SilenceMsg),
 }
 
@@ -99,20 +113,14 @@ pub enum MsgServerToClient {
 /// for example, listening to a URL.
 #[derive(Debug, PartialEq, Clone)]
 pub enum ListenURLEvents {
-    DataFromChannel(DataFromChannel),
+    InsertNotification(InsertNotification),
     WarningMsg(WarningMsg),
     ErrorMsg(ErrorMsg),
     FinishedMsg(FinishedMsg),
     SilenceMsg(SilenceMsg),
 }
 
-#[derive(Debug, PartialEq, Clone, Constructor)]
-pub struct DataFromChannel {
-    pub data_ready: DataReady,
-    pub raw_data: RawData,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct DataSaved {
     pub origin_node: String,
     pub unique_id: String,
@@ -139,6 +147,21 @@ pub struct DataReady {
     pub chunks_arriving: usize,
 }
 
+impl DataReady {
+    pub fn as_data_saved(&self) -> DataSaved {
+        DataSaved {
+            origin_node: self.origin_node.clone(),
+            unique_id: self.unique_id.clone(),
+            index: self.sequence,
+            time_inserted: self.time_inserted,
+            clocks: self.clocks.clone(),
+            content_type: self.content_type.clone(),
+            content_length: self.content_length,
+            digest: self.digest.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ResolvedData {
     RawData(RawData),
@@ -153,10 +176,6 @@ pub struct ResourceAvailabilityWire {
     pub available_until: f64,
 }
 
-// #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-// pub struct History {
-//     pub available: HashMap<usize, DataReady>,
-// }
 pub type History = HashMap<usize, DataReady>;
 
 #[derive(Debug, Clone)]
@@ -169,6 +188,9 @@ pub struct FoundMetadata {
     pub events_data_inline_url: Option<TypeOfConnection>,
     pub meta_url: Option<TypeOfConnection>,
     pub history_url: Option<TypeOfConnection>,
+
+    pub connections_url: Option<TypeOfConnection>,
+    pub proxied_url: Option<TypeOfConnection>,
     /// nanoseconds
     pub latency_ns: u128,
     pub content_type: String,
@@ -196,7 +218,7 @@ pub fn make_rel_url(a: &Vec<String>) -> String {
     let mut url = String::new();
     for c in a {
         url.push_str(c);
-        url.push_str("/");
+        url.push('/');
     }
     url
 }

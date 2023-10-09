@@ -64,7 +64,6 @@ use tungstenite::http::{
 use warp::{
     hyper::Body,
     reply::Response,
-    Error,
     Filter,
     Rejection,
 };
@@ -94,6 +93,7 @@ use crate::{
     serve_master_head,
     serve_master_patch,
     serve_master_post,
+    server_state::ConnectionJob,
     show_errors,
     sniff_and_start_proxy,
     types::CompositeName,
@@ -107,6 +107,7 @@ use crate::{
     DataReady,
     DataSaved,
     InsertNotification,
+    ListenURLEvents,
     MsgClientToServer,
     MsgServerToClient,
     ObjectQueue,
@@ -132,7 +133,7 @@ pub struct DTPSServer {
     pub cloudflare_executable: String,
     pub unix_path: Option<String>,
     initial_proxy: HashMap<String, TypeOfConnection>,
-    topic_connections: Vec<TopicConnection>,
+    topic_connections: Vec<ConnectionJob>,
 }
 
 impl DTPSServer {
@@ -142,7 +143,7 @@ impl DTPSServer {
         cloudflare_executable: String,
         unix_path: Option<String>,
         initial_proxy: HashMap<String, TypeOfConnection>,
-        topic_connections: Vec<TopicConnection>,
+        topic_connections: Vec<ConnectionJob>,
         aliases: Vec<TopicAlias>,
     ) -> DTPSR<Self> {
         let mut ss = ServerState::new(None)?;
@@ -180,6 +181,7 @@ impl DTPSServer {
             .and(clone_access.clone())
             .and(warp::header::headers_cloned())
             .and_then(serve_master_get);
+
         let master_route_head = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
             .and(warp::head())
@@ -214,7 +216,7 @@ impl DTPSServer {
                     // debug_with_info!("websocket raw {path1:?} -> {part:?}");
                     Ok(part.to_string())
                 } else {
-                    Err(warp::reject::not_found()) // should be not_available
+                    Err(warp::reject::reject())
                 }
             })
             .and(clone_access.clone())
@@ -444,18 +446,14 @@ impl DTPSServer {
                 indent_all_with(" ", ss.get_advertise_urls().join("\n"))
             );
         }
+
         for (i, con) in self.topic_connections.iter().enumerate() {
             let component_name = TopicName::from_components(&["connections".to_string(), format!("{i}")]);
 
-            let fut = start_connection(
-                ssa.clone(),
-                component_name.clone(),
-                con.source.clone(),
-                con.target.clone(),
-            );
+            let mut ss = self.mutex.lock().await;
 
-            let handle = spawn(show_errors(Some(ssa.clone()), component_name.to_dash_sep(), fut));
-            handles.push(handle);
+            ss.add_topic_to_topic_connection(&component_name, con, ssa.clone())
+                .await?;
         }
 
         Ok(handles)
@@ -526,30 +524,6 @@ impl DTPSServer {
 
         Ok(handle)
     }
-}
-
-pub async fn start_connection(
-    ssa: ServerStateAccess,
-    component_name: TopicName,
-    source: TopicName,
-    target: TopicName,
-) -> DTPSR<()> {
-    let (source, target) = {
-        let mut ss = ssa.lock().await;
-        ss.send_status_notification(&component_name, Status::STARTING, None)?;
-
-        let source = interpret_path(source.as_relative_url(), &hashmap! {}, &None, &ss).await?;
-        let target = interpret_path(target.as_relative_url(), &hashmap! {}, &None, &ss).await?;
-        (source, target)
-    };
-    debug_with_info!("Connecting source {source:?} with {target:?}");
-
-    {
-        let mut ss = ssa.lock().await;
-        ss.send_status_notification(&component_name, Status::STOPPED, None)?;
-    }
-
-    Ok(())
 }
 
 pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> HandlersResponse {
@@ -801,9 +775,25 @@ pub async fn handle_websocket_queue(
             },
         };
         let for_this = {
-            let mut ss = ssa.lock().await;
+            match r {
+                ListenURLEvents::InsertNotification(not) => {
+                    let mut ss = ssa.lock().await;
 
-            get_series_of_messages_for_notification_(send_data, &r, AVAILABILITY_LENGTH_SEC, &mut ss).await
+                    get_series_of_messages_for_notification_(send_data, &not, AVAILABILITY_LENGTH_SEC, &mut ss).await
+                }
+                ListenURLEvents::WarningMsg(m) => {
+                    vec![MsgServerToClient::WarningMsg(m)]
+                }
+                ListenURLEvents::ErrorMsg(m) => {
+                    vec![MsgServerToClient::ErrorMsg(m)]
+                }
+                ListenURLEvents::FinishedMsg(m) => {
+                    vec![MsgServerToClient::FinishedMsg(m)]
+                }
+                ListenURLEvents::SilenceMsg(m) => {
+                    vec![MsgServerToClient::SilenceMsg(m)]
+                }
+            }
         };
         send_as_ws_cbor(&for_this, ws_tx).await?;
     }
@@ -1045,32 +1035,6 @@ pub struct ServerArgs {
 }
 
 #[derive(Debug, Clone)]
-pub struct TopicConnection {
-    pub source: TopicName,
-    pub target: TopicName,
-}
-
-impl TopicConnection {
-    /// Parses a string of the form `a/b -> c/d`
-    pub fn from_string(s: &str) -> DTPSR<Self> {
-        match s.find("->") {
-            None => {
-                invalid_input!("Cannot find -> in string {s:?}")
-            }
-            Some(i) => {
-                // divide in 2
-                let before = s[..i].trim();
-                let after = s[i + "->".len()..].trim();
-                let source = TopicName::from_dash_sep(before)?;
-                let target = TopicName::from_dash_sep(after)?;
-
-                Ok(Self { source, target })
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct TopicAlias {
     pub new: TopicName,
     pub existing: TopicName,
@@ -1137,8 +1101,8 @@ pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {
     let topic_connections = args
         .connect
         .iter()
-        .map(|x| TopicConnection::from_string(x).unwrap())
-        .collect::<Vec<TopicConnection>>();
+        .map(|x| ConnectionJob::from_string(x).unwrap())
+        .collect::<Vec<ConnectionJob>>();
     let aliases = args
         .alias
         .iter()
@@ -1247,7 +1211,7 @@ pub async fn do_receiving(
     }
 }
 
-pub async fn collect_statuses(ssa: ServerStateAccess, mut rx: Receiver<InsertNotification>) -> DTPSR<()> {
+pub async fn collect_statuses(ssa: ServerStateAccess, mut rx: Receiver<ListenURLEvents>) -> DTPSR<()> {
     let mut cur = StatusSummary {
         components: Default::default(),
         comments: Default::default(),
@@ -1260,8 +1224,8 @@ pub async fn collect_statuses(ssa: ServerStateAccess, mut rx: Receiver<InsertNot
         ss.publish_object_as_cbor(&res, &cur, None)?;
     }
     loop {
-        let inot = match rx.recv().await {
-            Ok(inot) => inot,
+        let lue = match rx.recv().await {
+            Ok(lue) => lue,
             Err(e) => match e {
                 RecvError::Closed => {
                     debug_with_info!("collect_statuses: finished collecting");
@@ -1273,33 +1237,42 @@ pub async fn collect_statuses(ssa: ServerStateAccess, mut rx: Receiver<InsertNot
                 }
             },
         };
-        let csn0 = inot.raw_data.interpret::<ComponentStatusNotification>();
 
-        let csn = if let Err(e) = csn0 {
-            error_with_info!("Cannot parse status notification: {:?}", e);
-            continue;
-        } else {
-            csn0.unwrap()
-        };
+        match lue {
+            ListenURLEvents::InsertNotification(inot) => {
+                let csn0 = inot.raw_data.interpret::<ComponentStatusNotification>();
 
-        cur.incorporate(csn);
-        {
-            let mut ss = ssa.lock().await;
-            let r = ss.publish_object_as_cbor(&res, &cur, None);
-            if let Err(e) = r {
-                error_with_info!("Cannot publish status summary: {:?}", e);
-                continue;
-            }
-        }
+                let csn = if let Err(e) = csn0 {
+                    error_with_info!("Cannot parse status notification: {:?}", e);
+                    continue;
+                } else {
+                    csn0.unwrap()
+                };
 
-        {
-            let mut ss = ssa.lock().await;
-            match ss.publish_object_as_cbor(&res, &cur, None) {
-                Ok(_) => {}
-                Err(e) => {
-                    error_with_info!("Cannot publish status summary: {:?}", e);
+                cur.incorporate(csn);
+                {
+                    let mut ss = ssa.lock().await;
+                    let r = ss.publish_object_as_cbor(&res, &cur, None);
+                    if let Err(e) = r {
+                        error_with_info!("Cannot publish status summary: {:?}", e);
+                        continue;
+                    }
+                }
+
+                {
+                    let mut ss = ssa.lock().await;
+                    match ss.publish_object_as_cbor(&res, &cur, None) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            error_with_info!("Cannot publish status summary: {:?}", e);
+                        }
+                    }
                 }
             }
+            ListenURLEvents::WarningMsg(_) => {} // TODO: do something?
+            ListenURLEvents::ErrorMsg(_) => {}
+            ListenURLEvents::FinishedMsg(_) => {}
+            ListenURLEvents::SilenceMsg(_) => {}
         }
     }
 

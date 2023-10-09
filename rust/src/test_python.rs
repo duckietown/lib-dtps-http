@@ -4,6 +4,10 @@ use futures::{
 };
 use tokio::{
     process::Command,
+    sync::broadcast::{
+        error::RecvError,
+        Receiver as BroadcastReceiver,
+    },
     task::JoinHandle,
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -20,7 +24,6 @@ use crate::{
     interpret_resp,
     make_request,
     DTPSError,
-    DataFromChannel,
     FoundMetadata,
     ListenURLEvents,
     TopicName,
@@ -101,50 +104,56 @@ pub async fn check_server(con: &TypeOfConnection) -> DTPSR<()> {
 
     Ok(())
 }
-
-fn check_complete_metadata(md: &FoundMetadata) -> DTPSR<()> {
-    if md.answering.is_none() {
-        return Err(DTPSError::from("answering is None"));
-    }
-    if md.events_url.is_none() {
-        return Err(DTPSError::from("events_url is None"));
-    }
-    if md.events_data_inline_url.is_none() {
-        return Err(DTPSError::from("events_data_inline_url is None"));
-    }
-    if md.meta_url.is_none() {
-        return Err(DTPSError::from("meta is None"));
-    }
-    if md.history_url.is_none() {
-        return Err(DTPSError::from("history_url is None"));
-    }
-    Ok(())
-}
+//
+// fn check_complete_metadata(md: &FoundMetadata) -> DTPSR<()> {
+//     if md.answering.is_none() {
+//         return Err(DTPSError::from("answering is None"));
+//     }
+//     if md.events_url.is_none() {
+//         return Err(DTPSError::from("events_url is None"));
+//     }
+//     if md.events_data_inline_url.is_none() {
+//         return Err(DTPSError::from("events_data_inline_url is None"));
+//     }
+//     if md.meta_url.is_none() {
+//         return Err(DTPSError::from("meta is None"));
+//     }
+//     if md.history_url.is_none() {
+//         return Err(DTPSError::from("history_url is None"));
+//     }
+//     Ok(())
+// }
 
 async fn read_notifications(
     handle: JoinHandle<DTPSR<()>>,
-    mut stream: UnboundedReceiverStream<ListenURLEvents>,
+    mut rx: BroadcastReceiver<ListenURLEvents>,
     nmin: usize,
 ) -> DTPSR<()> {
     let mut i = 0;
     loop {
-        let ne = stream.next().await;
-        match ne {
-            None => {
-                debug_with_info!("finished stream");
-                break;
-            }
-            Some(notification) => {
-                debug_with_info!("clock notification: {:#?}", notification);
+        match rx.recv().await {
+            Ok(x) => {
+                debug_with_info!("clock notification: {:#?}", x);
 
                 i += 1;
             }
-        }
+            Err(e) => {
+                match e {
+                    RecvError::Closed => {
+                        debug_with_info!("finished stream");
+
+                        break;
+                    }
+                    RecvError::Lagged(_) => continue, // TODO: warning
+                }
+            }
+        };
+
         if i >= nmin {
             break;
         }
     }
-    drop(stream);
+    drop(rx);
     handle.await??;
 
     if i < nmin {

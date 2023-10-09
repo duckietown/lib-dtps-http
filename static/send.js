@@ -108,7 +108,7 @@ function subscribeWebSocket(url, fieldId, data_field) {
             i += 1;
 
         } else if ('ChannelInfo' in message0) {
-            console.log("ChannelInfo", message0);
+            // console.log("ChannelInfo", message0);
             let field = document.getElementById(fieldId);
             if (field) {
                 field.textContent = jsyaml.dump(message0);
@@ -116,6 +116,11 @@ function subscribeWebSocket(url, fieldId, data_field) {
 
         } else {
             console.log("unknown message", message0);
+            let field = document.getElementById(fieldId);
+            if (field) {
+                field.textContent = jsyaml.dump(message0);
+            }
+
         }
     });
 

@@ -5,13 +5,16 @@ use std::{
         HashSet,
     },
     env,
+    fmt::Debug,
     future::Future,
     path::{
         Path,
         PathBuf,
     },
-    pin::Pin,
+    str::FromStr,
+    sync::Arc,
 };
+use tokio::sync::Notify;
 
 use anyhow::Context;
 use bytes::Bytes;
@@ -26,6 +29,7 @@ use schemars::{
     JsonSchema,
 };
 use serde::{
+    de::DeserializeOwned,
     Deserialize,
     Serialize,
 };
@@ -35,13 +39,19 @@ use strum_macros::{
 };
 use tokio::{
     sync::{
-        broadcast::Receiver,
+        broadcast::{
+            error::RecvError,
+            Receiver,
+            Receiver as BroadcastReceiver,
+        },
         mpsc,
+        mpsc::UnboundedSender,
     },
     time::sleep,
 };
 
 use crate::{
+    client::wrap_recv,
     compute_best_alternative,
     context,
     debug_with_info,
@@ -53,12 +63,24 @@ use crate::{
     get_random_node_id,
     get_stats,
     info_with_info,
+    internal_assertion,
+    internal_jobs::{
+        InternalJobManager,
+        JobFunctionType,
+    },
     invalid_input,
     is_prefix_of,
     not_available,
     not_implemented,
     not_reachable,
+    shared_statuses::SharedStatusNotification,
+    signals_logic::{
+        GetStream,
+        Pushable,
+    },
+    signals_logic_resolve::interpret_path,
     sniff_type_resource,
+    types::CompositeName,
     warn_with_info,
     Clocks,
     ContentInfo,
@@ -108,11 +130,7 @@ pub struct ProxyJob {
 
 type Proxied = HashMap<String, ProxyJob>;
 
-use crate::internal_jobs::InternalJobManager;
-use std::str::FromStr;
-use tokio::sync::broadcast::error::RecvError;
-
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ServiceMode {
     /// Ignore messages that were produced while we were disconnected
     BestEffort,
@@ -146,7 +164,7 @@ impl ServiceMode {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
-pub struct ConnectionJob {
+pub struct ConnectionJobWire {
     /// Source topic (dash separated)
     pub source: String,
     /// Target topic (dash separated)
@@ -154,7 +172,58 @@ pub struct ConnectionJob {
     pub service_mode: String,
 }
 
-type Connections = HashMap<String, ConnectionJob>;
+#[derive(Debug, Clone)]
+pub struct ConnectionJob {
+    pub source: TopicName,
+    pub target: TopicName,
+    pub service_mode: ServiceMode,
+}
+
+type Connections = HashMap<CompositeName, ConnectionJob>;
+type ConnectionsWire = HashMap<String, ConnectionJobWire>;
+
+impl ConnectionJob {
+    pub fn from_wire(wire: &ConnectionJobWire) -> DTPSR<Self> {
+        let source = TopicName::from_dash_sep(&wire.source)?;
+        let target = TopicName::from_dash_sep(&wire.target)?;
+        let service_mode = ServiceMode::from_str(&wire.service_mode)?;
+        Ok(Self {
+            source,
+            target,
+            service_mode,
+        })
+    }
+
+    pub fn to_wire(&self) -> ConnectionJobWire {
+        ConnectionJobWire {
+            source: self.source.to_dash_sep(),
+            target: self.target.to_dash_sep(),
+            service_mode: self.service_mode.as_str().to_string(),
+        }
+    }
+
+    /// Parses a string of the form `a/b -> c/d`
+    pub fn from_string(s: &str) -> DTPSR<Self> {
+        match s.find("->") {
+            None => {
+                invalid_input!("Cannot find \"->\" in string {s:?}")
+            }
+            Some(i) => {
+                // divide in 2
+                let before = s[..i].trim();
+                let after = s[i + "->".len()..].trim();
+                let source = TopicName::from_dash_sep(before)?;
+                let target = TopicName::from_dash_sep(after)?;
+                let service_mode = ServiceMode::BestEffort;
+                Ok(Self {
+                    source,
+                    target,
+                    service_mode,
+                })
+            }
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LogEntry {
@@ -207,6 +276,7 @@ pub struct SavedBlob {
     // will not be removed until who_needs_it is empty and the deadline has passed
     pub deadline: i64,
 }
+
 #[derive(Debug)]
 pub struct ServerState {
     pub node_started: i64,
@@ -446,13 +516,36 @@ impl ServerState {
             None,
             CONTENT_TYPE_JSON,
             &p,
-            Some(schema_for!(Connections)),
+            Some(schema_for!(ConnectionsWire)),
             Some(1),
         )?;
         ss.publish_json(&TopicName::from_dash_sep(TOPIC_CONNECTIONS)?, "{}", None)?;
 
         Ok(ss)
     }
+    /// Modifies a local queue by applying a function that acts on the deserialized value
+    pub async fn modify_topic<AT, T, F>(&mut self, topic_name: AT, f: F) -> DTPSR<DataSaved>
+    where
+        F: FnOnce(&mut T) -> DTPSR<()>,
+        AT: AsRef<TopicName>,
+        T: Serialize + DeserializeOwned + JsonSchema + Clone + Debug,
+    {
+        let last_insert = match self.get_last_insert(&topic_name)? {
+            Some(x) => x,
+            None => {
+                return Err(DTPSError::Other("Cannot get last insert".to_string()));
+            }
+        };
+        let content_type = last_insert.raw_data.content_type.clone();
+
+        let mut value = last_insert.raw_data.interpret_owned::<T>()?;
+        f(&mut value)?;
+
+        let new_data = RawData::encode_as(&value, &content_type)?;
+        // TODO: add new clocks
+        self.publish_raw_data(topic_name, &new_data, None)
+    }
+
     pub fn add_alias(&mut self, new: &TopicName, existing: &TopicName) {
         // TODO: check for errors
         self.aliases.insert(new.clone(), existing.clone());
@@ -546,6 +639,105 @@ impl ServerState {
         Ok(())
     }
 
+    pub async fn remove_topic_to_topic_connection(
+        &mut self,
+        connection_name: &CompositeName,
+    ) -> DTPSR<SharedStatusNotification> {
+        let x = self.remove_topic_to_topic_connection_(connection_name).await?;
+
+        let connections_name = TopicName::from_dash_sep(TOPIC_CONNECTIONS)?;
+
+        self.modify_topic(connections_name, |connections: &mut ConnectionsWire| {
+            let connection_name = connection_name.to_dash_sep();
+            connections.remove(&connection_name);
+            Ok(())
+        })
+        .await?;
+
+        Ok(x)
+    }
+
+    pub async fn remove_topic_to_topic_connection_(
+        &mut self,
+        connection_name: &CompositeName,
+    ) -> DTPSR<SharedStatusNotification> {
+        let prefix = CompositeName::from_relative_url("connections")?;
+        let job_name = prefix + connection_name.clone();
+        self.job_manager.remove_job(&job_name)
+    }
+
+    pub async fn add_topic_to_topic_connection(
+        &mut self,
+        connection_name: &CompositeName,
+        connection_job: &ConnectionJob,
+        ssa: ServerStateAccess,
+    ) -> DTPSR<SharedStatusNotification> {
+        let x = self
+            .add_topic_to_topic_connection_(connection_name, connection_job, ssa)
+            .await?;
+
+        let connections_name = TopicName::from_dash_sep(TOPIC_CONNECTIONS)?;
+        self.modify_topic(connections_name, |connections: &mut ConnectionsWire| {
+            let connection_name = connection_name.to_dash_sep();
+            let connection = connection_job.to_wire();
+            connections.insert(connection_name, connection);
+            Ok(())
+        })
+        .await?;
+
+        Ok(x)
+    }
+
+    pub async fn add_topic_to_topic_connection_(
+        &mut self,
+        connection_name: &CompositeName,
+        connection_job: &ConnectionJob,
+        ssa: ServerStateAccess,
+    ) -> DTPSR<SharedStatusNotification> {
+        let prefix = CompositeName::from_relative_url("connections")?;
+        let job_name = prefix + connection_name.clone();
+
+        self.start_connection(&job_name, connection_name, connection_job, ssa)
+            .await
+    }
+
+    async fn start_connection(
+        &mut self,
+        job_name: &CompositeName,
+
+        connection_name: &CompositeName,
+        connection_job: &ConnectionJob,
+        ssa: ServerStateAccess,
+    ) -> DTPSR<SharedStatusNotification> {
+        let event = SharedStatusNotification::new(job_name.as_dash_sep());
+        let event_clone = event.clone();
+        let connection_name = connection_name.clone();
+        let connection_job = connection_job.clone();
+
+        let ssa2 = ssa.clone();
+        let connect_job: JobFunctionType = Box::new(move || {
+            let connection_name = connection_name.clone();
+            let connection_job = connection_job.clone();
+            let ssa = ssa.clone();
+            let event_clone = event_clone.clone();
+            Box::pin(async move {
+                let res = run_connection_job(connection_name, connection_job, ssa, event_clone).await;
+                match res {
+                    Ok(_) => {
+                        debug_with_info!("Connection job finished successfully");
+                        Ok(())
+                    }
+                    Err(e) => Err(format!("Connection job finished with error: {:?}", e)),
+                }
+            })
+        });
+
+        self.job_manager
+            .add_job(job_name, "Connection job", connect_job, true, true, 5.0, ssa2)?;
+
+        Ok(event)
+    }
+
     pub fn new_proxy_topic(
         &mut self,
         from_subscription: &TopicName,
@@ -577,12 +769,7 @@ impl ServerState {
         self.update_my_topic()
     }
 
-    pub fn new_filesystem_mount(
-        &mut self,
-        // from_subscription: &String,
-        topic_name: &TopicName,
-        fp: FilePaths,
-    ) -> DTPSR<()> {
+    pub fn new_filesystem_mount(&mut self, topic_name: &TopicName, fp: FilePaths) -> DTPSR<()> {
         if self.local_dirs.contains_key(topic_name) {
             return Err(DTPSError::TopicAlreadyExists(topic_name.to_relative_url()));
         }
@@ -693,6 +880,15 @@ impl ServerState {
         Ok(())
     }
 
+    pub fn publish_raw_data<A: AsRef<TopicName>, B: AsRef<RawData>>(
+        &mut self,
+        topic_name: A,
+        raw_data: B,
+        clocks: Option<Clocks>,
+    ) -> DTPSR<DataSaved> {
+        let rd = raw_data.as_ref();
+        self.publish(topic_name.as_ref(), &rd.content, &rd.content_type, clocks)
+    }
     pub fn publish<B: AsRef<[u8]>, C: AsRef<str>>(
         &mut self,
         topic_name: &TopicName,
@@ -1047,7 +1243,7 @@ impl ServerState {
         TopicsIndexInternal { topics }
     }
 
-    pub fn subscribe_insert_notification(&self, tn: &TopicName) -> DTPSR<Receiver<InsertNotification>> {
+    pub fn subscribe_insert_notification(&self, tn: &TopicName) -> DTPSR<Receiver<ListenURLEvents>> {
         let q = match self.oqs.get(tn) {
             None => {
                 let s = format!("Could not find topic {}", tn.as_dash_sep());
@@ -1058,8 +1254,15 @@ impl ServerState {
         Ok(q.subscribe_insert_notification())
     }
 
-    pub fn get_last_insert(&self, tn: &TopicName) -> DTPSR<Option<InsertNotification>> {
-        let q = self.get_queue(tn)?;
+    pub fn get_last_insert_assert_exists<AT: AsRef<TopicName>>(&self, topic_name: AT) -> DTPSR<InsertNotification> {
+        match self.get_last_insert(topic_name.as_ref())? {
+            None => internal_assertion!("{:?} is empty but it should never be.", topic_name.as_ref()),
+
+            Some(s) => Ok(s),
+        }
+    }
+    pub fn get_last_insert<AT: AsRef<TopicName>>(&self, topic_name: AT) -> DTPSR<Option<InsertNotification>> {
+        let q = self.get_queue(topic_name.as_ref())?;
         match q.stored.last() {
             None => Ok(None),
             Some(index) => {
@@ -1067,7 +1270,9 @@ impl ServerState {
                 let digest = &data_saved.digest;
                 let content = context!(
                     self.get_blob_bytes(digest),
-                    "Error getting blob {digest} for topic {tn:?}",
+                    "Error getting blob {} for topic {:?}",
+                    digest,
+                    topic_name.as_ref().as_dash_sep(),
                 )?;
 
                 Ok(Some(InsertNotification {
@@ -1285,15 +1490,15 @@ pub async fn observe_node_proxy(
     }
 
     let inline_url = md.events_data_inline_url.unwrap().clone();
-    let (_handle, mut stream) = get_events_stream_inline(&inline_url).await;
+    let (_handle, rx) = get_events_stream_inline(&inline_url).await;
 
-    while let Some(lue) = stream.next().await {
+    for_each_from_stream(rx, |lue| async {
         let notification = match lue {
-            ListenURLEvents::DataFromChannel(not) => not,
+            ListenURLEvents::InsertNotification(not) => not,
             ListenURLEvents::WarningMsg(_)
             | ListenURLEvents::ErrorMsg(_)
             | ListenURLEvents::FinishedMsg(_)
-            | ListenURLEvents::SilenceMsg(_) => continue,
+            | ListenURLEvents::SilenceMsg(_) => return Ok(()),
         };
 
         let x0: TopicsIndexWire = serde_cbor::from_slice(&notification.raw_data.content).unwrap();
@@ -1310,6 +1515,32 @@ pub async fn observe_node_proxy(
                 // url.to_string(),
             )?;
         }
+        Ok(())
+    })
+    .await?;
+
+    Ok(())
+}
+
+pub async fn for_each_from_stream<T, F, Fut>(mut rx: BroadcastReceiver<T>, f: F) -> DTPSR<()>
+where
+    T: Clone,
+    F: Fn(T) -> Fut,
+    Fut: Future<Output = DTPSR<()>>,
+{
+    loop {
+        match rx.recv().await {
+            Ok(msg) => f(msg).await?,
+            Err(e) => {
+                match e {
+                    RecvError::Closed => break,
+                    RecvError::Lagged(_) => {
+                        debug_with_info!("lagged");
+                        continue;
+                    }
+                };
+            }
+        };
     }
 
     Ok(())
@@ -1365,4 +1596,80 @@ pub fn absolute_path(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     .clean();
 
     Ok(absolute_path)
+}
+
+async fn run_connection_job(
+    connection_name: CompositeName,
+    connection_job: ConnectionJob,
+    ssa: ServerStateAccess,
+    tx: SharedStatusNotification,
+) -> DTPSR<()> {
+    // TODO: check already exists or not
+    let (source, target) = {
+        let ss = ssa.lock().await;
+
+        let source = interpret_path(connection_job.source.as_relative_url(), &hashmap! {}, &None, &ss).await?;
+        let target = interpret_path(connection_job.target.as_relative_url(), &hashmap! {}, &None, &ss).await?;
+        (source, target)
+    };
+    debug_with_info!(
+        "Connection job: {}: Connecting source:\n{source:#?}\n with\n {target:#?}",
+        connection_name.as_dash_sep()
+    );
+
+    let stream1 = source.get_data_stream("not needed", ssa.clone()).await?;
+    debug_with_info!("Source stream obtained");
+
+    let mut stream1 = match stream1.stream {
+        None => {
+            let s = format!(
+                "Source {source:?} is not available as a stream for connection {}",
+                connection_name.as_dash_sep()
+            );
+            error_with_info!("{}", s);
+            tx.notify(false, &s).await?;
+            return not_available!("{}", s);
+        }
+        Some(x) => x,
+    };
+
+    tx.notify(true, "found source and target").await?;
+    while let Some(x) = wrap_recv(&mut stream1).await {
+        debug_with_info!(
+            "Connection job: {}: Got data {:?} from source {source:?} with {target:?}",
+            connection_name.as_dash_sep(),
+            x
+        );
+
+        match x {
+            ListenURLEvents::InsertNotification(inot) => {
+                target
+                    .push(ssa.clone(), &inot.raw_data, &inot.data_saved.clocks)
+                    .await?;
+            }
+            ListenURLEvents::WarningMsg(_)
+            | ListenURLEvents::ErrorMsg(_)
+            | ListenURLEvents::FinishedMsg(_)
+            | ListenURLEvents::SilenceMsg(_) => {
+                debug_with_info!("ignoring {:?}", x)
+            }
+        }
+
+        // let data = x?;
+        // let data_saved = data.data_saved;
+        // let raw_data = data.raw_data;
+        // let target = target.clone();
+        // let ssa = ssa.clone();
+        // let connection_name = connection_name.clone();
+        // let _ = tokio::spawn(async move {
+        //     let mut ss = ssa.lock().await;
+        //     let _ = ss.publish_raw_data(&target, &raw_data, None);
+        //     let _ = ss.send_status_notification(&connection_name, Status::RUNNING, None);
+        //     Ok(())
+        // });
+    }
+
+    debug_with_info!("Connection job: {}: Source stream ended", connection_name.as_dash_sep());
+
+    Ok(())
 }

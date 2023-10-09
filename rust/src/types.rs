@@ -24,6 +24,7 @@ use serde::{
 
 use crate::{
     divide_in_components,
+    server_state::ConnectionJobWire,
     vec_concat,
     DTPSError,
     DTPSR,
@@ -146,6 +147,11 @@ impl CompositeName {
     pub fn add_prefix(&self, v: &[String]) -> Self {
         let a = vec_concat(v, &self.components);
         Self::from_components(&a)
+    }
+}
+impl AsRef<CompositeName> for CompositeName {
+    fn as_ref(&self) -> &CompositeName {
+        &self
     }
 }
 

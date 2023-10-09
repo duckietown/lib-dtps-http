@@ -2,14 +2,16 @@ use maud::{
     html,
     PreEscaped,
 };
+use serde::Serialize;
 
 use crate::{
     identify_presentation,
-    utils_mime,
+    not_implemented,
     utils_yaml::generate_html_from_cbor,
     ContentPresentation,
     DTPSError,
     RawData,
+    CONTENT_TYPE_JSON,
     DTPSR,
 };
 
@@ -67,6 +69,27 @@ impl RawData {
             ContentPresentation::PlainText | ContentPresentation::Other => {
                 let s = format!("Cannot convert json to {target_content_type}");
                 return DTPSError::other(s);
+            }
+        };
+        Ok(RawData::new(bytes, target_content_type))
+    }
+    pub fn encode_as_json<T>(value: &T) -> DTPSR<Self>
+    where
+        T: Serialize,
+    {
+        Self::encode_as(value, CONTENT_TYPE_JSON)
+    }
+
+    pub fn encode_as<T>(value: &T, target_content_type: &str) -> DTPSR<Self>
+    where
+        T: Serialize,
+    {
+        let bytes = match identify_presentation(target_content_type) {
+            ContentPresentation::CBOR => serde_cbor::to_vec(&value).unwrap(),
+            ContentPresentation::JSON => serde_json::to_vec(&value).unwrap(),
+            ContentPresentation::YAML => serde_yaml::to_string(&value).unwrap().as_bytes().to_vec(),
+            ContentPresentation::PlainText | ContentPresentation::Other => {
+                return not_implemented!("Cannot convert to {target_content_type}");
             }
         };
         Ok(RawData::new(bytes, target_content_type))

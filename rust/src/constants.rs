@@ -11,6 +11,7 @@ pub static HEADER_LINK_BENCHMARK: &str = "x-dtps-link-benchmark";
 pub static HEADER_NODE_ID: &str = "x-dtps-node-id";
 // pub static HEADER_NODE_PASSED_THROUGH: &str = "x-dtps-node-id-passed-through"; // should be Via
 pub static CONTENT_TYPE_OCTET_STREAM: &str = "application/octet-stream";
+pub static CONTENT_TYPE_TEXT_PLAIN: &str = "text/plain";
 pub static TOPIC_LIST_AVAILABILITY: &str = "dtps/availability";
 pub static TOPIC_LIST_CLOCK: &str = "dtps/clock";
 pub static TOPIC_LIST_NAME: &str = "dtps/topic_list";
@@ -30,6 +31,9 @@ pub static CONTENT_TYPE_YAML: &str = "application/yaml";
 pub static EVENTS_SUFFIX: &str = ":events";
 pub static REL_EVENTS_DATA: &str = "dtps-events-inline-data";
 pub static REL_EVENTS_NODATA: &str = "dtps-events";
+
+pub static REL_PROXIED: &str = "dtps-proxied";
+pub static REL_CONNECTIONS: &str = "dtps-connections";
 pub static REL_HISTORY: &str = "dtps-history";
 pub static REL_META: &str = "dtps-meta";
 pub static REL_URL_DEREF: &str = ":deref";

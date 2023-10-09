@@ -141,7 +141,7 @@ fn resolve(
     all_sources: &[(TopicName, TypeOFSource)],
 ) -> DTPSR<TypeOFSource> {
     let mut subtopics: Vec<(TopicName, Vec<String>, Vec<String>, TypeOFSource)> = vec![];
-    let mut subtopics_vec = vec![];
+    // let mut subtopics_vec = vec![];
 
     // if path_components.len() == 0 && ends_with_dash {
     //     p =
@@ -150,7 +150,7 @@ fn resolve(
     // debug_with_info!(" = all_sources =\n{:#?} ", all_sources);
     for (k, source) in all_sources.iter() {
         let topic_components = k.as_components();
-        subtopics_vec.push(topic_components.clone());
+        // subtopics_vec.push(topic_components.clone());
 
         if topic_components.is_empty() {
             continue;
@@ -177,9 +177,14 @@ fn resolve(
 
     // debug_with_info!("subtopics: {subtopics:?}");
     if subtopics.is_empty() {
+        let subtopics_strings: Vec<String> = all_sources
+            .iter()
+            .map(|(x, _)| format!("- \"{}\"\n", x.to_dash_sep()))
+            .collect();
         let s = format!(
-            "Cannot find a matching topic for {:?}.\nMy Topics: {:?}\n",
-            path_components, subtopics_vec
+            "Cannot find a matching topic for {:?}.\nMy Topics:\n{:}",
+            path_components.join("/"),
+            subtopics_strings.join("")
         );
         error_with_info!("{}", s);
         return Err(DTPSError::TopicNotFound(s));

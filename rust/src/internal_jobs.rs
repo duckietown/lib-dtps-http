@@ -9,8 +9,10 @@ use tokio::task::JoinHandle;
 
 use crate::{
     debug_with_info,
+    dtpserror_other,
     error_with_info,
     server_state::Status,
+    shared_statuses::SharedStatusNotification,
     types::CompositeName,
     ServerStateAccess,
     DTPSR,
@@ -20,8 +22,8 @@ pub type JobFunctionType = Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<()
 
 #[derive(Debug)]
 pub struct InternalJob {
-    events: Vec<String>,
     handle: JoinHandle<()>,
+    desc: String,
 }
 
 #[derive(Debug)]
@@ -34,6 +36,39 @@ impl InternalJobManager {
         Self { jobs: HashMap::new() }
     }
 
+    pub fn remove_job(&mut self, name: &CompositeName) -> DTPSR<SharedStatusNotification> {
+        if let Some(job) = self.jobs.remove(name) {
+            job.handle.abort();
+            let desc = format!("job {name:?} [{desc}]", name = name.as_dash_sep(), desc = job.desc)
+                .as_str()
+                .to_string();
+            let event = SharedStatusNotification::new(&desc);
+            let event2 = event.clone();
+            let job_name = name.to_dash_sep();
+            let desc = job.desc.clone();
+            tokio::spawn(async move {
+                match job.handle.await {
+                    Ok(_) => {
+                        debug_with_info!("job {job_name:?} [{desc}] finished OK");
+                        event2.notify(true, "Job finished").await.unwrap();
+                    }
+                    Err(e) => {
+                        error_with_info!("job {job_name:?} [{desc}]  finished with error: {e:?}");
+                        event2.notify(true, "Job finished").await.unwrap();
+                    }
+                }
+            });
+
+            Ok(event)
+        } else {
+            let s = format!(
+                "Job {} not found: known {}",
+                name.as_dash_sep(),
+                self.jobs.keys().map(|x| x.as_dash_sep()).collect::<Vec<_>>().join(", ")
+            );
+            dtpserror_other!("{}", s)
+        }
+    }
     pub fn add_job(
         &mut self,
         name: &CompositeName,
@@ -45,8 +80,6 @@ impl InternalJobManager {
         ssa: ServerStateAccess,
     ) -> DTPSR<()> {
         let desc = desc.to_string();
-        // debug_with_info!("Adding job {}: {desc}", name.as_dash_sep());
-        // let h2 = tokio::spawn(async move {job_function()});
         let desc2 = desc.clone();
         let name2 = name.clone();
         let handle = tokio::spawn(async move {
@@ -69,10 +102,7 @@ impl InternalJobManager {
                 debug_with_info!("job {:?}[{desc2}] finished (no restart)", name2.as_dash_sep());
             }
         });
-        let j = InternalJob {
-            events: Vec::new(),
-            handle,
-        };
+        let j = InternalJob { handle, desc };
         self.jobs.insert(name.clone(), j);
         Ok(())
     }

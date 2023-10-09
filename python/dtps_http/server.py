@@ -49,7 +49,6 @@ from .structures import (
     Chunk,
     Clocks,
     ContentInfo,
-    DataFromChannel,
     DataReady,
     DataSaved,
     is_structure,
@@ -145,7 +144,16 @@ class ObjectQueue:
         self._seq += 1
         digest = obj.digest()
         clocks = self.current_clocks()
-        ds = DataSaved(use_seq, time.time_ns(), digest, obj.content_type, len(obj.content), clocks=clocks)
+        ds = DataSaved(
+            self.tr.origin_node,
+            self.tr.unique_id,
+            use_seq,
+            time.time_ns(),
+            digest,
+            obj.content_type,
+            len(obj.content),
+            clocks=clocks,
+        )
         self._data[digest] = obj
         self.stored.append(use_seq)
         self.saved[use_seq] = ds
@@ -1201,8 +1209,10 @@ pre {{
             async for lue in client.listen_url_events(
                 url, inline_data=use_remote_inline_data, raise_on_error=False, add_silence=None
             ):
+                raise NotImplemented  # FIXME
+
                 if isinstance(lue, DataFromChannel):
-                    dr = lue.data_ready
+                    ds = lue.data_saved
                     urls = [join(url, _.url) for _ in dr.availability]
                     self.digest_to_urls[dr.digest] = urls
                     digesturl = URLString(f"../data/{dr.digest}/")
@@ -1218,22 +1228,20 @@ pre {{
                             for url_string in urls_strings
                         ]
                         chunks_arriving = 0
-                    dr = lue.data_ready
                     dr2 = DataReady(
-                        sequence=dr.sequence,
-                        time_inserted=dr.time_inserted,
-                        digest=dr.digest,
-                        content_type=dr.content_type,
-                        content_length=dr.content_length,
+                        sequence=ds.index,
+                        time_inserted=ds.time_inserted,
+                        digest=ds.digest,
+                        content_type=ds.content_type,
+                        content_length=ds.content_length,
                         availability=availability,
                         chunks_arriving=chunks_arriving,
-                        clocks=dr.clocks,
-                        origin_node=dr.origin_node,
-                        unique_id=dr.unique_id,
+                        clocks=ds.clocks,
+                        origin_node=ds.origin_node,
+                        unique_id=ds.unique_id,
                     )
                     # logger.debug(f"Forwarding {dr} -> {dr2}")
                     await ws.send_json(asdict(dr2))
-                    raise NotImplemented
                     if inline_data:  # FIXME: this is wrong
                         await ws.send_bytes(rd.content)
                 else:

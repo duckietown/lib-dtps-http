@@ -1,13 +1,20 @@
 #![allow(unused_mut)]
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::time::Duration;
 
-    use futures::StreamExt;
-    use json_patch::*;
+    use json_patch::{
+        AddOperation,
+        Patch,
+        PatchOperation,
+        ReplaceOperation,
+    };
     use maplit::hashmap;
-    use rstest::*;
+    use rstest::{
+        fixture,
+        rstest,
+    };
     use schemars::{
         schema_for,
         JsonSchema,
@@ -24,6 +31,7 @@ mod tests {
 
     use crate::{
         add_proxy,
+        add_tpt_connection,
         create_topic,
         debug_with_info,
         delete_topic,
@@ -35,7 +43,10 @@ mod tests {
         patch_data,
         post_data,
         remove_proxy,
+        remove_tpt_connection,
+        server_state::ServiceMode,
         test_python::check_server,
+        ConnectionJob,
         ContentInfo,
         DTPSError,
         DTPSServer,
@@ -51,7 +62,7 @@ mod tests {
         DTPSR,
     };
 
-    struct TestFixture {
+    pub struct TestFixture {
         pub server: DTPSServer,
         pub ssa: ServerStateAccess,
         pub handles: Vec<JoinHandle<()>>,
@@ -69,12 +80,57 @@ mod tests {
     }
 
     #[fixture]
-    async fn instance2() -> TestFixture {
+    pub async fn instance2() -> TestFixture {
         instance().await
     }
 
     #[fixture]
-    async fn instance() -> TestFixture {
+    pub async fn switchboard() -> TestFixture {
+        instance().await
+    }
+
+    #[fixture]
+    pub async fn node1() -> TestFixture {
+        let node1_topic1: TopicName = TopicName::from_dash_sep("topic1").unwrap();
+
+        let t = instance().await;
+        let ssa = t.server.get_lock();
+        let mut ss = ssa.lock().await;
+        ss.new_topic(
+            &node1_topic1,
+            None,
+            CONTENT_TYPE_JSON,
+            &TopicProperties::rw(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        t
+    }
+
+    #[fixture]
+    pub async fn node2() -> TestFixture {
+        let node2_topic2: TopicName = TopicName::from_dash_sep("topic2").unwrap();
+
+        let t = instance().await;
+        let ssa = t.server.get_lock();
+        let mut ss = ssa.lock().await;
+        ss.new_topic(
+            &node2_topic2,
+            None,
+            CONTENT_TYPE_JSON,
+            &TopicProperties::rw(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        t
+    }
+
+    #[fixture]
+    pub async fn instance() -> TestFixture {
         init_logging();
         let mut server = DTPSServer::new(None, None, "cloudflare".to_string(), None, hashmap! {}, vec![], vec![])
             .await
@@ -197,10 +253,10 @@ mod tests {
         let rd = RawData::cbor(data);
         let ds = post_data(&con_original, &rd).await?;
         debug_with_info!("post resulted in {ds:?}");
-        let notification = receiver.next().await.unwrap();
+        let notification = receiver.recv().await.unwrap();
         debug_with_info!("notification: {notification:#?}");
         match notification {
-            ListenURLEvents::DataFromChannel(s) => {
+            ListenURLEvents::InsertNotification(s) => {
                 assert_eq!(rd, s.raw_data);
             }
             ListenURLEvents::WarningMsg(_) => {}
@@ -404,11 +460,14 @@ mod tests {
 
         let status = output.status;
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
         if !status.success() {
             // print stderr if process failed
             error_with_info!("status {status} stderr:\n{stderr}");
 
             return DTPSError::other(format!("child process failed with error {status}:\n{stderr}"));
+        } else {
+            debug_with_info!("status {status} stderr:\n{stderr}\n---\nstdout:\n{stdout}");
         }
 
         instance.finish()?;

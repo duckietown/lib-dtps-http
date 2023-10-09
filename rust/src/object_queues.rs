@@ -8,6 +8,7 @@ use crate::{
     merge_clocks,
     Clocks,
     DataSaved,
+    ListenURLEvents,
     MinMax,
     RawData,
     TopicRefInternal,
@@ -24,10 +25,10 @@ pub struct ObjectQueue {
     pub tr: TopicRefInternal,
     pub max_history: Option<usize>,
 
-    pub tx_notification: broadcast::Sender<InsertNotification>,
+    pub tx_notification: broadcast::Sender<ListenURLEvents>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InsertNotification {
     pub data_saved: DataSaved,
     pub raw_data: RawData,
@@ -125,12 +126,14 @@ impl ObjectQueue {
                 data_saved: saved_data.clone(),
                 raw_data: data.clone(),
             };
-            self.tx_notification.send(notification).unwrap(); // can only fail if there are no receivers
+            self.tx_notification
+                .send(ListenURLEvents::InsertNotification(notification))
+                .unwrap(); // can only fail if there are no receivers
         }
         Ok((data, saved_data, dropped))
     }
 
-    pub fn subscribe_insert_notification(&self) -> broadcast::Receiver<InsertNotification> {
+    pub fn subscribe_insert_notification(&self) -> broadcast::Receiver<ListenURLEvents> {
         self.tx_notification.subscribe()
     }
 

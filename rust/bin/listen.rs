@@ -6,7 +6,10 @@ use std::error;
 use clap::Parser;
 
 use dtps_http::{
-    client::get_events_stream_inline,
+    client::{
+        get_events_stream_inline,
+        wrap_recv,
+    },
     debug_with_info,
     get_metadata,
     init_logging,
@@ -50,7 +53,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 
     let (handle, mut stream) = get_events_stream_inline(&inline_url).await;
 
-    while let Some(msg) = stream.next().await {
+    while let Some(msg) = wrap_recv(&mut stream).await {
         debug_with_info!("msg: {:#?}", msg);
     }
 

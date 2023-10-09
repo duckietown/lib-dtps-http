@@ -1,7 +1,5 @@
 use anyhow::Context;
-
 use async_trait::async_trait;
-
 use futures::StreamExt;
 use json_patch::{
     patch,
@@ -12,10 +10,16 @@ use json_patch::{
 use crate::{
     context,
     debug_with_info,
+    dtpserror_context,
     error_with_info,
+    internal_assertion,
+    invalid_input,
     not_implemented,
     parse_url_ext,
+    server_state::ServerState,
     unescape_json_patch,
+    ConnectionJob,
+    ConnectionJobWire,
     DTPSError,
     Patchable,
     ProxyJob,
@@ -27,22 +31,29 @@ use crate::{
     Transforms,
     TypeOFSource,
     DTPSR,
+    TOPIC_CONNECTIONS,
     TOPIC_PROXIED,
 };
 
 #[async_trait]
 impl Patchable for TypeOFSource {
-    async fn patch(&self, presented_as: &str, ss_mutex: ServerStateAccess, patch: &Patch) -> DTPSR<()> {
+    async fn patch(&self, presented_as: &str, ssa: ServerStateAccess, patch: &Patch) -> DTPSR<()> {
         match self {
             TypeOFSource::ForwardedQueue(_) => {
                 not_implemented!("patch for {self:#?} with {self:?}")
             }
             TypeOFSource::OurQueue(topic_name, ..) => {
-                if topic_name.as_dash_sep() == TOPIC_PROXIED {
-                    patch_proxied(ss_mutex, topic_name, patch).await
-                } else {
-                    patch_our_queue(ss_mutex, patch, topic_name).await
-                }
+                dtpserror_context!(
+                    if topic_name.as_dash_sep() == TOPIC_PROXIED {
+                        patch_proxied(ssa.clone(), topic_name, patch).await
+                    } else if topic_name.as_dash_sep() == TOPIC_CONNECTIONS {
+                        patch_connection(ssa.clone(), topic_name, patch).await
+                    } else {
+                        patch_our_queue(ssa, patch, topic_name).await
+                    },
+                    "cannot patch our queue {} with this patch\n{patch:#?}",
+                    topic_name.as_dash_sep()
+                )
             }
             TypeOFSource::MountedDir(..) => {
                 not_implemented!("patch for {self:#?} with {self:?}")
@@ -50,9 +61,9 @@ impl Patchable for TypeOFSource {
             TypeOFSource::MountedFile { .. } => {
                 not_implemented!("patch for {self:#?} with {self:?}")
             }
-            TypeOFSource::Compose(sc) => patch_composition(ss_mutex, patch, sc).await,
+            TypeOFSource::Compose(sc) => patch_composition(ssa, patch, sc).await,
             TypeOFSource::Transformed(ts_inside, transform) => {
-                patch_transformed(ss_mutex, presented_as, patch, ts_inside, transform).await
+                patch_transformed(ssa, presented_as, patch, ts_inside, transform).await
             }
             TypeOFSource::Digest(..) => {
                 not_implemented!("patch for {self:#?} with {self:?}")
@@ -67,7 +78,7 @@ impl Patchable for TypeOFSource {
                 not_implemented!("patch for {self:#?} with {self:?}")
             }
             TypeOFSource::History(..) => {
-                not_implemented!("patch for {self:#?} with {self:?}")
+                invalid_input!("patch for {self:#?} with {self:?}")
             }
             TypeOFSource::OtherProxied(..) => {
                 not_implemented!("patch for {self:#?} with {self:?}")
@@ -192,21 +203,15 @@ async fn patch_transformed(
     }
 }
 
-async fn patch_our_queue(
-    ss_mutex: ServerStateAccess,
-    // _presented_as: &str,
-    patch: &Patch,
-    topic_name: &TopicName,
-) -> DTPSR<()> {
+async fn patch_our_queue(ssa: ServerStateAccess, patch: &Patch, topic_name: &TopicName) -> DTPSR<()> {
+    let mut ss = ssa.lock().await;
+
     let (data_saved, raw_data) = {
-        let ss = ss_mutex.lock().await;
+        // let ss = ss_mutex.lock().await;
+
         let oq = ss.get_queue(topic_name)?;
-        // todo: if EMPTY...
         if oq.saved.is_empty() {
-            return Err(DTPSError::TopicNotFound(format!(
-                "patch_our_queue: {topic_name:?} is empty",
-                topic_name = topic_name
-            )));
+            return invalid_input!("patch_our_queue: {topic_name:?} is empty");
         }
         let last = oq.stored.last().unwrap();
         let data_saved = oq.saved.get(last).unwrap();
@@ -226,9 +231,6 @@ async fn patch_our_queue(
     let new_content: RawData = RawData::encode_from_json(&x, &data_saved.content_type)?;
     let new_clocks = data_saved.clocks.clone();
 
-    let mut ss = ss_mutex.lock().await;
-
-    // oq.push(&new_content, Some(new_clocks))?;
     let ds = ss.publish(
         topic_name,
         &new_content.content,
@@ -238,7 +240,11 @@ async fn patch_our_queue(
 
     if ds.index != data_saved.index + 1 {
         // should never happen because we have acquired the lock
-        panic!("there were some modifications inside: {ds:?} != {data_saved:?}");
+        return internal_assertion!(
+            "there were some modifications inside ds.index={} data_saved.index={}:\n{ds:#?}\n!=\n{data_saved:#?}",
+            ds.index,
+            data_saved.index
+        );
     }
 
     Ok(())
@@ -247,15 +253,9 @@ async fn patch_our_queue(
 async fn patch_proxied(ss_mutex: ServerStateAccess, topic_name: &TopicName, p: &Patch) -> DTPSR<()> {
     let mut ss = ss_mutex.lock().await;
 
-    let (data_saved, raw_data) = match ss.get_last_insert(topic_name)? {
-        None => {
-            // should not happen
-            panic!("patch_proxied: {topic_name:?} is empty");
-        }
-        Some(s) => (s.data_saved, s.raw_data),
-    };
+    let s = ss.get_last_insert_assert_exists(topic_name)?;
 
-    let x0: serde_json::Value = raw_data.get_as_json()?;
+    let x0: serde_json::Value = s.raw_data.get_as_json()?;
     let mut x = x0.clone();
     // debug_with_info!("patching:\n---{x0:?}---\n{p:?}\n");
     patch(&mut x, p)?;
@@ -298,19 +298,78 @@ async fn patch_proxied(ss_mutex: ServerStateAccess, topic_name: &TopicName, p: &
             }
         }
     }
-    let new_content: RawData = RawData::encode_from_json(&x, &data_saved.content_type)?;
-    let new_clocks = data_saved.clocks.clone();
+    let new_content: RawData = RawData::encode_from_json(&x, &s.data_saved.content_type)?;
+    let new_clocks = s.data_saved.clocks.clone();
 
     let ds = ss.publish(
         topic_name,
         &new_content.content,
-        &data_saved.content_type,
+        &s.data_saved.content_type,
         Some(new_clocks),
     )?;
 
-    if ds.index != data_saved.index + 1 {
-        panic!("there were some modifications inside: {ds:?} != {data_saved:?}");
+    if ds.index != s.data_saved.index + 1 {
+        return internal_assertion!("there were some modifications inside: {ds:?} != {:?}", s.data_saved);
     }
 
+    Ok(())
+}
+
+async fn patch_connection(ssa: ServerStateAccess, topic_name: &TopicName, p: &Patch) -> DTPSR<()> {
+    let mut ss = ssa.lock().await;
+    let s = ss.get_last_insert_assert_exists(topic_name)?;
+    let x0: serde_json::Value = s.raw_data.get_as_json()?;
+    let mut x = x0.clone();
+    // debug_with_info!("patching:\n---{x0:?}---\n{p:?}\n");
+    patch(&mut x, p)?;
+    if x == x0 {
+        debug_with_info!("The patch didn't change anything:\n {p:?}");
+        return Ok(());
+    }
+    if p.0.len() != 1 {
+        return not_implemented!("PATCH operation only allowed of length 1 with {p:?}");
+    }
+    let po = &p.0[0];
+
+    let notification = match po {
+        PatchOperation::Add(ao) => {
+            let pj: ConnectionJobWire = serde_json::from_value(ao.value.clone())?;
+            let pj = ConnectionJob::from_wire(&pj)?;
+            let key = unescape_json_patch(&ao.path)[1..].to_string();
+            let name = TopicName::from_dash_sep(key)?;
+            ss.add_topic_to_topic_connection_(&name, &pj, ssa.clone()).await?
+        }
+        PatchOperation::Remove(ao) => {
+            let key = unescape_json_patch(&ao.path)[1..].to_string();
+            let name = TopicName::from_dash_sep(key)?;
+            ss.remove_topic_to_topic_connection_(&name).await?
+        }
+        PatchOperation::Replace(_) | PatchOperation::Move(_) | PatchOperation::Copy(_) | PatchOperation::Test(_) => {
+            return not_implemented!("PATCH operation invalid with {p:?}");
+        }
+    };
+
+    let new_content: RawData = RawData::encode_from_json(&x, &s.data_saved.content_type)?;
+    let new_clocks = s.data_saved.clocks.clone();
+
+    let ds = ss.publish(
+        topic_name,
+        &new_content.content,
+        &s.data_saved.content_type,
+        Some(new_clocks),
+    )?;
+
+    if ds.index != s.data_saved.index + 1 {
+        return internal_assertion!(
+            "there were some modifications inside ds.index={} data_saved.index={}:\norigin:\n{:#?}\nnew found:\n{:#?}",
+            ds.index,
+            s.data_saved.index,
+            s.data_saved,
+            ds
+        );
+    }
+
+    drop(ss);
+    notification.wait().await?;
     Ok(())
 }
