@@ -36,6 +36,8 @@ html:
   extra_navbar: ""
 
 sphinx:
-  extra_extensions: []
+  extra_extensions:
+    - 'sphinx.ext.autodoc'
+    - 'sphinx.ext.napoleon'
   config:
     intersphinx_mapping: {}

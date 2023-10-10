@@ -27,7 +27,7 @@ pydantic = "^1.10"
 psutil = "^5"
 
 # other dependencies: aiohttp-devtools pre-commit mkdocs mkdocs-material mkdocstrings[python]
-rich = "^13.5.2"
+# rich = "^13.5.2"
 
 
 [tool.poetry.scripts]
