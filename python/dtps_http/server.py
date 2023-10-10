@@ -1,9 +1,11 @@
 import asyncio
 import json
+import pathlib
 import time
 import traceback
 import uuid
 from dataclasses import asdict, replace
+from pprint import pprint
 from typing import Any, Awaitable, Callable, cast, Dict, List, Optional, Sequence, Tuple, Union
 
 import cbor2
@@ -237,6 +239,17 @@ class ForwardedTopic:
     content_info: ContentInfo
 
 
+def get_static_dir() -> str:
+    static_dir = pathlib.Path(__file__).parent.parent / "static"
+    if static_dir.exists():
+        return str(static_dir)
+    static_dir2 = pathlib.Path(__file__).parent.parent.parent / "static"
+    if static_dir2.exists():
+        return str(static_dir2)
+    msg = f"Static directories {static_dir} or {static_dir2} do not exist."
+    raise FileNotFoundError(msg)
+
+
 class DTPSServer:
     node_id: NodeID
 
@@ -246,12 +259,17 @@ class DTPSServer:
     tasks: "list[asyncio.Task[Any]]"
     digest_to_urls: Dict[str, List[URL]]
     node_app_data: Dict[str, bytes]
-    topic_prefix: TopicNameV
+
+    @classmethod
+    def create(
+        cls,
+        on_startup: "Sequence[Callable[[DTPSServer], Awaitable[None]]]" = (),
+    ) -> "DTPSServer":
+        return cls(on_startup=on_startup)
 
     def __init__(
         self,
         *,
-        topics_prefix: TopicNameV,
         on_startup: "Sequence[Callable[[DTPSServer], Awaitable[None]]]" = (),
     ) -> None:
         self.app = web.Application()
@@ -259,7 +277,6 @@ class DTPSServer:
         self.node_app_data = {}
         self.node_started = time.time_ns()
 
-        self.topics_prefix = topics_prefix
         routes = web.RouteTableDef()
         self._more_on_startup = on_startup
         self.app.on_startup.append(self.on_startup)
@@ -274,7 +291,8 @@ class DTPSServer:
         routes.post("/{topic:.*}")(self.serve_post)
         routes.get("/{topic:.*}")(self.serve_get)
         # mount a static directory for the web interface
-        self.app.add_routes([web.static("/static", "./static")])
+
+        self.app.add_routes([web.static("/static", get_static_dir())])
         self.app.add_routes(routes)
 
         self.hub = Hub()
@@ -515,7 +533,7 @@ class DTPSServer:
     def create_root_index(self) -> TopicsIndex:
         topics: Dict[TopicNameV, TopicRef] = {}
         for topic_name, oqs in self._oqs.items():
-            qual_topic_name = self.topics_prefix + topic_name
+            qual_topic_name = topic_name
             reach = TopicReachability(
                 URLString(qual_topic_name.as_relative_url()),
                 self.node_id,
@@ -526,7 +544,7 @@ class DTPSServer:
             topics[qual_topic_name] = topic_ref
 
         for topic_name, fd in self._forwarded.items():
-            qual_topic_name = self.topics_prefix + topic_name
+            qual_topic_name = topic_name
 
             tr = TopicRef(
                 fd.unique_id,
@@ -657,7 +675,7 @@ class DTPSServer:
         cbor = cbor2.dumps(history)
         rd = RawData(cbor, CONTENT_TYPE_TOPIC_HISTORY_CBOR)
         title = f"History for {topic_name_s}"
-        return self.visualize_data(request, title, rd, headers)
+        return self.visualize_data(request, title, rd, headers, is_streamable=False, is_pushable=False)
 
         # return web.Response(body=cbor, content_type=CONTENT_TYPE_TOPIC_HISTORY_CBOR, headers=headers)
 
@@ -687,7 +705,7 @@ class DTPSServer:
         index_wire = index_internal.to_wire()
         rd = RawData(cbor2.dumps(asdict(index_wire)), CONTENT_TYPE_DTPS_INDEX_CBOR)
         title = f"Meta for {topic_name_s}"
-        return self.visualize_data(request, title, rd, headers)
+        return self.visualize_data(request, title, rd, headers, is_streamable=False, is_pushable=False)
 
     #  topics: dict[TopicNameV, TopicRef] = {}
     #  headers_s = "".join(f"{k}: {v}\n" for k, v in request.headers.items())
@@ -774,14 +792,16 @@ class DTPSServer:
     #
     #  return web.Response(body=as_cbor, content_type=CONTENT_TYPE_DTPS_INDEX_CBOR, headers=headers)
 
-    def resolve(self, url: str) -> Source:
+    def resolve(self, url0: str) -> Source:
         after: Optional[str]
-
+        url = url0
         if url and not url.endswith("/"):
             url, _, after = url.rpartition("/")
+            url += "/"
         else:
             after = None
 
+        logger.info(f"resolve({url0!r}) - url: {url!r} after: {after!r}")
         tn = TopicNameV.from_relative_url(url)
         sources = self.iterate_sources()
 
@@ -844,6 +864,8 @@ class DTPSServer:
         add_nocache_headers(headers)
 
         topic_name_s = request.match_info["topic"]
+        # if not topic_name_s.endswith("/"):
+        #     raise web.HTTPNotFound(text=f"Expect URL ending in /", headers=headers)
 
         try:
             source = self.resolve(topic_name_s)
@@ -882,12 +904,24 @@ class DTPSServer:
         else:
             raise AssertionError
 
-        return self.visualize_data(request, title, rd, headers)
+        properties = source.get_properties(self)
+        pprint(properties)
+        return self.visualize_data(
+            request, title, rd, headers, is_streamable=properties.streamable, is_pushable=properties.pushable
+        )
 
-    def make_friendly_visualization(self, title: str, rd: RawData) -> web.StreamResponse:
+    def make_friendly_visualization(
+        self,
+        title: str,  # rd: RawData,
+        initial_data_html: str,
+        *,
+        pushable: bool,
+        initial_push_value: str,
+        initial_push_contenttype: str,
+        streamable: bool,
+    ) -> web.StreamResponse:
         headers: CIMultiDict[str] = CIMultiDict()
 
-        yaml_str = rd.get_as_yaml()
         # language=html
         html_index = f"""
         <html lang="en">
@@ -898,27 +932,71 @@ class DTPSServer:
                 
                 <script src="https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.min.js"></script>
                 <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+                
         </head>
         <body>
         <h1>{title}</h1>
 
         <p>This response coming to you in HTML format because you requested it in HTML format.</p>
 
-        <p>Original content type: <code>{rd.content_type}</code></p>
 
-        <pre id="data_field"><code>{yaml_str}</code></pre>
+        <pre id="data_field"><code>{initial_data_html}</code></pre>
 
         """
+        if pushable:
+            #  @if properties.pushable {
+            #                     h3 {"push to queue"}
+            #
+            #                     textarea id="myTextAreaContentType" { (default_content_type) };
+            #                     textarea id="myTextArea" { (initial_value) };
+            #
+            #                     br;
+            #
+            #                     button id="myButton" { "push" };
+            #                 }
+
+            # language=html
+            html_index += f"""
+            <h3>Push to queue</h3>
+            <textarea id="myTextAreaContentType">{initial_push_contenttype}</textarea>
+            
+            <textarea id="myTextArea">{initial_push_value}</textarea>
+            <br/>
+            <button id="myButton">push</button>
+            """
+
+        if streamable:
+            # language=html
+            html_index += """
+            <p>Streaming is available for this topic.</p>
+            <pre id="result"></pre>
+            """
         return web.Response(body=html_index, content_type="text/html", headers=headers)
 
     def visualize_data(
-        self, request: web.Request, title: str, rd: Union[RawData, NotAvailableYet], headers: CIMultiDict[str]
+        self,
+        request: web.Request,
+        title: str,
+        rd: Union[RawData, NotAvailableYet],
+        headers: CIMultiDict[str],
+        *,
+        is_streamable: bool,
+        is_pushable: bool,
     ) -> web.StreamResponse:
         accept_headers = request.headers.get("accept", "")
+
         accepts_html = "text/html" in accept_headers
         if isinstance(rd, RawData):
             if rd.content_type != "text/html" and accepts_html and is_structure(rd.content_type):
-                return self.make_friendly_visualization(title, rd)
+                initial_data_html = rd.get_as_yaml()
+                return self.make_friendly_visualization(
+                    title,
+                    initial_data_html,
+                    streamable=is_streamable,
+                    pushable=is_pushable,
+                    initial_push_value=initial_data_html,
+                    initial_push_contenttype=rd.content_type,
+                )
             else:
                 return web.Response(body=rd.content, content_type=rd.content_type, headers=headers)
         elif isinstance(rd, NotAvailableYet):
@@ -946,9 +1024,10 @@ pre {{
 </html>
 
                         """
-                return web.Response(body=html_index, content_type="text/html", status=204, headers=headers)
+                return web.Response(body=html_index, content_type="text/html", status=200, headers=headers)
             else:
-                return web.Response(body=None, content_type=None, status=204, headers=headers)
+                body = "204 - No data yet."
+                return web.Response(body=body, content_type="text/plain", status=204, headers=headers)
 
         else:
             raise AssertionError(f"Cannot handle {rd!r}")
@@ -1035,7 +1114,9 @@ pre {{
         topic_name = TopicNameV.from_relative_url(topic_name_s)
         digest = request.match_info["digest"]
         if topic_name not in self._oqs:
-            raise web.HTTPNotFound(headers=headers)
+            msg = f"Cannot resolve topic: {request.url}\ntopic: {topic_name_s!r}"
+            logger.error(msg)
+            raise web.HTTPNotFound(text=msg, headers=headers)
         oq = self._oqs[topic_name]
         data = oq.get(digest)
         # headers[HEADER_SEE_EVENTS] = f"../events/"

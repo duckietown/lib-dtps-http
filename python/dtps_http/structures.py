@@ -31,11 +31,13 @@ __all__ = [
     "RawData",
     "Registration",
     "ResourceAvailability",
+    "SilenceMsg",
     "TopicProperties",
     "TopicReachability",
     "TopicRef",
     "TopicsIndex",
     "TransportData",
+    "WarningMsg",
     "channel_msgs_parse",
     "is_structure",
 ]
@@ -110,6 +112,12 @@ class TopicProperties:
     def streamable_readonly(cls) -> "TopicProperties":
         return TopicProperties(
             streamable=True, pushable=False, readable=True, immutable=False, has_history=True, patchable=False
+        )
+
+    @classmethod
+    def rw_pushable(cls) -> "TopicProperties":
+        return TopicProperties(
+            streamable=True, pushable=True, readable=True, immutable=False, has_history=True, patchable=False
         )
 
 

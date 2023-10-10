@@ -4,7 +4,11 @@ from typing import Dict, Optional, Union, List
 from multidict import CIMultiDict, CIMultiDictProxy
 from pydantic.dataclasses import dataclass
 
-__all__ = ["LinkHeader", "get_link_headers", "put_link_header"]
+__all__ = [
+    "LinkHeader",
+    "get_link_headers",
+    "put_link_header",
+]
 
 
 @dataclass

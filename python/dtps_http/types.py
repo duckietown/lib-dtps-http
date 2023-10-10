@@ -12,8 +12,6 @@ __all__ = [
     "URLString",
 ]
 
-# TopicName = NewType("TopicName", str)
-
 URLString = NewType("URLString", str)
 NodeID = NewType("NodeID", str)
 SourceID = NewType("SourceID", str)
@@ -53,6 +51,8 @@ class TopicNameV:
 
     @classmethod
     def from_dash_sep(cls, s: str) -> "TopicNameV":
+        if not s:
+            return cls.root()
         if s.endswith("/"):
             raise ValueError(f"{s!r} ends with /")
         return cls(tuple(s.split("/")))

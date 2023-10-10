@@ -1,7 +1,7 @@
 # Book settings
 # Learn more at https://jupyterbook.org/customize/config.html
 
-title: BOOK_NAME_HERE
+title: DTPS HTTP libraries
 author: The Duckietown Team
 logo: logo.png
 # Patterns to skip when building the book. Can be glob-style (e.g. "*skip.ipynb")
@@ -23,8 +23,8 @@ bibtex_bibfiles:
 
 # Information about where the book exists on the web
 repository:
-  url: https://github.com/duckietown/BOOK_NAME_HERE
-  path_to_book: src
+  url: https://github.com/duckietown/lib-dtps-http
+  path_to_book: docs
 
 # Add GitHub buttons to your book
 # See https://jupyterbook.org/customize/config.html#add-a-link-to-your-repository
@@ -36,6 +36,7 @@ html:
   extra_navbar: ""
 
 sphinx:
-  extra_extensions: []
+  extra_extensions:
+  - "sphinx.ext.autodoc"
   config:
     intersphinx_mapping: {}
