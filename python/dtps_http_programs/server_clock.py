@@ -9,9 +9,9 @@ from dtps_http import (
     ContentInfo,
     DTPSServer,
     interpret_command_line_and_start,
+    MIME_JSON,
     TopicNameV,
 )
-from dtps_http.constants import MIME_JSON
 from . import logger
 
 __all__ = [
