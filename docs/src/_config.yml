@@ -37,6 +37,7 @@ html:
 
 sphinx:
   extra_extensions:
-  - "sphinx.ext.autodoc"
+    - 'sphinx.ext.autodoc'
+    - 'sphinx.ext.napoleon'
   config:
     intersphinx_mapping: {}
