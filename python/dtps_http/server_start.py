@@ -13,10 +13,10 @@ import psutil
 from aiohttp import web
 
 from . import logger
-from .urls import URLIndexer, parse_url_unescape
 from .server import DTPSServer
 from .structures import Registration
 from .types import TopicNameV
+from .urls import parse_url_unescape, URLIndexer
 
 __all__ = [
     "app_start",
@@ -50,7 +50,8 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[List
     parser.add_argument(
         "--register-namespace",
         default=None,
-        help="Prefix of topics to register on switchboard. E.g. --register-namespace=node  only registers node/*",
+        help="Prefix of topics to register on switchboard. E.g. --register-namespace=node  only registers "
+        "node/*",
     )
 
     parsed = parser.parse_args(args)

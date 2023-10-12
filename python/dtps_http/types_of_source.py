@@ -15,9 +15,8 @@ from .structures import (
     TopicRef,
     TopicsIndex,
 )
-from .urls import get_relative_url
-
 from .types import ContentType, NodeID, SourceID, TopicNameV
+from .urls import get_relative_url
 
 __all__ = [
     "ForwardedQueue",

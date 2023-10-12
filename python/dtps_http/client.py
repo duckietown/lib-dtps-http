@@ -47,7 +47,6 @@ from .constants import (
 from .exceptions import EventListeningNotAvailable
 from .link_headers import get_link_headers
 from .structures import (
-    InsertNotification,
     channel_msgs_parse,
     ChannelInfo,
     Chunk,
@@ -55,6 +54,7 @@ from .structures import (
     ErrorMsg,
     FinishedMsg,
     ForwardingStep,
+    InsertNotification,
     LinkBenchmark,
     ListenURLEvents,
     RawData,
