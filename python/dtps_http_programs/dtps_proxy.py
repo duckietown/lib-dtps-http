@@ -51,7 +51,7 @@ async def go_proxy(args: Optional[List[str]] = None) -> None:
 
     urlbase = parsed.url
     mask_origin = parsed.mask_origin
-    dtps_server = DTPSServer(topics_prefix=TopicNameV.root(), on_startup=[])
+    dtps_server = DTPSServer.create()
 
     t = interpret_command_line_and_start(dtps_server, args)
     server_task = asyncio.create_task(t)

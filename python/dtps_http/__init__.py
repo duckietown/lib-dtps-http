@@ -10,7 +10,6 @@ logger = getLogger(__name__)
 logger.setLevel(DEBUG)
 
 from .client import *
-from .components import *
 from .constants import *
 from .exceptions import *
 from .server import *

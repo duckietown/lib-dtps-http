@@ -47,7 +47,6 @@ from .constants import (
 from .exceptions import EventListeningNotAvailable
 from .link_headers import get_link_headers
 from .structures import (
-    InsertNotification,
     channel_msgs_parse,
     ChannelInfo,
     Chunk,
@@ -55,6 +54,7 @@ from .structures import (
     ErrorMsg,
     FinishedMsg,
     ForwardingStep,
+    InsertNotification,
     LinkBenchmark,
     ListenURLEvents,
     RawData,
@@ -559,6 +559,7 @@ class DTPSClient:
         use_url = None
         try:
             async with self.my_session(url, conn_timeout=2) as (session, use_url):
+                # logger.info(f"get_metadata {url0=!r} {use_url=!r}")
                 async with session.head(use_url) as resp:
                     #  if resp.status == 404:
 
@@ -853,7 +854,7 @@ class DTPSClient:
                             try:
                                 msg = await asyncio.wait_for(ws.receive(), timeout=add_silence)
                             except asyncio.exceptions.TimeoutError:
-                                logger.debug(f"add_silence {add_silence} expired")
+                                # logger.debug(f"add_silence {add_silence} expired")
                                 yield SilenceMsg(add_silence)
                                 continue
                         else:

@@ -8,10 +8,15 @@ parts:
       maxdepth: 2
       numbered: False
       chapters:
-          - file: part_1/index
-          - file: part_1/about
-          - file: part_1/client
-          - file: part_1/client-tutorial
-          - file: part_1/protocol
-          - file: part_1/server
-          - file: part_1/server-tutorial
+#          - file: part_1/index
+#          - file: part_1/about
+#          - file: part_1/client
+#          - file: part_1/client-tutorial
+#          - file: part_1/protocol
+#          - file: part_1/server
+#          - file: part_1/server-tutorial
+          - file: examples/examples
+          - file: examples/pub-sub
+          - file: examples/two-flows
+          - file: code/client
+          - file: code/server

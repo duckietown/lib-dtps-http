@@ -1,10 +1,14 @@
 from dataclasses import field
-from typing import Dict, Optional, Union, List
+from typing import Dict, List, Optional, Union
 
 from multidict import CIMultiDict, CIMultiDictProxy
 from pydantic.dataclasses import dataclass
 
-__all__ = ["LinkHeader", "get_link_headers", "put_link_header"]
+__all__ = [
+    "LinkHeader",
+    "get_link_headers",
+    "put_link_header",
+]
 
 
 @dataclass

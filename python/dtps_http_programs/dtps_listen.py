@@ -4,7 +4,7 @@ import time
 from io import StringIO
 from typing import List, Optional
 
-from rich import print
+from pprint import pprint
 
 from dtps_http import (
     async_error_catcher,
@@ -48,7 +48,7 @@ async def dtps_listen_main_f(
             inline_data=inline_data,
         ):
             io = StringIO()
-            print(d, file=io)
+            pprint(d, stream=io)
             data = io.getvalue().strip()
             logger.info(data)
             if isinstance(d, FinishedMsg):

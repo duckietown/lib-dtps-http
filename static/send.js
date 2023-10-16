@@ -1,57 +1,66 @@
-const button = document.getElementById('myButton');
-const textarea = document.getElementById('myTextArea');
-const textarea_content_type = document.getElementById('myTextAreaContentType');
+document.addEventListener("DOMContentLoaded", function () {
 
+    const button = document.getElementById('myButton');
+    const textarea = document.getElementById('myTextArea');
+    const textarea_content_type = document.getElementById('myTextAreaContentType');
 
-if (button !== null) {
-    button.addEventListener('click', () => {
-        const content_type = textarea_content_type.value;
-        const content_json = jsyaml.load(textarea.value);
-        let data;
-        if (content_type === "application/json") {
-            data = JSON.stringify(content_json);
-        } else if (content_type === "application/cbor") {
-            data = CBOR.encode(content_json);
-        } else if (content_type === "application/yaml") {
-            data = jsyaml.dump(content_json);
+    if (button !== null) {
+        button.addEventListener('click', () => {
+            const content_type = textarea_content_type.value;
+            const content_json = jsyaml.load(textarea.value);
+            let data;
+            if (content_type === "application/json") {
+                data = JSON.stringify(content_json);
+            } else if (content_type === "application/cbor") {
+                data = CBOR.encode(content_json);
+            } else if (content_type === "application/yaml") {
+                data = jsyaml.dump(content_json);
+
+            } else {
+                alert("Unknown content type: " + content_type);
+                return;
+            }
+            // const content_cbor = CBOR.encode(content_json);
+
+            fetch('.', {
+                method: 'POST',
+                headers: {'Content-Type': content_type},
+                body: data
+            })
+                .then(handle_response)
+                .catch(error => console.error('Error:', error));
+        });
+    } else {
+        console.log("no button found");
+    }
+
+    async function handle_response(r) {
+        // r is a promise
+        // await it
+        if (r.ok) {
+            console.log("ok");
 
         } else {
-            alert("Unknown content type: " + content_type);
-            return;
+            console.error(r.statusText);
+            // write the texst
+            let text = await r.text();
+
+            console.error(text);
+
         }
-        // const content_cbor = CBOR.encode(content_json);
-
-        fetch('.', {
-            method: 'POST',
-            headers: {'Content-Type': content_type},
-            body: data
-        })
-            .then(handle_response)
-            .catch(error => console.error('Error:', error));
-    });
-}
-
-async function handle_response(r) {
-    // r is a promise
-    // await it
-    if (r.ok) {
-        console.log("ok");
-
-    } else {
-        console.error(r.statusText);
-        // write the texst
-        let text = await r.text();
-
-        console.error(text);
 
     }
 
-}
+
+});
 
 function subscribeWebSocket(url, fieldId, data_field) {
     // Initialize a new WebSocket connection
     let socket = new WebSocket(url);
     let field = document.getElementById(fieldId);
+
+    let base_url = url.replace("wss://", "https://").replace("ws://", "http://");
+
 
     // Connection opened
     socket.addEventListener('open', function (event) {
@@ -65,10 +74,11 @@ function subscribeWebSocket(url, fieldId, data_field) {
     let i = 0;
     // Listen for messages
     socket.addEventListener('message', async function (event) {
-        console.log('Message from server: ', event);
+        // console.log('Message from server: ', event);
         // Find the field by ID and update its content
 
         let message0 = await convert(event);
+        console.log('Message from server: ', message0);
 
 
         if ('DataReady' in message0) {
@@ -89,9 +99,10 @@ function subscribeWebSocket(url, fieldId, data_field) {
             }
 
             let availability = dr.availability[0].url;
-            // console.log("availability", availability);
+            let use_url = new URL(availability, base_url);
+            console.log("availability", availability, use_url);
             // download from the url
-            let data = await fetch(availability);
+            let data = await fetch(use_url);
             let blob = await data.blob();
             let content_type = data.headers.get('Content-Type');
 

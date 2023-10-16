@@ -12,8 +12,6 @@ __all__ = [
     "URLString",
 ]
 
-# TopicName = NewType("TopicName", str)
-
 URLString = NewType("URLString", str)
 NodeID = NewType("NodeID", str)
 SourceID = NewType("SourceID", str)
@@ -53,9 +51,19 @@ class TopicNameV:
 
     @classmethod
     def from_dash_sep(cls, s: str) -> "TopicNameV":
+        if not s:
+            return cls.root()
         if s.endswith("/"):
             raise ValueError(f"{s!r} ends with /")
         return cls(tuple(s.split("/")))
+
+    @classmethod
+    def from_dash_sep_or_none(cls, s: Optional[str]) -> "TopicNameV":
+        """Like from_dash_sep, but it treats None as root."""
+        if s is None:
+            return cls.root()
+        else:
+            return cls.from_dash_sep(s)
 
     @classmethod
     def from_components(cls, c: Sequence[str], /) -> "TopicNameV":

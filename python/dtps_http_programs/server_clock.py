@@ -9,9 +9,9 @@ from dtps_http import (
     ContentInfo,
     DTPSServer,
     interpret_command_line_and_start,
+    MIME_JSON,
     TopicNameV,
 )
-from dtps_http.constants import MIME_JSON
 from . import logger
 
 __all__ = [
@@ -39,7 +39,7 @@ async def on_clock_startup(s: DTPSServer) -> None:
 
 
 def get_clock_dtps() -> DTPSServer:
-    s = DTPSServer(topics_prefix=TopicNameV.root(), on_startup=[on_clock_startup])
+    s = DTPSServer.create(on_startup=[on_clock_startup])
     return s
 
 

@@ -15,9 +15,10 @@ from .structures import (
     TopicRef,
     TopicsIndex,
 )
+from .types import ContentType, NodeID, SourceID, TopicNameV
 from .urls import get_relative_url
 
-from .types import ContentType, NodeID, SourceID, TopicNameV
+import cbor2, yaml
 
 __all__ = [
     "ForwardedQueue",
@@ -223,9 +224,6 @@ class ForwardedQueue(Source):
                     content_type = ContentType(resp_data.content_type)
                     data = RawData(content_type=content_type, content=data)
                     return data
-
-
-import cbor2, yaml
 
 
 @dataclass

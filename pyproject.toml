@@ -36,7 +36,7 @@ dtps-http-py-server-example-clock = 'dtps_http_programs:clock_main'
 dtps-http-py-client-stats = 'dtps_http_programs:dtps_stats_main'
 dtps-http-py-proxy = 'dtps_http_programs:dtps_proxy_main'
 dtps-http-py-send-continuous = 'dtps_http_programs:dtps_send_continuous_main'
-dtps-http-py-manual-filter = 'dtps_http_programs:dtps_example_manual_filter_main'
+#dtps-http-py-manual-filter = 'dtps_http_programs:dtps_example_manual_filter_main'
 dtps-http-py-listen= 'dtps_http_programs:dtps_listen_main'
 
 
@@ -55,3 +55,6 @@ strict = true
 folders = [
     { path = "src" }
 ]
+
+# [tool.poetry.include]
+# "static/*" = { from = "static", to = "static" }
