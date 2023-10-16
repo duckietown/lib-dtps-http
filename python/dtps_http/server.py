@@ -89,6 +89,12 @@ __all__ = [
 SUB_ID = str
 K_INDEX = "index"
 
+ObjectTransformFunction = Callable[[RawData], RawData]
+
+
+def transform_identity(data: RawData) -> RawData:
+    return data
+
 
 class ObjectQueue:
     stored: List[int]
@@ -101,8 +107,16 @@ class ObjectQueue:
     _sub: Subscriber
     tr: TopicRef
     max_history: Optional[int]
+    transform: ObjectTransformFunction
 
-    def __init__(self, hub: Hub, name: TopicNameV, tr: TopicRef, max_history: Optional[int]):
+    def __init__(
+        self,
+        hub: Hub,
+        name: TopicNameV,
+        tr: TopicRef,
+        max_history: Optional[int],
+        transform: ObjectTransformFunction = transform_identity,
+    ):
         self._hub = hub
         self._pub = Publisher(self._hub, Key())
         self._sub = Subscriber(self._hub, name.as_relative_url())
@@ -113,6 +127,7 @@ class ObjectQueue:
         self.max_history = max_history
         self.stored = []
         self.saved = {}
+        self._transform = transform
 
     def get_channel_info(self) -> ChannelInfo:
         if not self.stored:
@@ -137,11 +152,15 @@ class ObjectQueue:
         self.publish(RawData(data, content_type))
 
     def publish_json(self, obj: object) -> None:
-        """Publish a python object as a cbor2 encoded object."""
+        """Publish a python object as a JSON encoded object."""
         data = json.dumps(obj)
         self.publish(RawData(data.encode(), MIME_JSON))
 
     def publish(self, obj: RawData) -> None:
+        """
+        Publish raw bytes.
+
+        """
         use_seq = self._seq
         self._seq += 1
         digest = obj.digest()
@@ -288,6 +307,7 @@ class DTPSServer:
         routes.get("/{topic:.*}" + REL_URL_HISTORY + "/")(self.serve_history)
 
         routes.get("/{topic:.*}/data/{digest}/")(self.serve_data_get)
+        routes.get("/data/{digest}/")(self.serve_data_get)
         routes.post("/{topic:.*}")(self.serve_post)
         routes.get("/{topic:.*}")(self.serve_get)
         # mount a static directory for the web interface
@@ -707,91 +727,6 @@ class DTPSServer:
         title = f"Meta for {topic_name_s}"
         return self.visualize_data(request, title, rd, headers, is_streamable=False, is_pushable=False)
 
-    #  topics: dict[TopicNameV, TopicRef] = {}
-    #  headers_s = "".join(f"{k}: {v}\n" for k, v in request.headers.items())
-    #  self.logger.debug(f"serve_index: {request.url} \n {headers_s}")
-    #  for topic_name, oqs in self._oqs.items():
-    #      qual_topic_name = self.topics_prefix + topic_name
-    #      reach = TopicReachability(URLString(qual_topic_name.as_relative_url()), self.node_id,
-    #                                forwarders=[], benchmark=LinkBenchmark.identity(), )
-    #      topic_ref = replace(oqs.tr, reachability=[reach])
-    #      topics[qual_topic_name] = topic_ref
-    #
-    #  for topic_name, fd in self._forwarded.items():
-    #      qual_topic_name = self.topics_prefix + topic_name
-    #
-    #      tr = TopicRef(fd.unique_id, fd.origin_node, {}, fd.reachability, properties=fd.properties,
-    #                    created=time.time_ns(), content_info=fd.content_info, )
-    #      topics[qual_topic_name] = tr
-    #
-    #  index_internal = TopicsIndex(topics=topics)
-    #  index_wire = index_internal.to_wire()
-    #
-    #  headers: CIMultiDict[str] = CIMultiDict()
-    #
-    #  add_nocache_headers(headers)
-    #  multidict_update(headers, self.get_headers_alternatives(request))
-    #  self._add_own_headers(headers)
-    #  json_data = asdict(index_wire)
-    #
-    #  json_data["debug-available"] = self.available_urls
-    #
-    #
-    #  get all the accept headers
-    #  accept = []
-    #  for _ in request.headers.getall("accept", []):
-    #      accept.extend(_.split(","))
-    #
-    #  if "application/cbor" not in accept:
-    #      if "text/html" in accept:
-    #          topics_html = "<ul>"
-    #          for topic_name, topic_ref in topics.items():
-    #              topics_html += f"<li><a href='{topic_name.as_relative_url()}'><code>{
-    #              topic_name.as_dash_sep()}</code></a></li>\n"
-    #          topics_html += "</ul>"
-    #
-    #  language=html
-    #          html_index = f"""
-    #          <html lang="en">
-    #          <head>
-    #          <style>
-    #          pre {{
-    #              background-color:
-    # eee;
-    #              padding: 10px;
-    #              border: 1px solid
-    # 999;
-    #              border-radius: 5px;
-    #          }}
-    #          </style>
-    #          <title>DTPS server</title>
-    #          </head>
-    #          <body>
-    #          <h1>DTPS server</h1>
-    #
-    #          <p> This response coming to you in HTML format because you requested it in HTML format.</p>
-    #
-    #          <p>Node ID: <code>{self.node_id}</code></p>
-    #          <p>Node App Data:</p>
-    #          <pre><code>{yaml.dump(self.node_app_data, indent=3)}</code></pre>
-    #
-    #          <h2>Topics</h2>
-    #          {topics_html}
-    #          <h2>Index answer presented in YAML</h2>
-    #          <pre><code>{yaml.dump(json_data, indent=3)}</code></pre>
-    #
-    #
-    #          <h2>Your request headers</h2>
-    #          <pre><code>{headers_s}</code></pre>
-    #          </body>
-    #          </html>
-    #          """
-    #          return web.Response(body=html_index, content_type="text/html", headers=headers)
-    #
-    #  as_cbor = cbor2.dumps(json_data)
-    #
-    #  return web.Response(body=as_cbor, content_type=CONTENT_TYPE_DTPS_INDEX_CBOR, headers=headers)
-
     def resolve(self, url0: str) -> Source:
         after: Optional[str]
         url = url0
@@ -801,7 +736,7 @@ class DTPSServer:
         else:
             after = None
 
-        logger.info(f"resolve({url0!r}) - url: {url!r} after: {after!r}")
+        logger.debug(f"resolve({url0!r}) - url: {url!r} after: {after!r}")
         tn = TopicNameV.from_relative_url(url)
         sources = self.iterate_sources()
 
@@ -825,7 +760,7 @@ class DTPSServer:
                 subtopics.append((k, matched, rest, source))
 
         if not subtopics:
-            raise KeyError(f"Cannot find a matching topic for {url}")
+            raise KeyError(f"Cannot find a matching topic for {url}, {tn=}")
 
         origin_node = self.node_id
         unique_id = get_unique_id(origin_node, tn)
@@ -871,7 +806,7 @@ class DTPSServer:
             source = self.resolve(topic_name_s)
         except KeyError as e:
             logger.error(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {e}")
-            raise web.HTTPNotFound(text=f"{e}", headers=headers) from e
+            raise web.HTTPNotFound(text=f"404\n{e}", headers=headers) from e
 
         multidict_update(headers, self.get_headers_alternatives(request))
         put_meta_headers(headers, source.get_properties(self))
@@ -889,7 +824,12 @@ class DTPSServer:
         title = topic_name_s
         url = topic_name_s
         logger.info(f"url: {topic_name_s!r} source: {source!r}")
-        rs = await source.get_resolved_data(request, url, self)
+        try:
+            rs = await source.get_resolved_data(request, url, self)
+        except KeyError as e:
+            logger.error(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {e}")
+            raise web.HTTPNotFound(text=f"404\n{e}", headers=headers) from e
+
         rd: Union[RawData, NotAvailableYet]
         if isinstance(rs, RawData):
             rd = rs
@@ -944,17 +884,6 @@ class DTPSServer:
 
         """
         if pushable:
-            #  @if properties.pushable {
-            #                     h3 {"push to queue"}
-            #
-            #                     textarea id="myTextAreaContentType" { (default_content_type) };
-            #                     textarea id="myTextArea" { (initial_value) };
-            #
-            #                     br;
-            #
-            #                     button id="myButton" { "push" };
-            #                 }
-
             # language=html
             html_index += f"""
             <h3>Push to queue</h3>
@@ -1110,7 +1039,10 @@ pre {{
         headers: CIMultiDict[str] = CIMultiDict()
         multidict_update(headers, self.get_headers_alternatives(request))
         self._add_own_headers(headers)
-        topic_name_s = request.match_info["topic"] + "/"
+        if "topic" not in request.match_info:
+            topic_name_s = ""
+        else:
+            topic_name_s = request.match_info["topic"] + "/"
         topic_name = TopicNameV.from_relative_url(topic_name_s)
         digest = request.match_info["digest"]
         if topic_name not in self._oqs:

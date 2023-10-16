@@ -16,6 +16,7 @@ __all__ = [
     "HEADER_NO_CACHE",
     "MIME_CBOR",
     "MIME_HTML",
+    "MIME_JPEG",
     "MIME_JSON",
     "MIME_TEXT",
     "MIME_YAML",
@@ -80,3 +81,4 @@ MIME_JSON = ContentType("application/json")
 MIME_YAML = ContentType("application/yaml")
 MIME_TEXT = ContentType("text/plain")
 MIME_HTML = ContentType("text/html")
+MIME_JPEG = ContentType("image/jpeg")

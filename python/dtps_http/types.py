@@ -58,6 +58,14 @@ class TopicNameV:
         return cls(tuple(s.split("/")))
 
     @classmethod
+    def from_dash_sep_or_none(cls, s: Optional[str]) -> "TopicNameV":
+        """Like from_dash_sep, but it treats None as root."""
+        if s is None:
+            return cls.root()
+        else:
+            return cls.from_dash_sep(s)
+
+    @classmethod
     def from_components(cls, c: Sequence[str], /) -> "TopicNameV":
         return cls(tuple(c))
 

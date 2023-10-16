@@ -46,7 +46,7 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[List
     parser.add_argument("--tunnel", required=False, default=None, help="cloudflare credentials")
     parser.add_argument("--advertise", action="append", help="extra advertisement URLS")
     parser.add_argument("--register-switchboard", default=None, help="Switchboard to register to")
-    parser.add_argument("--register-topic", default=None, help="Topic name on which to register.")
+    parser.add_argument("--register-as", default=None, help="Topic name on which to register.")
     parser.add_argument(
         "--register-namespace",
         default=None,
@@ -79,20 +79,17 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[List
     registrations: List[Registration] = []
     if parsed.register_switchboard is not None:
         switchboard_url = URLIndexer(parse_url_unescape(parsed.register_switchboard))
-        if parsed.register_topic is None:
-            msg = "Please specify --register-topic"
+        if parsed.register_as is None:
+            msg = "Please specify --register-as"
             logger.error(msg)
             sys.exit(msg)
 
-        if parsed.register_namespace is None:
-            namespace = TopicNameV.root()
-        else:
-            namespace = TopicNameV.from_dash_sep(parsed.register_namespace)
+        namespace = TopicNameV.from_dash_sep_or_none(parsed.register_namespace)
 
         registrations.append(
             Registration(
                 switchboard_url=switchboard_url,
-                topic=TopicNameV.from_dash_sep(parsed.register_topic),
+                topic=TopicNameV.from_dash_sep(parsed.register_as),
                 namespace=namespace,
             )
         )

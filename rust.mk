@@ -73,5 +73,5 @@ demo-registration-server:
 demo-registration-client:
 	dtps-http-py-server-example-clock --tcp-port 8081 --unix-path /tmp/mine \
 		--register-switchboard http://localhost:9765/ \
-		--register-topic node/node1 \
+		--register-as node/node1 \
 		--register-namespace dtps
