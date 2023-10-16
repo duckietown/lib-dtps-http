@@ -3,7 +3,7 @@ import json
 import time
 import traceback
 import uuid
-from dataclasses import asdict, field, replace
+from dataclasses import asdict, replace
 from typing import Any, Awaitable, Callable, cast, Dict, List, Optional, Sequence, Tuple, Union
 
 import cbor2
@@ -14,6 +14,7 @@ from multidict import CIMultiDict
 from pydantic.dataclasses import dataclass
 
 from . import __version__, logger
+from .client import DTPSClient
 from .constants import (
     CONTENT_TYPE_DTPS_INDEX_CBOR,
     CONTENT_TYPE_TOPIC_HISTORY_CBOR,
@@ -41,6 +42,7 @@ from .constants import (
     TOPIC_STATE_NOTIFICATION,
     TOPIC_STATE_SUMMARY,
 )
+from .link_headers import put_link_header
 from .structures import (
     ChannelInfo,
     ChannelInfoDesc,
@@ -48,11 +50,12 @@ from .structures import (
     Clocks,
     ContentInfo,
     DataReady,
-    History,
+    DataSaved,
     is_structure,
     LinkBenchmark,
     MinMax,
     RawData,
+    Registration,
     ResourceAvailability,
     TopicProperties,
     TopicReachability,
@@ -69,7 +72,7 @@ from .types_of_source import (
     Source,
     SourceComposition,
 )
-from .urls import get_relative_url, join, parse_url_unescape, URL, url_to_string
+from .urls import get_relative_url, join, parse_url_unescape, URL, url_to_string, URLWS
 from .utils import async_error_catcher, multidict_update
 
 SEND_DATA_ARGNAME = "send_data"
@@ -79,19 +82,7 @@ __all__ = [
     "DTPSServer",
     "ForwardedTopic",
     "ObjectQueue",
-    "get_link_headers",
 ]
-
-
-@dataclass
-class DataSaved:
-    index: int
-    time_inserted: int
-    digest: str
-    content_type: ContentType
-    content_length: int
-    clocks: Clocks
-
 
 SUB_ID = str
 K_INDEX = "index"
@@ -153,7 +144,16 @@ class ObjectQueue:
         self._seq += 1
         digest = obj.digest()
         clocks = self.current_clocks()
-        ds = DataSaved(use_seq, time.time_ns(), digest, obj.content_type, len(obj.content), clocks=clocks)
+        ds = DataSaved(
+            self.tr.origin_node,
+            self.tr.unique_id,
+            use_seq,
+            time.time_ns(),
+            digest,
+            obj.content_type,
+            len(obj.content),
+            clocks=clocks,
+        )
         self._data[digest] = obj
         self.stored.append(use_seq)
         self.saved[use_seq] = ds
@@ -188,7 +188,10 @@ class ObjectQueue:
         return self._data[digest]
 
     def subscribe(self, callback: "Callable[[ObjectQueue, int], Awaitable[None]]") -> SUB_ID:
-        wrap_callback = lambda key, msg: callback(self, msg)
+        def wrap_callback(_key: Key, msg: Any):
+            return callback(self, msg)
+
+        # wrap_callback = lambda key, msg: callback(self, msg)
         self._sub.add_async_listener(Key(self._name.as_relative_url(), K_INDEX), wrap_callback)
         # last_used = list(self._sub._listeners)[-1]
         return ""  # TODO
@@ -227,8 +230,8 @@ class ForwardedTopic:
     origin_node: NodeID  # unique id of the node that created the stream
     app_data: Dict[str, bytes]
     forward_url_data: URL
-    forward_url_events: Optional[URL]
-    forward_url_events_inline_data: Optional[URL]
+    forward_url_events: Optional[URLWS]
+    forward_url_events_inline_data: Optional[URLWS]
     reachability: List[TopicReachability]
     properties: TopicProperties
     content_info: ContentInfo
@@ -270,6 +273,8 @@ class DTPSServer:
         routes.get("/{topic:.*}/data/{digest}/")(self.serve_data_get)
         routes.post("/{topic:.*}")(self.serve_post)
         routes.get("/{topic:.*}")(self.serve_get)
+        # mount a static directory for the web interface
+        self.app.add_routes([web.static("/static", "./static")])
         self.app.add_routes(routes)
 
         self.hub = Hub()
@@ -278,7 +283,7 @@ class DTPSServer:
         self.tasks = []
         self.logger = logger
         self.available_urls = []
-        self.node_id = NodeID(str(uuid.uuid4()))
+        self.node_id = NodeID(f"python-{str(uuid.uuid4())[:8]}")
 
         self.digest_to_urls = {}
 
@@ -298,6 +303,12 @@ class DTPSServer:
         wire = index.to_wire()
         as_cbor = cbor2.dumps(asdict(wire))
         self._oqs[ROOT].publish(RawData(as_cbor, CONTENT_TYPE_DTPS_INDEX_CBOR))
+        self.registrations = []
+
+    registrations: List[Registration]
+
+    def add_registrations(self, registrations: Sequence[Registration]) -> None:
+        self.registrations.extend(registrations)
 
     def has_forwarded(self, topic_name: TopicNameV) -> bool:
         return topic_name in self._forwarded
@@ -362,7 +373,7 @@ class DTPSServer:
         self.tasks.append(task)
 
     def _update_lists(self):
-        topics = []
+        topics: List[TopicNameV] = []
         topics.extend(self._oqs.keys())
         topics.extend(self._forwarded.keys())
         self._oqs[TOPIC_LIST].publish_json(sorted([_.as_relative_url() for _ in topics]))
@@ -459,6 +470,42 @@ class DTPSServer:
         for f in self._more_on_startup:
             await f(self)
 
+        for registration in self.registrations:
+            self.remember_task(asyncio.create_task(self._register(registration)))
+
+    @async_error_catcher
+    async def _register(self, r: Registration) -> None:
+        n = 0
+        while True:
+            try:
+                changes = await self._try_register(r)
+
+            except Exception as e:
+                logger.error(f"Error while registering {r}: {e}")
+                await asyncio.sleep(1.0)
+            else:
+                if n == 0:
+                    logger.info(f"Registered as {r.topic.as_dash_sep()} on {r.switchboard_url}")
+                else:
+                    if changes:
+                        logger.info(f"Re-registered as {r.topic.as_dash_sep()} on {r.switchboard_url}")
+
+                n += 1
+                # TODO: just open a websocket connection and see when it closes
+                await asyncio.sleep(10.0)
+
+    @async_error_catcher
+    async def _try_register(self, r: Registration) -> bool:
+        async with DTPSClient.create() as client:
+            # url = parse_url_unescape(r.switchboard_url)
+            if not self.available_urls:
+                msg = f"Cannot register {r} because no available URLs"
+                logger.error(msg)
+                raise ValueError(msg)
+            postfix = r.namespace.as_relative_url()
+            urls = [_ + postfix for _ in self.available_urls]
+            return await client.add_proxy(r.switchboard_url, r.topic, self.node_id, urls)
+
     @async_error_catcher
     async def on_shutdown(self, _: web.Application) -> None:
         self.logger.info("on_shutdown")
@@ -480,9 +527,6 @@ class DTPSServer:
 
         for topic_name, fd in self._forwarded.items():
             qual_topic_name = self.topics_prefix + topic_name
-            #
-            # reach = TopicReachability(URLString(qual_topic_name.as_relative_url()), self.node_id,
-            #                           self.node_id, forwarders=[], benchmark=LinkBenchmark.identity(), )
 
             tr = TopicRef(
                 fd.unique_id,
@@ -554,31 +598,30 @@ class DTPSServer:
                 html_index = f"""
                 <html lang="en">
                 <head>
-                <style>
-                pre {{ 
-                    background-color: #eee;
-                    padding: 10px;
-                    border: 1px solid #999;
-                    border-radius: 5px; 
-                }}
+                <style> 
                 </style>
+                <link rel="stylesheet" href="/static/style.css">
+                
+                <script src="https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.min.js"></script>
+                <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+                <script src="/static/send.js"></script>
                 <title>DTPS server</title>
                 </head>
                 <body>
                 <h1>DTPS server</h1>
-                
+
                 <p> This response coming to you in HTML format because you requested it in HTML format.</p>
-                
+
                 <p>Node ID: <code>{self.node_id}</code></p>
                 <p>Node App Data:</p>
                 <pre><code>{yaml.dump(self.node_app_data, indent=3)}</code></pre>
-                
+
                 <h2>Topics</h2>
                 {topics_html}
                 <h2>Index answer presented in YAML</h2>
                 <pre><code>{yaml.dump(json_data, indent=3)}</code></pre>
-                
-                
+
+
                 <h2>Your request headers</h2>
                 <pre><code>{headers_s}</code></pre>
                 </body>
@@ -592,7 +635,7 @@ class DTPSServer:
 
     @async_error_catcher
     async def serve_history(self, request: web.Request) -> web.StreamResponse:
-        headers = CIMultiDict()
+        headers: CIMultiDict[str] = CIMultiDict()
         # TODO: add nodeid
         topic_name_s = request.match_info["topic"]
         try:
@@ -609,11 +652,9 @@ class DTPSServer:
         for i in oq.stored:
             ds = oq.saved[i]
             a = oq.get_data_ready(ds, presented_as, inline_data=False)
-            history[a.sequence] = a
+            history[a.sequence] = asdict(a)
 
-        hist = History(history)
-
-        cbor = cbor2.dumps(asdict(hist))
+        cbor = cbor2.dumps(history)
         rd = RawData(cbor, CONTENT_TYPE_TOPIC_HISTORY_CBOR)
         title = f"History for {topic_name_s}"
         return self.visualize_data(request, title, rd, headers)
@@ -631,7 +672,7 @@ class DTPSServer:
 
     @async_error_catcher
     async def serve_meta(self, request: web.Request) -> web.StreamResponse:
-        headers = CIMultiDict()
+        headers: CIMultiDict[str] = CIMultiDict()
         # TODO: add nodeid
         topic_name_s = request.match_info["topic"]
         try:
@@ -744,7 +785,7 @@ class DTPSServer:
         tn = TopicNameV.from_relative_url(url)
         sources = self.iterate_sources()
 
-        subtopics: List[Tuple[TopicNameV, List[str], List[str], Source]] = []
+        subtopics: List[Tuple[TopicNameV, Sequence[str], Sequence[str], Source]] = []
 
         for k, source in sources.items():
             if k.is_root() and not tn.is_root():
@@ -847,28 +888,26 @@ class DTPSServer:
         headers: CIMultiDict[str] = CIMultiDict()
 
         yaml_str = rd.get_as_yaml()
+        # language=html
         html_index = f"""
-        <html>
-        <head>
-        <style>
-        pre {{ 
-            background-color: #eee;
-            padding: 10px;
-            border: 1px solid #999;
-            border-radius: 5px; 
-        }}
-        </style>
+        <html lang="en">
+        <head> 
         <title>{title}</title>
+          <link rel="stylesheet" href="/static/style.css">
+                <script src="/static/send.js"></script>
+                
+                <script src="https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.min.js"></script>
+                <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
         </head>
         <body>
         <h1>{title}</h1>
-    
+
         <p>This response coming to you in HTML format because you requested it in HTML format.</p>
-        
+
         <p>Original content type: <code>{rd.content_type}</code></p>
-        
-        <pre><code>{yaml_str}</code></pre>
-     
+
+        <pre id="data_field"><code>{yaml_str}</code></pre>
+
         """
         return web.Response(body=html_index, content_type="text/html", headers=headers)
 
@@ -876,12 +915,6 @@ class DTPSServer:
         self, request: web.Request, title: str, rd: Union[RawData, NotAvailableYet], headers: CIMultiDict[str]
     ) -> web.StreamResponse:
         accept_headers = request.headers.get("accept", "")
-        # headers: CIMultiDict[str] = CIMultiDict()
-        # self._add_own_headers(headers)
-        # put_meta_headers(headers)
-        # add_nocache_headers(headers)
-        # multidict_update(headers, self.get_headers_alternatives(request))
-        # logger.info(f'request headers: {dict(request.headers)}')
         accepts_html = "text/html" in accept_headers
         if isinstance(rd, RawData):
             if rd.content_type != "text/html" and accepts_html and is_structure(rd.content_type):
@@ -890,8 +923,9 @@ class DTPSServer:
                 return web.Response(body=rd.content, content_type=rd.content_type, headers=headers)
         elif isinstance(rd, NotAvailableYet):
             if accepts_html:
+                # language=html
                 html_index = f"""
-<html>
+<html lang="en">
 <head>
 <style>
 pre {{ 
@@ -912,30 +946,12 @@ pre {{
 </html>
 
                         """
-                return web.Response(body=html_index, content_type="text/html", status=209, headers=headers)
+                return web.Response(body=html_index, content_type="text/html", status=204, headers=headers)
             else:
-                return web.Response(body=None, content_type=None, status=209, headers=headers)
+                return web.Response(body=None, content_type=None, status=204, headers=headers)
 
         else:
             raise AssertionError(f"Cannot handle {rd!r}")
-
-    #  headers[HEADER_DATA_UNIQUE_ID] = oq.tr.unique_id
-    #  headers[HEADER_DATA_ORIGIN_NODE_ID] = oq.tr.origin_node
-    #  headers[HEADER_NODE_ID] = self.node_id
-
-    #  try:
-    #      data = oq.last_data()
-    #  except KeyError:
-    #      return web.Response(body=None, headers=headers, status=209)
-    #  209 = no content
-
-    #  lb = LinkBenchmark.identity()
-    #  lb.fill_headers(headers)
-    #
-    #  return web.Response(body=data.content, headers=headers, content_type=data.content_type)
-
-    #
-    # @async_error_catcher
 
     @async_error_catcher
     async def serve_get_proxied(self, request: web.Request, fd: ForwardedTopic) -> web.StreamResponse:
@@ -971,10 +987,10 @@ pre {{
 
                     return response
 
-    def _add_own_headers(self, headers: CIMultiDict) -> None:
+    def _add_own_headers(self, headers: CIMultiDict[str]) -> None:
         # passed_already = headers.get(HEADER_NODE_PASSED_THROUGH, [])
-
-        prevnodeids = headers.getall(HEADER_NODE_ID, [])
+        default: List[str] = []
+        prevnodeids = headers.getall(HEADER_NODE_ID, default)
         if len(prevnodeids) > 1:
             raise ValueError(f"More than one {HEADER_NODE_ID} header found: {prevnodeids}")
 
@@ -984,7 +1000,7 @@ pre {{
         server_string = f"lib-dtps-http/Python/{__version__}"
         HEADER_SERVER = "Server"
 
-        current_server_strings = headers.getall(HEADER_SERVER, [])
+        current_server_strings = headers.getall(HEADER_SERVER, default)
         # logger.info(f'current_server_strings: {current_server_strings} cur = {headers}')
         if HEADER_SERVER not in current_server_strings:
             headers.add(HEADER_SERVER, server_string)
@@ -1000,7 +1016,7 @@ pre {{
         content_type = request.headers.get("Content-Type", "application/octet-stream")
         data = await request.read()
         oq = self.get_oq(topic_name)
-        rd = RawData(data, content_type)
+        rd = RawData(data, ContentType(content_type))
 
         oq.publish(rd)
 
@@ -1043,7 +1059,8 @@ pre {{
             headers: CIMultiDict[str] = CIMultiDict()
 
             self._add_own_headers(headers)
-            raise web.HTTPNotFound(headers=headers)
+            msg = f"Cannot resolve topic: {request.url}\ntopic: {topic_name_s!r}"
+            raise web.HTTPNotFound(text=msg, headers=headers)
 
         logger.info(
             f"serve_events: {topic_name.as_dash_sep()} send_data={send_data} headers={request.headers}"
@@ -1150,12 +1167,13 @@ pre {{
                     if fd.forward_url_events_inline_data is not None:
                         await self.serve_events_forward_simple(ws, fd.forward_url_events_inline_data)
                     else:
-                        await self.serve_events_forwarder_one(ws, True)
+                        raise NotImplementedError  # FIXME: wrong
+                        # await self.serve_events_forwarder_one(ws,  True)
                 else:
                     url = fd.forward_url_events
 
                     await self.serve_events_forwarder_one(ws, url, inline_data)
-            except Exception as e:
+            except:
                 logger.error(f"Exception in serve_events_forwarder_one: {traceback.format_exc()}")
                 await asyncio.sleep(1)
 
@@ -1180,7 +1198,7 @@ pre {{
 
     @async_error_catcher
     async def serve_events_forwarder_one(
-        self, ws: web.WebSocketResponse, url: URL, inline_data: bool
+        self, ws: web.WebSocketResponse, url: URLWS, inline_data: bool
     ) -> None:
         assert isinstance(url, URL)
         use_remote_inline_data = True  # TODO: configurable
@@ -1188,38 +1206,46 @@ pre {{
         from .client import DTPSClient
 
         async with DTPSClient.create() as client:
-            async for dr, rd in client.listen_url_events(url, inline_data=use_remote_inline_data):
-                urls = [join(url, _.url) for _ in dr.availability]
-                self.digest_to_urls[dr.digest] = urls
-                digesturl = URLString(f"../data/{dr.digest}/")
-                urls_strings: List[URLString]
-                urls_strings = [url_to_string(_) for _ in urls] + [digesturl]
-                if inline_data:
-                    availability = []
-                    chunks_arriving = 1
-                else:
-                    availability = [
-                        ResourceAvailability(url=url_string, available_until=time.time() + 60)
-                        for url_string in urls_strings
-                    ]
-                    chunks_arriving = 0
-                dr2 = DataReady(
-                    sequence=dr.sequence,
-                    time_inserted=dr.time_inserted,
-                    digest=dr.digest,
-                    content_type=dr.content_type,
-                    content_length=dr.content_length,
-                    availability=availability,
-                    chunks_arriving=chunks_arriving,
-                    clocks=dr.clocks,
-                    origin_node=dr.origin_node,
-                    unique_id=dr.unique_id,
-                )
-                # logger.debug(f"Forwarding {dr} -> {dr2}")
-                await ws.send_json(asdict(dr2))
+            async for lue in client.listen_url_events(
+                url, inline_data=use_remote_inline_data, raise_on_error=False, add_silence=None
+            ):
+                raise NotImplemented  # FIXME
 
-                if inline_data:
-                    await ws.send_bytes(rd.content)
+                if isinstance(lue, DataFromChannel):
+                    ds = lue.data_saved
+                    urls = [join(url, _.url) for _ in dr.availability]
+                    self.digest_to_urls[dr.digest] = urls
+                    digesturl = URLString(f"../data/{dr.digest}/")
+                    urls_strings: List[URLString]
+                    urls_strings = [url_to_string(_) for _ in urls] + [digesturl]
+                    # TODO: this doesn't work either, we need to save the data
+                    if inline_data:
+                        availability = []
+                        chunks_arriving = 1
+                    else:
+                        availability = [
+                            ResourceAvailability(url=url_string, available_until=time.time() + 60)
+                            for url_string in urls_strings
+                        ]
+                        chunks_arriving = 0
+                    dr2 = DataReady(
+                        sequence=ds.index,
+                        time_inserted=ds.time_inserted,
+                        digest=ds.digest,
+                        content_type=ds.content_type,
+                        content_length=ds.content_length,
+                        availability=availability,
+                        chunks_arriving=chunks_arriving,
+                        clocks=ds.clocks,
+                        origin_node=ds.origin_node,
+                        unique_id=ds.unique_id,
+                    )
+                    # logger.debug(f"Forwarding {dr} -> {dr2}")
+                    await ws.send_json(asdict(dr2))
+                    if inline_data:  # FIXME: this is wrong
+                        await ws.send_bytes(rd.content)
+                else:
+                    await ws.send_json(asdict(lue))
 
 
 def add_nocache_headers(h: CIMultiDict[str]) -> None:
@@ -1246,56 +1272,6 @@ def put_meta_headers(h: CIMultiDict[str], tp: TopicProperties) -> None:
 #
 
 
-def put_link_header(h: CIMultiDict[str], url: str, rel: str, content_type: Optional[str]):
-    l = LinkHeader(url, rel, attributes={"rel": rel})
-    if content_type is not None:
-        l.attributes["type"] = content_type
-
-    h.add("Link", l.to_header())
-
-
-@dataclass
-class LinkHeader:
-    url: str
-    rel: str
-    attributes: Dict[str, str] = field(default_factory=dict)
-
-    def to_header(self) -> str:
-        s = f"<{self.url}>; rel={self.rel}"
-        for k, v in self.attributes.items():
-            s += f"; {k}={v}"
-        return s
-
-    @classmethod
-    def parse(cls, header: str) -> "LinkHeader":
-        pairs = header.split(";")
-        if not pairs:
-            raise ValueError
-        first = pairs[0]
-        if not first.startswith("<") or not first.endswith(">"):
-            raise ValueError
-        url = first[1:-1]
-
-        attributes: Dict[str, str] = {}
-        for p in pairs[1:]:
-            p = p.strip()
-            k, _, v = p.partition("=")
-            k = k.strip()
-            v = v.strip()
-            attributes[k] = v
-
-        rel = attributes.pop("rel", "")
-        return cls(url, rel, attributes)
-
-
-def get_link_headers(h: CIMultiDict[str]) -> Dict[str, LinkHeader]:
-    res: Dict[str, LinkHeader] = {}
-    for l in h.getall("Link", []):
-        lh = LinkHeader.parse(l)
-        res[lh.rel] = lh
-    return res
-
-
 @async_error_catcher
 async def update_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, initial_delay: float) -> None:
     await asyncio.sleep(initial_delay)
@@ -1308,7 +1284,7 @@ async def update_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, i
         await asyncio.sleep(interval)
 
 
-def get_tagged_cbor(ob: dataclass) -> bytes:
+def get_tagged_cbor(ob: Any) -> bytes:
     data = {ob.__class__.__name__: asdict(ob)}
     return cbor2.dumps(data)
 

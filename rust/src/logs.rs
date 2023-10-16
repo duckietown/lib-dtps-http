@@ -1,5 +1,7 @@
-use std::env;
-use std::sync::Once;
+use std::{
+    env,
+    sync::Once,
+};
 
 use crate::built_info;
 
@@ -10,7 +12,7 @@ fn get_exec_name() -> Option<String> {
         .and_then(|s| s.into_string().ok())
 }
 
-pub static DEFAULT_LOG_LEVEL: &'static str = "warn,dtps_http=info";
+pub static DEFAULT_LOG_LEVEL: &str = "warn,dtps_http=info";
 
 pub fn get_id_string() -> String {
     let exec_name = get_exec_name().unwrap_or("unknown".to_string());

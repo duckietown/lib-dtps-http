@@ -1,29 +1,68 @@
+#![allow(unused_mut)]
+
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::time::Duration;
 
-    use futures::StreamExt;
-    use json_patch::*;
-    use log::debug;
-    use maplit::hashmap;
-    use rstest::*;
-    use schemars::{schema_for, JsonSchema};
-    use serde::{Deserialize, Serialize};
-    use serde_json::json;
-    use tokio::task::JoinHandle;
-
-    use crate::test_python::check_server;
-    use crate::{
-        add_proxy, create_topic, delete_topic, get_events_stream_inline, get_rawdata, init_logging,
-        patch_data, post_data, remove_proxy, ContentInfo, RawData, TopicRefAdd, CONTENT_TYPE_CBOR,
-        CONTENT_TYPE_JSON,
+    use json_patch::{
+        AddOperation,
+        Patch,
+        PatchOperation,
+        ReplaceOperation,
     };
+    use maplit::hashmap;
+    use rstest::{
+        fixture,
+        rstest,
+    };
+    use schemars::{
+        schema_for,
+        JsonSchema,
+    };
+    use serde::{
+        Deserialize,
+        Serialize,
+    };
+    use serde_json::json;
+    use tokio::{
+        process::Command,
+        task::JoinHandle,
+    };
+
     use crate::{
-        get_metadata, DTPSServer, ServerStateAccess, TopicName, TopicProperties, TypeOfConnection,
+        add_proxy,
+        add_tpt_connection,
+        create_topic,
+        debug_with_info,
+        delete_topic,
+        error_with_info,
+        get_events_stream_inline,
+        get_metadata,
+        get_rawdata,
+        init_logging,
+        patch_data,
+        post_data,
+        remove_proxy,
+        remove_tpt_connection,
+        server_state::ServiceMode,
+        test_python::check_server,
+        ConnectionJob,
+        ContentInfo,
+        DTPSError,
+        DTPSServer,
+        ListenURLEvents,
+        RawData,
+        ServerStateAccess,
+        TopicName,
+        TopicProperties,
+        TopicRefAdd,
+        TypeOfConnection,
+        CONTENT_TYPE_CBOR,
+        CONTENT_TYPE_JSON,
         DTPSR,
     };
 
-    struct TestFixture {
+    pub struct TestFixture {
         pub server: DTPSServer,
         pub ssa: ServerStateAccess,
         pub handles: Vec<JoinHandle<()>>,
@@ -41,24 +80,61 @@ mod tests {
     }
 
     #[fixture]
-    async fn instance2() -> TestFixture {
+    pub async fn instance2() -> TestFixture {
         instance().await
     }
 
     #[fixture]
-    async fn instance() -> TestFixture {
-        init_logging();
-        let mut server = DTPSServer::new(
+    pub async fn switchboard() -> TestFixture {
+        instance().await
+    }
+
+    #[fixture]
+    pub async fn node1() -> TestFixture {
+        let node1_topic1: TopicName = TopicName::from_dash_sep("topic1").unwrap();
+
+        let t = instance().await;
+        let ssa = t.server.get_lock();
+        let mut ss = ssa.lock().await;
+        ss.new_topic(
+            &node1_topic1,
+            None,
+            CONTENT_TYPE_JSON,
+            &TopicProperties::rw(),
             None,
             None,
-            "cloudflare".to_string(),
-            None,
-            hashmap! {},
-            vec![],
-            vec![],
         )
-        .await
         .unwrap();
+
+        t
+    }
+
+    #[fixture]
+    pub async fn node2() -> TestFixture {
+        let node2_topic2: TopicName = TopicName::from_dash_sep("topic2").unwrap();
+
+        let t = instance().await;
+        let ssa = t.server.get_lock();
+        let mut ss = ssa.lock().await;
+        ss.new_topic(
+            &node2_topic2,
+            None,
+            CONTENT_TYPE_JSON,
+            &TopicProperties::rw(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        t
+    }
+
+    #[fixture]
+    pub async fn instance() -> TestFixture {
+        init_logging();
+        let mut server = DTPSServer::new(None, None, "cloudflare".to_string(), None, hashmap! {}, vec![], vec![])
+            .await
+            .unwrap();
 
         let handles = server.start_serving().await.unwrap();
 
@@ -87,7 +163,7 @@ mod tests {
     async fn check_server_answers(#[future] instance: TestFixture) -> DTPSR<()> {
         let x = check_server(&instance.con).await;
         if let Err(ei) = &x {
-            log::error!("check_server failed:\n{}", ei);
+            error_with_info!("check_server failed:\n{}", ei);
         }
         x
     }
@@ -101,14 +177,7 @@ mod tests {
         {
             let mut ss = instance.ssa.lock().await;
             let topic_name = TopicName::from_dash_sep("a/b")?;
-            ss.new_topic(
-                &topic_name,
-                None,
-                CONTENT_TYPE_CBOR,
-                &TopicProperties::rw(),
-                None,
-                None,
-            )?;
+            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
             for i in 0..10 {
                 ss.publish_object_as_cbor(&topic_name, &i, None)?;
             }
@@ -127,14 +196,7 @@ mod tests {
         {
             let mut ss = instance.ssa.lock().await;
             let topic_name = TopicName::from_dash_sep("a/b")?;
-            ss.new_topic(
-                &topic_name,
-                None,
-                CONTENT_TYPE_CBOR,
-                &TopicProperties::rw(),
-                None,
-                None,
-            )?;
+            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
             for i in 0..10 {
                 let h = hashmap! {"value" => i};
                 ss.publish_object_as_cbor(&topic_name, &h, None)?;
@@ -177,14 +239,7 @@ mod tests {
         {
             let mut ss = instance.ssa.lock().await;
             let topic_name = TopicName::from_dash_sep("a/b")?;
-            ss.new_topic(
-                &topic_name,
-                None,
-                CONTENT_TYPE_CBOR,
-                &TopicProperties::rw(),
-                None,
-                None,
-            )?;
+            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
         }
         let con_original = instance.con.join("a/b/")?;
 
@@ -197,9 +252,18 @@ mod tests {
         let data = serde_cbor::to_vec(&object)?;
         let rd = RawData::cbor(data);
         let ds = post_data(&con_original, &rd).await?;
-        debug!("post resulted in {ds:?}");
-        let notification = receiver.next().await.unwrap();
-        assert_eq!(rd, notification.rd);
+        debug_with_info!("post resulted in {ds:?}");
+        let notification = receiver.recv().await.unwrap();
+        debug_with_info!("notification: {notification:#?}");
+        match notification {
+            ListenURLEvents::InsertNotification(s) => {
+                assert_eq!(rd, s.raw_data);
+            }
+            ListenURLEvents::WarningMsg(_) => {}
+            ListenURLEvents::ErrorMsg(_) => {}
+            ListenURLEvents::FinishedMsg(_) => {}
+            ListenURLEvents::SilenceMsg(_) => {}
+        }
 
         instance.finish()?;
         handle.abort();
@@ -216,14 +280,7 @@ mod tests {
 
         {
             let mut ss = instance.ssa.lock().await;
-            ss.new_topic(
-                &topic_name,
-                None,
-                CONTENT_TYPE_CBOR,
-                &TopicProperties::rw(),
-                None,
-                None,
-            )?;
+            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
         }
         let con_original = instance.con.join(topic_name.as_relative_url())?;
 
@@ -237,27 +294,25 @@ mod tests {
         let data = serde_cbor::to_vec(&object)?;
         let rd = RawData::cbor(data);
         let ds = post_data(&con_original, &rd).await?;
-        debug!("post resulted in {ds:?}");
+        debug_with_info!("post resulted in {ds:?}");
 
         let get_inside = con_original.join("one/0/b/")?;
         let rd2 = get_rawdata(&get_inside).await?;
         let converted: serde_cbor::Value = serde_cbor::from_slice(&rd2.content)?;
 
         let expected = serde_cbor::Value::Integer(42);
-        debug!("Converted {converted:?}");
+        debug_with_info!("Converted {converted:?}");
 
         assert_eq!(expected, converted);
         instance.finish()?;
         Ok(())
     }
 
+    #[allow(unused_mut)]
     #[rstest]
     #[awt]
     #[tokio::test]
-    async fn check_proxy(
-        #[future] instance: TestFixture,
-        #[future] mut instance2: TestFixture,
-    ) -> DTPSR<()> {
+    async fn check_proxy(#[future] instance: TestFixture, #[future] mut instance2: TestFixture) -> DTPSR<()> {
         init_logging();
         let instance = instance;
         let mut instance2 = instance2;
@@ -267,14 +322,7 @@ mod tests {
 
         {
             let mut ss = instance.ssa.lock().await;
-            ss.new_topic(
-                &topic_name,
-                None,
-                CONTENT_TYPE_CBOR,
-                &TopicProperties::rw(),
-                None,
-                None,
-            )?;
+            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
             for i in 0..n {
                 let h = hashmap! {"value" => i};
                 ss.publish_object_as_cbor(&topic_name, &h, None)?;
@@ -287,28 +335,25 @@ mod tests {
 
         let mounted_at = TopicName::from_dash_sep("mounted/here")?;
 
-        instance2
-            .server
-            .add_proxied(&mounted_at, con_original.clone())
-            .await?;
+        instance2.server.add_proxied(&mounted_at, con_original.clone()).await?;
 
         let con_proxied = instance2.con.join(mounted_at.as_relative_url())?;
 
-        debug!("ask metadata for con_original {con_original:#?}");
+        debug_with_info!("ask metadata for con_original {con_original:#?}");
         let md_original = get_metadata(&con_original).await;
-        debug!("ask metadata for con_proxied {con_proxied:#?}");
+        debug_with_info!("ask metadata for con_proxied {con_proxied:#?}");
         let md_proxied = get_metadata(&con_proxied).await;
 
-        debug!("md_original {md_original:#?}");
-        debug!("md_proxied {md_proxied:#?}");
+        debug_with_info!("md_original {md_original:#?}");
+        debug_with_info!("md_proxied {md_proxied:#?}");
 
-        debug!("get data for con_original {con_original:#?}");
+        debug_with_info!("get data for con_original {con_original:#?}");
         let data_original = get_rawdata(&con_original).await?;
-        debug!("get data for con_proxied {con_proxied:#?}");
+        debug_with_info!("get data for con_proxied {con_proxied:#?}");
         let data_proxied = get_rawdata(&con_proxied).await?;
 
-        debug!("data_original {con_original:#} {data_original:#?}");
-        debug!("data_proxied {con_proxied:#} {data_proxied:#?}");
+        debug_with_info!("data_original {con_original:#} {data_original:#?}");
+        debug_with_info!("data_proxied {con_proxied:#} {data_proxied:#?}");
 
         assert_eq!(data_original.content_type, CONTENT_TYPE_CBOR);
         assert_eq!(data_original, data_proxied);
@@ -316,13 +361,115 @@ mod tests {
         // now let's get the value inside
         let con_original_inside = con_original.join("value/")?;
         let con_proxied_inside = con_proxied.join("value/")?;
-        debug!("get data for con_original_inside {con_original_inside:#?}");
+        debug_with_info!("get data for con_original_inside {con_original_inside:#?}");
         let inside_original = get_rawdata(&con_original_inside).await?;
-        debug!("get data for con_proxied_inside {con_proxied_inside:#?}");
+        debug_with_info!("get data for con_proxied_inside {con_proxied_inside:#?}");
         let inside_proxied = get_rawdata(&con_proxied_inside).await?;
         assert_eq!(inside_original, inside_proxied);
         let i: i64 = serde_cbor::from_slice(&inside_original.content)?;
         assert_eq!(i, n - 1);
+        instance.finish()?;
+        instance2.finish()?;
+        Ok(())
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_websocket_01_root(#[future] instance: TestFixture, #[future] instance2: TestFixture) -> DTPSR<()> {
+        check_proxy_websocket(instance, instance2, "").await
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_websocket_02_root_deref(
+        #[future] instance: TestFixture,
+        #[future] instance2: TestFixture,
+    ) -> DTPSR<()> {
+        check_proxy_websocket(instance, instance2, ":deref/").await
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_websocket_03_mounted(
+        #[future] instance: TestFixture,
+        #[future] instance2: TestFixture,
+    ) -> DTPSR<()> {
+        check_proxy_websocket(instance, instance2, "mounted/").await
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_websocket_04_mounted_dtps_clock(
+        #[future] instance: TestFixture,
+        #[future] instance2: TestFixture,
+    ) -> DTPSR<()> {
+        check_proxy_websocket(instance, instance2, "mounted/dtps/clock/").await
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_websocket_05_dtps_clock(
+        #[future] instance: TestFixture,
+        #[future] instance2: TestFixture,
+    ) -> DTPSR<()> {
+        check_proxy_websocket(instance, instance2, "dtps/clock/").await
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_websocket_06_dtps(#[future] instance: TestFixture, #[future] instance2: TestFixture) -> DTPSR<()> {
+        check_proxy_websocket(instance, instance2, "dtps/").await
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_websocket_04_mounted_dtps(
+        #[future] instance: TestFixture,
+        #[future] instance2: TestFixture,
+    ) -> DTPSR<()> {
+        check_proxy_websocket(instance, instance2, "mounted/dtps/").await
+    }
+
+    async fn check_proxy_websocket(instance: TestFixture, mut instance2: TestFixture, path: &str) -> DTPSR<()> {
+        init_logging();
+
+        let mounted_at = TopicName::from_dash_sep("mounted")?;
+        instance2.server.add_proxied(&mounted_at, instance.con.clone()).await?;
+        let url = instance2.con.to_string();
+        let url = format!("{url}{path}");
+        let cmd = vec![
+            "dtps-http-py-listen",
+            "--max-time",
+            "5",
+            "--max-messages",
+            "5",
+            "--raise-on-error",
+            "--url",
+            url.as_str(),
+        ];
+
+        // create process given by command above
+        let output = Command::new(cmd[0]).args(&cmd[1..]).output().await?;
+
+        let status = output.status;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if !status.success() {
+            // print stderr if process failed
+            error_with_info!("status {status} stderr:\n{stderr}");
+
+            return DTPSError::other(format!("child process failed with error {status}:\n{stderr}"));
+        } else {
+            debug_with_info!("status {status} stderr:\n{stderr}\n---\nstdout:\n{stdout}");
+        }
+
         instance.finish()?;
         instance2.finish()?;
         Ok(())
@@ -338,14 +485,7 @@ mod tests {
 
         {
             let mut ss = instance.ssa.lock().await;
-            ss.new_topic(
-                &topic_name,
-                None,
-                CONTENT_TYPE_CBOR,
-                &TopicProperties::rw(),
-                None,
-                None,
-            )?;
+            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
             let h = hashmap! {"value" => "initial"};
             ss.publish_object_as_cbor(&topic_name, &h, None)?;
         }
@@ -357,7 +497,7 @@ mod tests {
             value: serde_json::Value::String("new".to_string()),
         };
         let operation = PatchOperation::Replace(replace);
-        let patch = json_patch::Patch(vec![operation]);
+        let patch = Patch(vec![operation]);
         patch_data(&con_original, &patch).await?;
 
         // now test something that should fail
@@ -366,10 +506,8 @@ mod tests {
             value: serde_json::Value::String("new".to_string()),
         };
         let operation = PatchOperation::Replace(replace);
-        let patch = json_patch::Patch(vec![operation]);
-        patch_data(&con_original, &patch)
-            .await
-            .expect_err("should fail");
+        let patch = Patch(vec![operation]);
+        patch_data(&con_original, &patch).await.expect_err("should fail");
 
         // now let's see if we can replace entirely
 
@@ -378,7 +516,7 @@ mod tests {
             value: json!({"A": {"B": ["C", "D"]}}),
         };
         let operation = PatchOperation::Replace(replace);
-        let patch = json_patch::Patch(vec![operation]);
+        let patch = Patch(vec![operation]);
         patch_data(&con_original, &patch).await?;
 
         // now check the addressing
@@ -393,7 +531,7 @@ mod tests {
         };
         let operation1 = PatchOperation::Add(add_operation1);
         let operation2 = PatchOperation::Add(add_operation2);
-        let patch = json_patch::Patch(vec![operation1, operation2]);
+        let patch = Patch(vec![operation1, operation2]);
         patch_data(&b_address, &patch).await?;
 
         instance.finish()?;
@@ -448,17 +586,13 @@ mod tests {
         // first time ok
         delete_topic(&instance.con, &topic_name).await?;
         // second time should fail
-        delete_topic(&instance.con, &topic_name)
-            .await
-            .expect_err("should fail");
+        delete_topic(&instance.con, &topic_name).await.expect_err("should fail");
 
         let topic_name = TopicName::root();
         create_topic(&instance.con, &topic_name, &tr)
             .await
             .expect_err("should fail");
-        delete_topic(&instance.con, &topic_name)
-            .await
-            .expect_err("should fail");
+        delete_topic(&instance.con, &topic_name).await.expect_err("should fail");
 
         instance.finish()?;
         Ok(())
@@ -467,10 +601,7 @@ mod tests {
     #[rstest]
     #[awt]
     #[tokio::test]
-    async fn check_proxy_manual(
-        #[future] instance: TestFixture,
-        #[future] mut instance2: TestFixture,
-    ) -> DTPSR<()> {
+    async fn check_proxy_manual(#[future] instance: TestFixture, #[future] mut instance2: TestFixture) -> DTPSR<()> {
         init_logging();
         let instance = instance;
         let mut instance2 = instance2;
@@ -480,14 +611,7 @@ mod tests {
 
         {
             let mut ss = instance.ssa.lock().await;
-            ss.new_topic(
-                &topic_name,
-                None,
-                CONTENT_TYPE_CBOR,
-                &TopicProperties::rw(),
-                None,
-                None,
-            )?;
+            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
             for i in 0..n {
                 let h = hashmap! {"value" => i};
                 ss.publish_object_as_cbor(&topic_name, &h, None)?;
@@ -496,13 +620,15 @@ mod tests {
 
         let mounted_at = TopicName::from_dash_sep("mounted/here")?;
 
-        add_proxy(&instance2.con, &mounted_at, &instance.con).await?;
-        add_proxy(&instance2.con, &mounted_at, &instance.con).await?;
+        let node_id = instance.server.get_node_id().await;
+        let urls = vec![instance.con.clone()];
+        add_proxy(&instance2.con, &mounted_at, node_id.clone(), &urls).await?;
+        add_proxy(&instance2.con, &mounted_at, node_id.clone(), &urls).await?;
         // sleep 5 seconds
         tokio::time::sleep(Duration::from_millis(2000)).await;
 
         let con_proxied = instance2.con.join(mounted_at.as_relative_url())?;
-        let rd = get_rawdata(&con_proxied).await?;
+        let _rd = get_rawdata(&con_proxied).await?;
 
         remove_proxy(&instance2.con, &mounted_at).await?;
 

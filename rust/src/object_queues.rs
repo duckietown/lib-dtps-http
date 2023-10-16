@@ -1,16 +1,18 @@
 use std::collections::HashMap;
 
-use bytes::Bytes;
 use chrono::Local;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use sha256::digest;
+
 use tokio::sync::broadcast;
 
-use crate::TopicRefInternal;
 use crate::{
-    identify_presentation, merge_clocks, Clocks, ContentPresentation, DTPSError, DataSaved, MinMax,
-    RawData, CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, DTPSR,
+    merge_clocks,
+    Clocks,
+    DataSaved,
+    ListenURLEvents,
+    MinMax,
+    RawData,
+    TopicRefInternal,
+    DTPSR,
 };
 
 #[derive(Debug)]
@@ -23,10 +25,10 @@ pub struct ObjectQueue {
     pub tr: TopicRefInternal,
     pub max_history: Option<usize>,
 
-    pub tx_notification: broadcast::Sender<InsertNotification>,
+    pub tx_notification: broadcast::Sender<ListenURLEvents>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InsertNotification {
     pub data_saved: DataSaved,
     pub raw_data: RawData,
@@ -100,8 +102,8 @@ impl ObjectQueue {
             unique_id: self.tr.unique_id.clone(),
             index: this_seq,
             time_inserted: now,
-            clocks: clocks.clone(),
-            digest: digest.clone(),
+            clocks,
+            digest,
             content_type: data.content_type.clone(),
             content_length: data.content.len(),
         };
@@ -124,13 +126,15 @@ impl ObjectQueue {
                 data_saved: saved_data.clone(),
                 raw_data: data.clone(),
             };
-            self.tx_notification.send(notification).unwrap(); // can only fail if there are no receivers
+            self.tx_notification
+                .send(ListenURLEvents::InsertNotification(notification))
+                .unwrap(); // can only fail if there are no receivers
         }
-        return Ok((data, saved_data, dropped));
+        Ok((data, saved_data, dropped))
     }
 
-    pub fn subscribe_insert_notification(&self) -> broadcast::Receiver<InsertNotification> {
-        return self.tx_notification.subscribe();
+    pub fn subscribe_insert_notification(&self) -> broadcast::Receiver<ListenURLEvents> {
+        self.tx_notification.subscribe()
     }
 
     fn current_clocks(&self, now: i64) -> Clocks {
@@ -140,11 +144,9 @@ impl ObjectQueue {
         let my_id = self.tr.unique_id.clone();
         if this_seq > 0 {
             let based_on = this_seq - 1;
-            clocks
-                .logical
-                .insert(my_id.clone(), MinMax::new(based_on, based_on));
+            clocks.logical.insert(my_id.clone(), MinMax::new(based_on, based_on));
         }
-        clocks.wall.insert(my_id.clone(), MinMax::new(now, now));
+        clocks.wall.insert(my_id, MinMax::new(now, now));
         clocks
     }
 }

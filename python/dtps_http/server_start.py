@@ -13,7 +13,10 @@ import psutil
 from aiohttp import web
 
 from . import logger
+from .urls import URLIndexer, parse_url_unescape
 from .server import DTPSServer
+from .structures import Registration
+from .types import TopicNameV
 
 __all__ = [
     "app_start",
@@ -42,6 +45,13 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[List
     parser.add_argument("--no-alternatives", default=False, action="store_true")
     parser.add_argument("--tunnel", required=False, default=None, help="cloudflare credentials")
     parser.add_argument("--advertise", action="append", help="extra advertisement URLS")
+    parser.add_argument("--register-switchboard", default=None, help="Switchboard to register to")
+    parser.add_argument("--register-topic", default=None, help="Topic name on which to register.")
+    parser.add_argument(
+        "--register-namespace",
+        default=None,
+        help="Prefix of topics to register on switchboard. E.g. --register-namespace=node  only registers node/*",
+    )
 
     parsed = parser.parse_args(args)
 
@@ -65,6 +75,28 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[List
     no_alternatives = parsed.no_alternatives
 
     tunnel = parsed.tunnel
+    registrations: List[Registration] = []
+    if parsed.register_switchboard is not None:
+        switchboard_url = URLIndexer(parse_url_unescape(parsed.register_switchboard))
+        if parsed.register_topic is None:
+            msg = "Please specify --register-topic"
+            logger.error(msg)
+            sys.exit(msg)
+
+        if parsed.register_namespace is None:
+            namespace = TopicNameV.root()
+        else:
+            namespace = TopicNameV.from_dash_sep(parsed.register_namespace)
+
+        registrations.append(
+            Registration(
+                switchboard_url=switchboard_url,
+                topic=TopicNameV.from_dash_sep(parsed.register_topic),
+                namespace=namespace,
+            )
+        )
+
+    dtps.add_registrations(registrations)
     async with app_start(
         dtps,
         tcp=tcp,
@@ -183,12 +215,14 @@ async def app_start(
             tunnel_process = await asyncio.create_subprocess_exec(*cmd)
 
             #  cloudflared tunnel run --cred-file test-dtps1-tunnel.json --url 127.0.0.1:8000 test-dtps1
-            pass
 
     else:
+        if tunnel is not None:
+            logger.error("cannot start cloudflared tunnel without TCP server")
+            sys.exit(1)
         logger.info("not starting TCP server. Use --tcp-port to start one.")
 
-    unix_paths = []
+    unix_paths: List[str] = []
 
     tmpdir = tempfile.gettempdir()
     unix_paths.append(os.path.join(tmpdir, f"dtps-{s.node_id}"))
@@ -208,13 +242,13 @@ async def app_start(
 
         available_urls.append(the_url)
 
-    if extra_advertise is not None:
-        available_urls.extend(extra_advertise)
-
     if not available_urls:
         msg = "Please specify at least one of --tcp-port or --unix-path"
         logger.error(msg)
-        sys.exit(msg)
+        sys.exit(1)
+
+    if extra_advertise is not None:
+        available_urls.extend(extra_advertise)
 
     if not no_alternatives:
         for url in available_urls:

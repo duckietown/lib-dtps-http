@@ -1,25 +1,33 @@
 import functools
 import traceback
-from typing import Any, AsyncIterator, Awaitable, Callable, TYPE_CHECKING, TypeVar
+from typing import Any, AsyncIterator, Awaitable, Callable, TYPE_CHECKING, TypeVar, Union
 
-from multidict import CIMultiDict
+from multidict import CIMultiDict, CIMultiDictProxy
 from typing_extensions import ParamSpec
 
 from . import logger
 
-__all__ = ["async_error_catcher", "async_error_catcher_iterator", "method_lru_cache", "multidict_update"]
+__all__ = [
+    "async_error_catcher",
+    "async_error_catcher_iterator",
+    "method_lru_cache",
+    "multidict_update",
+]
 
 PS = ParamSpec("PS")
 X = TypeVar("X")
 
 F = TypeVar("F", bound=Callable[..., Any])
+FA = TypeVar("FA", bound=Callable[..., Awaitable[Any]])
+
+FAsync = TypeVar("FAsync", bound=Callable[..., AsyncIterator[Any]])
 
 if TYPE_CHECKING:
 
-    def async_error_catcher(_: F, /) -> F:
+    def async_error_catcher(_: FA, /) -> FA:
         ...
 
-    def async_error_catcher_iterator(_: F, /) -> F:
+    def async_error_catcher_iterator(_: FAsync, /) -> FAsync:
         ...
 
 else:
@@ -62,6 +70,6 @@ else:
     from methodtools import lru_cache as method_lru_cache
 
 
-def multidict_update(dest: CIMultiDict[X], src: CIMultiDict[X]) -> None:
+def multidict_update(dest: CIMultiDict[X], src: Union[CIMultiDict[X], CIMultiDictProxy[X]]) -> None:
     for k, v in src.items():
         dest.add(k, v)

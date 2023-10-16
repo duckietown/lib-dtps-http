@@ -1,7 +1,7 @@
 import json
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, replace
-from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING, Union
 
 from aiohttp import web
 
@@ -15,18 +15,21 @@ from .structures import (
     TopicRef,
     TopicsIndex,
 )
-from .types import NodeID, SourceID, TopicNameV
+from .urls import get_relative_url
+
+from .types import ContentType, NodeID, SourceID, TopicNameV
 
 __all__ = [
     "ForwardedQueue",
+    "Native",
+    "NotAvailableYet",
+    "NotFound",
     "OurQueue",
     "Source",
     "SourceComposition",
     "Transformed",
     "TypeOfSource",
 ]
-
-from .urls import get_relative_url
 
 
 @dataclass
@@ -51,7 +54,7 @@ if TYPE_CHECKING:
 
 
 class Source(ABC):
-    def resolve_extra(self, components: Tuple[str, ...], extra: Optional[str]):
+    def resolve_extra(self, components: Tuple[str, ...], extra: Optional[str]) -> "Source":
         if not components:
             if extra is None:
                 return self
@@ -108,8 +111,10 @@ class GetInside(Transform):
             return Native(self.apply(data.ob))
         elif isinstance(data, NotAvailableYet):
             return data
-        elif isinstance(data, NotFound):
+        else:
+            assert isinstance(data, NotFound)
             return data
+
         raise NotImplementedError(f"Transform.transform() for {self}")
 
     def apply(self, ob: object) -> object:
@@ -117,7 +122,7 @@ class GetInside(Transform):
 
 
 def get_inside(
-    original_ob: object, context: Tuple[Union[int, str], ...], ob: object, components: Tuple[str, ...]
+    original_ob: object, context: Tuple[Union[int, str], ...], ob: object, components: Sequence[str]
 ) -> object:
     if not components:
         return ob
@@ -126,11 +131,12 @@ def get_inside(
 
     if isinstance(ob, dict):
         if first not in ob:
+            keys: List[Any] = list(ob.keys())
             raise KeyError(
-                f"cannot get_inside({components!r}) of dict with keys {list(ob)!r}\ncontext: "
+                f"cannot get_inside({components!r}) of dict with keys {keys!r}\ncontext: "
                 f"{context!r}\noriginal:\n{original_ob!r}"
             )
-        v = ob[first]
+        v: Any = ob[first]
         return get_inside(original_ob, context + (first,), v, rest)
     elif isinstance(ob, (list, tuple)):
         try:
@@ -206,16 +212,15 @@ class ForwardedQueue(Source):
     async def get_resolved_data(
         self, request: web.Request, presented_as: str, server: "DTPSServer"
     ) -> "ResolvedData":
-        # resp = await server.serve_get_proxied(request, server._forwarded[self.topic_name])
         url_data = server._forwarded[self.topic_name].forward_url_data
-        from dtps_http import DTPSClient
+        from dtps_http import DTPSClient, my_raise_for_status
 
         async with DTPSClient.create() as dtpsclient:
             async with dtpsclient.my_session(url_data) as (session2, use_url2):
                 async with session2.get(use_url2) as resp_data:
-                    resp_data.raise_for_status()
+                    await my_raise_for_status(resp_data, url_data)
                     data = await resp_data.read()
-                    content_type = resp_data.content_type
+                    content_type = ContentType(resp_data.content_type)
                     data = RawData(content_type=content_type, content=data)
                     return data
 
@@ -237,7 +242,6 @@ class SourceComposition(Source):
 
             for a, b in x.topics.items():
                 topics[prefix + a] = b
-            topics.update()
 
         supposed = self.topic_name.as_relative_url()
         url_relative = get_relative_url(supposed, presented_as)

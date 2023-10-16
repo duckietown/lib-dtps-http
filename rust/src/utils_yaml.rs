@@ -1,4 +1,8 @@
-use maud::{html, Markup, Render};
+use maud::{
+    html,
+    Markup,
+    Render,
+};
 use serde_cbor::Value;
 
 //
@@ -50,14 +54,14 @@ use serde_cbor::Value;
 //     }
 // }
 
-pub fn generate_html_from_cbor(input: &serde_cbor::Value, max_level_open: i32) -> Markup {
+pub fn generate_html_from_cbor(input: &Value, max_level_open: i32) -> Markup {
     match input {
-        serde_cbor::Value::Text(s) => html! { code {"\""(s)"\"" }},
-        serde_cbor::Value::Integer(n) => html! { (n.to_string()) },
-        serde_cbor::Value::Bool(b) => html! { (b) },
-        serde_cbor::Value::Null => html! { "null" },
-        serde_cbor::Value::Array(arr) => {
-            if arr.len() == 0 {
+        Value::Text(s) => html! { code {"\""(s)"\"" }},
+        Value::Integer(n) => html! { (n.to_string()) },
+        Value::Bool(b) => html! { (b) },
+        Value::Null => html! { "null" },
+        Value::Array(arr) => {
+            if arr.is_empty() {
                 html! { code{"[]"}}
             } else {
                 let mut stuff = vec![];
@@ -78,8 +82,8 @@ pub fn generate_html_from_cbor(input: &serde_cbor::Value, max_level_open: i32) -
                 }
             }
         }
-        serde_cbor::Value::Map(map) => {
-            if map.len() == 0 {
+        Value::Map(map) => {
+            if map.is_empty() {
                 html! { code{"{}"}}
             } else {
                 let mut stuff = vec![];
@@ -97,21 +101,19 @@ pub fn generate_html_from_cbor(input: &serde_cbor::Value, max_level_open: i32) -
                             }
 
                         }
-                    } else {
-                        if max_level_open > 0 {
-                            html! {
-                                tr {
-                                    td { (k)}
-                                    td { (v) }
-                                }
-
+                    } else if max_level_open > 0 {
+                        html! {
+                            tr {
+                                td { (k)}
+                                td { (v) }
                             }
-                        } else {
-                            html! {
-                                tr {
-                                td {(k)}
-                                td {details   { summary {} {(v)} }}
-                                }
+
+                        }
+                    } else {
+                        html! {
+                            tr {
+                            td {(k)}
+                            td {details   { summary {} {(v)} }}
                             }
                         }
                     };
