@@ -1,10 +1,11 @@
 import argparse
 import asyncio
-
+from typing import cast
 from dtps_http import (
     async_error_catcher, DTPSClient, join, parse_url_unescape, TopicNameV, TopicRef, URL,
-    URLString,
+    URLString, URLIndexer,
 )
+from dtps_http.structures import InsertNotification
 
 
 @async_error_catcher
@@ -17,7 +18,7 @@ async def read_continuous(urlbase0: URL) -> None:
         if not md.answering:
             raise Exception("Not a DTPS node")
         # we get the topics inside
-        topics = await dtpsclient.ask_topics(urlbase0)
+        topics = await dtpsclient.ask_topics(cast(URLIndexer, urlbase0))
         tasks = []
         topic_name: TopicNameV
         info: TopicRef
@@ -46,7 +47,10 @@ async def listen(dtpsclient: DTPSClient, abs_url: URL, tn: str, ) -> None:
                                                  add_silence=None,
                                                  raise_on_error=False,
                                                  switch_identity_ok=False):
-        print(f'{tn}: {rd.raw_data.content.decode("utf-8")}')
+        if isinstance(rd, InsertNotification):
+            print(f'{tn}: {rd.raw_data.content.decode("utf-8")}')
+        else:
+            print(f'{tn}: {rd!r}')
 
 
 def subscribe_main() -> None:

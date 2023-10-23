@@ -23,7 +23,7 @@ async def on_startup(s: DTPSServer) -> None:
         while True:
             await asyncio.sleep(1)
             # We publish a json object
-            queue_out.publish_json({"counter": i})
+            await queue_out.publish_json({"counter": i})
             i += 1
             logger.info(f"Published {i}")
 

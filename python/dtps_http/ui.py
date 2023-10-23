@@ -23,7 +23,7 @@ def allow_exceptions(*allowed_exceptions: Type[Exception]):
                 )
                 raise RuntimeError(msg) from e
 
-        wrapper._allowed_exceptions = allowed_exceptions
+        wrapper._allowed_exceptions = allowed_exceptions  # type: ignore
         return wrapper
 
     return decorator

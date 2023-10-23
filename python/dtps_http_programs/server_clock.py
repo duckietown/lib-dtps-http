@@ -27,7 +27,7 @@ async def run_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, init
     oq = await s.create_oq(topic_name, content_info=ContentInfo.simple(MIME_JSON))
     while True:
         t = time.time_ns()
-        oq.publish_json(t)
+        await oq.publish_json(t)
         await asyncio.sleep(interval)
 
 

@@ -254,7 +254,7 @@ class DTPSClient:
             return None
 
         me = ForwardingStep(
-            this_node_id,
+            forwarding_node=this_node_id,
             forwarding_node_connects_to=url_to_string(connects_to),
             performance=benchmark,
         )
@@ -262,7 +262,9 @@ class DTPSClient:
         for f in forwarders:
             total |= f.performance
         total |= benchmark
-        tr2 = TopicReachability(this_url, this_node_id, forwarders=forwarders + [me], benchmark=total)
+        tr2 = TopicReachability(
+            url=this_url, answering=this_node_id, forwarders=forwarders + [me], benchmark=total
+        )
         return tr2
 
     async def find_best_alternative(self, us: List[Tuple[URLTopic, Optional[NodeID]]]) -> Optional[URLTopic]:
@@ -355,7 +357,13 @@ class DTPSClient:
 
             latency_ns = int(latency * 1_000_000_000)
             reliability_percent = int(reliability * 100)
-            return LinkBenchmark(complexity, bandwidth, latency_ns, reliability_percent, hops)
+            return LinkBenchmark(
+                complexity=complexity,
+                bandwidth=bandwidth,
+                latency_ns=latency_ns,
+                reliability_percent=reliability_percent,
+                hops=hops,
+            )
         if url.scheme == "http+unix":
             complexity = 1
             reliability_percent = 100
@@ -384,7 +392,13 @@ class DTPSClient:
 
             latency_ns = int(latency * 1_000_000_000)
 
-            return LinkBenchmark(complexity, bandwidth, latency_ns, reliability_percent, hops)
+            return LinkBenchmark(
+                complexity=complexity,
+                bandwidth=bandwidth,
+                latency_ns=latency_ns,
+                reliability_percent=reliability_percent,
+                hops=hops,
+            )
 
         if url.scheme == "http+ether":
             return None
@@ -508,7 +522,7 @@ class DTPSClient:
                 async with session.patch(use_url, data=data, headers=headers) as resp:
                     res_bytes: bytes = await resp.read()
                     content_type = ContentType(resp.headers.get("content-type", "application/octet-stream"))
-                    rd = RawData(res_bytes, content_type)
+                    rd = RawData(content=res_bytes, content_type=content_type)
 
                     if not resp.ok:
                         try:
@@ -535,7 +549,7 @@ class DTPSClient:
                 async with session.get(use_url) as resp:
                     res_bytes: bytes = await resp.read()
                     content_type = ContentType(resp.headers.get("content-type", "application/octet-stream"))
-                    rd = RawData(res_bytes, content_type)
+                    rd = RawData(content=res_bytes, content_type=content_type)
 
                     if not resp.ok:
                         try:
@@ -717,11 +731,11 @@ class DTPSClient:
                         if nreceived == 0:
                             s = "Closed, but not even one event received"
                             logger.error(s)
-                            yield ErrorMsg(s)
+                            yield ErrorMsg(comment=s)
                             if raise_on_error:
                                 raise Exception(s)
 
-                        yield FinishedMsg("closed")
+                        yield FinishedMsg(comment="closed")
                         break
                     wmsg: WSMessage
                     if add_silence is not None:
@@ -729,7 +743,7 @@ class DTPSClient:
                             wmsg = await asyncio.wait_for(ws.receive(), timeout=add_silence)
                         except asyncio.exceptions.TimeoutError:
                             # logger.debug(f"add_silence {add_silence} expired")
-                            yield SilenceMsg(add_silence)
+                            yield SilenceMsg(dt=add_silence)
                             continue
                     else:
                         wmsg = await ws.receive()
@@ -739,16 +753,16 @@ class DTPSClient:
                             if nreceived == 0:
                                 s = "Closed, but not even one event received"
                                 logger.error(s)
-                                yield ErrorMsg(s)
+                                yield ErrorMsg(comment=s)
                                 if raise_on_error:
                                     raise Exception(s)
 
-                            yield FinishedMsg("closed")
+                            yield FinishedMsg(comment="closed")
                         else:
                             s = f"Closing with error: {wmsg.data}"
                             logger.error(s)
-                            yield ErrorMsg(s)
-                            yield FinishedMsg("closed")
+                            yield ErrorMsg(comment=s)
+                            yield FinishedMsg(comment="closed")
                             if raise_on_error:
                                 raise Exception(s)
                         break
@@ -756,15 +770,15 @@ class DTPSClient:
                         if nreceived == 0:
                             s = "Closing, but not even one event received"
                             logger.error(s)
-                            yield ErrorMsg(s)
+                            yield ErrorMsg(comment=s)
                             if raise_on_error:
                                 raise Exception(s)
-                        yield FinishedMsg("closing")
+                        yield FinishedMsg(comment="closing")
                         break
                     elif wmsg.type == aiohttp.WSMsgType.ERROR:
                         s = str(wmsg.data)
                         logger.error(s)
-                        yield ErrorMsg(s)
+                        yield ErrorMsg(comment=s)
                         if raise_on_error:
                             raise Exception(s)
 
@@ -774,7 +788,7 @@ class DTPSClient:
                         except Exception as e:
                             msg = f"error in parsing\n{wmsg.data!r}\nerror:\n{e.__class__.__name__} {e!r}"
                             logger.error(msg)
-                            yield ErrorMsg(msg)
+                            yield ErrorMsg(comment=msg)
                             if raise_on_error:
                                 raise Exception(msg) from e
                             continue
@@ -786,12 +800,12 @@ class DTPSClient:
                                 # todo: send message
                                 msg = f"error in downloading {cm}: {e.__class__.__name__} {e!r}"
                                 logger.error(msg)
-                                yield ErrorMsg(msg)
+                                yield ErrorMsg(comment=msg)
                                 if raise_on_error:
                                     raise Exception(msg) from e
                                 continue
 
-                            yield InsertNotification(cm.as_data_saved(), data)
+                            yield InsertNotification(data_saved=cm.as_data_saved(), raw_data=data)
                         elif isinstance(cm, ChannelInfo):
                             nreceived += 1
                             # logger.info(f"channel info {cm}")
@@ -801,14 +815,14 @@ class DTPSClient:
                         else:
                             s = f"cannot interpret"
                             logger.error(s)
-                            yield ErrorMsg(s)
+                            yield ErrorMsg(comment=s)
                             if raise_on_error:
                                 raise Exception(s)
 
                     else:
                         s = f"unexpected message type {wmsg.type} {wmsg.data!r}"
                         logger.debug(s)
-                        yield ErrorMsg(s)
+                        yield ErrorMsg(comment=s)
                         if raise_on_error:
                             raise Exception(s)
 
@@ -846,33 +860,33 @@ class DTPSClient:
                     while True:
                         if ws.closed:
                             if nreceived == 0:
-                                yield ErrorMsg("Closed, but not even one event received")
+                                yield ErrorMsg(comment="Closed, but not even one event received")
 
-                            yield FinishedMsg("closed")
+                            yield FinishedMsg(comment="closed")
                             break
                         if add_silence is not None:
                             try:
                                 msg = await asyncio.wait_for(ws.receive(), timeout=add_silence)
                             except asyncio.exceptions.TimeoutError:
                                 # logger.debug(f"add_silence {add_silence} expired")
-                                yield SilenceMsg(add_silence)
+                                yield SilenceMsg(dt=add_silence)
                                 continue
                         else:
                             msg = await ws.receive()
 
                         if msg.type == aiohttp.WSMsgType.CLOSE:  # aiohttp-specific
                             if nreceived == 0:
-                                yield ErrorMsg("Closed, but not even one event received")
+                                yield ErrorMsg(comment="Closed, but not even one event received")
 
-                            yield FinishedMsg("closed")
+                            yield FinishedMsg(comment="closed")
                             break
                         elif msg.type == aiohttp.WSMsgType.CLOSING:  # aiohttp-specific
                             if nreceived == 0:
-                                yield ErrorMsg("Closing, but not even one event received")
-                            yield FinishedMsg("closing")
+                                yield ErrorMsg(comment="Closing, but not even one event received")
+                            yield FinishedMsg(comment="closing")
                             break
                         elif msg.type == aiohttp.WSMsgType.ERROR:
-                            yield ErrorMsg(str(msg.data))
+                            yield ErrorMsg(comment=str(msg.data))
                             if raise_on_error:
                                 raise Exception(str(msg.data))
 
@@ -882,7 +896,7 @@ class DTPSClient:
                             except Exception as e:
                                 s = f"error in parsing {msg.data!r}: {e.__class__.__name__} {e!r}"
                                 logger.error(s)
-                                yield ErrorMsg(s)
+                                yield ErrorMsg(comment=s)
                                 if raise_on_error:
                                     raise Exception(s)
                                 continue
@@ -892,7 +906,7 @@ class DTPSClient:
                                     if dr.chunks_arriving == 0:
                                         s = f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}"
                                         logger.error(s)
-                                        yield ErrorMsg(s)
+                                        yield ErrorMsg(comment=s)
                                         if raise_on_error:
                                             raise Exception(s)
 
@@ -909,7 +923,7 @@ class DTPSClient:
                                         else:
                                             s = f"unexpected message {msg!r}"
                                             logger.error(s)
-                                            yield ErrorMsg(s)
+                                            yield ErrorMsg(comment=s)
                                             if raise_on_error:
                                                 raise Exception(s)
                                             continue
@@ -917,14 +931,14 @@ class DTPSClient:
                                     if len(data) != dr.content_length:
                                         s = f"unexpected data length {len(data)} != {dr.content_length}\n{dr}"
                                         logger.error(s)
-                                        yield ErrorMsg(s)
+                                        yield ErrorMsg(comment=s)
                                         if raise_on_error:
                                             raise Exception(
                                                 f"unexpected data length {len(data)} != {dr.content_length}"
                                             )
 
                                     raw_data = RawData(content_type=dr.content_type, content=data)
-                                    x = InsertNotification(dr.as_data_saved(), raw_data)
+                                    x = InsertNotification(data_saved=dr.as_data_saved(), raw_data=raw_data)
                                     yield x
 
                                 elif isinstance(cm, ChannelInfo):
@@ -935,14 +949,14 @@ class DTPSClient:
                                 else:
                                     s = f"unexpected message {cm!r}"
                                     logger.error(s)
-                                    yield ErrorMsg(s)
+                                    yield ErrorMsg(comment=s)
                                     if raise_on_error:
                                         raise Exception(s)
 
                         else:
                             s = f"unexpected message type {msg.type} {msg.data!r}"
                             logger.error(s)
-                            yield ErrorMsg(s)
+                            yield ErrorMsg(comment=s)
                             if raise_on_error:
                                 raise Exception(s)
                             continue

@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING, Union
 
+import cbor2
+import yaml
 from aiohttp import web
 
 from .constants import CONTENT_TYPE_DTPS_INDEX_CBOR
@@ -17,8 +19,6 @@ from .structures import (
 )
 from .types import ContentType, NodeID, SourceID, TopicNameV
 from .urls import get_relative_url
-
-import cbor2, yaml
 
 __all__ = [
     "ForwardedQueue",

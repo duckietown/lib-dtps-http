@@ -18,5 +18,6 @@ parts:
           - file: examples/examples
           - file: examples/pub-sub
           - file: examples/two-flows
+          - file: examples/rpc1
           - file: code/client
           - file: code/server

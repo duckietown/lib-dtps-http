@@ -7,7 +7,7 @@ from multidict import CIMultiDict
 from pydantic import parse_obj_as
 from pydantic.dataclasses import dataclass
 
-from .constants import HEADER_LINK_BENCHMARK, MIME_TEXT
+from .constants import HEADER_LINK_BENCHMARK, MIME_CBOR, MIME_TEXT
 from .types import ContentType, NodeID, SourceID, TopicNameS, TopicNameV, URLString
 from .urls import URLIndexer
 
@@ -17,6 +17,7 @@ __all__ = [
     "Chunk",
     "Clocks",
     "ContentInfo",
+    "DataDesc",
     "DataReady",
     "DataSaved",
     "ErrorMsg",
@@ -63,7 +64,13 @@ class LinkBenchmark:
         latency = self.latency_ns + other.latency_ns
         reliability = int(self.reliability_percent * other.reliability_percent / (100 * 100))
         hops = self.hops + other.hops
-        return LinkBenchmark(complexity, bandwidth, latency, reliability, hops)
+        return LinkBenchmark(
+            complexity=complexity,
+            bandwidth=bandwidth,
+            latency_ns=latency,
+            reliability_percent=reliability,
+            hops=hops,
+        )
 
     def fill_headers(self, headers: CIMultiDict[str]) -> None:
         # RTT = 2 * latency - in mseconds
@@ -128,7 +135,11 @@ class RawData:
 
     @classmethod
     def simple_string(cls, s: str) -> "RawData":
-        return cls(s.encode("utf-8"), MIME_TEXT)
+        return cls(content=s.encode("utf-8"), content_type=MIME_TEXT)
+
+    @classmethod
+    def cbor_from_native_object(cls, ob: object) -> "RawData":
+        return cls(content=cbor2.dumps(ob), content_type=MIME_CBOR)
 
     def digest(self) -> str:
         import hashlib
@@ -258,10 +269,10 @@ class TopicsIndex:
         return wire.to_topics_index()
 
     def to_wire(self) -> "TopicsIndexWire":
-        res = {}
+        topics = {}
         for k, v in self.topics.items():
-            res[k.as_dash_sep()] = v
-        return TopicsIndexWire(res)
+            topics[k.as_dash_sep()] = v
+        return TopicsIndexWire(topics=topics)
 
 
 @dataclass
@@ -276,7 +287,7 @@ class TopicsIndexWire:
         topics: Dict[TopicNameV, TopicRef] = {}
         for k, v in self.topics.items():
             topics[TopicNameV.from_dash_sep(k)] = v
-        return TopicsIndex(topics)
+        return TopicsIndex(topics=topics)
 
 
 # used in websockets

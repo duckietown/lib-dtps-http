@@ -4,6 +4,7 @@ use futures::StreamExt;
 use json_patch::{
     patch,
     Patch,
+    PatchError,
     PatchOperation,
 };
 
@@ -221,8 +222,12 @@ async fn patch_our_queue(ssa: ServerStateAccess, patch: &Patch, topic_name: &Top
     };
     let mut x: serde_json::Value = raw_data.get_as_json()?;
     let x0 = x.clone();
-
-    context!(json_patch::patch(&mut x, patch), "cannot apply patch")?;
+    match json_patch::patch(&mut x, patch) {
+        Ok(_) => {}
+        Err(e) => {
+            return invalid_input!("cannot apply patch to {topic_name:?} with {patch:?}: {e:?}",);
+        }
+    }
     if x == x0 {
         debug_with_info!("The patch didn't change anything:\n {patch:?}");
         return Ok(());

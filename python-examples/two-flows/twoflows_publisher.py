@@ -12,7 +12,7 @@ async def periodic_publish(queue_out: ObjectQueue, period: float) -> None:
     i = 0
     while True:
         await asyncio.sleep(period)
-        queue_out.publish_json({"counter": i})
+        await queue_out.publish_json({"counter": i})
         i += 1
 
 

@@ -4,7 +4,7 @@ import pathlib
 import time
 import traceback
 import uuid
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass as original_dataclass, replace
 from pprint import pprint
 from typing import Any, Awaitable, Callable, cast, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -84,16 +84,36 @@ __all__ = [
     "DTPSServer",
     "ForwardedTopic",
     "ObjectQueue",
+    "ObjectTransformContext",
+    "ObjectTransformFunction",
+    "ObjectTransformResult",
+    "TransformError",
 ]
 
 SUB_ID = str
 K_INDEX = "index"
 
-ObjectTransformFunction = Callable[[RawData], RawData]
+
+@original_dataclass
+class ObjectTransformContext:
+    raw_data: RawData
+    topic: TopicNameV
+    queue: "ObjectQueue"
 
 
-def transform_identity(data: RawData) -> RawData:
-    return data
+@original_dataclass
+class TransformError:
+    http_code: int
+    message: str
+
+
+ObjectTransformResult = Union[RawData, TransformError]
+
+ObjectTransformFunction = Callable[[ObjectTransformContext], Awaitable[ObjectTransformResult]]
+
+
+async def transform_identity(otc: ObjectTransformContext) -> RawData:
+    return otc.raw_data
 
 
 class ObjectQueue:
@@ -136,43 +156,54 @@ class ObjectQueue:
         else:
             ds_oldest = self.saved[self.stored[0]]
             ds_newest = self.saved[self.stored[-1]]
-            oldest = ChannelInfoDesc(ds_oldest.index, ds_oldest.time_inserted)
-            newest = ChannelInfoDesc(ds_newest.index, ds_newest.time_inserted)
+            oldest = ChannelInfoDesc(sequence=ds_oldest.index, time_inserted=ds_oldest.time_inserted)
+            newest = ChannelInfoDesc(sequence=ds_newest.index, time_inserted=ds_newest.time_inserted)
 
         ci = ChannelInfo(queue_created=self.tr.created, num_total=self._seq, newest=newest, oldest=oldest)
         return ci
 
-    def publish_text(self, text: str) -> None:
+    async def publish_text(self, text: str, content_type: ContentType = MIME_TEXT) -> ObjectTransformResult:
         data = text.encode("utf-8")
-        self.publish(RawData(data, MIME_TEXT))
+        return await self.publish(RawData(content=data, content_type=content_type))
 
-    def publish_cbor(self, obj: object, content_type: ContentType = MIME_CBOR) -> None:
+    async def publish_cbor(self, obj: object, content_type: ContentType = MIME_CBOR) -> ObjectTransformResult:
         """Publish a python object as a cbor2 encoded object."""
         data = cbor2.dumps(obj)
-        self.publish(RawData(data, content_type))
+        return await self.publish(RawData(content=data, content_type=content_type))
 
-    def publish_json(self, obj: object) -> None:
+    async def publish_json(self, obj: object, content_type: ContentType = MIME_JSON) -> ObjectTransformResult:
         """Publish a python object as a JSON encoded object."""
         data = json.dumps(obj)
-        self.publish(RawData(data.encode(), MIME_JSON))
+        return await self.publish(RawData(content=data.encode(), content_type=content_type))
 
-    def publish(self, obj: RawData) -> None:
+    async def publish(self, obj0: RawData, /) -> ObjectTransformResult:
         """
         Publish raw bytes.
 
         """
+
+        try:
+            obj = await self._transform(ObjectTransformContext(raw_data=obj0, topic=self._name, queue=self))
+        except Exception as e:
+            msg = f"Error while transforming {obj0}: {e}"
+            return TransformError(500, msg)
+
+        if isinstance(obj, TransformError):
+            logger.error(f"Error while transforming {obj0}: {obj}")
+            return obj
+
         use_seq = self._seq
         self._seq += 1
         digest = obj.digest()
         clocks = self.current_clocks()
         ds = DataSaved(
-            self.tr.origin_node,
-            self.tr.unique_id,
-            use_seq,
-            time.time_ns(),
-            digest,
-            obj.content_type,
-            len(obj.content),
+            origin_node=self.tr.origin_node,
+            unique_id=self.tr.unique_id,
+            index=use_seq,
+            time_inserted=time.time_ns(),
+            digest=digest,
+            content_type=obj.content_type,
+            content_length=len(obj.content),
             clocks=clocks,
         )
         self._data[digest] = obj
@@ -185,14 +216,15 @@ class ObjectQueue:
         self._pub.publish(
             Key(self._name.as_relative_url(), K_INDEX), use_seq
         )  # logger.debug(f"published #{self._seq} {self._name}: {obj!r}")
+        return obj
 
     def current_clocks(self) -> Clocks:
         clocks = Clocks.empty()
         if self._seq > 0:
             based_on = self._seq - 1
-            clocks.logical[self.tr.unique_id] = MinMax(based_on, based_on)
+            clocks.logical[self.tr.unique_id] = MinMax(min=based_on, max=based_on)
         now = time.time_ns()
-        clocks.wall[self.tr.unique_id] = MinMax(now, now)
+        clocks.wall[self.tr.unique_id] = MinMax(min=now, max=now)
         return clocks
 
     def last(self) -> DataSaved:
@@ -325,22 +357,6 @@ class DTPSServer:
 
         self.digest_to_urls = {}
 
-        content_info = ContentInfo.simple(CONTENT_TYPE_DTPS_INDEX_CBOR)
-
-        tr = TopicRef(
-            get_unique_id(self.node_id, ROOT),
-            self.node_id,
-            {},
-            [],
-            content_info=content_info,
-            properties=TopicProperties.streamable_readonly(),
-            created=time.time_ns(),
-        )
-        self._oqs[ROOT] = ObjectQueue(self.hub, ROOT, tr, max_history=5)
-        index = self.create_root_index()
-        wire = index.to_wire()
-        as_cbor = cbor2.dumps(asdict(wire))
-        self._oqs[ROOT].publish(RawData(as_cbor, CONTENT_TYPE_DTPS_INDEX_CBOR))
         self.registrations = []
 
     registrations: List[Registration]
@@ -401,34 +417,34 @@ class DTPSServer:
     def set_available_urls(self, urls: List[str]) -> None:
         self.available_urls = urls
 
-    def add_available_url(self, url: str) -> None:
+    async def add_available_url(self, url: str) -> None:
         self.available_urls.append(url)
         oq = self.get_oq(TOPIC_AVAILABILITY)
-        oq.publish_json(self.available_urls)
+        await oq.publish_json(self.available_urls)
 
     def remember_task(self, task: "asyncio.Task[Any]") -> None:
         """Add a task to the list of tasks to be cancelled on shutdown"""
         self.tasks.append(task)
 
-    def _update_lists(self):
+    async def _update_lists(self):
         topics: List[TopicNameV] = []
         topics.extend(self._oqs.keys())
         topics.extend(self._forwarded.keys())
-        self._oqs[TOPIC_LIST].publish_json(sorted([_.as_relative_url() for _ in topics]))
+        await self._oqs[TOPIC_LIST].publish_json(sorted([_.as_relative_url() for _ in topics]))
 
         index = self.create_root_index()
         index_wire = index.to_wire()
-        self._oqs[ROOT].publish_cbor(asdict(index_wire), CONTENT_TYPE_DTPS_INDEX_CBOR)
+        await self._oqs[ROOT].publish_cbor(asdict(index_wire), CONTENT_TYPE_DTPS_INDEX_CBOR)
 
     async def remove_oq(self, name: TopicNameV) -> None:
         if name in self._oqs:
             self._oqs.pop(name)
-            self._update_lists()
+            await self._update_lists()
 
     async def remove_forward(self, name: TopicNameV) -> None:
         if name in self._forwarded:
             self._forwarded.pop(name)
-            self._update_lists()
+            await self._update_lists()
 
     async def add_forwarded(self, name: TopicNameV, forwarded: ForwardedTopic) -> None:
         if name in self._forwarded or name in self._oqs:
@@ -447,6 +463,7 @@ class DTPSServer:
         content_info: ContentInfo,
         tp: Optional[TopicProperties] = None,
         max_history: Optional[int] = None,
+        transform: ObjectTransformFunction = transform_identity,
     ) -> ObjectQueue:
         if name in self._forwarded:
             raise ValueError(f"Topic {name} is a forwarded one")
@@ -456,8 +473,8 @@ class DTPSServer:
         unique_id = get_unique_id(self.node_id, name)
 
         treach = TopicReachability(
-            URLString(name.as_relative_url()),
-            self.node_id,
+            url=URLString(name.as_relative_url()),
+            answering=self.node_id,
             forwarders=[],
             benchmark=LinkBenchmark.identity(),
         )
@@ -475,20 +492,36 @@ class DTPSServer:
             content_info=content_info,
         )
 
-        self._oqs[name] = ObjectQueue(self.hub, name, tr, max_history=max_history)
-        self._update_lists()
+        self._oqs[name] = ObjectQueue(self.hub, name, tr, max_history=max_history, transform=transform)
+        await self._update_lists()
         return self._oqs[name]
 
     @async_error_catcher
     async def on_startup(self, _: web.Application) -> None:
         # self.logger.info("on_startup")
+        content_info = ContentInfo.simple(CONTENT_TYPE_DTPS_INDEX_CBOR)
+
+        tr = TopicRef(
+            unique_id=get_unique_id(self.node_id, ROOT),
+            origin_node=self.node_id,
+            app_data={},
+            reachability=[],
+            content_info=content_info,
+            properties=TopicProperties.streamable_readonly(),
+            created=time.time_ns(),
+        )
+        self._oqs[ROOT] = ObjectQueue(self.hub, ROOT, tr, max_history=5)
+        index = self.create_root_index()
+        wire = index.to_wire()
+        as_cbor = cbor2.dumps(asdict(wire))
+        await self._oqs[ROOT].publish(RawData(content=as_cbor, content_type=CONTENT_TYPE_DTPS_INDEX_CBOR))
 
         content_info = ContentInfo.simple(MIME_JSON)
         tr = TopicRef(
-            get_unique_id(self.node_id, TOPIC_LIST),
-            self.node_id,
-            {},
-            [],
+            unique_id=get_unique_id(self.node_id, TOPIC_LIST),
+            origin_node=self.node_id,
+            app_data={},
+            reachability=[],
             content_info=content_info,
             properties=TopicProperties.streamable_readonly(),
             created=time.time_ns(),
@@ -555,8 +588,8 @@ class DTPSServer:
         for topic_name, oqs in self._oqs.items():
             qual_topic_name = topic_name
             reach = TopicReachability(
-                URLString(qual_topic_name.as_relative_url()),
-                self.node_id,
+                url=URLString(qual_topic_name.as_relative_url()),
+                answering=self.node_id,
                 forwarders=[],
                 benchmark=LinkBenchmark.identity(),
             )
@@ -567,10 +600,10 @@ class DTPSServer:
             qual_topic_name = topic_name
 
             tr = TopicRef(
-                fd.unique_id,
-                fd.origin_node,
-                {},
-                fd.reachability,
+                unique_id=fd.unique_id,
+                origin_node=fd.origin_node,
+                app_data={},
+                reachability=fd.reachability,
                 properties=fd.properties,
                 created=time.time_ns(),
                 content_info=fd.content_info,
@@ -582,17 +615,17 @@ class DTPSServer:
                 if x not in topics:
                     reachability = [
                         TopicReachability(
-                            URLString(x.as_relative_url()),
-                            self.node_id,
+                            url=URLString(x.as_relative_url()),
+                            answering=self.node_id,
                             forwarders=[],
                             benchmark=LinkBenchmark.identity(),
                         ),
                     ]
                     topics[x] = TopicRef(
-                        get_unique_id(self.node_id, x),
-                        self.node_id,
-                        {},
-                        reachability,
+                        unique_id=get_unique_id(self.node_id, x),
+                        origin_node=self.node_id,
+                        app_data={},
+                        reachability=reachability,
                         properties=TopicProperties.streamable_readonly(),
                         created=time.time_ns(),
                         content_info=ContentInfo.simple(CONTENT_TYPE_DTPS_INDEX_CBOR),
@@ -693,7 +726,7 @@ class DTPSServer:
             history[a.sequence] = asdict(a)
 
         cbor = cbor2.dumps(history)
-        rd = RawData(cbor, CONTENT_TYPE_TOPIC_HISTORY_CBOR)
+        rd = RawData(content=cbor, content_type=CONTENT_TYPE_TOPIC_HISTORY_CBOR)
         title = f"History for {topic_name_s}"
         return self.visualize_data(request, title, rd, headers, is_streamable=False, is_pushable=False)
 
@@ -723,7 +756,7 @@ class DTPSServer:
         index_internal = await source.get_meta_info(request.url.path, self)
 
         index_wire = index_internal.to_wire()
-        rd = RawData(cbor2.dumps(asdict(index_wire)), CONTENT_TYPE_DTPS_INDEX_CBOR)
+        rd = RawData(content=cbor2.dumps(asdict(index_wire)), content_type=CONTENT_TYPE_DTPS_INDEX_CBOR)
         title = f"Meta for {topic_name_s}"
         return self.visualize_data(request, title, rd, headers, is_streamable=False, is_pushable=False)
 
@@ -835,8 +868,7 @@ class DTPSServer:
             rd = rs
         elif isinstance(rs, Native):
             # logger.info(f"Native: {rs}")
-            cbor_data = cbor2.dumps(rs)
-            rd = RawData(cbor_data, MIME_CBOR)
+            rd = RawData.cbor_from_native_object(rs)
         elif isinstance(rs, NotAvailableYet):
             rd = rs
         elif isinstance(rs, NotFound):
@@ -1024,15 +1056,20 @@ pre {{
         content_type = request.headers.get("Content-Type", "application/octet-stream")
         data = await request.read()
         oq = self.get_oq(topic_name)
-        rd = RawData(data, ContentType(content_type))
+        rd = RawData(content=data, content_type=ContentType(content_type))
 
-        oq.publish(rd)
+        otr = await oq.publish(rd)
 
         headers: CIMultiDict[str] = CIMultiDict()
         add_nocache_headers(headers)
         self._add_own_headers(headers)
         multidict_update(headers, self.get_headers_alternatives(request))
-        return web.Response(status=200, headers=headers)
+        if isinstance(otr, TransformError):
+            return web.Response(status=otr.http_code, text=otr.message, headers=headers)
+        elif isinstance(otr, RawData):
+            return web.Response(status=200, headers=headers, content_type=otr.content_type, body=otr.content)
+        else:
+            raise AssertionError(f"Cannot handle {otr!r}")
 
     @async_error_catcher
     async def serve_data_get(self, request: web.Request) -> web.Response:
@@ -1139,7 +1176,7 @@ pre {{
 
             if send_data:
                 the_bytes = oq_.get(digest).content
-                chunk = Chunk(digest, 0, 1, 0, the_bytes)
+                chunk = Chunk(digest=digest, i=0, n=1, index=0, data=the_bytes)
                 as_cbor = get_tagged_cbor(chunk)
 
                 try:
@@ -1293,7 +1330,7 @@ async def update_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, i
     while True:
         t = time.time_ns()
         data = str(t).encode()
-        oq.publish(RawData(data, MIME_JSON))
+        await oq.publish(RawData(content=data, content_type=MIME_JSON))
         await asyncio.sleep(interval)
 
 

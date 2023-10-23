@@ -38,7 +38,7 @@ async def on_startup(s: DTPSServer) -> None:
             jpeg_byte_array = np.array(jpeg_bytes).tobytes()
 
             rd = RawData(content=jpeg_byte_array, content_type=MIME_JPEG)
-            queue_out.publish(rd)
+            await queue_out.publish(rd)
             await asyncio.sleep(1)
 
     asyncio.create_task(video_reader())
