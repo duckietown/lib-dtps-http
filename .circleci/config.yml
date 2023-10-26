@@ -6,7 +6,6 @@ jobs:
     steps:
     - checkout
     - run: python3 -m pip install nose2
-    - run: find .
     - run: python3 -m pip install -e .
     - run: python3 -m nose2 python
   "python-39":
@@ -15,7 +14,6 @@ jobs:
     steps:
     - checkout
     - run: python3 -m pip install nose2
-    - run: find .
     - run: python3 -m pip install -e .
     - run: python3 -m nose2 python
   "python-310":
@@ -24,8 +22,6 @@ jobs:
     steps:
     - checkout
     - run: python3 -m pip install nose2
-    - run: $PWD
-    - run: find .
     - run: python3 -m pip install -e .
     - run: python3 -m nose2 python
   "python-311":
@@ -34,7 +30,6 @@ jobs:
     steps:
     - checkout
     - run: python3 -m pip install nose2
-    - run: find .
     - run: python3 -m pip install -e .
     - run: python3 -m nose2 python
   "python-312":
@@ -43,7 +38,6 @@ jobs:
     steps:
     - checkout
     - run: python3 -m pip install nose2
-    - run: find .
     - run: python3 -m pip install -e .
     - run: python3 -m nose2 python
   rust:
