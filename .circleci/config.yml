@@ -6,7 +6,7 @@ jobs:
     steps:
     - checkout
     - run: python3 -m pip install nose2
-    - run: python3 -m pip install -e .
+    - run: python3 -m pip install .
     - run: python3 -m nose2 python
   "python39":
     docker:
@@ -14,7 +14,7 @@ jobs:
     steps:
     - checkout
     - run: python3 -m pip install nose2
-    - run: python3 -m pip install -e .
+    - run: python3 -m pip install .
     - run: python3 -m nose2 python
   "python310":
     docker:
@@ -22,7 +22,7 @@ jobs:
     steps:
     - checkout
     - run: python3 -m pip install nose2
-    - run: python3 -m pip install -e .
+    - run: python3 -m pip install  .
     - run: python3 -m nose2 python
   "python311":
     docker:
@@ -30,7 +30,7 @@ jobs:
     steps:
     - checkout
     - run: python3 -m pip install nose2
-    - run: python3 -m pip install -e .
+    - run: python3 -m pip install .
     - run: python3 -m nose2 python
   # "python-312":
   #   docker:
