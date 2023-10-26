@@ -34,6 +34,11 @@ class TestAsyncServerFunction(unittest.TestCase):
 
             task.cancel()
 
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
         self.loop.run_until_complete(doit())
 
     def tearDown(self):

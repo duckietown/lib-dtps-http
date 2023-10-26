@@ -4,6 +4,7 @@ import pathlib
 import time
 import traceback
 import uuid
+from asyncio import CancelledError
 from dataclasses import asdict, dataclass as original_dataclass, replace
 from pprint import pprint
 from typing import Any, Awaitable, Callable, cast, Dict, List, Optional, Sequence, Tuple, Union
@@ -769,7 +770,7 @@ class DTPSServer:
         else:
             after = None
 
-        logger.debug(f"resolve({url0!r}) - url: {url!r} after: {after!r}")
+        # logger.debug(f"resolve({url0!r}) - url: {url!r} after: {after!r}")
         tn = TopicNameV.from_relative_url(url)
         sources = self.iterate_sources()
 
@@ -1331,7 +1332,11 @@ async def update_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, i
         t = time.time_ns()
         data = str(t).encode()
         await oq.publish(RawData(content=data, content_type=MIME_JSON))
-        await asyncio.sleep(interval)
+        try:
+            await asyncio.sleep(interval)
+        except CancelledError:
+            logger.info(f"Clock {topic_name.as_relative_url()} cancelled")
+            break
 
 
 def get_tagged_cbor(ob: Any) -> bytes:
