@@ -49,11 +49,12 @@ jobs:
       RUST_BACKTRACE: 1
     steps:
       - checkout
-      - run: apt-get update && apt-get install -y python3-pip 
-      - run: python3 -m pip install -e .
+      - run: apt-get update && apt-get install -y python3-pip python3-venv
+      - run: python3 -m venv .
+      - run: ./bin/pip install -e .
       - run:
           name: Run Tests
-          command: "cargo test"
+          command: "PATH=$PATH:./bin cargo test"
 
 workflows:
   test:
