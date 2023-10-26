@@ -242,6 +242,7 @@ async fn read_websocket_stream<S: Debug, T: StreamExt<Item = Result<S, tungsteni
                             tungstenite::Error::Http(_) => {}
                             tungstenite::Error::HttpFormat(_) => {}
                             Error::WriteBufferFull(_) => {}
+                            Error::AttackAttempt => {}
                         }
                         error_with_info!("error in read_websocket_stream: {:?}", e);
                         break;

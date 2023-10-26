@@ -55,8 +55,8 @@ strip-ansi-escapes = "0.2.0"
 [target.'cfg(target_os = "wasi")'.dependencies]
 js-sys = "0.3"
 tokio = { version = "^1.32", features = ["sync", "macros", "io-util", "rt", "time"] }
-tokio-tungstenite = { version = "0.19.0", features = [] }
-websocket = { version = "0.26.5", default-features = false, features = [] }
+tokio-tungstenite = { version = "0.20.1", features = [] }
+websocket = { version = "0.27.0", default-features = false, features = [] }
 wasm-bindgen = "0.2.87"
 
 
@@ -67,7 +67,7 @@ openssl-sys = "0.9"
 tokio = { version = "^1.32", features = ["full"] }
 tokio-stream = { version = "0.1.14", features = ["full"] }
 tokio-tungstenite = { version = "0.20.0", features = ["rustls", "rustls-native-certs", "rustls-tls-native-roots", "rustls-tls-webpki-roots"] }
-websocket = "0.26.5"
+websocket = "0.27.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 getaddrs = "0.1.0"
@@ -96,8 +96,8 @@ path = "rust/bin/subscribe.rs"
 
 
 [build-dependencies]
-built = { version = "0.6", features = ["chrono", "git2", "semver"] }
-git2 = "0.17.2"
+built = { version = "0.7.0", features = ["chrono", "git2", "semver"] }
+git2 = "0.18.1"
 semver = "1.0.17"
 chrono = "0.4"
 
