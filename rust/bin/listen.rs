@@ -1,6 +1,6 @@
 extern crate dtps_http;
 extern crate url;
-use futures::StreamExt;
+
 use std::error;
 
 use clap::Parser;

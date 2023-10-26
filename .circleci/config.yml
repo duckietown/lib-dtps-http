@@ -1,6 +1,6 @@
 version: 2.1
 jobs:
-  "python-38":
+  "python38":
     docker:
     - image: cimg/python:3.8
     steps:
@@ -8,7 +8,7 @@ jobs:
     - run: python3 -m pip install nose2
     - run: python3 -m pip install -e .
     - run: python3 -m nose2 python
-  "python-39":
+  "python39":
     docker:
     - image: cimg/python:3.9
     steps:
@@ -16,7 +16,7 @@ jobs:
     - run: python3 -m pip install nose2
     - run: python3 -m pip install -e .
     - run: python3 -m nose2 python
-  "python-310":
+  "python310":
     docker:
     - image: cimg/python:3.10
     steps:
@@ -24,7 +24,7 @@ jobs:
     - run: python3 -m pip install nose2
     - run: python3 -m pip install -e .
     - run: python3 -m nose2 python
-  "python-311":
+  "python311":
     docker:
     - image: cimg/python:3.11
     steps:
@@ -44,12 +44,13 @@ jobs:
   # ERROR: Could not build wheels for aiohttp, which is required to install pyproject.toml-based projects
   rust:
     docker:
-      - image: cimg/rust:1.70.0
+      - image: rust:1.73.0
+    environment:
+      RUST_BACKTRACE: 1
     steps:
       - checkout
-      - run: cargo --version
-      # - run: apt-get update && apt-get install python3-pip
-      # - run: python3 -m pip install -e .
+      - run: apt-get update && apt-get install -y python3-pip 
+      - run: python3 -m pip install -e .
       - run:
           name: Run Tests
           command: "cargo test"
@@ -57,9 +58,9 @@ jobs:
 workflows:
   test:
     jobs:
-      - "python-38"
-      - "python-39"
-      - "python-310"
-      - "python-311"
+      - "python38"
+      - "python39"
+      - "python310"
+      - "python311"
       - rust
 
