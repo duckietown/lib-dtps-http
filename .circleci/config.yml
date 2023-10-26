@@ -51,7 +51,7 @@ jobs:
       - checkout
       - run: apt-get update && apt-get install -y python3-pip python3-venv
       - run: python3 -m venv .
-      - run: ./bin/pip install -e .
+      - run: ./bin/pip install  .
       - run:
           name: Run Tests
           command: "PATH=$PATH:./bin cargo test"
