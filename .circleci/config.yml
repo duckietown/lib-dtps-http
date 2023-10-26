@@ -1,5 +1,4 @@
 version: 2.1
-
 jobs:
   "python-38":
     docker:
@@ -7,15 +6,36 @@ jobs:
     steps:
     - run: python3 -m pip install nose2
     - run: python3 -m pip install -e .
-    - run: nose2 python
+    - run: python3 -m nose2 python
+  "python-39":
+    docker:
+    - image: cimg/python:3.9
+    steps:
+    - run: python3 -m pip install nose2
+    - run: python3 -m pip install -e .
+    - run: python3 -m nose2 python
   "python-310":
     docker:
     - image: cimg/python:3.10
     steps:
     - run: python3 -m pip install nose2
     - run: python3 -m pip install -e .
-    - run: nose2 python
-  build:
+    - run: python3 -m nose2 python
+  "python-311":
+    docker:
+    - image: cimg/python:3.11
+    steps:
+    - run: python3 -m pip install nose2
+    - run: python3 -m pip install -e .
+    - run: python3 -m nose2 python
+  "python-312":
+    docker:
+    - image: cimg/python:3.12
+    steps:
+    - run: python3 -m pip install nose2
+    - run: python3 -m pip install -e .
+    - run: python3 -m nose2 python
+  rust:
     docker:
       - image: cimg/rust:1.70.0
     steps:
@@ -26,3 +46,14 @@ jobs:
       - run:
           name: Run Tests
           command: "cargo test"
+
+workflows:
+  test:
+    jobs:
+      - "python-38"
+      - "python-39"
+      - "python-310"
+      - "python-311"
+      - "python-312"
+      - rust
+

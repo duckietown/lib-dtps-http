@@ -25,6 +25,7 @@ aiopubsub = "^3"
 methodtools = "^0.4"
 pydantic = "^1.10"
 psutil = "^5"
+urllib3 = "^2"
 
 # other dependencies: aiohttp-devtools pre-commit mkdocs mkdocs-material mkdocstrings[python]
 # rich = "^13.5.2"
