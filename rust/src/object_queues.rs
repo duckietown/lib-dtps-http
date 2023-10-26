@@ -6,6 +6,7 @@ use tokio::sync::broadcast;
 
 use crate::{
     merge_clocks,
+    utils::time_nanos_i64,
     Clocks,
     DataSaved,
     ListenURLEvents,
@@ -85,7 +86,7 @@ impl ObjectQueue {
         } else {
             data0.clone()
         };
-        let now = Local::now().timestamp_nanos();
+        let now = time_nanos_i64();
 
         let mut clocks = self.current_clocks(now);
 

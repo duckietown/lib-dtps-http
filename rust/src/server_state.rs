@@ -81,6 +81,7 @@ use crate::{
     signals_logic_resolve::interpret_path,
     sniff_type_resource,
     types::CompositeName,
+    utils::time_nanos_i64,
     warn_with_info,
     Clocks,
     ContentInfo,
@@ -380,7 +381,7 @@ impl ServerState {
 
         let mut oqs: HashMap<TopicName, ObjectQueue> = HashMap::new();
 
-        let now = Local::now().timestamp_nanos();
+        let now = time_nanos_i64();
         let app_data = node_app_data.clone();
         let tr = TopicRefInternal {
             unique_id: node_id.clone(),
@@ -400,7 +401,7 @@ impl ServerState {
         };
         oqs.insert(TopicName::root(), ObjectQueue::new(tr, Some(10)));
 
-        let node_started = Local::now().timestamp_nanos();
+        let node_started = time_nanos_i64();
 
         let (status_tx, status_rx) = mpsc::unbounded_channel::<ComponentStatusNotification>();
 
@@ -821,7 +822,7 @@ impl ServerState {
         let app_data = app_data.unwrap_or_default();
 
         let origin_node = self.node_id.clone();
-        let now = Local::now().timestamp_nanos();
+        let now = time_nanos_i64();
         let tr = TopicRefInternal {
             unique_id: uuid,
             origin_node,
@@ -920,7 +921,7 @@ impl ServerState {
 
     pub fn guarantee_blob_exists(&mut self, digest: &str, seconds: f64) {
         // debug_with_info!("Guarantee blob {digest} exists for {seconds} seconds more");
-        let now = Local::now().timestamp_nanos();
+        let now = time_nanos_i64();
         let deadline = now + (seconds * 1_000_000_000.0) as i64;
         match self.blobs.get_mut(digest) {
             None => {
@@ -932,7 +933,7 @@ impl ServerState {
         }
     }
     pub fn cleanup_blobs(&mut self) {
-        let now = Local::now().timestamp_nanos();
+        let now = time_nanos_i64();
         let mut todrop = Vec::new();
         for (digest, sb) in self.blobs.iter() {
             let no_one_needs_it = sb.who_needs_it.is_empty();
@@ -958,7 +959,7 @@ impl ServerState {
             Some(sb) => {
                 sb.who_needs_it.remove(who);
                 if sb.who_needs_it.is_empty() {
-                    let now = Local::now().timestamp_nanos();
+                    let now = time_nanos_i64();
                     let deadline_passed = now > sb.deadline;
                     if deadline_passed {
                         self.blobs.remove(digest);
@@ -991,7 +992,7 @@ impl ServerState {
 
     pub fn save_blob_for_time(&mut self, digest: &str, content: &[u8], delta_seconds: f64) {
         let time_nanos_delta = (delta_seconds * 1_000_000_000.0) as i64;
-        let nanos_now = Local::now().timestamp_nanos();
+        let nanos_now = time_nanos_i64();
         let deadline = nanos_now + time_nanos_delta;
         match self.blobs.get_mut(digest) {
             None => {
@@ -1018,7 +1019,7 @@ impl ServerState {
             Some(v) => Ok(v),
             None => match self.blobs_forgotten.get(digest) {
                 Some(ts) => {
-                    let now = Local::now().timestamp_nanos();
+                    let now = time_nanos_i64();
                     let delta = now - ts;
                     let seconds = delta as f64 / 1_000_000_000.0;
                     let msg = format!("Blob {:#?} not found. It was forgotten {} seconds ago", digest, seconds);

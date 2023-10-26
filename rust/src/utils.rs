@@ -69,6 +69,10 @@ pub fn time_nanos() -> u128 {
         .as_nanos()
 }
 
+pub fn time_nanos_i64() -> i64 {
+    time_nanos() as i64
+}
+
 pub fn format_query(q: &HashMap<String, String>) -> String {
     if q.is_empty() {
         return "".to_string();

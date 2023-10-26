@@ -33,6 +33,7 @@ use crate::{
     merge_clocks,
     not_implemented,
     putinside,
+    utils::time_nanos_i64,
     warn_with_info,
     ActualUpdate,
     ChannelInfo,
@@ -70,7 +71,7 @@ async fn get_stream_compose_data(
 ) -> DTPSR<DataStream> {
     // let mut components = HashMap::new();
     let mut handles = Vec::new();
-    let mut queue_created: i64 = Local::now().timestamp_nanos();
+    let mut queue_created: i64 = time_nanos_i64();
     let mut num_total = 0;
     let mut time_inserted = 0;
     let clocks0 = Clocks::default();
@@ -358,7 +359,7 @@ async fn put_together(
                 clocks0 = merge_clocks(&clocks0, &clocks);
                 putinside(&mut first, &component, data)?;
                 let rd = RawData::from_cbor_value(&first)?;
-                let time_inserted = Local::now().timestamp_nanos();
+                let time_inserted = time_nanos_i64();
                 let data_saved = DataSaved {
                     origin_node: "".to_string(),
                     unique_id: "".to_string(),
@@ -457,7 +458,7 @@ async fn get_stream_compose_meta(
     );
     handles.push(tokio::spawn(future));
 
-    let queue_created: i64 = Local::now().timestamp_nanos();
+    let queue_created: i64 = time_nanos_i64();
     let num_total = 1;
 
     let data_stream = DataStream {
@@ -546,7 +547,7 @@ async fn get_stream_transform(
     );
     handles.push(tokio::spawn(future));
 
-    let queue_created: i64 = Local::now().timestamp_nanos();
+    let queue_created: i64 = time_nanos_i64();
     let num_total = 1;
 
     let data_stream = DataStream {
@@ -645,7 +646,7 @@ async fn get_data_stream_from_url(con: &TypeOfConnection) -> DTPSR<DataStream> {
 
     let handles = vec![handle];
 
-    let queue_created: i64 = Local::now().timestamp_nanos();
+    let queue_created: i64 = time_nanos_i64();
     let num_total = 1;
 
     let (status, raw_data) = get_rawdata_status(con).await?;

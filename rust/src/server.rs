@@ -97,6 +97,7 @@ use crate::{
     show_errors,
     sniff_and_start_proxy,
     types::CompositeName,
+    utils::time_nanos_i64,
     utils_headers,
     warn_with_info,
     ChannelInfo,
@@ -874,7 +875,7 @@ async fn handler_topic_html_summary(
             (l.content_type.clone(), initial)
         }
     };
-    let now = Local::now().timestamp_nanos();
+    let now = time_nanos_i64();
 
     let format_elapsed = |a| -> String { format_nanos(now - a) };
 
@@ -1128,7 +1129,7 @@ async fn clock_go(state: ServerStateAccess, topic_name: TopicName, interval_s: f
         let mut ss = state.lock().await;
         // let datetime_string = Local::now().to_rfc3339();
         // get the current time in nanoseconds
-        let now = Local::now().timestamp_nanos();
+        let now = time_nanos_i64();
         let s = format!("{}", now);
         let _inserted = ss.publish_json(&topic_name, &s, None);
 

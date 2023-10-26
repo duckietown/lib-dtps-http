@@ -1,14 +1,14 @@
 version: 2.1
 
 jobs:
-  python-3.8:
+  "python-38":
     docker:
     - image: cimg/python:3.8
     steps:
     - run: python3 -m pip install nose2
     - run: python3 -m pip install -e .
     - run: nose2 python
-  python-3.10:
+  "python-310":
     docker:
     - image: cimg/python:3.10
     steps:

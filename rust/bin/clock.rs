@@ -15,6 +15,7 @@ use dtps_http::{
     error_with_info,
     init_logging,
     show_errors,
+    utils::time_nanos_i64,
     ServerStateAccess,
     TopicName,
     TopicProperties,
@@ -44,7 +45,7 @@ async fn clock_go(state: ServerStateAccess, topic_name: &str, interval_s: f32) -
         let mut ss = state.lock().await;
         // let datetime_string = Local::now().to_rfc3339();
         // get the current time in nanoseconds
-        let now = Local::now().timestamp_nanos();
+        let now = time_nanos_i64();
         let s = format!("{}", now);
         let _inserted = ss.publish_json(&TopicName::from_relative_url(topic_name)?, &s, None)?;
 
