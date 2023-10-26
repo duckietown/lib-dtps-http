@@ -4,6 +4,7 @@ jobs:
     docker:
     - image: cimg/python:3.8
     steps:
+    - checkout
     - run: python3 -m pip install nose2
     - run: find .
     - run: python3 -m pip install -e .
@@ -12,6 +13,7 @@ jobs:
     docker:
     - image: cimg/python:3.9
     steps:
+    - checkout
     - run: python3 -m pip install nose2
     - run: find .
     - run: python3 -m pip install -e .
@@ -20,7 +22,9 @@ jobs:
     docker:
     - image: cimg/python:3.10
     steps:
+    - checkout
     - run: python3 -m pip install nose2
+    - run: $PWD
     - run: find .
     - run: python3 -m pip install -e .
     - run: python3 -m nose2 python
@@ -28,6 +32,7 @@ jobs:
     docker:
     - image: cimg/python:3.11
     steps:
+    - checkout
     - run: python3 -m pip install nose2
     - run: find .
     - run: python3 -m pip install -e .
@@ -36,6 +41,7 @@ jobs:
     docker:
     - image: cimg/python:3.12
     steps:
+    - checkout
     - run: python3 -m pip install nose2
     - run: find .
     - run: python3 -m pip install -e .
