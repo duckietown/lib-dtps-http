@@ -752,7 +752,7 @@ class DTPSServer:
         except KeyError as e:
             raise web.HTTPNotFound(text=f"{e}", headers=headers)
 
-        logger.debug(f"serve_meta: {request.url!r} -> {source!r}")
+        # logger.debug(f"serve_meta: {request.url!r} -> {source!r}")
 
         index_internal = await source.get_meta_info(request.url.path, self)
 
@@ -845,7 +845,7 @@ class DTPSServer:
         multidict_update(headers, self.get_headers_alternatives(request))
         put_meta_headers(headers, source.get_properties(self))
 
-        logger.debug(f"serve_get: {request.url!r} -> {source!r}")
+        # logger.debug(f"serve_get: {request.url!r} -> {source!r}")
 
         if isinstance(source, ForwardedQueue):
             # Optimization: streaming
@@ -857,7 +857,7 @@ class DTPSServer:
 
         title = topic_name_s
         url = topic_name_s
-        logger.info(f"url: {topic_name_s!r} source: {source!r}")
+        # logger.info(f"url: {topic_name_s!r} source: {source!r}")
         try:
             rs = await source.get_resolved_data(request, url, self)
         except KeyError as e:
@@ -1104,7 +1104,7 @@ pre {{
 
         topic_name_s = request.match_info["topic"]
 
-        logger.info(f"serve_events: {request} topic_name={topic_name_s} send_data={send_data}")
+        # logger.info(f"serve_events: {request} topic_name={topic_name_s} send_data={send_data}")
         topic_name = TopicNameV.from_relative_url(topic_name_s)
         if topic_name not in self._oqs and topic_name not in self._forwarded:
             headers: CIMultiDict[str] = CIMultiDict()
@@ -1113,9 +1113,9 @@ pre {{
             msg = f"Cannot resolve topic: {request.url}\ntopic: {topic_name_s!r}"
             raise web.HTTPNotFound(text=msg, headers=headers)
 
-        logger.info(
-            f"serve_events: {topic_name.as_dash_sep()} send_data={send_data} headers={request.headers}"
-        )
+        # logger.info(
+        #     f"serve_events: {topic_name.as_dash_sep()} send_data={send_data} headers={request.headers}"
+        # )
         ws = web.WebSocketResponse()
         multidict_update(ws.headers, self.get_headers_alternatives(request))
         self._add_own_headers(ws.headers)
@@ -1236,7 +1236,7 @@ pre {{
         async with DTPSClient.create() as client:
             async with client.my_session(url) as (session, use_url):
                 async with session.ws_connect(use_url) as ws:
-                    logger.debug(f"websocket to {use_url} ready")
+                    # logger.debug(f"websocket to {use_url} ready")
                     async for msg in ws:
                         if msg.type == WSMsgType.CLOSE:
                             break
@@ -1253,7 +1253,7 @@ pre {{
     ) -> None:
         assert isinstance(url, URL)
         use_remote_inline_data = True  # TODO: configurable
-        logger.debug(f"serve_events_forwarder_one: {url} {inline_data=} {use_remote_inline_data=}")
+        # logger.debug(f"serve_events_forwarder_one: {url} {inline_data=} {use_remote_inline_data=}")
         from .client import DTPSClient
 
         async with DTPSClient.create() as client:
