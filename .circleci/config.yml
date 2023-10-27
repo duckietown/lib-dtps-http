@@ -46,7 +46,7 @@ jobs:
     docker:
       - image: rust:1.73.0
     environment:
-      RUST_BACKTRACE: 1
+      RUST_BACKTRACE: full
     steps:
       - checkout
       - run: apt-get update && apt-get install -y python3-pip python3-venv

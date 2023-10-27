@@ -47,6 +47,8 @@ mod tests {
     async fn test_python1() -> DTPSR<()> {
         init_logging();
         let path = "/tmp/dtps-tests/test_python1/socket";
+        // create directory
+        tokio::fs::create_dir_all("/tmp/dtps-tests/test_python1").await?;
         let cmd = vec!["dtps-http-py-server-example-clock", "--unix-path", path];
 
         // create process given by command above
