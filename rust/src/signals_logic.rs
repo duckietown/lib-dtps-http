@@ -1,22 +1,23 @@
 use std::{
     collections::HashMap,
+    env,
     fmt::Debug,
 };
-use tokio::sync::broadcast::Receiver as BroadcastReceiver;
 
 use anyhow::Context;
-
 use async_trait::async_trait;
-
 use json_patch::Patch;
-
+use lazy_static::lazy_static;
 use serde_cbor::Value as CBORValue;
-use tokio::task::JoinHandle;
-use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio::{
+    sync::broadcast::Receiver as BroadcastReceiver,
+    task::JoinHandle,
+};
 
 use crate::{
     context,
     get_inside,
+    utils::is_truthy,
     ChannelInfo,
     Clocks,
     InsertNotification,
@@ -29,6 +30,7 @@ use crate::{
     TopicProperties,
     TopicsIndexInternal,
     DTPSR,
+    ENV_MASK_ORIGIN,
 };
 
 #[derive(Debug, Clone)]
@@ -143,51 +145,6 @@ pub struct ActualUpdate {
     pub clocks: Clocks,
 }
 
-// fn adapt_cbor_map<'a, F, T1, T2>(in1: &InsertNotification, f: F, content_type: String,
-//                              unique_id_suffix: String) -> DTPSR<InsertNotification>
-//     where F: FnOnce(&T1) -> T2,
-//           T1: Clone + Debug + Deserialize<'a>,
-//           T2: Serialize  + Clone + Debug ,
-// {
-//     let in1 = in1.clone();
-//     let rd0 = in1.raw_data.clone();
-//     let content: Vec<u8> = in1.raw_data.content.to_vec().clone();
-//     let rd = {
-//         // let v1 = serde_cbor::from_slice(&content)?;
-//         let v1 = rd0.interpret::<T1>()?;
-//         let v1_ = v1.clone();
-//         let v2 = f(&v1_);
-//         // let v2 = match f(v1) {
-//         //     Ok(v) => v,
-//         //     Err(e) => {
-//         //         return Err(DTPSError::Other(format!("Cannot run function")));
-//         //     }
-//         // };
-//         not_implemented!();
-//         // let cbor_bytes = serde_cbor::to_vec(&v2)?;
-//         // let rd = RawData::new(&cbor_bytes, content_type);
-//         // rd.clone()
-//     };
-//     not_implemented!("adapt_cbor_map")
-//     //
-//     // let ds = in1.data_saved.clone();
-//     //
-//     // let data_saved = DataSaved {
-//     //     origin_node: ds.origin_node.clone(),
-//     //     unique_id: format!("{}:{}", ds.unique_id, unique_id_suffix),
-//     //     index: ds.index,
-//     //     time_inserted: ds.time_inserted,
-//     //     clocks: ds.clocks.clone(),
-//     //     content_type: rd.content_type.clone(),
-//     //     content_length: rd.content.len(),
-//     //     digest: rd.digest().clone(),
-//     // };
-//     // Ok(InsertNotification {
-//     //     data_saved,
-//     //     raw_data: rd,
-//     // })
-// }
-
 impl Transforms {
     pub fn apply(&self, data: CBORValue) -> DTPSR<CBORValue> {
         match self {
@@ -200,4 +157,25 @@ impl Transforms {
     }
 }
 
-pub const MASK_ORIGIN: bool = false;
+pub static DEFAULT_MASK_ORIGIN: bool = false;
+
+pub fn should_use_origin() -> bool {
+    // Retrieve the environment variable's value.
+    match env::var(ENV_MASK_ORIGIN) {
+        Ok(value) => {
+            // If the environment variable is set, check its truthiness.
+            match is_truthy(&value) {
+                None => DEFAULT_MASK_ORIGIN,
+                Some(x) => x,
+            }
+        }
+        // If the environment variable is not set, return the default value.
+        Err(_) => DEFAULT_MASK_ORIGIN,
+    }
+}
+
+lazy_static! {
+    // Define a default value for mask origin that can be used throughout the program.
+    pub static  ref MASK_ORIGIN: bool = should_use_origin();
+
+}

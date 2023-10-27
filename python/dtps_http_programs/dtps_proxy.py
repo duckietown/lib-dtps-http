@@ -21,6 +21,7 @@ from dtps_http import (
     URLIndexer,
     URLString,
 )
+from dtps_http.utils import should_mask_origin
 from . import logger
 
 __all__ = [
@@ -45,12 +46,11 @@ async def go_proxy(args: Optional[List[str]] = None) -> None:
 
     parser.add_argument("--add-prefix", type=str, default="proxied", required=False)
     parser.add_argument("--url", required=True)
-    parser.add_argument("--mask-origin", default=False, action="store_true")
 
     parsed, args = parser.parse_known_args(args)
 
     urlbase = parsed.url
-    mask_origin = parsed.mask_origin
+    mask_origin = should_mask_origin()
     dtps_server = DTPSServer.create()
 
     t = interpret_command_line_and_start(dtps_server, args)

@@ -49,9 +49,6 @@ mod tests {
         let path0 = dir.path().join("socket");
 
         let path = path0.to_str().unwrap();
-        // let path2 = "/tmp/dtps-tests/test_python1/socket2";
-        // create directory
-        // tokio::fs::create_dir_all("/tmp/dtps-tests/test_python1").await?;
         let cmd = vec!["dtps-http-py-server-example-clock", "--unix-path", path];
 
         // create process given by command above
@@ -75,9 +72,6 @@ mod tests {
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             }
         }
-
-        // // await everything ready
-        // tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
         let con = TypeOfConnection::unix_socket(path);
 

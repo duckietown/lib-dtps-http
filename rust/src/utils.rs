@@ -87,3 +87,49 @@ pub fn format_query(q: &HashMap<String, String>) -> String {
     }
     res
 }
+
+/// Determines if the given string slice represents a truthy or falsy value.
+///
+/// # Arguments
+///
+/// * `input` - A string slice that holds the value to be evaluated.
+///
+/// # Returns
+///
+/// * `Some(true)` if the value is truthy (e.g., "true", "True", "1", "yes").
+/// * `Some(false)` if the value is falsy (e.g., "false", "False", "0", "no").
+/// * `None` if the value does not match any truthy or falsy representation.
+///
+/// # Examples
+///
+/// ```
+/// // You can use the function in this manner:
+/// let truthy_str = "True";
+/// let result = is_truthy(truthy_str);
+/// assert_eq!(result, Some(true));
+///
+/// let non_truthy_str = "not true or false";
+/// let result = is_truthy(non_truthy_str);
+/// assert_eq!(result, None);
+/// ```
+pub fn is_truthy(input: &str) -> Option<bool> {
+    // Lowercase the input to make comparison case-insensitive
+    match input.to_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" | "t" => Some(true),
+        "false" | "0" | "no" | "off" | "f" | "" => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_truthy() {
+        assert_eq!(is_truthy("True"), Some(true));
+        assert_eq!(is_truthy("false"), Some(false));
+        assert_eq!(is_truthy(""), Some(false));
+        assert_eq!(is_truthy("not sure"), None);
+    }
+}

@@ -52,6 +52,7 @@ warp = { version = "0.3.5", features = ["compression"] }
 json-patch = "*"
 strip-ansi-escapes = "0.2.0"
 tempfile = "3.8.1"
+lazy_static = "1.4.0"
 
 [target.'cfg(target_os = "wasi")'.dependencies]
 js-sys = "0.3"

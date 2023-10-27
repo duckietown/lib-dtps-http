@@ -1,3 +1,4 @@
+import hashlib
 import json
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Sequence, Union
@@ -142,8 +143,6 @@ class RawData:
         return cls(content=cbor2.dumps(ob), content_type=MIME_CBOR)
 
     def digest(self) -> str:
-        import hashlib
-
         s = hashlib.sha256(self.content).hexdigest()
         return f"sha256:{s}"
 

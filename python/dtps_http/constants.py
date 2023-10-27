@@ -5,6 +5,7 @@ __all__ = [
     "CONTENT_TYPE_DTPS_INDEX_CBOR",
     "CONTENT_TYPE_PATCH_JSON",
     "CONTENT_TYPE_TOPIC_HISTORY_CBOR",
+    "ENV_MASK_ORIGIN",
     "EVENTS_SUFFIX",
     "HEADER_CONTENT_LOCATION",
     "HEADER_DATA_ORIGIN_NODE_ID",
@@ -82,3 +83,6 @@ MIME_YAML = ContentType("application/yaml")
 MIME_TEXT = ContentType("text/plain")
 MIME_HTML = ContentType("text/html")
 MIME_JPEG = ContentType("image/jpeg")
+
+
+ENV_MASK_ORIGIN = "DTPS_HTTP_MASK_ORIGIN"

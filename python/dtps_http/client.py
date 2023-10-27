@@ -575,10 +575,7 @@ class DTPSClient:
             async with self.my_session(url, conn_timeout=2) as (session, use_url):
                 # logger.info(f"get_metadata {url0=!r} {use_url=!r}")
                 async with session.head(use_url) as resp:
-                    #  if resp.status == 404:
-
-                    #      return FoundMetadata([], None, None, None)
-                    logger.info(f"headers {url0}: {resp.headers}")
+                    # logger.info(f"headers {url0}: {resp.headers}")
 
                     await my_raise_for_status(resp, url0)
 

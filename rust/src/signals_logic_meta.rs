@@ -126,7 +126,7 @@ impl TypeOFSource {
                 let link_benchmark_total =
                     the_data.reachability_we_used.benchmark.clone() + the_data.link_benchmark_last.clone();
 
-                if MASK_ORIGIN {
+                if *MASK_ORIGIN {
                     tr.reachability.clear();
                 }
                 tr.reachability.push(TopicReachabilityInternal {

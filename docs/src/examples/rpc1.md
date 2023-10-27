@@ -55,7 +55,6 @@ The output must be a `ObjectTransformResult`, which is the union of `RawData` or
 
 `TransformError` is an object that contains the HTTP status code and a message.
 
-
 The 40x status codes are used to indicate that the client made a mistake, e.g. the input was not an integer.
 
 ### Setting the trasnform function

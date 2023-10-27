@@ -39,9 +39,9 @@ pub static REL_META: &str = "dtps-meta";
 pub static REL_URL_DEREF: &str = ":deref";
 pub static REL_URL_META: &str = ":meta";
 pub static URL_HISTORY: &str = ":history";
+pub static ENV_MASK_ORIGIN: &str = "DTPS_HTTP_MASK_ORIGIN";
 
 #[cfg(test)]
-
 mod test {
     use mime::Mime;
 

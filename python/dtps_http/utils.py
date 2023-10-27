@@ -1,17 +1,20 @@
 import functools
+import os
 import traceback
-from typing import Any, AsyncIterator, Awaitable, Callable, TYPE_CHECKING, TypeVar, Union
+from typing import Any, AsyncIterator, Awaitable, Callable, Optional, TYPE_CHECKING, TypeVar, Union
 
 from multidict import CIMultiDict, CIMultiDictProxy
 from typing_extensions import ParamSpec
 
 from . import logger
+from .constants import ENV_MASK_ORIGIN
 
 __all__ = [
     "async_error_catcher",
     "async_error_catcher_iterator",
     "method_lru_cache",
     "multidict_update",
+    "should_mask_origin",
 ]
 
 PS = ParamSpec("PS")
@@ -73,3 +76,50 @@ else:
 def multidict_update(dest: CIMultiDict[X], src: Union[CIMultiDict[X], CIMultiDictProxy[X]]) -> None:
     for k, v in src.items():
         dest.add(k, v)
+
+
+@functools.lru_cache(maxsize=None)
+def should_mask_origin() -> bool:
+    default = False
+    v = os.environ.get(ENV_MASK_ORIGIN, str(default))
+    t = is_truthy(v)
+    if t is None:
+        logger.warning(f"Cannot parse {ENV_MASK_ORIGIN}={v!r} as truthy or falsy; using default {default}")
+        return default
+    return t
+
+
+def is_truthy(s: str) -> Optional[bool]:
+    """
+    Determines if the given string represents a truthy or falsy value.
+
+    Parameters:
+    input_str (str): A string that holds the value to be evaluated.
+
+    Returns:
+    bool|None: True if the value is truthy (e.g., "true", "True", "1", "yes").
+               False if the value is falsy (e.g., "false", "False", "0", "no").
+               None if the value does not match any truthy or falsy representation.
+
+    Example:
+    >>> is_truthy("True")
+    True
+    >>> is_truthy("false")
+    False
+    >>> is_truthy("not sure")
+    None
+    """
+
+    # Convert the string to lowercase to ensure case-insensitive comparison.
+    input_str_lower = s.lower()
+
+    # Define sets of strings that are considered "truthy" and "falsy".
+    truthy_set = {"true", "1", "yes", "t", "y"}
+    falsy_set = {"false", "0", "no", "f", "n"}
+
+    if input_str_lower in truthy_set:
+        return True
+    elif input_str_lower in falsy_set:
+        return False
+    else:
+        return None  # The value is neither truthy nor falsy.

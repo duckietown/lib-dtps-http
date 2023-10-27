@@ -1128,7 +1128,7 @@ impl ServerState {
 
             let total = oq.reachability_we_used.benchmark.clone() + oq.link_benchmark_last.clone();
 
-            if MASK_ORIGIN {
+            if *MASK_ORIGIN {
                 tr.reachability.clear();
             }
 
