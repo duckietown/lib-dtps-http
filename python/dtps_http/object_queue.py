@@ -80,6 +80,9 @@ class ObjectQueue:
         max_history: Optional[int],
         transform: ObjectTransformFunction = transform_identity,
     ):
+        if max_history is not None and max_history < 1:
+            msg = f"Invalid max_history: {max_history}"
+            raise ValueError(msg)
         self._hub = hub
         self._pub = Publisher(self._hub, Key())
         self._sub = Subscriber(self._hub, name.as_relative_url())
@@ -152,7 +155,7 @@ class ObjectQueue:
         self._data[digest] = obj
         self.stored.append(use_seq)
         self.saved[use_seq] = ds
-        if self.max_history:
+        if self.max_history is not None:
             if len(self.stored) > self.max_history:
                 x = self.stored.pop(0)
                 self.saved.pop(x, None)

@@ -538,17 +538,6 @@ class DTPSServer:
         title = f"History for {topic_name_s}"
         return self.visualize_data(request, title, rd, headers, is_streamable=False, is_pushable=False)
 
-        # return web.Response(body=cbor, content_type=CONTENT_TYPE_TOPIC_HISTORY_CBOR, headers=headers)
-
-        # logger.debug(f"serve_history: {request.url!r} -> {source!r}")  #  # raise NotImplementedError()
-
-    #  index_internal = await source.get_meta_info(request.url.path, self)
-    #
-    #  index_wire = index_internal.to_wire()
-    #  rd = RawData(cbor2.dumps(asdict(index_wire)), CONTENT_TYPE_DTPS_INDEX_CBOR)
-    #  title = f"Meta for {topic_name_s}"
-    #  return self.visualize_data(request, title, rd)
-
     @async_error_catcher
     async def serve_meta(self, request: web.Request) -> web.StreamResponse:
         headers: CIMultiDict[str] = CIMultiDict()
