@@ -1,11 +1,11 @@
 import argparse
 import asyncio
 from typing import cast
+
 from dtps_http import (
-    async_error_catcher, DTPSClient, join, parse_url_unescape, TopicNameV, TopicRef, URL,
-    URLString, URLIndexer,
+    async_error_catcher, DTPSClient, InsertNotification, join, parse_url_unescape,
+    TopicNameV, TopicRef, URL, URLIndexer, URLString,
 )
-from dtps_http.structures import InsertNotification
 
 
 @async_error_catcher

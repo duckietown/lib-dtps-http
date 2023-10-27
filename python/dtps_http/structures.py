@@ -177,6 +177,10 @@ def is_structure(content_type: str) -> bool:
     return is_yaml(content_type) or is_json(content_type) or is_cbor(content_type)
 
 
+def is_image(content_type: str) -> bool:
+    return "image" in content_type
+
+
 def is_yaml(content_type: str) -> bool:
     return "yaml" in content_type
 

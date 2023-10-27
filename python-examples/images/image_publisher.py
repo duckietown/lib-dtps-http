@@ -21,13 +21,15 @@ async def on_startup(s: DTPSServer) -> None:
     @async_error_catcher
     async def video_reader():
         import cv2
+        loop = asyncio.get_running_loop()
         video_capture = cv2.VideoCapture(0)
         logger.info("Opening video capture")
         while True:
             # Read a frame from the video
-            ret, frame = video_capture.read()
 
-            logger.info(f"Read a frame {ret}, {frame}")
+            # Very important: we use run_in_executor to run the blocking call in a thread
+            ret, frame = await loop.run_in_executor(None, video_capture.read)
+
             # Check if the video has ended
             if not ret:
                 break
@@ -39,7 +41,6 @@ async def on_startup(s: DTPSServer) -> None:
 
             rd = RawData(content=jpeg_byte_array, content_type=MIME_JPEG)
             await queue_out.publish(rd)
-            await asyncio.sleep(1)
 
     asyncio.create_task(video_reader())
 

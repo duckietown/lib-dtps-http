@@ -3,11 +3,8 @@ from typing import List, Optional
 
 from dtps_http import (
     async_error_catcher, ContentInfo, DataDesc, DTPSServer,
-    interpret_command_line_and_start, MIME_CBOR, MIME_JSON, RawData, TopicNameV, TopicProperties, logger,
-)
-from dtps_http.object_queue import (
-    ObjectTransformContext, ObjectTransformFunction, ObjectTransformResult,
-    TransformError,
+    interpret_command_line_and_start, logger, MIME_CBOR, MIME_JSON, ObjectTransformContext,
+    ObjectTransformFunction, ObjectTransformResult, RawData, TopicNameV, TopicProperties, TransformError,
 )
 
 __all__ = [

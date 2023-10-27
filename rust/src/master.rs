@@ -584,6 +584,7 @@ fn make_friendly_visualization(
                     (display)
                 }
             }
+            img id="data_field_image" src=""  {}
 
         },
     );

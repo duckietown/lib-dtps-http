@@ -1,6 +1,6 @@
 from multidict import CIMultiDict
 
-from dtps_http.utils import multidict_update
+from dtps_http import multidict_update
 
 
 def test_multidict1() -> None:

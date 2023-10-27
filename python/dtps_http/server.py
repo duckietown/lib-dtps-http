@@ -1,11 +1,11 @@
 import asyncio
+import base64
 import pathlib
 import time
 import traceback
 import uuid
 from asyncio import CancelledError
 from dataclasses import asdict, replace
-from pprint import pprint
 from typing import Any, Awaitable, Callable, cast, Dict, List, Optional, Sequence, Tuple, Union
 
 import cbor2
@@ -49,6 +49,7 @@ from .structures import (
     Chunk,
     ContentInfo,
     DataReady,
+    is_image,
     is_structure,
     LinkBenchmark,
     RawData,
@@ -639,8 +640,6 @@ class DTPSServer:
         add_nocache_headers(headers)
 
         topic_name_s = request.match_info["topic"]
-        # if not topic_name_s.endswith("/"):
-        #     raise web.HTTPNotFound(text=f"Expect URL ending in /", headers=headers)
 
         try:
             source = self.resolve(topic_name_s)
@@ -684,7 +683,7 @@ class DTPSServer:
             raise AssertionError
 
         properties = source.get_properties(self)
-        pprint(properties)
+        # pprint(properties)
         return self.visualize_data(
             request, title, rd, headers, is_streamable=properties.streamable, is_pushable=properties.pushable
         )
@@ -694,6 +693,8 @@ class DTPSServer:
         title: str,  # rd: RawData,
         initial_data_html: str,
         *,
+        is_image_content: bool,
+        content_type: str,
         pushable: bool,
         initial_push_value: str,
         initial_push_contenttype: str,
@@ -702,26 +703,34 @@ class DTPSServer:
         headers: CIMultiDict[str] = CIMultiDict()
 
         # language=html
-        html_index = f"""
-        <html lang="en">
-        <head> 
-        <title>{title}</title>
-          <link rel="stylesheet" href="/static/style.css">
-                <script src="/static/send.js"></script>
-                
-                <script src="https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.min.js"></script>
-                <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
-                
-        </head>
-        <body>
-        <h1>{title}</h1>
+        html_index = f"""\
+<html lang="en">
+<head>
+    <title>{title}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/send.js"></script>
 
-        <p>This response coming to you in HTML format because you requested it in HTML format.</p>
+    <script src="https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
 
+</head>
+<body>
+<h1>{title}</h1>
 
-        <pre id="data_field"><code>{initial_data_html}</code></pre>
+<p>This response coming to you in HTML format because you requested it in HTML format.</p>
 
         """
+        if is_image_content:
+            # language=html
+            html_index += f"""
+                <img id="data_field_image" src="data:{content_type};base64,{initial_data_html}"/>
+            
+            """
+        else:
+            # language=html
+            html_index += f"""
+                <pre id="data_field"><code>{initial_data_html}</code></pre>
+            """
         if pushable:
             # language=html
             html_index += f"""
@@ -755,8 +764,21 @@ class DTPSServer:
 
         accepts_html = "text/html" in accept_headers
         if isinstance(rd, RawData):
-            if rd.content_type != "text/html" and accepts_html and is_structure(rd.content_type):
-                initial_data_html = rd.get_as_yaml()
+            if (
+                rd.content_type != "text/html"
+                and accepts_html
+                and (is_structure(rd.content_type) or is_image(rd.content_type))
+            ):
+                if is_structure(rd.content_type):
+                    is_image_content = False
+                    initial_data_html = rd.get_as_yaml()
+                else:
+                    # convert to base64
+                    is_image_content = True
+
+                    encoded: bytes = base64.b64encode(rd.content)
+
+                    initial_data_html: str = encoded.decode("ascii")
                 return self.make_friendly_visualization(
                     title,
                     initial_data_html,
@@ -764,6 +786,8 @@ class DTPSServer:
                     pushable=is_pushable,
                     initial_push_value=initial_data_html,
                     initial_push_contenttype=rd.content_type,
+                    is_image_content=is_image_content,
+                    content_type=rd.content_type,
                 )
             else:
                 return web.Response(body=rd.content, content_type=rd.content_type, headers=headers)
@@ -975,6 +999,9 @@ pre {{
             if ws.closed:
                 exit_event.set()
                 return
+
+            # dt_ns = time.time_ns() - data.time_inserted
+            # logger.info(f"Sending data {data.sequence} {data.digest} send delay {dt_ns/1e6:.1f}ms")
             try:
                 await ws.send_bytes(get_tagged_cbor(data))
             except ConnectionResetError:

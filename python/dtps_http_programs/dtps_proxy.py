@@ -14,6 +14,7 @@ from dtps_http import (
     interpret_command_line_and_start,
     parse_url_unescape,
     RawData,
+    should_mask_origin,
     TOPIC_LIST,
     TopicNameV,
     TopicReachability,
@@ -21,7 +22,6 @@ from dtps_http import (
     URLIndexer,
     URLString,
 )
-from dtps_http.utils import should_mask_origin
 from . import logger
 
 __all__ = [

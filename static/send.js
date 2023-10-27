@@ -54,7 +54,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
 });
 
-function subscribeWebSocket(url, fieldId, data_field) {
+function subscribeWebSocket(url, fieldId, data_field, data_field_image) {
     // Initialize a new WebSocket connection
     let socket = new WebSocket(url);
     let field = document.getElementById(fieldId);
@@ -72,13 +72,14 @@ function subscribeWebSocket(url, fieldId, data_field) {
     });
 
     let i = 0;
+    let ndownloads_active = 0;
     // Listen for messages
     socket.addEventListener('message', async function (event) {
         // console.log('Message from server: ', event);
         // Find the field by ID and update its content
 
         let message0 = await convert(event);
-        console.log('Message from server: ', message0);
+        // console.log('Message from server: ', message0);
 
 
         if ('DataReady' in message0) {
@@ -88,9 +89,46 @@ function subscribeWebSocket(url, fieldId, data_field) {
             let diff = now - dr.time_inserted;
 
             let diff_ms = diff / 1000.0 / 1000.0;
+
             // console.log("diff", now, dr.time_inserted, diff);
 
-            let s = "Received this notification with " + diff_ms.toFixed(3) + " ms latency:\n\n";
+            let availability = dr.availability[0].url;
+            let use_url = new URL(availability, base_url);
+            // console.log("ndownloads_active", ndownloads_active);
+            // download from the url
+
+            async function download(the_url) {
+                let data = await fetch(the_url);
+                let blob = await data.blob();
+                let content_type = data.headers.get('Content-Type');
+
+                let interpreted = await interpret_blob(blob, content_type);
+                // console.log("interpreted", interpreted);
+                // check if it is an image by checking the content type starting with "image"
+                let is_image = content_type.indexOf('image') >= 0;
+                if (is_image) {
+                    // console.log("is image", interpreted);
+                    let img_field_ = document.getElementById(data_field_image);
+                    if (img_field_) {
+                        img_field_.src = URL.createObjectURL(blob);
+                    }
+
+                } else {
+                    let data_field_ = document.getElementById(data_field);
+                    if (i > 0) {
+                        if (data_field_) {
+                            data_field_.textContent = jsyaml.dump(interpreted);
+                        }
+                    }
+                }
+            }
+
+            // if (i > 0 && diff_ms > 500) {
+            //     console.log("skipping download, too old", diff_ms, 'ndownloads_active', ndownloads_active);
+            //     return;
+            // }
+
+             let s = "Received this notification with " + diff_ms.toFixed(3) + " ms latency:\n\n";
             // console.log('Message from server: ', message);
 
             if (field) {
@@ -98,23 +136,9 @@ function subscribeWebSocket(url, fieldId, data_field) {
                 field.textContent = s + jsyaml.dump(message0);
             }
 
-            let availability = dr.availability[0].url;
-            let use_url = new URL(availability, base_url);
-            console.log("availability", availability, use_url);
-            // download from the url
-            let data = await fetch(use_url);
-            let blob = await data.blob();
-            let content_type = data.headers.get('Content-Type');
+                ndownloads_active += 1;
+                download(use_url).then(r => ndownloads_active -= 1);
 
-            let interpreted = await interpret_blob(blob, content_type);
-            console.log("interpreted", interpreted);
-
-            let data_field_ = document.getElementById(data_field);
-            if (i > 0) {
-                if (data_field_) {
-                    data_field_.textContent = jsyaml.dump(interpreted);
-                }
-            }
 
             i += 1;
 
@@ -207,5 +231,5 @@ document.addEventListener("DOMContentLoaded", function () {
 
     console.log("subscribing to: ", s);
 
-    subscribeWebSocket(s, 'result', 'data_field');
+    subscribeWebSocket(s, 'result', 'data_field', 'data_field_image');
 });

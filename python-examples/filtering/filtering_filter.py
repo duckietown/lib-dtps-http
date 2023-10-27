@@ -2,11 +2,9 @@ import asyncio
 from typing import List, Optional
 
 from dtps_http import (
-    async_error_catcher, ContentInfo, DataSaved, DTPSServer, interpret_command_line_and_start, logger,
-    MIME_JSON, RawData, TopicNameV,
-    TopicProperties,
+    async_error_catcher, ContentInfo, DataSaved, DTPSServer,
+    interpret_command_line_and_start, logger, MIME_JSON, ObjectQueue, RawData, TopicNameV, TopicProperties,
 )
-from dtps_http.object_queue import ObjectQueue
 
 __all__ = [
     "dtps_example_manual_filter_main",
