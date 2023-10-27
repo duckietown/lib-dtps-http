@@ -3,8 +3,9 @@ import asyncio
 
 from dtps_http import (
     async_error_catcher, ContentInfo, DTPSServer, interpret_command_line_and_start, MIME_JSON,
-    ObjectQueue, TopicNameV,
+    TopicNameV,
 )
+from dtps_http.object_queue import ObjectQueue
 
 
 @async_error_catcher

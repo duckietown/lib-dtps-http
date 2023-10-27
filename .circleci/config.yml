@@ -51,6 +51,7 @@ jobs:
       - image: rust:1.73.0
     environment:
       RUST_BACKTRACE: full
+      DTPS_HTTP_MASK_ORIGIN: "true" 
     steps:
       - checkout
       - run: apt-get update && apt-get install -y python3-pip python3-venv

@@ -58,7 +58,9 @@ Things to notice:
 This is the first part of the  `on_startup` callback that is called when the server is ready:
 
 ```python
-from dtps_http import DTPSServer, async_error_catcher, MIME_JSON, ContentInfo, TopicNameV, ObjectQueue
+from dtps_http import DTPSServer, async_error_catcher, MIME_JSON, ContentInfo, TopicNameV
+from dtps_http.object_queue import ObjectQueue
+
 
 @async_error_catcher
 async def on_startup(s: DTPSServer) -> None:
@@ -81,16 +83,17 @@ Things to notice:
 This is the second part:
 
 ```python
-from dtps_http import DTPSServer, async_error_catcher, ObjectQueue
-import asyncio 
+from dtps_http import DTPSServer, async_error_catcher
+from dtps_http.object_queue import ObjectQueue
+import asyncio
+
 
 @async_error_catcher
 async def on_startup(s: DTPSServer) -> None:
-    
     ...
-    
-    queue_out : ObjectQueue = ...
-    
+
+    queue_out: ObjectQueue = ...
+
     # We create a task that periodically publishes to the queue
     @async_error_catcher
     async def periodic_publish():

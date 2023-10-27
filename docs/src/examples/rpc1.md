@@ -24,7 +24,8 @@ This can serve as an entry point for RPC calls.
 In this example we expect that the input is a json/yaml/cbor even integer.
 
 ```python
-from dtps_http import ObjectTransformContext, ObjectTransformResult, RawData, TransformError
+from dtps_http import RawData
+from dtps_http.object_queue import ObjectTransformContext, ObjectTransformResult, TransformError
 
 
 async def transform(x: ObjectTransformContext) -> ObjectTransformResult:

@@ -104,6 +104,7 @@ pub fn format_query(q: &HashMap<String, String>) -> String {
 ///
 /// ```
 /// // You can use the function in this manner:
+/// use dtps_http::utils::is_truthy;
 /// let truthy_str = "True";
 /// let result = is_truthy(truthy_str);
 /// assert_eq!(result, Some(true));
