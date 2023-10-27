@@ -1,5 +1,6 @@
 use std::{
     env,
+    env::VarError,
     sync::Once,
 };
 
@@ -32,12 +33,15 @@ pub fn get_id_string() -> String {
 
 fn init_logging_() {
     eprintln!("{}", get_id_string());
-
-    if env::var("RUST_LOG").is_err() {
-        eprintln!("RUST_LOG not set: setting it to {DEFAULT_LOG_LEVEL}");
-        env::set_var("RUST_LOG", DEFAULT_LOG_LEVEL)
-    } else {
-        eprintln!("RUST_LOG is set to {:?}", env::var("RUST_LOG"));
+    let x = env::var("RUST_LOG");
+    match x {
+        Ok(val) => {
+            eprintln!("RUST_LOG is set to {val:?}");
+        }
+        Err(_) => {
+            eprintln!("RUST_LOG not set: setting it to {DEFAULT_LOG_LEVEL}");
+            env::set_var("RUST_LOG", DEFAULT_LOG_LEVEL)
+        }
     }
     env_logger::init();
 }

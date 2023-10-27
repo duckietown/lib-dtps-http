@@ -2,6 +2,8 @@ use futures::{
     SinkExt,
     StreamExt,
 };
+use tempfile::tempdir;
+
 use tokio::{
     process::Command,
     sync::broadcast::{
@@ -10,7 +12,6 @@ use tokio::{
     },
     task::JoinHandle,
 };
-use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::{
     client::get_rawdata_accept,
@@ -19,12 +20,8 @@ use crate::{
     get_history,
     get_index,
     get_metadata,
-    get_rawdata,
     info_with_info,
-    interpret_resp,
-    make_request,
     DTPSError,
-    FoundMetadata,
     ListenURLEvents,
     TopicName,
     TypeOfConnection,
@@ -34,6 +31,7 @@ use crate::{
 
 #[cfg(test)]
 mod tests {
+    use log::info;
     use std::fmt::Debug;
 
     use crate::{
@@ -46,24 +44,55 @@ mod tests {
     #[tokio::test]
     async fn test_python1() -> DTPSR<()> {
         init_logging();
-        let path = "/tmp/dtps-tests/test_python1/socket";
+        // generate a temp dir
+        let dir = tempdir()?;
+        let path0 = dir.path().join("socket");
+
+        let path = path0.to_str().unwrap();
+        // let path2 = "/tmp/dtps-tests/test_python1/socket2";
         // create directory
-        tokio::fs::create_dir_all("/tmp/dtps-tests/test_python1").await?;
+        // tokio::fs::create_dir_all("/tmp/dtps-tests/test_python1").await?;
         let cmd = vec!["dtps-http-py-server-example-clock", "--unix-path", path];
 
         // create process given by command above
-        let mut child = Command::new(cmd[0]).args(&cmd[1..]).spawn().unwrap();
+        let mut child = Command::new(cmd[0])
+            .args(&cmd[1..])
+            .stdout(std::process::Stdio::inherit()) // Inherit the parent's stdout
+            .stderr(std::process::Stdio::inherit()) // Inherit the parent's stderr
+            .spawn()?;
 
-        // await everything ready
-        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+        // wait that the socket exists but not more than 5 seconds
+        let t0 = tokio::time::Instant::now();
+        while true {
+            let elapsed = t0.elapsed().as_secs();
+            if tokio::fs::metadata(path).await.is_ok() {
+                info!("found socket {path} after {elapsed} seconds");
+                break;
+            } else {
+                if elapsed > 5 {
+                    return Err(DTPSError::from("socket not found"));
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
+        }
+
+        // // await everything ready
+        // tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
         let con = TypeOfConnection::unix_socket(path);
 
         let res = check_server(&con).await;
 
         child.kill().await?;
-        res.unwrap();
-        Ok(())
+        // if res.is_err() {
+        //
+        //     ret
+        //     let res = res.unwrap_err();
+        //     error_with_info!("error: {:#?}", res);
+        // }
+        // res.unwrap();
+        // Ok(())
+        res
     }
 }
 
