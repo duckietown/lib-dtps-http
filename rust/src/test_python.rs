@@ -63,7 +63,7 @@ mod tests {
 
         // wait that the socket exists but not more than 5 seconds
         let t0 = tokio::time::Instant::now();
-        while true {
+        loop {
             let elapsed = t0.elapsed().as_secs();
             if tokio::fs::metadata(path).await.is_ok() {
                 info!("found socket {path} after {elapsed} seconds");

@@ -13,6 +13,9 @@ packages = [
     { from = "python", include = "dtps_http" },
     { from = "python", include = "dtps_http_programs" },
 ]
+
+include = ["static/*"]
+
 [tool.poetry.dependencies]
 python = "^3.8"
 coloredlogs = "^15"
@@ -56,6 +59,3 @@ strict = true
 folders = [
     { path = "src" }
 ]
-
-# [tool.poetry.include]
-# "static/*" = { from = "static", to = "static" }

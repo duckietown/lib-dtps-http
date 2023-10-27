@@ -7,6 +7,7 @@ jobs:
     - checkout
     - run: python3 -m pip install nose2
     - run: python3 -m pip install .
+    - run: rm -rf static python/dtps_http
     - run: python3 -m nose2 python
   "python39":
     docker:
@@ -15,6 +16,7 @@ jobs:
     - checkout
     - run: python3 -m pip install nose2
     - run: python3 -m pip install .
+    - run: rm -rf static python/dtps_http
     - run: python3 -m nose2 python
   "python310":
     docker:
@@ -23,6 +25,7 @@ jobs:
     - checkout
     - run: python3 -m pip install nose2
     - run: python3 -m pip install  .
+    - run: rm -rf static python/dtps_http
     - run: python3 -m nose2 python
   "python311":
     docker:
@@ -31,6 +34,7 @@ jobs:
     - checkout
     - run: python3 -m pip install nose2
     - run: python3 -m pip install .
+    - run: rm -rf static python/dtps_http
     - run: python3 -m nose2 python
   # "python-312":
   #   docker:
@@ -52,10 +56,13 @@ jobs:
       - run: apt-get update && apt-get install -y python3-pip python3-venv
       - run: python3 -m venv .
       - run: ./bin/pip install  .
+      - run: rm -rf static python/dtps_http
+      - run:
+          name: Run Tests
+          command: "PATH=$PATH:./bin cargo test test_python1"
       - run:
           name: Run Tests
           command: "PATH=$PATH:./bin cargo test"
-
 workflows:
   test:
     jobs:
