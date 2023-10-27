@@ -292,13 +292,16 @@ class ForwardedTopic:
 
 
 def get_static_dir() -> str:
-    static_dir = pathlib.Path(__file__).parent.parent / "static"
-    if static_dir.exists():
-        return str(static_dir)
-    static_dir2 = pathlib.Path(__file__).parent.parent.parent / "static"
-    if static_dir2.exists():
-        return str(static_dir2)
-    msg = f"Static directories {static_dir} or {static_dir2} do not exist."
+    options = [
+        pathlib.Path(__file__).parent / "static",
+        pathlib.Path(__file__).parent.parent / "static",
+        pathlib.Path(__file__).parent.parent.parent / "static",
+    ]
+    for o in options:
+        if o.exists():
+            return str(o)
+
+    msg = f"Static directory not found: {options}."
     raise FileNotFoundError(msg)
 
 
@@ -311,6 +314,7 @@ class DTPSServer:
     tasks: "list[asyncio.Task[Any]]"
     digest_to_urls: Dict[str, List[URL]]
     node_app_data: Dict[str, bytes]
+    registrations: List[Registration]
 
     @classmethod
     def create(
@@ -333,7 +337,6 @@ class DTPSServer:
         self._more_on_startup = on_startup
         self.app.on_startup.append(self.on_startup)
         self.app.on_shutdown.append(self.on_shutdown)
-        # routes.get("/")(self.serve_index)
 
         routes.get("/{topic:.*}" + EVENTS_SUFFIX + "/")(self.serve_events)
         routes.get("/{topic:.*}" + REL_URL_META + "/")(self.serve_meta)
@@ -345,7 +348,9 @@ class DTPSServer:
         routes.get("/{topic:.*}")(self.serve_get)
         # mount a static directory for the web interface
 
-        self.app.add_routes([web.static("/static", get_static_dir())])
+        static_dir = get_static_dir()
+        logger.info(f"Using static dir: {static_dir}")
+        self.app.add_routes([web.static("/static", static_dir)])
         self.app.add_routes(routes)
 
         self.hub = Hub()
@@ -359,8 +364,6 @@ class DTPSServer:
         self.digest_to_urls = {}
 
         self.registrations = []
-
-    registrations: List[Registration]
 
     def add_registrations(self, registrations: Sequence[Registration]) -> None:
         self.registrations.extend(registrations)

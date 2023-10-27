@@ -31,8 +31,7 @@ psutil = "^5"
 urllib3 = "^2"
 
 # other dependencies: aiohttp-devtools pre-commit mkdocs mkdocs-material mkdocstrings[python]
-# rich = "^13.5.2"
-
+# pip install "mkdocstrings[python]"  mkdocs-material
 
 [tool.poetry.scripts]
 
@@ -40,7 +39,6 @@ dtps-http-py-server-example-clock = 'dtps_http_programs:clock_main'
 dtps-http-py-client-stats = 'dtps_http_programs:dtps_stats_main'
 dtps-http-py-proxy = 'dtps_http_programs:dtps_proxy_main'
 dtps-http-py-send-continuous = 'dtps_http_programs:dtps_send_continuous_main'
-#dtps-http-py-manual-filter = 'dtps_http_programs:dtps_example_manual_filter_main'
 dtps-http-py-listen= 'dtps_http_programs:dtps_listen_main'
 
 
@@ -53,7 +51,7 @@ vcs = "git"
 style = "pep440"
 strict = true
 
-# pip install "mkdocstrings[python]"  mkdocs-material
+
 
 [tool.poetry-dynamic-versioning.substitution]
 folders = [
