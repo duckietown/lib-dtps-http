@@ -39,6 +39,7 @@ use crate::{
 #[async_trait]
 impl Patchable for TypeOFSource {
     async fn patch(&self, presented_as: &str, ssa: ServerStateAccess, patch: &Patch) -> DTPSR<()> {
+        debug_with_info!("patching {self:#?} with {patch:#?}");
         match self {
             TypeOFSource::ForwardedQueue(_) => {
                 not_implemented!("patch for {self:#?} with {self:?}")

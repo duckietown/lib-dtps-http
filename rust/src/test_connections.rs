@@ -12,12 +12,12 @@ pub mod tests {
         debug_with_info,
         init_logging,
         post_json,
+        test_fixtures::TestFixture,
         test_range::tests::{
             instance,
             node1,
             node2,
             switchboard,
-            TestFixture,
         },
         ConnectionJob,
         ServiceMode,
@@ -147,9 +147,9 @@ pub mod tests {
         };
 
         tokio::time::sleep(Duration::from_millis(1000)).await;
-        add_tpt_connection(&instance.con, &connection_name, &connection_job).await?;
-        remove_tpt_connection(&instance.con, &connection_name).await?;
-        add_tpt_connection(&instance.con, &connection_name, &connection_job).await?;
+        add_tpt_connection(&instance.cf.con, &connection_name, &connection_job).await?;
+        remove_tpt_connection(&instance.cf.con, &connection_name).await?;
+        add_tpt_connection(&instance.cf.con, &connection_name, &connection_job).await?;
 
         let n = 5;
         for i in 0..n {
@@ -178,7 +178,7 @@ pub mod tests {
     #[rstest]
     #[awt]
     #[tokio::test]
-    async fn check_connection_remote_remote(
+    async fn check_connection_remote_remote_rust(
         #[future] switchboard: TestFixture,
         #[future] node1: TestFixture,
         #[future] node2: TestFixture,
@@ -197,10 +197,22 @@ pub mod tests {
         let node1_topic1 = node1_prefix.clone() + topic1.clone();
         let node2_topic2 = node2_prefix.clone() + topic2.clone();
 
-        let urls = vec![node1.con.clone()];
-        add_proxy(&switchboard.con, &node1_prefix, node1.server.get_node_id().await, &urls).await?;
-        let urls = vec![node2.con.clone()];
-        add_proxy(&switchboard.con, &node2_prefix, node2.server.get_node_id().await, &urls).await?;
+        let urls = vec![node1.cf.con.clone()];
+        add_proxy(
+            &switchboard.cf.con,
+            &node1_prefix,
+            node1.server.get_node_id().await,
+            &urls,
+        )
+        .await?;
+        let urls = vec![node2.cf.con.clone()];
+        add_proxy(
+            &switchboard.cf.con,
+            &node2_prefix,
+            node2.server.get_node_id().await,
+            &urls,
+        )
+        .await?;
 
         let connection_name = TopicName::from_dash_sep("connection1")?;
         let cn = ConnectionJob {
@@ -208,9 +220,9 @@ pub mod tests {
             target: node2_topic2.clone(),
             service_mode: ServiceMode::BestEffort,
         };
-        add_tpt_connection(&switchboard.con, &connection_name, &cn).await?;
+        add_tpt_connection(&switchboard.cf.con, &connection_name, &cn).await?;
 
-        let topic1_url = node1.con.join(topic1.as_relative_url())?;
+        let topic1_url = node1.cf.con.join(topic1.as_relative_url())?;
         let n: usize = 5;
         for i in 0..n {
             post_json(&topic1_url, &i).await?;
@@ -230,9 +242,9 @@ pub mod tests {
             assert_eq!(topic2.saved.len(), n);
         }
 
-        switchboard.finish()?;
-        node1.finish()?;
-        node2.finish()?;
+        switchboard.finish().await?;
+        node1.finish().await?;
+        node2.finish().await?;
         Ok(())
     }
 }

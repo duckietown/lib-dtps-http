@@ -11,6 +11,7 @@ use crate::{
     ContentPresentation,
     DTPSError,
     RawData,
+    CONTENT_TYPE_CBOR,
     CONTENT_TYPE_JSON,
     DTPSR,
 };
@@ -78,6 +79,12 @@ impl RawData {
         T: Serialize,
     {
         Self::encode_as(value, CONTENT_TYPE_JSON)
+    }
+    pub fn encode_as_cbor<T>(value: &T) -> DTPSR<Self>
+    where
+        T: Serialize,
+    {
+        Self::encode_as(value, CONTENT_TYPE_CBOR)
     }
 
     pub fn encode_as<T>(value: &T, target_content_type: &str) -> DTPSR<Self>

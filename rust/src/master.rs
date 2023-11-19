@@ -30,6 +30,7 @@ use warp::{
 };
 
 use crate::{
+    clocks::Clocks,
     debug_with_info,
     display_printable,
     divide_in_components,
@@ -45,6 +46,7 @@ use crate::{
     receive_from_websocket,
     send_as_ws_cbor,
     serve_static_file_path,
+    signals_logic::Pushable,
     utils_headers,
     utils_headers::put_patchable_headers,
     utils_mime,
@@ -115,46 +117,80 @@ pub async fn serve_master_post(
             .unwrap();
         return Ok(res);
     }
+    let res = ds.push(ss_mutex.clone(), &rd, &Clocks::default()).await;
 
-    return match ds {
-        TypeOFSource::OurQueue(topic_name, _) => {
-            debug_with_info!("Pushing to topic {:?}", topic_name);
-            handle_topic_post(&topic_name, ss_mutex, &rd).await
-        }
-        TypeOFSource::ForwardedQueue(fq) => {
-            let con = {
-                let ss = ss_mutex.lock().await;
-                let sub = ss.proxied.get(&fq.subscription).unwrap();
-                match &sub.established {
-                    None => {
-                        let msg = "Subscription not established";
-                        let res = http::Response::builder()
-                            .status(StatusCode::NOT_FOUND) //ok
-                            .body(Body::from(msg.to_string()))
-                            .unwrap();
-                        return Ok(res);
-                    }
-                    Some(est) => est.using.join(fq.his_topic_name.as_relative_url())?,
-                }
-            };
-            let resp = make_request(&con, hyper::Method::POST, &rd.content, Some(&rd.content_type), None).await?;
-            if !resp.status().is_success() {
-                let s = format!("The proxied request did not succeed. con ={con} ");
-                error_with_info!("{s}");
-            }
-
-            Ok(resp)
-        }
-        _ => {
-            let s = format!("We do not support POST to {path_str}: {ds:?}");
-            error_with_info!("{s}");
+    match res {
+        Ok(_) => {
+            // FIXME: (post) need to return the location of the new resource
             let res = http::Response::builder()
-                .status(StatusCode::METHOD_NOT_ALLOWED)
-                .body(Body::from(s))
+                .status(StatusCode::OK)
+                .body(Body::from("Push ok"))
                 .unwrap();
             Ok(res)
         }
-    };
+        Err(e) => {
+            error_with_info!("Push not ok: {}", e);
+            e.as_handler_response()
+        }
+    }
+
+    // return match ds {
+    //     TypeOFSource::OurQueue(topic_name, _) => {
+    //         debug_with_info!("Pushing to topic {:?}", topic_name);
+    //         handle_topic_post(&topic_name, ss_mutex, &rd).await
+    //     }
+    //     TypeOFSource::ForwardedQueue(fq) => {
+    //         let con = {
+    //             let ss = ss_mutex.lock().await;
+    //             let sub = ss.proxied.get(&fq.subscription).unwrap();
+    //             match &sub.established {
+    //                 None => {
+    //                     let msg = "Subscription not established";
+    //                     let res = http::Response::builder()
+    //                         .status(StatusCode::NOT_FOUND) //ok
+    //                         .body(Body::from(msg.to_string()))
+    //                         .unwrap();
+    //                     return Ok(res);
+    //                 }
+    //                 Some(est) => est.using.join(fq.his_topic_name.as_relative_url())?,
+    //             }
+    //         };
+    //         let resp = make_request(&con, hyper::Method::POST, &rd.content, Some(&rd.content_type), None).await?;
+    //         if !resp.status().is_success() {
+    //             let s = format!("The proxied request did not succeed. con ={con} ");
+    //             error_with_info!("{s}");
+    //         }
+    //
+    //         Ok(resp)
+    //     }
+    //     TypeOFSource::Transformed(source, t) => {
+    //         let clocks = Clocks::default();
+    //
+    //         ds.push(ss_mutex.clone(), &rd, &clocks).await
+    //         //
+    //         // debug_with_info!("Pushing to transformed {source:?} / {t:?} with rd = {rd:?}");
+    //         // let clocks = Clocks::default();
+    //         // source.push(ss_mutex, &rd,& clocks).await?;
+    //         // let s = "";
+    //         // let res = http::Response::builder()
+    //         //     .status(StatusCode::OK)
+    //         //     .body(Body::from(s))
+    //         //     .unwrap();
+    //         // Ok(res)
+    //
+    //         // debug_with_info!("Pushing to topic {:?}", topic_name);
+    //         // handle_topic_post(&topic_name, ss_mutex, &rd).await
+    //     }
+    //     _ => {
+    //         let s = format!("We do not support POST to {path_str}: {ds:?}");
+    //         error_with_info!("{s}");
+    //         let res = http::Response::builder()
+    //             .status(StatusCode::METHOD_NOT_ALLOWED)
+    //             .body(Body::from(s))
+    //             .unwrap();
+    //         Ok(res)
+    //     }
+    // };
 }
 
 pub async fn serve_master_patch(

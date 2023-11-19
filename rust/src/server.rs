@@ -821,22 +821,12 @@ pub fn get_header_with_default(headers: &HeaderMap, key: &str, default: &str) ->
     };
 }
 
-pub async fn handle_topic_post(
-    topic_name: &TopicName,
-    ss_mutex: ServerStateAccess,
-    rd: &RawData,
-    // headers: HeaderMap,
-    // data: hyper::body::Bytes,
-) -> HandlersResponse {
+pub async fn handle_topic_post(topic_name: &TopicName, ss_mutex: ServerStateAccess, rd: &RawData) -> HandlersResponse {
     let mut ss = ss_mutex.lock().await;
-
-    // let content_type = get_header_with_default(&headers, CONTENT_TYPE, OCTET_STREAM);
-    //
-    //
-    // let byte_vector: Vec<u8> = data.to_vec().clone();
 
     let ds = ss.publish(topic_name, &rd.content, &rd.content_type, None)?;
 
+    // FIXME: (rust) this should return the data, not datasaved
     Ok(construct_response_cbor(&ds))
 }
 

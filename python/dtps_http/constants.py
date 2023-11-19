@@ -37,10 +37,6 @@ __all__ = [
     "TOPIC_STATE_SUMMARY",
 ]
 
-# CONTENT_TYPE_TOPIC_DIRECTORY = CONTENT_TYPE_TOPIC_DESC = "application/json"
-# HEADER_SEE_EVENTS = "X-dtps-events"
-# HEADER_SEE_EVENTS_INLINE_DATA = "X-dtps-events-inline-data"
-
 HEADER_NO_CACHE = {
     "Cache-Control": "no-store, must-revalidate, max-age=0, post-check=0, pre-check=0",
     "Pragma": "no-cache",
@@ -83,6 +79,5 @@ MIME_YAML = ContentType("application/yaml")
 MIME_TEXT = ContentType("text/plain")
 MIME_HTML = ContentType("text/html")
 MIME_JPEG = ContentType("image/jpeg")
-
 
 ENV_MASK_ORIGIN = "DTPS_HTTP_MASK_ORIGIN"

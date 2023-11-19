@@ -16,6 +16,7 @@ use tokio::{
 
 use crate::{
     context,
+    dtpserror_context,
     get_inside,
     utils::is_truthy,
     ChannelInfo,
@@ -150,7 +151,7 @@ impl Transforms {
         match self {
             Transforms::GetInside(path) => {
                 // debug_with_info!("Get inside: {:?}", d);
-                let inside = context!(get_inside(vec![], &data, path), "Error getting inside: {path:?}")?;
+                let inside = dtpserror_context!(get_inside(vec![], &data, path), "Error getting inside: {path:?}")?;
                 Ok(inside)
             }
         }

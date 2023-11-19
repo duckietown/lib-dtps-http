@@ -12,6 +12,7 @@ use serde_cbor::Value::{
 use crate::{
     context,
     debug_with_info,
+    dtpserror_other,
     DTPSError,
     ResolvedData,
     ResolvedData::{
@@ -81,7 +82,7 @@ pub fn get_inside(context: Vec<String>, data: &serde_cbor::Value, path: &Vec<Str
     if path.is_empty() {
         return Ok(current.clone());
     }
-    let context_s = format!("Context: {}\n", context.join(""));
+    let context_s = format!("Context: {:?}\n Path: {:?}\nCurrent: {:?}\n", context, path, current);
     let mut new_context = context.clone();
     let mut path = path.clone();
     let first = path.remove(0);
@@ -90,19 +91,18 @@ pub fn get_inside(context: Vec<String>, data: &serde_cbor::Value, path: &Vec<Str
             let p: usize = match first.parse() {
                 Ok(x) => x,
                 Err(e) => {
-                    let s = format!("{}Cannot parse {} as usize: {}", context_s, first, e);
-                    return DTPSError::other(s);
+                    return dtpserror_other!("{}Cannot parse {:?} as usize: {}\n", context_s, first, e);
                 }
             };
 
             if p >= a.len() {
-                let s = format!(
-                    "{}Cannot find index {} for array of length {}",
+                return dtpserror_other!(
+                    "{}Cannot find index {} for array of length {}\n",
                     context_s,
                     first,
                     a.len()
                 );
-                return DTPSError::other(s);
+                // return DTPSError::other(s);
             } else {
                 new_context.push(format!("[{}]", p));
                 a.get(p).unwrap()
@@ -117,12 +117,12 @@ pub fn get_inside(context: Vec<String>, data: &serde_cbor::Value, path: &Vec<Str
             match a.get(&key) {
                 None => {
                     let available = a.keys().map(|x| format!("{:?}", x)).collect::<Vec<String>>().join(", ");
-                    let s = format!(
+                    return dtpserror_other!(
                         "{}Cannot find key {} for map.\nAvailable: {}",
-                        context_s, first, available
+                        context_s,
+                        first,
+                        available
                     );
-
-                    return DTPSError::other(s);
                 }
                 Some(v) => {
                     new_context.push(format!(".{}", first));
@@ -132,8 +132,7 @@ pub fn get_inside(context: Vec<String>, data: &serde_cbor::Value, path: &Vec<Str
         }
         _ => {
             let context_s = context.join(" -> ");
-            let s = format!("{context_s}: Cannot get inside this: {data:?}");
-            return DTPSError::other(s);
+            return dtpserror_other!("{context_s}: Cannot get inside this: {data:?}");
         }
     };
     get_inside(new_context, inside, &path)

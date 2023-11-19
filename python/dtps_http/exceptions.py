@@ -5,7 +5,11 @@ __all__ = [
 ]
 
 
-class DTPSClientException(Exception):
+class DTPSException(Exception):
+    pass
+
+
+class DTPSClientException(DTPSException):
     pass
 
 

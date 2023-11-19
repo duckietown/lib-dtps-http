@@ -36,48 +36,59 @@ mod tests {
 
     use crate::{
         init_logging,
+        test_range,
         TypeOfConnection,
     };
 
     use super::*;
 
+    use crate::test_fixtures::instance_python_test_fixture;
+    use test_range::tests::*;
+
     #[tokio::test]
     async fn test_python1() -> DTPSR<()> {
-        init_logging();
-        // generate a temp dir
-        let dir = tempdir()?;
-        let path0 = dir.path().join("socket");
+        // init_logging();
+        // // generate a temp dir
+        // let dir = tempdir()?;
+        // let path0 = dir.path().join("socket");
+        //
+        // let path = path0.to_str().unwrap();
+        // let cmd = vec!["dtps-http-py-server-example-clock", "--unix-path", path];
+        //
+        // // create process given by command above
+        // let mut child = Command::new(cmd[0])
+        //     .args(&cmd[1..])
+        //     .stdout(std::process::Stdio::inherit()) // Inherit the parent's stdout
+        //     .stderr(std::process::Stdio::inherit()) // Inherit the parent's stderr
+        //     .spawn()?;
+        //
+        // // wait that the socket exists but not more than 5 seconds
+        // let t0 = tokio::time::Instant::now();
+        // loop {
+        //     let elapsed = t0.elapsed().as_secs();
+        //     if tokio::fs::metadata(path).await.is_ok() {
+        //         info!("found socket {path} after {elapsed} seconds");
+        //         break;
+        //     } else {
+        //         if elapsed > 5 {
+        //             return Err(DTPSError::from("socket not found"));
+        //         }
+        //         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        //     }
+        // }
+        //
+        // let con = TypeOfConnection::unix_socket(path);
+        //
+        // // check_server(&con).await?;
+        // // child.kill().await?;
 
-        let path = path0.to_str().unwrap();
-        let cmd = vec!["dtps-http-py-server-example-clock", "--unix-path", path];
+        let cf = instance_python_test_fixture().await?;
 
-        // create process given by command above
-        let mut child = Command::new(cmd[0])
-            .args(&cmd[1..])
-            .stdout(std::process::Stdio::inherit()) // Inherit the parent's stdout
-            .stderr(std::process::Stdio::inherit()) // Inherit the parent's stderr
-            .spawn()?;
+        let res = check_server(&cf.con).await;
 
-        // wait that the socket exists but not more than 5 seconds
-        let t0 = tokio::time::Instant::now();
-        loop {
-            let elapsed = t0.elapsed().as_secs();
-            if tokio::fs::metadata(path).await.is_ok() {
-                info!("found socket {path} after {elapsed} seconds");
-                break;
-            } else {
-                if elapsed > 5 {
-                    return Err(DTPSError::from("socket not found"));
-                }
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            }
-        }
-
-        let con = TypeOfConnection::unix_socket(path);
-
-        let res = check_server(&con).await;
-
-        child.kill().await?;
+        cf.finish().await?;
+        // cf.finish().await?;
+        // child.kill().await?;
         // if res.is_err() {
         //
         //     ret
@@ -129,25 +140,6 @@ pub async fn check_server(con: &TypeOfConnection) -> DTPSR<()> {
 
     Ok(())
 }
-//
-// fn check_complete_metadata(md: &FoundMetadata) -> DTPSR<()> {
-//     if md.answering.is_none() {
-//         return Err(DTPSError::from("answering is None"));
-//     }
-//     if md.events_url.is_none() {
-//         return Err(DTPSError::from("events_url is None"));
-//     }
-//     if md.events_data_inline_url.is_none() {
-//         return Err(DTPSError::from("events_data_inline_url is None"));
-//     }
-//     if md.meta_url.is_none() {
-//         return Err(DTPSError::from("meta is None"));
-//     }
-//     if md.history_url.is_none() {
-//         return Err(DTPSError::from("history_url is None"));
-//     }
-//     Ok(())
-// }
 
 async fn read_notifications(
     handle: JoinHandle<DTPSR<()>>,

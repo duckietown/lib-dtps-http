@@ -1,13 +1,16 @@
-import json
+import copy
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING, Union
 
 import cbor2
-import yaml
+import jsonpatch
 from aiohttp import web
+from jsonpatch import JsonPatch
 
+from . import logger
 from .constants import CONTENT_TYPE_DTPS_INDEX_CBOR
+from .object_queue import ObjectTransformResult
 from .structures import (
     ContentInfo,
     LinkBenchmark,
@@ -87,6 +90,18 @@ class Source(ABC):
     async def get_meta_info(self, presented_as: str, server: "DTPSServer") -> "TopicsIndex":
         raise NotImplementedError(f"Source.get_meta_info() for {self}")
 
+    @abstractmethod
+    async def patch(
+        self, request: web.Request, presented_as: str, server: "DTPSServer", patch: JsonPatch
+    ) -> "ObjectTransformResult":
+        ...
+
+    @abstractmethod
+    async def post(
+        self, request: web.Request, presented_as: str, server: "DTPSServer", rd: RawData
+    ) -> "ObjectTransformResult":
+        ...
+
 
 class Transform(ABC):
     @abstractmethod
@@ -116,7 +131,7 @@ class GetInside(Transform):
             assert isinstance(data, NotFound)
             return data
 
-        raise NotImplementedError(f"Transform.transform() for {self}")
+        # raise NotImplementedError(f"Transform.transform() for {self}")
 
     def apply(self, ob: object) -> object:
         return get_inside(ob, (), ob, self.components)
@@ -172,8 +187,6 @@ class OurQueue(Source):
         tr = replace(tr, reachability=[reachability])
         return TopicsIndex(topics={TopicNameV.root(): tr})
 
-        # raise NotImplementedError(f"OurQueue.get_meta_info() for {self}")
-
     def get_properties(self, server: "DTPSServer") -> TopicProperties:
         oq = server.get_oq(self.topic_name)
         return oq.tr.properties
@@ -191,6 +204,32 @@ class OurQueue(Source):
         if not oq.stored:
             return NotAvailableYet(f"no data yet for {self.topic_name.as_dash_sep()}")
         return oq.last_data()
+
+    async def post(
+        self, request: web.Request, presented_as: str, server: "DTPSServer", rd: RawData
+    ) -> "ObjectTransformResult":
+        oq = server.get_oq(self.topic_name)
+
+        otr = await oq.publish(rd)
+        return otr
+
+    async def patch(
+        self, request: web.Request, presented_as: str, server: "DTPSServer", patch: JsonPatch
+    ) -> "ObjectTransformResult":
+        oq = server.get_oq(self.topic_name)
+        last_data = oq.last_data()
+        ob = last_data.get_as_native_object()
+        try:
+            # noinspection PyTypeChecker
+            ob2 = patch.apply(ob)
+        except jsonpatch.JsonPatchException as e:
+            msg = f"Cannot apply patch {patch} to {ob}"
+            logger.error(msg + f": {e}")
+            raise web.HTTPBadRequest(reason=msg) from e
+
+        rd = RawData.json_from_native_object(ob2)
+        otr = await oq.publish(rd)
+        return otr
 
 
 @dataclass
@@ -224,6 +263,20 @@ class ForwardedQueue(Source):
                     content_type = ContentType(resp_data.content_type)
                     data = RawData(content_type=content_type, content=data)
                     return data
+
+    async def patch(
+        self, request: web.Request, presented_as: str, server: "DTPSServer", patch: JsonPatch
+    ) -> "ObjectTransformResult":
+        raise NotImplementedError(f"patch() for {self}")  # TODO: patch forwarded queue
+
+    async def post(
+        self, request: web.Request, presented_as: str, server: "DTPSServer", rd: RawData
+    ) -> "ObjectTransformResult":
+        raise NotImplementedError(f"post() for {self}")  # TODO: post forwarded queue
+        # oq = server.get_oq(self.topic_name)
+        #
+        # otr = await oq.publish(rd)
+        # return otr
 
 
 @dataclass
@@ -294,60 +347,43 @@ class SourceComposition(Source):
         as_cbor = cbor2.dumps(asdict(data.to_wire()))
         return RawData(content_type=CONTENT_TYPE_DTPS_INDEX_CBOR, content=as_cbor)
 
-    async def get_resolved_data0(
-        self, request: web.Request, presented_as: str, server: "DTPSServer"
-    ) -> "ResolvedData":
-        res: Dict[str, Any] = {}
-        for k0, v in self.sources.items():
-            k = k0.as_dash_sep()
-            data = await v.get_resolved_data(request, presented_as, server)
-            if isinstance(data, RawData):
-                if "cbor" in data.content_type:
-                    res[k] = cbor2.loads(data.content)
-                elif "json" in data.content_type:
-                    res[k] = json.loads(data.content)
-                elif "yaml" in data.content_type:
-                    res[k] = yaml.safe_load(data.content)
-                else:
-                    res[k] = {"content": data.content, "content_type": data.content_type}
-            elif isinstance(data, Native):
-                res[k] = data.ob
+    #
+    # async def get_resolved_data0(
+    #     self, request: web.Request, presented_as: str, server: "DTPSServer"
+    # ) -> "ResolvedData":
+    #     res: Dict[str, Any] = {}
+    #     for k0, v in self.sources.items():
+    #         k = k0.as_dash_sep()
+    #         data = await v.get_resolved_data(request, presented_as, server)
+    #         if isinstance(data, RawData):
+    #             if "cbor" in data.content_type:
+    #                 res[k] = cbor2.loads(data.content)
+    #             elif "json" in data.content_type:
+    #                 res[k] = json.loads(data.content)
+    #             elif "yaml" in data.content_type:
+    #                 res[k] = yaml.safe_load(data.content)
+    #             else:
+    #                 res[k] = {"content": data.content, "content_type": data.content_type}
+    #         elif isinstance(data, Native):
+    #             res[k] = data.ob
+    #
+    #         elif isinstance(data, NotAvailableYet):
+    #             res[k] = None
+    #             pass
+    #         elif isinstance(data, NotFound):
+    #             res[k] = None
+    #             pass
+    #     return Native(res)
 
-            elif isinstance(data, NotAvailableYet):
-                res[k] = None
-                pass
-            elif isinstance(data, NotFound):
-                res[k] = None
-                pass
-        return Native(res)
+    async def patch(
+        self, request: web.Request, presented_as: str, server: "DTPSServer", patch: JsonPatch
+    ) -> "ObjectTransformResult":
+        raise NotImplementedError(f"patch() for {self}")  # TODO: patch SourceComposition
 
-    async def get_resolved_data2(
-        self, request: web.Request, presented_as: str, server: "DTPSServer"
-    ) -> "ResolvedData":
-        res: Dict[str, Any] = {}
-        for k0, v in self.sources.items():
-            k = k0.as_dash_sep()
-            data = await v.get_resolved_data(request, presented_as, server)
-            if isinstance(data, RawData):
-                if "cbor" in data.content_type:
-                    res[k] = cbor2.loads(data.content)
-                elif "json" in data.content_type:
-                    res[k] = json.loads(data.content)
-                elif "yaml" in data.content_type:
-                    res[k] = yaml.safe_load(data.content)
-                else:
-                    res[k] = {"content": data.content, "content_type": data.content_type}
-            elif isinstance(data, Native):
-                res[k] = data.ob
-            elif isinstance(data, NotAvailableYet):
-                res[k] = None
-                pass
-            elif isinstance(data, NotFound):
-                res[k] = None
-                pass
-            else:
-                raise AssertionError
-        return Native(res)
+    async def post(
+        self, request: web.Request, presented_as: str, server: "DTPSServer", rd: RawData
+    ) -> "ObjectTransformResult":
+        raise NotImplementedError(f"post() for {self}")  # TODO: post SourceComposition
 
 
 @dataclass
@@ -373,6 +409,41 @@ class Transformed(Source):
     def get_properties(self, server: "DTPSServer") -> TopicProperties:
         return self.source.get_properties(server)
 
+    async def patch(
+        self, request: web.Request, presented_as: str, server: "DTPSServer", patch: JsonPatch
+    ) -> "ObjectTransformResult":
+        # logger.debug(f"Transformed.patch() {self} {patch}")
+        if isinstance(self.transform, GetInside):
+            patch2 = add_prefix_to_patch(self.transform.components, patch)
+            return await self.source.patch(request, presented_as, server, patch2)
+        else:
+            raise NotImplementedError(f"patch() for {self}")
+
+        # raise NotImplementedError(f"patch() for {self}")
+
+    async def post(
+        self, request: web.Request, presented_as: str, server: "DTPSServer", rd: RawData
+    ) -> "ObjectTransformResult":
+        if isinstance(self.transform, GetInside):
+            native = rd.get_as_native_object()
+            path = "".join("/" + o for o in self.transform.components)
+            ops = [{"op": "replace", "path": path, "value": native}]
+            patch = JsonPatch(ops)
+
+            return await self.source.patch(request, presented_as, server, patch)
+        else:
+            raise NotImplementedError(f"patch() for {self}")
+
+
+def add_prefix_to_patch(prefix: Tuple[str, ...], patch: JsonPatch) -> JsonPatch:
+    patch2 = copy.deepcopy(patch.patch)
+    pref = "".join("/" + o for o in prefix)
+    for op in patch2:
+        if "path" in op:
+            op["path"] = pref + op["path"]
+
+    return JsonPatch(patch2)
+
 
 @dataclass
 class MetaInfo(Source):
@@ -394,6 +465,16 @@ class MetaInfo(Source):
         self, request: web.Request, presented_as: str, server: "DTPSServer"
     ) -> "ResolvedData":
         raise NotImplementedError("MetaInfo.get_resolved_data()")
+
+    async def patch(
+        self, request: web.Request, presented_as: str, server: "DTPSServer", patch: JsonPatch
+    ) -> "ObjectTransformResult":
+        raise NotImplementedError(f"patch() for {self}")
+
+    async def post(
+        self, request: web.Request, presented_as: str, server: "DTPSServer", rd: RawData
+    ) -> "ObjectTransformResult":
+        raise NotImplementedError(f"post() for {self}")  # TODO: post MetaInfo
 
 
 TypeOfSource = Union[OurQueue, ForwardedQueue, SourceComposition, Transformed]

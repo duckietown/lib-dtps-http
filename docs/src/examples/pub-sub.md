@@ -40,7 +40,7 @@ def simple_publisher() -> None:
     # the server is ready
     dtps_server = DTPSServer.create(on_startup=[on_startup])
     asyncio.run(interpret_command_line_and_start(dtps_server, args))
-
+    
 
 if __name__ == '__main__':
     simple_publisher()

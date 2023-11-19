@@ -105,6 +105,7 @@ mod test_range;
 mod shared_statuses;
 #[cfg(test)]
 mod test_connections;
+mod test_fixtures;
 
 use internal_jobs::*;
 use signals_logic_push::*;

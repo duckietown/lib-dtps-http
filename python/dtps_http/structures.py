@@ -8,7 +8,7 @@ from multidict import CIMultiDict
 from pydantic import parse_obj_as
 from pydantic.dataclasses import dataclass
 
-from .constants import HEADER_LINK_BENCHMARK, MIME_CBOR, MIME_TEXT
+from .constants import HEADER_LINK_BENCHMARK, MIME_CBOR, MIME_JSON, MIME_TEXT
 from .types import ContentType, NodeID, SourceID, TopicNameS, TopicNameV, URLString
 from .urls import URLIndexer
 
@@ -142,6 +142,10 @@ class RawData:
     def cbor_from_native_object(cls, ob: object) -> "RawData":
         return cls(content=cbor2.dumps(ob), content_type=MIME_CBOR)
 
+    @classmethod
+    def json_from_native_object(cls, ob: object) -> "RawData":
+        return cls(content=json.dumps(ob).encode(), content_type=MIME_JSON)
+
     def digest(self) -> str:
         s = hashlib.sha256(self.content).hexdigest()
         return f"sha256:{s}"
@@ -254,6 +258,17 @@ class TopicRef:
     created: int
     properties: TopicProperties
     content_info: ContentInfo
+
+
+@dataclass
+class TopicRefAdd:
+    app_data: Dict[str, str]
+    properties: TopicProperties
+    content_info: ContentInfo
+
+    @classmethod
+    def from_json(cls, s: Any) -> "TopicRefAdd":
+        return parse_obj_as(cls, s)
 
 
 @dataclass

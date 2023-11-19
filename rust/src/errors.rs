@@ -207,7 +207,6 @@ impl DTPSError {
     }
 }
 #[macro_export]
-
 macro_rules! dtpserror_context {
     ($expr:expr, $($u:expr),* $(,)?) => {{
         let s = format!("{}:{}:\n{}", file!(), line!(),
@@ -216,11 +215,6 @@ macro_rules! dtpserror_context {
         $expr.map_err(|e| e.add_context(&s))
     }};
 }
-
-//
-// pub fn just_log<E: Debug>(e: E) -> () {
-//     error_with_info!("Ignoring error: {:?}", e);
-// }
 
 #[macro_export]
 macro_rules! add_info {

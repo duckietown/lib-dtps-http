@@ -3,6 +3,7 @@ use std::{
     collections::HashSet,
     fmt::Debug,
     os::unix::fs::FileTypeExt,
+    path::Path,
     time::Duration,
 };
 
@@ -336,19 +337,23 @@ pub async fn listen_events_websocket(
 }
 
 pub async fn get_rawdata_status(con: &TypeOfConnection) -> DTPSR<(http::StatusCode, RawData)> {
-    let resp = make_request(con, hyper::Method::GET, b"", None, None).await?;
+    let method = hyper::Method::GET;
+
+    let resp = make_request(con, method, b"", None, None).await?;
     // TODO: send more headers
     Ok((resp.status(), interpret_resp(con, resp).await?))
 }
 
 pub async fn get_rawdata(con: &TypeOfConnection) -> DTPSR<RawData> {
-    let resp = make_request(con, hyper::Method::GET, b"", None, None).await?;
+    let method = hyper::Method::GET;
+    let resp = make_request(con, method, b"", None, None).await?;
     // TODO: send more headers
     interpret_resp(con, resp).await
 }
 
 pub async fn get_rawdata_accept(con: &TypeOfConnection, accept: Option<&str>) -> DTPSR<RawData> {
-    let resp = make_request(con, hyper::Method::GET, b"", None, accept).await?;
+    let method = hyper::Method::GET;
+    let resp = make_request(con, method, b"", None, accept).await?;
     // TODO: send more headers
     interpret_resp(con, resp).await
 }
@@ -396,14 +401,23 @@ pub async fn sniff_type_resource(con: &TypeOfConnection) -> DTPSR<TypeOfResource
     }
 }
 
-pub async fn post_json<T>(con: &TypeOfConnection, value: &T) -> DTPSR<DataSaved>
+pub async fn post_json<T>(con: &TypeOfConnection, value: &T) -> DTPSR<RawData>
 where
     T: Serialize,
 {
     let rd = RawData::encode_as_json(value)?;
     post_data(con, &rd).await
 }
-pub async fn post_data(con: &TypeOfConnection, rd: &RawData) -> DTPSR<DataSaved> {
+
+pub async fn post_cbor<T>(con: &TypeOfConnection, value: &T) -> DTPSR<RawData>
+where
+    T: Serialize,
+{
+    let rd = RawData::encode_as_cbor(value)?;
+    post_data(con, &rd).await
+}
+
+pub async fn post_data(con: &TypeOfConnection, rd: &RawData) -> DTPSR<RawData> {
     let resp = context!(
         make_request(con, hyper::Method::POST, &rd.content, Some(&rd.content_type), None).await,
         "Cannot make request to {}",
@@ -411,14 +425,18 @@ pub async fn post_data(con: &TypeOfConnection, rd: &RawData) -> DTPSR<DataSaved>
     )?;
 
     let (is_success, as_string) = (resp.status().is_success(), resp.status().to_string());
+    let content_type = get_content_type(&resp);
     let body_bytes = context!(hyper::body::to_bytes(resp.into_body()).await, "Cannot get body bytes")?;
     if !is_success {
         // pragma: no cover
         let body_text = String::from_utf8_lossy(&body_bytes);
         return not_available!("Request is not a success: for {con}\n{as_string:?}\n{body_text}");
     }
-    let x0: DataSaved = context!(serde_cbor::from_slice(&body_bytes), "Cannot interpret as CBOR")?;
-
+    // let x0: DataSaved = context!(serde_cbor::from_slice(&body_bytes), "Cannot interpret as CBOR: {body_bytes:?}")?;
+    let x0: RawData = RawData {
+        content: body_bytes,
+        content_type,
+    };
     Ok(x0)
 }
 
@@ -591,17 +609,32 @@ pub async fn compute_best_alternative(
     Ok(best_url)
 }
 
-fn check_unix_socket(file_path: &str) -> DTPSR<()> {
-    if let Ok(metadata) = std::fs::metadata(file_path) {
-        // debug_with_info!("metadata for {}: {:?}", file_path, metadata);
-        let is_socket = metadata.file_type().is_socket();
-        if is_socket {
-            Ok(())
-        } else {
-            not_reachable!("File {file_path} exists but it is not a socket.")
+pub async fn check_unix_socket(file_path: &str) -> DTPSR<()> {
+    let path = Path::new(file_path);
+    match tokio::fs::metadata(path).await {
+        Ok(md) => {
+            let is_socket = md.file_type().is_socket();
+            if !is_socket {
+                not_reachable!("File {file_path} exists but it is not a socket.")
+            } else {
+                Ok(())
+            }
         }
-    } else {
-        Err(DTPSError::NotAvailable(format!("Socket {file_path} does not exist.")))
+        Err(e) => {
+            // check parent directory
+            match path.parent() {
+                None => {
+                    not_available!("Cannot get parent directory of: {file_path:?}")
+                }
+                Some(parent) => {
+                    if !parent.exists() {
+                        not_available!("Socket not available and parent directory does not exist: {file_path:?}")
+                    } else {
+                        not_available!("Parent dir exists but socket does not exist: {file_path:?}: \n {e}")
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -615,7 +648,7 @@ pub async fn make_request(
     let use_url = match conbase {
         TypeOfConnection::TCP(url) => url.clone().to_string(),
         TypeOfConnection::UNIX(uc) => {
-            context!(check_unix_socket(&uc.socket_name), "cannot use unix socket {uc}",)?;
+            context!(check_unix_socket(&uc.socket_name).await, "cannot use unix socket {uc}",)?;
 
             let h = hex::encode(&uc.socket_name);
             let p0 = format!("unix://{}{}", h, uc.path);
@@ -779,7 +812,11 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     Ok(md)
 }
 
-pub async fn create_topic(conbase: &TypeOfConnection, topic_name: &TopicName, tr: &TopicRefAdd) -> DTPSR<()> {
+pub async fn create_topic(
+    conbase: &TypeOfConnection,
+    topic_name: &TopicName,
+    tr: &TopicRefAdd,
+) -> DTPSR<TypeOfConnection> {
     let mut path: String = String::new();
     for t in topic_name.as_components() {
         path.push('/');
@@ -791,7 +828,9 @@ pub async fn create_topic(conbase: &TypeOfConnection, topic_name: &TopicName, tr
     let add_operation = AddOperation { path, value };
     let operation1 = PatchOperation::Add(add_operation);
     let patch = Patch(vec![operation1]);
-    patch_data(conbase, &patch).await
+    patch_data(conbase, &patch).await?;
+    let con = conbase.join(topic_name.as_relative_url())?;
+    Ok(con)
 }
 
 pub async fn delete_topic(conbase: &TypeOfConnection, topic_name: &TopicName) -> DTPSR<()> {

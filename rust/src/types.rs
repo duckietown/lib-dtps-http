@@ -149,6 +149,7 @@ impl CompositeName {
         Self::from_components(&a)
     }
 }
+
 impl AsRef<CompositeName> for CompositeName {
     fn as_ref(&self) -> &CompositeName {
         &self

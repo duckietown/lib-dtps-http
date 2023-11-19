@@ -2,9 +2,8 @@ import argparse
 import asyncio
 import time
 from io import StringIO
-from typing import List, Optional
-
 from pprint import pprint
+from typing import List, Optional
 
 from dtps_http import (
     async_error_catcher,

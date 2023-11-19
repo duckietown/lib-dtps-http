@@ -10,6 +10,7 @@ pub mod tests {
         PatchOperation,
         ReplaceOperation,
     };
+    use log::info;
     use maplit::hashmap;
     use rstest::{
         fixture,
@@ -18,6 +19,7 @@ pub mod tests {
     use schemars::{
         schema_for,
         JsonSchema,
+        _private::NoSerialize,
     };
     use serde::{
         Deserialize,
@@ -31,10 +33,14 @@ pub mod tests {
 
     use crate::{
         add_proxy,
-        add_tpt_connection,
+        client::{
+            post_cbor,
+            post_json,
+        },
         create_topic,
         debug_with_info,
         delete_topic,
+        dtpserror_context,
         error_with_info,
         get_events_stream_inline,
         get_metadata,
@@ -43,10 +49,13 @@ pub mod tests {
         patch_data,
         post_data,
         remove_proxy,
-        remove_tpt_connection,
-        server_state::ServiceMode,
+        test_fixtures::{
+            instance_python_test_fixture,
+            instance_rust,
+            ConnectionFixture,
+            TestFixture,
+        },
         test_python::check_server,
-        ConnectionJob,
         ContentInfo,
         DTPSError,
         DTPSServer,
@@ -62,36 +71,29 @@ pub mod tests {
         DTPSR,
     };
 
-    pub struct TestFixture {
-        pub server: DTPSServer,
-        pub ssa: ServerStateAccess,
-        pub handles: Vec<JoinHandle<()>>,
-        pub con: TypeOfConnection,
+    #[fixture]
+    pub async fn instance() -> TestFixture {
+        instance_rust().await
     }
 
-    impl TestFixture {
-        pub fn finish(self) -> DTPSR<()> {
-            for handle in self.handles {
-                handle.abort();
-            }
-
-            Ok(())
-        }
+    #[fixture]
+    pub async fn instance_python() -> ConnectionFixture {
+        instance_python_test_fixture().await.unwrap()
     }
 
     #[fixture]
     pub async fn instance2() -> TestFixture {
-        instance().await
+        instance_rust().await
     }
 
     #[fixture]
     pub async fn switchboard() -> TestFixture {
-        instance().await
+        instance_rust().await
     }
 
     #[fixture]
     pub async fn node1() -> TestFixture {
-        let node1_topic1: TopicName = TopicName::from_dash_sep("topic1").unwrap();
+        let node1_topic1 = TopicName::from_dash_sep("topic1").unwrap();
 
         let t = instance().await;
         let ssa = t.server.get_lock();
@@ -111,7 +113,7 @@ pub mod tests {
 
     #[fixture]
     pub async fn node2() -> TestFixture {
-        let node2_topic2: TopicName = TopicName::from_dash_sep("topic2").unwrap();
+        let node2_topic2 = TopicName::from_dash_sep("topic2").unwrap();
 
         let t = instance().await;
         let ssa = t.server.get_lock();
@@ -129,39 +131,11 @@ pub mod tests {
         t
     }
 
-    #[fixture]
-    pub async fn instance() -> TestFixture {
-        init_logging();
-        let mut server = DTPSServer::new(None, None, "cloudflare".to_string(), None, hashmap! {}, vec![], vec![])
-            .await
-            .unwrap();
-
-        let handles = server.start_serving().await.unwrap();
-
-        let ssa = server.get_lock();
-
-        let con = {
-            let ss = ssa.lock().await;
-            let advertised_urls = ss.get_advertise_urls();
-            let url = advertised_urls.get(0).unwrap();
-            crate::parse_url_ext(url).unwrap()
-        };
-
-        tokio::time::sleep(Duration::from_millis(1000)).await;
-
-        TestFixture {
-            server,
-            ssa,
-            handles,
-            con,
-        }
-    }
-
     #[rstest]
     #[awt]
     #[tokio::test]
     async fn check_server_answers(#[future] instance: TestFixture) -> DTPSR<()> {
-        let x = check_server(&instance.con).await;
+        let x = check_server(&instance.cf.con).await;
         if let Err(ei) = &x {
             error_with_info!("check_server failed:\n{}", ei);
         }
@@ -172,7 +146,7 @@ pub mod tests {
     #[awt]
     #[tokio::test]
     async fn another(#[future] instance: TestFixture) -> DTPSR<()> {
-        let _md = get_metadata(&instance.con).await;
+        let _md = get_metadata(&instance.cf.con).await;
 
         {
             let mut ss = instance.ssa.lock().await;
@@ -183,14 +157,14 @@ pub mod tests {
             }
         }
 
-        instance.finish()
+        instance.finish().await
     }
 
     #[rstest]
     #[awt]
     #[tokio::test]
     async fn check_aliases(#[future] instance: TestFixture) -> DTPSR<()> {
-        let _md = get_metadata(&instance.con).await;
+        let _md = get_metadata(&instance.cf.con).await;
         // eprintln!("found {md:?}");
 
         {
@@ -206,8 +180,8 @@ pub mod tests {
             ss.add_alias(&alias, &topic_name);
         }
 
-        let con_original = instance.con.join("a/b/")?;
-        let con_alias = instance.con.join("c/d/")?;
+        let con_original = instance.cf.con.join("a/b/")?;
+        let con_alias = instance.cf.con.join("c/d/")?;
 
         let md_original = get_metadata(&con_original).await;
         let md_alias = get_metadata(&con_alias).await;
@@ -225,7 +199,7 @@ pub mod tests {
         assert_eq!(data_original, data_alias);
         tokio::time::sleep(Duration::from_millis(1000)).await;
 
-        instance.finish()?;
+        instance.finish().await?;
         Ok(())
     }
 
@@ -241,7 +215,7 @@ pub mod tests {
             let topic_name = TopicName::from_dash_sep("a/b")?;
             ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
         }
-        let con_original = instance.con.join("a/b/")?;
+        let con_original = instance.cf.con.join("a/b/")?;
 
         let md = get_metadata(&con_original).await?;
 
@@ -251,8 +225,8 @@ pub mod tests {
         let object = 42;
         let data = serde_cbor::to_vec(&object)?;
         let rd = RawData::cbor(data);
-        let ds = post_data(&con_original, &rd).await?;
-        debug_with_info!("post resulted in {ds:?}");
+        let ds0 = post_data(&con_original, &rd).await?;
+        debug_with_info!("post resulted in {ds0:?}");
         let notification = receiver.recv().await.unwrap();
         debug_with_info!("notification: {notification:#?}");
         match notification {
@@ -265,7 +239,7 @@ pub mod tests {
             ListenURLEvents::SilenceMsg(_) => {}
         }
 
-        instance.finish()?;
+        instance.finish().await?;
         handle.abort();
         Ok(())
     }
@@ -282,7 +256,7 @@ pub mod tests {
             let mut ss = instance.ssa.lock().await;
             ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
         }
-        let con_original = instance.con.join(topic_name.as_relative_url())?;
+        let con_original = instance.cf.con.join(topic_name.as_relative_url())?;
 
         let object = hashmap! {
             "one" => vec![
@@ -293,8 +267,8 @@ pub mod tests {
 
         let data = serde_cbor::to_vec(&object)?;
         let rd = RawData::cbor(data);
-        let ds = post_data(&con_original, &rd).await?;
-        debug_with_info!("post resulted in {ds:?}");
+        let ds0 = post_data(&con_original, &rd).await?;
+        debug_with_info!("post resulted in {ds0:?}");
 
         let get_inside = con_original.join("one/0/b/")?;
         let rd2 = get_rawdata(&get_inside).await?;
@@ -304,7 +278,7 @@ pub mod tests {
         debug_with_info!("Converted {converted:?}");
 
         assert_eq!(expected, converted);
-        instance.finish()?;
+        instance.finish().await?;
         Ok(())
     }
 
@@ -331,13 +305,13 @@ pub mod tests {
             let alias = TopicName::from_dash_sep("c/d")?;
             ss.add_alias(&alias, &topic_name);
         }
-        let con_original = instance.con.join(topic_name.as_relative_url())?;
+        let con_original = instance.cf.con.join(topic_name.as_relative_url())?;
 
         let mounted_at = TopicName::from_dash_sep("mounted/here")?;
 
         instance2.server.add_proxied(&mounted_at, con_original.clone()).await?;
 
-        let con_proxied = instance2.con.join(mounted_at.as_relative_url())?;
+        let con_proxied = instance2.cf.con.join(mounted_at.as_relative_url())?;
 
         debug_with_info!("ask metadata for con_original {con_original:#?}");
         let md_original = get_metadata(&con_original).await;
@@ -368,8 +342,8 @@ pub mod tests {
         assert_eq!(inside_original, inside_proxied);
         let i: i64 = serde_cbor::from_slice(&inside_original.content)?;
         assert_eq!(i, n - 1);
-        instance.finish()?;
-        instance2.finish()?;
+        instance.finish().await?;
+        instance2.finish().await?;
         Ok(())
     }
 
@@ -441,8 +415,11 @@ pub mod tests {
         init_logging();
 
         let mounted_at = TopicName::from_dash_sep("mounted")?;
-        instance2.server.add_proxied(&mounted_at, instance.con.clone()).await?;
-        let url = instance2.con.to_string();
+        instance2
+            .server
+            .add_proxied(&mounted_at, instance.cf.con.clone())
+            .await?;
+        let url = instance2.cf.con.to_string();
         let url = format!("{url}{path}");
         let cmd = vec![
             "dtps-http-py-listen",
@@ -470,27 +447,48 @@ pub mod tests {
             debug_with_info!("status {status} stderr:\n{stderr}\n---\nstdout:\n{stdout}");
         }
 
-        instance.finish()?;
-        instance2.finish()?;
+        instance.finish().await?;
+        instance2.finish().await?;
         Ok(())
     }
 
     #[rstest]
     #[awt]
     #[tokio::test]
-    async fn check_patch(#[future] instance: TestFixture) -> DTPSR<()> {
+    async fn check_patch_rust(#[future] instance: TestFixture) -> DTPSR<()> {
+        check_patch(instance.cf).await
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_patch_python(#[future] instance_python: ConnectionFixture) -> DTPSR<()> {
+        check_patch(instance_python).await
+    }
+
+    async fn check_patch(cf: ConnectionFixture) -> DTPSR<()> {
         init_logging();
 
         let topic_name = TopicName::from_dash_sep("a/b")?;
 
-        {
-            let mut ss = instance.ssa.lock().await;
-            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
-            let h = hashmap! {"value" => "initial"};
-            ss.publish_object_as_cbor(&topic_name, &h, None)?;
-        }
+        let tra = TopicRefAdd {
+            app_data: Default::default(),
+            properties: TopicProperties::rw(),
+            content_info: ContentInfo::simple(CONTENT_TYPE_CBOR, None),
+        };
+        let con_topic = create_topic(&cf.con, &topic_name, &tra).await?;
+        let h = hashmap! {"value" => "initial"};
 
-        let con_original = instance.con.join(topic_name.as_relative_url())?;
+        // let con_original = cf.con.join(topic_name.as_relative_url())?;
+
+        post_cbor(&con_topic, &h).await?;
+
+        // {
+        //     let mut ss = instance.ssa.lock().await;
+        //     ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
+        //     let h = hashmap! {"value" => "initial"};
+        //     ss.publish_object_as_cbor(&topic_name, &h, None)?;
+        // }
 
         let replace = ReplaceOperation {
             path: "/value".to_string(),
@@ -498,29 +496,34 @@ pub mod tests {
         };
         let operation = PatchOperation::Replace(replace);
         let patch = Patch(vec![operation]);
-        patch_data(&con_original, &patch).await?;
+        patch_data(&con_topic, &patch).await?;
 
         // now test something that should fail
+        info!("Testing NOTEXISTING addressing");
         let replace = ReplaceOperation {
             path: "/NOTEXISTING".to_string(),
             value: serde_json::Value::String("new".to_string()),
         };
         let operation = PatchOperation::Replace(replace);
         let patch = Patch(vec![operation]);
-        patch_data(&con_original, &patch).await.expect_err("should fail");
+        patch_data(&con_topic, &patch).await.expect_err("should fail");
 
         // now let's see if we can replace entirely
-
+        let value2 = json!({"A": {"B": ["C", "D"]}});
+        info!("----\nTesting replacing entire value ({h:?}) with a new one ({value2:?})");
         let replace = ReplaceOperation {
             path: "".to_string(),
-            value: json!({"A": {"B": ["C", "D"]}}),
+            value: value2,
         };
         let operation = PatchOperation::Replace(replace);
         let patch = Patch(vec![operation]);
-        patch_data(&con_original, &patch).await?;
+        patch_data(&con_topic, &patch).await?;
+        let rd = get_rawdata(&con_topic).await?;
+        info!("Getting result back: {rd:?}");
 
         // now check the addressing
-        let b_address = con_original.join("A/B/")?;
+        info!("----\nTesting adding first and last to array");
+        let b_address = con_topic.join("A/B/")?;
         let add_operation1 = AddOperation {
             path: "/0".to_string(),
             value: json!("start"),
@@ -533,8 +536,27 @@ pub mod tests {
         let operation2 = PatchOperation::Add(add_operation2);
         let patch = Patch(vec![operation1, operation2]);
         patch_data(&b_address, &patch).await?;
+        let rd = get_rawdata(&con_topic).await?;
+        info!("Getting result back: {rd:?}");
 
-        instance.finish()?;
+        // now change the value of B
+
+        info!("----\nTesting changing the value of a/b/A/B using post");
+
+        let B_address = con_topic.join("A/B/")?;
+        let h = vec!["second", "value"];
+        dtpserror_context!(post_json(&B_address, &h).await, "Cannot change using post",)?;
+        let rd = get_rawdata(&con_topic).await?;
+        info!("Getting result back: {rd:?}");
+        let expected = json!({"A": {"B": ["second", "value"]}});
+        assert_eq!(rd.get_as_json()?, expected);
+
+        //
+        // let rd = get_rawdata(&b_address).await?;
+        // let j = rd.get_as_json()?;
+        // info!("j {:#?}", j);
+
+        cf.finish().await?;
         Ok(())
     }
 
@@ -569,9 +591,9 @@ pub mod tests {
         };
 
         //first time ok
-        create_topic(&instance.con, &topic_name, &tr).await?;
+        create_topic(&instance.cf.con, &topic_name, &tr).await?;
 
-        let address = instance.con.join(topic_name.as_relative_url())?;
+        let address = instance.cf.con.join(topic_name.as_relative_url())?;
         let data = ExampleData {
             a: 42,
             b: vec!["a".to_string(), "b".to_string()],
@@ -580,21 +602,25 @@ pub mod tests {
         post_data(&address, &RawData::represent_as_json(&data)?).await?;
 
         // second time should fail
-        create_topic(&instance.con, &topic_name, &tr)
+        create_topic(&instance.cf.con, &topic_name, &tr)
             .await
             .expect_err("should fail");
         // first time ok
-        delete_topic(&instance.con, &topic_name).await?;
+        delete_topic(&instance.cf.con, &topic_name).await?;
         // second time should fail
-        delete_topic(&instance.con, &topic_name).await.expect_err("should fail");
-
-        let topic_name = TopicName::root();
-        create_topic(&instance.con, &topic_name, &tr)
+        delete_topic(&instance.cf.con, &topic_name)
             .await
             .expect_err("should fail");
-        delete_topic(&instance.con, &topic_name).await.expect_err("should fail");
 
-        instance.finish()?;
+        let topic_name = TopicName::root();
+        create_topic(&instance.cf.con, &topic_name, &tr)
+            .await
+            .expect_err("should fail");
+        delete_topic(&instance.cf.con, &topic_name)
+            .await
+            .expect_err("should fail");
+
+        instance.finish().await?;
         Ok(())
     }
 
@@ -621,19 +647,19 @@ pub mod tests {
         let mounted_at = TopicName::from_dash_sep("mounted/here")?;
 
         let node_id = instance.server.get_node_id().await;
-        let urls = vec![instance.con.clone()];
-        add_proxy(&instance2.con, &mounted_at, node_id.clone(), &urls).await?;
-        add_proxy(&instance2.con, &mounted_at, node_id.clone(), &urls).await?;
+        let urls = vec![instance.cf.con.clone()];
+        add_proxy(&instance2.cf.con, &mounted_at, node_id.clone(), &urls).await?;
+        add_proxy(&instance2.cf.con, &mounted_at, node_id.clone(), &urls).await?;
         // sleep 5 seconds
         tokio::time::sleep(Duration::from_millis(2000)).await;
 
-        let con_proxied = instance2.con.join(mounted_at.as_relative_url())?;
+        let con_proxied = instance2.cf.con.join(mounted_at.as_relative_url())?;
         let _rd = get_rawdata(&con_proxied).await?;
 
-        remove_proxy(&instance2.con, &mounted_at).await?;
+        remove_proxy(&instance2.cf.con, &mounted_at).await?;
 
-        instance.finish()?;
-        instance2.finish()?;
+        instance.finish().await?;
+        instance2.finish().await?;
         Ok(())
     }
 }

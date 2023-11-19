@@ -5,13 +5,23 @@ import time
 import traceback
 import uuid
 from asyncio import CancelledError
+from contextlib import contextmanager
 from dataclasses import asdict, replace
-from typing import Any, Awaitable, Callable, cast, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Awaitable, Callable, cast, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 import cbor2
 import yaml
 from aiohttp import web, WSMsgType
 from aiopubsub import Hub
+from jsonpatch import (
+    AddOperation,
+    CopyOperation,
+    JsonPatch,
+    MoveOperation,
+    RemoveOperation,
+    ReplaceOperation,
+    TestOperation,
+)
 from multidict import CIMultiDict
 from pydantic.dataclasses import dataclass
 
@@ -58,6 +68,7 @@ from .structures import (
     TopicProperties,
     TopicReachability,
     TopicRef,
+    TopicRefAdd,
     TopicsIndex,
 )
 from .types import ContentType, NodeID, SourceID, TopicNameV, URLString
@@ -112,6 +123,9 @@ def get_static_dir() -> str:
 class DTPSServer:
     node_id: NodeID
 
+    # set when we have been going through the startup process
+    started: asyncio.Event
+
     _oqs: Dict[TopicNameV, ObjectQueue]
     _forwarded: Dict[TopicNameV, ForwardedTopic]
 
@@ -149,6 +163,8 @@ class DTPSServer:
         routes.get("/{topic:.*}/data/{digest}/")(self.serve_data_get)
         routes.get("/data/{digest}/")(self.serve_data_get)
         routes.post("/{topic:.*}")(self.serve_post)
+        routes.patch("/{topic:.*}")(self.serve_patch)
+
         routes.get("/{topic:.*}")(self.serve_get)
         # mount a static directory for the web interface
 
@@ -168,6 +184,8 @@ class DTPSServer:
         self.digest_to_urls = {}
 
         self.registrations = []
+
+        self.started = asyncio.Event()
 
     def add_registrations(self, registrations: Sequence[Registration]) -> None:
         self.registrations.extend(registrations)
@@ -235,10 +253,15 @@ class DTPSServer:
         self.tasks.append(task)
 
     async def _update_lists(self):
+        if TOPIC_LIST not in self._oqs:
+            raise AssertionError(f"Topic {TOPIC_LIST.as_relative_url()} not found")
+        if ROOT not in self._oqs:
+            raise AssertionError(f"Topic {ROOT.as_relative_url()} not found")
         topics: List[TopicNameV] = []
         topics.extend(self._oqs.keys())
         topics.extend(self._forwarded.keys())
-        await self._oqs[TOPIC_LIST].publish_json(sorted([_.as_relative_url() for _ in topics]))
+        urls = sorted([_.as_relative_url() for _ in topics])
+        await self._oqs[TOPIC_LIST].publish_json(urls)
 
         index = self.create_root_index()
         index_wire = index.to_wire()
@@ -351,6 +374,8 @@ class DTPSServer:
 
         for registration in self.registrations:
             self.remember_task(asyncio.create_task(self._register(registration)))
+
+        self.started.set()
 
     @async_error_catcher
     async def _register(self, r: Registration) -> None:
@@ -663,7 +688,7 @@ class DTPSServer:
             rd = rs
         elif isinstance(rs, Native):
             # logger.info(f"Native: {rs}")
-            rd = RawData.cbor_from_native_object(rs)
+            rd = RawData.cbor_from_native_object(rs.ob)
         elif isinstance(rs, NotAvailableYet):
             rd = rs
         elif isinstance(rs, NotFound):
@@ -868,28 +893,111 @@ pre {{
         headers.popall(HEADER_NODE_ID, None)
         headers[HEADER_NODE_ID] = self.node_id
 
-    @async_error_catcher
-    async def serve_post(self, request: web.Request) -> web.Response:
-        topic_name_s: str = request.match_info["topic"]
-        topic_name = TopicNameV.from_relative_url(topic_name_s)
-
-        content_type = request.headers.get("Content-Type", "application/octet-stream")
-        data = await request.read()
-        oq = self.get_oq(topic_name)
-        rd = RawData(content=data, content_type=ContentType(content_type))
-
-        otr = await oq.publish(rd)
-
+    def _headers(self, request: web.Request) -> CIMultiDict[str]:
         headers: CIMultiDict[str] = CIMultiDict()
         add_nocache_headers(headers)
         self._add_own_headers(headers)
         multidict_update(headers, self.get_headers_alternatives(request))
-        if isinstance(otr, TransformError):
-            return web.Response(status=otr.http_code, text=otr.message, headers=headers)
-        elif isinstance(otr, RawData):
-            return web.Response(status=200, headers=headers, content_type=otr.content_type, body=otr.content)
-        else:
-            raise AssertionError(f"Cannot handle {otr!r}")
+        return headers
+
+    def _resolve(self, request: web.Request) -> Source:
+        """Raises HTTPNotFound"""
+        topic_name_s: str = request.match_info["topic"]
+        # topic_name = TopicNameV.from_relative_url(topic_name_s)
+        try:
+            return self.resolve(topic_name_s)
+        except KeyError as e:
+            logger.error(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {e}")
+            raise web.HTTPNotFound(text=f"404\n{e}", headers=self._headers(request)) from e
+
+    @async_error_catcher
+    async def serve_post(self, request: web.Request) -> web.Response:
+        with self._log_request(request):
+            content_type = request.headers.get("Content-Type", "application/octet-stream")
+            data = await request.read()
+            rd = RawData(content=data, content_type=ContentType(content_type))
+
+            source: Source = self._resolve(request)
+
+            headers = self._headers(request)
+
+            presented_as = request.url.path
+            otr = await source.post(request, presented_as, self, rd)
+
+            if isinstance(otr, TransformError):
+                return web.Response(status=otr.http_code, text=otr.message, headers=headers)
+            elif isinstance(otr, RawData):
+                logger.info(f"after POST otr: {otr}")
+                return web.Response(
+                    status=200, headers=headers, content_type=otr.content_type, body=otr.content
+                )
+            else:
+                raise AssertionError(f"Cannot handle {otr!r}")
+
+    @contextmanager
+    def _log_request(self, request: web.Request) -> Iterator[None]:
+        logger.debug(f"{request.method} {request.url}")
+        try:
+            yield
+        except Exception as e:
+            logger.error(f"{request.method} {request.url}: {e}")
+            raise
+
+    @async_error_catcher
+    async def serve_patch(self, request: web.Request) -> web.Response:
+        with self._log_request(request):
+            presented_as = request.url.path
+
+            headers = self._headers(request)
+
+            topic_name_s: str = request.match_info["topic"]
+            topic_name = TopicNameV.from_relative_url(topic_name_s)
+            if topic_name.is_root():
+                return await self.serve_patch_root(request)
+
+            data = await request.read()
+            patch = JsonPatch.from_string(data.decode("utf-8"))
+
+            source = self.resolve(topic_name_s)
+
+            otr = await source.patch(request, presented_as, self, patch)
+
+            if isinstance(otr, TransformError):
+                return web.Response(status=otr.http_code, text=otr.message, headers=headers)
+            elif isinstance(otr, RawData):
+                return web.Response(
+                    status=200, headers=headers, content_type=otr.content_type, body=otr.content
+                )
+            else:
+                raise AssertionError(f"Cannot handle {otr!r}")
+
+    @async_error_catcher
+    async def serve_patch_root(self, request: web.Request) -> web.Response:
+        with self._log_request(request):
+            data = await request.read()
+            patch = JsonPatch.from_string(data.decode("utf-8"))
+            # logger.info(f"patch: {patch}")
+
+            for operation in patch._ops:
+                if isinstance(operation, RemoveOperation):
+                    raise NotImplementedError(f"Cannot handle {operation!r}")
+                elif isinstance(operation, AddOperation):
+                    pass
+                    topic = TopicNameV.from_components(operation.pointer.parts)
+                    # logger.info(f"op: {operation.__dict__}, {operation.pointer.parts}")
+                    value = operation.operation["value"]
+                    trf = TopicRefAdd.from_json(value)
+                    oq = await self.create_oq(topic, trf.content_info, trf.properties)
+                    # logger.info(f"trf: {trf}")
+
+                elif isinstance(operation, (ReplaceOperation, MoveOperation, TestOperation, CopyOperation)):
+                    return web.Response(status=405)
+                else:
+                    raise NotImplementedError(f"Cannot handle {operation!r}")
+
+            headers = self._headers(request)
+            # TODO: should I return the new index?
+            return web.Response(status=200, headers=headers)
 
     @async_error_catcher
     async def serve_data_get(self, request: web.Request) -> web.Response:
