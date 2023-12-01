@@ -22,6 +22,7 @@ from typing import (
 
 import aiohttp
 import cbor2
+import jsonpatch
 from aiohttp import (
     ClientResponseError,
     ClientWebSocketResponse,
@@ -61,6 +62,7 @@ from .structures import (
     SilenceMsg,
     TopicReachability,
     TopicRef,
+    TopicRefAdd,
     TopicsIndex,
     WarningMsg,
 )
@@ -511,6 +513,18 @@ class DTPSClient:
         as_json = json.dumps(patch).encode("utf-8")
         url = join(url0, TOPIC_PROXIED.as_relative_url())
         res = await self.patch(url, CONTENT_TYPE_PATCH_JSON, as_json)
+
+    async def add_topic(self, url0: URLIndexer, topic_name: TopicNameV, tra: TopicRefAdd) -> None:
+        path = "/" + escape_json_pointer(topic_name.as_dash_sep())
+        patch = jsonpatch.JsonPatch(
+            [
+                {"op": "add", "path": path, "value": asdict(tra)},
+            ]
+        )
+        patch_json = patch.to_string().encode()
+
+        # url = join(url0, TOPIC_PROXIED.as_relative_url())
+        res = await self.patch(url0, CONTENT_TYPE_PATCH_JSON, patch_json)
 
     async def patch(self, url0: URL, content_type: Optional[str], data: bytes) -> RawData:
         headers = {"content-type": content_type} if content_type is not None else {}

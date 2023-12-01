@@ -3,7 +3,17 @@ import unittest
 
 import jsonpatch
 
-from dtps_http import ContentInfo, DTPSServer, interpret_command_line_and_start, MIME_JSON, TopicNameV
+from dtps_http import (
+    ContentInfo,
+    DTPSClient,
+    DTPSServer,
+    interpret_command_line_and_start,
+    MIME_JSON,
+    parse_url_unescape,
+    TopicNameV,
+    URLString,
+)
+from dtps_http.structures import TopicProperties, TopicRefAdd
 from . import logger
 
 
@@ -82,6 +92,58 @@ class TestAsyncServerFunction(unittest.TestCase):
             logger.info(f"ob2={ob2!r}")
 
             self.assertEqual(ob2, ob2_expected)
+
+            task.cancel()
+
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        self.loop.run_until_complete(doit())
+
+    def test_patch_creation(self):
+        async def doit():
+            port = 8435
+            args = ["--tcp-port", str(port)]
+            dtps_server = DTPSServer.create()
+            t = interpret_command_line_and_start(dtps_server, args)
+            task = asyncio.create_task(t)
+            logger.info("waiting for server to start")
+            await dtps_server.started.wait()
+            logger.info("waiting for server to start: done")
+            url = parse_url_unescape(URLString(f"http://localhost:{port}/"))
+
+            tra = TopicRefAdd(
+                content_info=ContentInfo.simple(MIME_JSON),
+                properties=TopicProperties.rw_pushable(),
+                app_data={},
+            )
+            async with DTPSClient.create() as client:
+                await client.add_topic(url, TopicNameV.from_dash_sep("a/b"), tra)
+
+            # # convert the pydantic object to a dict
+            #
+            # patch = jsonpatch.JsonPatch(
+            #     [
+            #         {"op": "add", "path": "/a/b", "value": asdict(tra)},
+            #     ]
+            # )
+            # patch_json = patch.to_string()
+            # headers = {"Content-type": "application/json-patch+json"}
+            #
+            # async with aiohttp.ClientSession() as session:
+            #     async with session.patch(url, headers=headers, data=patch_json) as resp:
+            #         logger.info(f"PATCH {url!r} status={resp.status}")
+            #         resp.raise_for_status()
+
+            # rd2 = oq.last_data()
+            # ob2 = rd2.get_as_native_object()
+            #
+            # logger.info(f"ob1={ob1!r}")
+            # logger.info(f"ob2={ob2!r}")
+            #
+            # self.assertEqual(ob2, ob2_expected)
 
             task.cancel()
 

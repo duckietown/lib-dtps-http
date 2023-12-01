@@ -80,4 +80,6 @@ MIME_TEXT = ContentType("text/plain")
 MIME_HTML = ContentType("text/html")
 MIME_JPEG = ContentType("image/jpeg")
 
+MIME_OCTET = ContentType("application/octet-stream")
+
 ENV_MASK_ORIGIN = "DTPS_HTTP_MASK_ORIGIN"

@@ -5,9 +5,8 @@ import os
 import socket
 import sys
 import tempfile
-from contextlib import asynccontextmanager
 from socket import AddressFamily
-from typing import AsyncIterator, Iterator, List, Optional, Tuple
+from typing import Iterator, List, Optional, Sequence, Tuple
 
 import psutil
 from aiohttp import web
@@ -61,16 +60,14 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[List
         logger.error(msg)
         sys.exit(msg)
 
+    tcps = []
     if parsed.tcp_port is not None:
-        tcp = (parsed.tcp_host, parsed.tcp_port)
-
-    else:
-        tcp = None
+        tcps.append((parsed.tcp_host, parsed.tcp_port))
 
     if parsed.unix_path is not None:
-        unix_path = parsed.unix_path
+        unix_paths = [parsed.unix_path]
     else:
-        unix_path = None
+        unix_paths = []
 
     never = asyncio.Event()
     no_alternatives = parsed.no_alternatives
@@ -95,33 +92,57 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[List
         )
 
     dtps.add_registrations(registrations)
-    async with app_start(
+
+    s = await app_start(
         dtps,
-        tcp=tcp,
-        unix_path=unix_path,
+        tcps=tcps,
+        unix_paths=unix_paths,
         tunnel=tunnel,
         no_alternatives=no_alternatives,
         extra_advertise=parsed.advertise,
-    ):
+    )
+    async with s:
         await never.wait()
 
 
-@asynccontextmanager
+class ServerWrapped:
+    def __init__(
+        self, server: DTPSServer, runner: web.AppRunner, tunnel_process: Optional[asyncio.subprocess.Process]
+    ) -> None:
+        self.server = server
+        self.runner = runner
+        self.tunnel_process = tunnel_process
+
+    async def __aenter__(self) -> DTPSServer:
+        return self.server
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        if self.tunnel_process is not None:
+            logger.info("terminating cloudflared tunnel")
+            self.tunnel_process.terminate()
+            await self.tunnel_process.wait()
+        await self.runner.cleanup()
+
+
 async def app_start(
     s: DTPSServer,
-    tcp: Optional[Tuple[str, int]] = None,
-    unix_path: Optional[str] = None,
+    *,
+    tcps: Sequence[Tuple[str, int]] = (),
+    unix_paths: Sequence[str] = (),
     tunnel: Optional[str] = None,
     no_alternatives: bool = False,
     extra_advertise: Optional[List[str]] = None,
-) -> AsyncIterator[None]:
+) -> ServerWrapped:
     runner = web.AppRunner(s.app)
     await runner.setup()
 
     tunnel_process = None
 
     available_urls: List[str] = []
-    if tcp is not None:
+    for tcp in tcps:
         tcp_host, port = tcp
         the_url0 = f"http://{tcp_host}:{port}/"
         logger.info(f"Starting TCP server - the URL is {the_url0!r}")
@@ -153,7 +174,7 @@ async def app_start(
             available_urls.append(the_url)
 
             add_weird_addresses = False
-            # add a weird address
+            # add a weird address: for testing purposes
             if add_weird_addresses:
                 # TODO: add a non-existent path
                 the_url = f"http://8.8.12.2:{port}/"
@@ -214,18 +235,15 @@ async def app_start(
 
             #  cloudflared tunnel run --cred-file test-dtps1-tunnel.json --url 127.0.0.1:8000 test-dtps1
 
-    else:
-        if tunnel is not None:
-            logger.error("cannot start cloudflared tunnel without TCP server")
-            sys.exit(1)
-        logger.info("not starting TCP server. Use --tcp-port to start one.")
+    if not tcps and tunnel is not None:
+        logger.error("cannot start cloudflared tunnel without TCP server")
+        sys.exit(1)
+    # logger.info("not starting TCP server. Use --tcp-port to start one.")
 
-    unix_paths: List[str] = []
+    unix_paths = list(unix_paths)
 
     tmpdir = tempfile.gettempdir()
     unix_paths.append(os.path.join(tmpdir, f"dtps-{s.node_id}"))
-    if unix_path is not None:
-        unix_paths.append(unix_path)
 
     for up in unix_paths:
         dn = os.path.dirname(up)
@@ -252,12 +270,5 @@ async def app_start(
         for url in available_urls:
             await s.add_available_url(url)
         logger.info("available URLs\n" + "".join("* " + _ + "\n" for _ in available_urls))
-    # wait for finish signal
-    try:
-        yield
-    finally:
-        if tunnel_process is not None:
-            logger.info("terminating cloudflared tunnel")
-            tunnel_process.terminate()
-            await tunnel_process.wait()
-        await runner.cleanup()
+
+    return ServerWrapped(s, runner, tunnel_process)

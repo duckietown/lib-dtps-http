@@ -235,13 +235,7 @@ class DTPSServer:
             res[HEADER_NO_AVAIL] = f"Nothing matched {url} of {self.available_urls}"
         else:
             res.popall(HEADER_NO_AVAIL, None)
-        # list_alternatives = "".join(f"\n  {_}" for _ in alternatives)
-        # logger.debug(f"get_headers_alternatives: {request.url} -> \n effective: {use_url} \n {
-        # list_alternatives}")
         return res
-
-    def set_available_urls(self, urls: List[str]) -> None:
-        self.available_urls = urls
 
     async def add_available_url(self, url: str) -> None:
         self.available_urls.append(url)
@@ -988,7 +982,7 @@ pre {{
                     value = operation.operation["value"]
                     trf = TopicRefAdd.from_json(value)
                     oq = await self.create_oq(topic, trf.content_info, trf.properties)
-                    # logger.info(f"trf: {trf}")
+                    logger.info(f"created new topic: {topic.as_dash_sep()}")
 
                 elif isinstance(operation, (ReplaceOperation, MoveOperation, TestOperation, CopyOperation)):
                     return web.Response(status=405)
