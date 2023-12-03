@@ -120,6 +120,8 @@ class ServerWrapped:
         await self.aclose()
 
     async def aclose(self) -> None:
+        await self.server.aclose()
+
         if self.tunnel_process is not None:
             logger.info("terminating cloudflared tunnel")
             self.tunnel_process.terminate()

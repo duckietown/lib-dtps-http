@@ -157,11 +157,15 @@ class RawData:
         return yaml.safe_dump(ob)
 
     def get_as_native_object(self) -> object:
+        if is_plain_text(self.content_type):
+            return self.content.decode("utf-8")
+
         if not is_structure(self.content_type):
             msg = (
                 f"Cannot convert non-structure content to native object (content_type={self.content_type!r})"
             )
             raise ValueError(msg)
+
         if is_yaml(self.content_type):
             import yaml
 
@@ -187,6 +191,10 @@ def is_image(content_type: str) -> bool:
 
 def is_yaml(content_type: str) -> bool:
     return "yaml" in content_type
+
+
+def is_plain_text(content_type: str) -> bool:
+    return "text/plain" in content_type
 
 
 def is_json(content_type: str) -> bool:

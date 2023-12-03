@@ -25,6 +25,11 @@ ContentType = NewType("ContentType", str)
 class TopicNameV:
     components: Tuple[str, ...]
 
+    def __post_init__(self):
+        for c in self.components:
+            if "/" in c:
+                raise ValueError(f"Invalid component {c!r} in {self!r}")
+
     def as_relative_url(self) -> TopicNameS:
         """returns either "" or a/b/c/ (with ending /)"""
         if not self.components:

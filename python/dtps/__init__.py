@@ -1,3 +1,8 @@
+from logging import getLogger, DEBUG
+
+logger = getLogger(__name__)
+logger.setLevel(DEBUG)
+
 from .config import *
 from .ergo_ui import *
 

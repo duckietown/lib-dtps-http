@@ -191,12 +191,16 @@ class ObjectQueue:
             return callback(self, msg)
 
         # wrap_callback = lambda key, msg: callback(self, msg)
+
         self._sub.add_async_listener(Key(self._name.as_relative_url(), K_INDEX), wrap_callback)
         # last_used = list(self._sub._listeners)[-1]
-        return ""  # TODO
+        return ""  # TODO DTSW-4776 unsubscribe/subscribe not implemented
+
+    async def aclose(self) -> None:
+        await self._sub.remove_all_listeners()
 
     def unsubscribe(self, sub_id: SUB_ID) -> None:
-        pass  # TODO
+        pass  # TODO: DTSW-4776  unsubscribe/subscribe not implemented
 
     def get_data_ready(self, ds: DataSaved, presented_as: str, inline_data: bool) -> DataReady:
         actual_url = self._name.as_relative_url() + "data/" + ds.digest + "/"

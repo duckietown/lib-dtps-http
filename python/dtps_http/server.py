@@ -26,7 +26,7 @@ from multidict import CIMultiDict
 from pydantic.dataclasses import dataclass
 
 from . import __version__, logger
-from .client import DTPSClient
+from .client import DTPSClient, unescape_json_pointer
 from .constants import (
     CONTENT_TYPE_DTPS_INDEX_CBOR,
     CONTENT_TYPE_TOPIC_HISTORY_CBOR,
@@ -278,7 +278,7 @@ class DTPSServer:
 
     def get_oq(self, name: TopicNameV) -> ObjectQueue:
         if name in self._forwarded:
-            raise ValueError(f"Topic {name} is a forwarded one")
+            raise ValueError(f"Topic {name.as_dash_sep()} is a forwarded one")
 
         return self._oqs[name]
 
@@ -291,9 +291,9 @@ class DTPSServer:
         transform: ObjectTransformFunction = transform_identity,
     ) -> ObjectQueue:
         if name in self._forwarded:
-            raise ValueError(f"Topic {name} is a forwarded one")
+            raise ValueError(f"Topic '{name.as_dash_sep()}' is a forwarded one")
         if name in self._oqs:
-            raise ValueError(f"Topic {name} is a forwarded one")
+            return self._oqs[name]
 
         unique_id = get_unique_id(self.node_id, name)
 
@@ -370,6 +370,13 @@ class DTPSServer:
             self.remember_task(asyncio.create_task(self._register(registration)))
 
         self.started.set()
+
+    async def aclose(self) -> None:
+        for t in self.tasks:
+            t.cancel()
+        for q in self._oqs.values():
+            await q.aclose()
+        # await asyncio.gather(*self.tasks, return_exceptions=True)
 
     @async_error_catcher
     async def _register(self, r: Registration) -> None:
@@ -609,7 +616,13 @@ class DTPSServer:
                 subtopics.append((k, matched, rest, source))
 
         if not subtopics:
-            raise KeyError(f"Cannot find a matching topic for {url}, {tn=}")
+            msg = f"Cannot find a matching topic for {url0!r}.\n"
+            msg += f"| topic name: {tn.as_dash_sep()}\n"
+            msg += f"| sources: \n"
+            for k, source in sources.items():
+                msg += f"| {k.as_dash_sep()!r}: {type(source).__name__}\n"
+            logger.debug(msg)
+            raise KeyError(msg)
 
         origin_node = self.node_id
         unique_id = get_unique_id(origin_node, tn)
@@ -652,8 +665,10 @@ class DTPSServer:
         try:
             source = self.resolve(topic_name_s)
         except KeyError as e:
-            logger.error(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {e}")
-            raise web.HTTPNotFound(text=f"404\n{e}", headers=headers) from e
+            msg = f"404: {request.url!r}\nCannot find topic '{topic_name_s}':\n{e}"
+            # logger.error()
+            # text = f'404: Cannot find topic "{topic_name_s}"'
+            return web.HTTPNotFound(text=msg, headers=headers)
 
         multidict_update(headers, self.get_headers_alternatives(request))
         put_meta_headers(headers, source.get_properties(self))
@@ -934,7 +949,7 @@ pre {{
         try:
             yield
         except Exception as e:
-            logger.error(f"{request.method} {request.url}: {e}")
+            # logger.error(f"{request.method} {request.url}: response {e}")
             raise
 
     @async_error_catcher
@@ -969,20 +984,24 @@ pre {{
     async def serve_patch_root(self, request: web.Request) -> web.Response:
         with self._log_request(request):
             data = await request.read()
-            patch = JsonPatch.from_string(data.decode("utf-8"))
-            # logger.info(f"patch: {patch}")
+            decoded = data.decode("utf-8")
+            patch = JsonPatch.from_string(decoded)
+            # logger.info(f"decoded: {decoded} patch: {patch}")
 
             for operation in patch._ops:
                 if isinstance(operation, RemoveOperation):
                     raise NotImplementedError(f"Cannot handle {operation!r}")
                 elif isinstance(operation, AddOperation):
-                    pass
-                    topic = TopicNameV.from_components(operation.pointer.parts)
                     # logger.info(f"op: {operation.__dict__}, {operation.pointer.parts}")
+                    topic = topic_name_from_json_pointer(operation.location)
+
+                    if topic.is_root():
+                        raise ValueError(f"Cannot create root topic (path = {operation.path!r})")
+
                     value = operation.operation["value"]
                     trf = TopicRefAdd.from_json(value)
                     oq = await self.create_oq(topic, trf.content_info, trf.properties)
-                    logger.info(f"created new topic: {topic.as_dash_sep()}")
+                    logger.info(f"created new topic: '{topic.as_dash_sep()}'")
 
                 elif isinstance(operation, (ReplaceOperation, MoveOperation, TestOperation, CopyOperation)):
                     return web.Response(status=405)
@@ -1273,3 +1292,15 @@ def removeprefix(s: str, prefix: str) -> str:
         return s[len(prefix) :]
     else:
         return s[:]
+
+
+def topic_name_from_json_pointer(path: str) -> TopicNameV:
+    path = unescape_json_pointer(path)
+
+    components = []
+    for p in path.split("/"):
+        if not p:
+            continue
+        components.append(p)
+
+    return TopicNameV.from_components(components)

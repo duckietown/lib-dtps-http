@@ -7,6 +7,7 @@ use json_patch::{
     PatchError,
     PatchOperation,
 };
+use log::info;
 
 use crate::{
     context,
@@ -142,9 +143,14 @@ async fn patch_composition(ss_mutex: ServerStateAccess, patch: &Patch, sc: &Sour
     for x in &patch.0 {
         match x {
             PatchOperation::Add(ao) => {
-                let topic_name = topic_name_from_json_pointer(ao.path.as_str())?;
+                let path = unescape_json_patch(ao.path.as_str());
+                let topic_name = topic_name_from_json_pointer(&path)?;
                 let value = ao.value.clone();
                 let tra: TopicRefAdd = serde_json::from_value(value)?;
+                info!(
+                    "patch_composition: adding {topic_name:#?} path = {path}",
+                    path = ao.path
+                );
                 ss.new_topic_ci(
                     &topic_name,
                     Some(tra.app_data),
@@ -154,7 +160,10 @@ async fn patch_composition(ss_mutex: ServerStateAccess, patch: &Patch, sc: &Sour
                 )?;
             }
             PatchOperation::Remove(ro) => {
-                let topic_name = topic_name_from_json_pointer(ro.path.as_str())?;
+                let path = unescape_json_patch(ro.path.as_str());
+
+                let topic_name = topic_name_from_json_pointer(&path)?;
+
                 ss.remove_topic(&topic_name)?;
             }
             PatchOperation::Replace(_)

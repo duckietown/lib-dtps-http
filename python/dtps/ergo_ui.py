@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Awaitable, Callable, Dict, List, Optional
 
 from dtps_http.structures import DataSaved, RawData, TopicRefAdd
 
@@ -21,18 +21,12 @@ class DTPSContext(ABC):
         components = other.split("/")
         return self.navigate(*components)
 
-    # @abstractmethod
-    # async def urls(self) -> List[str]:
-    #     ...
-
-    # todo: add
-
     @abstractmethod
     async def list(self) -> List[str]:
         """List subtopics"""
         ...
 
-    #  - more information - dict[str, ...]
+    # TODO: - more information - dict[str, ...]
 
     # creation and deletion
 
@@ -49,7 +43,7 @@ class DTPSContext(ABC):
     @abstractmethod
     async def subscribe(
         self,
-        on_data: Callable,
+        on_data: Callable[[RawData], Awaitable[None]],
         /,
         # service_level=None,
         # timeout: Optional[float] = None
@@ -68,7 +62,7 @@ class DTPSContext(ABC):
     # pushing
 
     @abstractmethod
-    async def publish(self, data: RawData) -> None:
+    async def publish(self, data: RawData, /) -> None:
         ...
 
     @abstractmethod
@@ -76,14 +70,14 @@ class DTPSContext(ABC):
         ...
 
     @abstractmethod
-    async def call(self, data: RawData) -> RawData:
+    async def call(self, data: RawData, /) -> RawData:
         """RPC call (push with response)"""
         ...
 
     # proxy
 
     @abstractmethod
-    async def expose(self, urls: "Sequence[str] | DTPSContext") -> "DTPSContext":
+    async def expose(self, urls: "Sequence[str] | DTPSContext", /) -> "DTPSContext":
         """
         Creates this topic as a proxy to the given urls or to the context..
 
@@ -99,17 +93,21 @@ class DTPSContext(ABC):
     # connection
 
     @abstractmethod
-    async def connect_to(self, context: "DTPSContext") -> "ConnectionInterface":
+    async def connect_to(self, context: "DTPSContext", /) -> "ConnectionInterface":
         """Add a connection between topics with the given service level."""
         ...
+
+    @abstractmethod
+    async def aclose(self) -> None:
+        """Clean up all resources"""
 
 
 class HistoryContext(ABC):
     @abstractmethod
-    async def summary(self, nmax: int) -> Dict[int, DataSaved]:
+    async def summary(self, nmax: int, /) -> Dict[int, DataSaved]:
         ...
 
-    async def get(self, index: int) -> RawData:
+    async def get(self, index: int, /) -> RawData:
         ...
 
 
@@ -121,6 +119,11 @@ class ConnectionInterface(ABC):
 
 
 class PublisherInterface(ABC):
+    @abstractmethod
+    async def publish(self, rd: RawData, /) -> None:
+        pass
+        # await self.publish(rd)
+
     @abstractmethod
     async def terminate(self) -> None:
         """Stops the publisher"""

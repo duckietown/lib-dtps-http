@@ -3,12 +3,14 @@ import json
 import os
 import traceback
 from abc import ABC, abstractmethod
+from asyncio import CancelledError
 from contextlib import asynccontextmanager, AsyncExitStack
 from dataclasses import asdict, dataclass, replace
 from typing import (
     Any,
     AsyncContextManager,
     AsyncIterator,
+    Awaitable,
     Callable,
     cast,
     Dict,
@@ -78,15 +80,19 @@ from .urls import (
     URLWSInline,
     URLWSOffline,
 )
-from .utils import async_error_catcher_iterator, method_lru_cache
+from .utils import async_error_catcher, async_error_catcher_iterator, method_lru_cache
 
 __all__ = [
     "DTPSClient",
     "StopContinuousLoop",
+    "escape_json_pointer",
     "my_raise_for_status",
+    "unescape_json_pointer",
 ]
 
 U = TypeVar("U", bound=URL)
+
+X = TypeVar("X")
 
 
 @dataclass
@@ -112,6 +118,10 @@ class FoundMetadata:
     meta_url: Optional[URL]
     # servizio history
     history_url: Optional[URL]
+
+
+class ShutdownAsked(Exception):
+    pass
 
 
 class DTPSClient:
@@ -141,19 +151,26 @@ class DTPSClient:
         self.blacklist_protocol_host_port = set()
         self.obtained_answer = {}
 
-    tasks: "list[asyncio.Task[Any]]"
+        self.shutdown_event = asyncio.Event()
+
+    tasks: "List[asyncio.Task[Any]]"
     blacklist_protocol_host_port: Set[Tuple[str, str, int]]
     obtained_answer: Dict[Tuple[str, str, int], Optional[NodeID]]
 
     preferred_cache: Dict[URL, URL]
     sessions: Dict[str, aiohttp.ClientSession]
+    shutdown_event: asyncio.Event
 
     async def init(self) -> None:
         pass
 
     async def aclose(self) -> None:
+        logger.debug(f"aclose {self=}; setting shutdown event")
+        self.shutdown_event.set()
         for t in self.tasks:
             t.cancel()
+
+        await asyncio.gather(*self.tasks, return_exceptions=True)
         await self.S.aclose()
 
     async def ask_topics(self, url0: URLIndexer) -> Dict[TopicNameV, TopicRef]:
@@ -413,7 +430,7 @@ class DTPSClient:
         if key not in self.obtained_answer:
             try:
                 md = await self.get_metadata(url)
-                logger.warn(f"checking {url} -> {md}")
+                # logger.warning(f"checking {url} -> {md}")
                 return md.answering
 
                 #   self.obtained_answer[
@@ -470,7 +487,8 @@ class DTPSClient:
         else:
             raise ValueError(f"unknown scheme {url.scheme!r}")
 
-        async with aiohttp.ClientSession(connector=connector, conn_timeout=conn_timeout) as session:
+        timeout = aiohttp.ClientTimeout(total=conn_timeout)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             yield session, URLString(use_url)
 
     async def get_proxied(self, url0: URLIndexer) -> Dict[TopicNameV, ProxyJob]:
@@ -523,7 +541,6 @@ class DTPSClient:
         )
         patch_json = patch.to_string().encode()
 
-        # url = join(url0, TOPIC_PROXIED.as_relative_url())
         res = await self.patch(url0, CONTENT_TYPE_PATCH_JSON, patch_json)
 
     async def patch(self, url0: URL, content_type: Optional[str], data: bytes) -> RawData:
@@ -593,9 +610,6 @@ class DTPSClient:
 
                     await my_raise_for_status(resp, url0)
 
-                    #  assert resp.status == 200, resp
-
-                    #  logger.info(f"headers : {resp.headers}")
                     if HEADER_CONTENT_LOCATION in resp.headers:
                         alternatives0 = cast(List[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION))
                     else:
@@ -624,9 +638,10 @@ class DTPSClient:
                         meta_url = None
                     else:
                         meta_url = join(url, resp.headers[REL_META])
+
         except:
             #  (TimeoutError, ClientConnectorError):
-            logger.error(f"cannot connect to {url0=!r} {use_url=!r} \n{traceback.format_exc()}")
+            # logger.error(f"cannot connect to {url0=!r} {use_url=!r} \n{traceback.format_exc()}")
 
             #  return FoundMetadata([], None, None, None)
             raise
@@ -673,7 +688,12 @@ class DTPSClient:
         return await self.listen_url(url, cb, inline_data=inline_data, raise_on_error=raise_on_error)
 
     async def listen_url(
-        self, url_topic: URLTopic, cb: Callable[[RawData], Any], *, inline_data: bool, raise_on_error: bool
+        self,
+        url_topic: URLTopic,
+        cb: Callable[[RawData], Awaitable[None]],
+        *,
+        inline_data: bool,
+        raise_on_error: bool,
     ) -> "asyncio.Task[None]":
         url_topic = self._look_cache(url_topic)
         metadata = await self.get_metadata(url_topic)
@@ -690,11 +710,12 @@ class DTPSClient:
             else:
                 raise EventListeningNotAvailable(f"cannot find metadata {url_topic}: {metadata}")
 
-        logger.info(f"listening to  {url_topic} -> {metadata} -> {url_events}")
+        # logger.info(f"listening to  {url_topic} -> {metadata} -> {url_events}")
+        desc = f"{url_topic} inline={inline_data}"
         it = self.listen_url_events(
             url_events, inline_data=inline_data, raise_on_error=raise_on_error, add_silence=None
         )
-        t = asyncio.create_task(_listen_and_callback(it, cb))
+        t = asyncio.create_task(_listen_and_callback(desc, it, cb))
         self.tasks.append(t)
         return t
 
@@ -718,6 +739,29 @@ class DTPSClient:
                 url_events, raise_on_error=raise_on_error, add_silence=add_silence
             ):
                 yield _
+            logger.info(f"listen_url_events {url_events} finished")
+
+    async def _wait_until_shutdown(self, a: "asyncio.Task[X]") -> X:
+        """Waits for an event, or for the shutdown event. In that case we raise ShutdownAsked"""
+        t_wait = asyncio.create_task(self.shutdown_event.wait())
+        tasks = [
+            t_wait,
+            a,
+        ]
+        try:
+            finished, unfinished = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        except CancelledError:
+            a.cancel()
+            t_wait.cancel()
+            raise
+
+        if self.shutdown_event.is_set():
+            a.cancel("shutdown asked")
+            raise ShutdownAsked()
+        else:
+            t_wait.cancel()
+            assert len(finished) == 1
+            return finished.pop().result()
 
     async def listen_url_events_with_data_offline(
         self,
@@ -749,16 +793,27 @@ class DTPSClient:
                         yield FinishedMsg(comment="closed")
                         break
                     wmsg: WSMessage
-                    if add_silence is not None:
-                        try:
-                            wmsg = await asyncio.wait_for(ws.receive(), timeout=add_silence)
-                        except asyncio.exceptions.TimeoutError:
-                            # logger.debug(f"add_silence {add_silence} expired")
-                            yield SilenceMsg(dt=add_silence)
-                            continue
-                    else:
-                        wmsg = await ws.receive()
-                    # logger.info(f'raw: {wmsg}')
+
+                    wmsg_task = asyncio.create_task(
+                        self._wait_until_shutdown(asyncio.create_task(ws.receive()))
+                    )
+
+                    try:
+                        if add_silence is not None:
+                            try:
+                                wmsg = await asyncio.wait_for(wmsg_task, timeout=add_silence)
+                            except asyncio.exceptions.TimeoutError:
+                                # logger.debug(f"add_silence {add_silence} expired")
+                                yield SilenceMsg(dt=add_silence)
+                                continue
+                        else:
+                            wmsg = await wmsg_task
+                    except ShutdownAsked:
+                        msg = f"shutdown asked: ending listen_url"
+                        yield FinishedMsg(comment=msg)
+                        break
+
+                    logger.info(f"raw: {wmsg}")
                     if wmsg.type == aiohttp.WSMsgType.CLOSE:  # aiohttp-specific
                         if wmsg.data == WSCloseCode.OK:
                             if nreceived == 0:
@@ -875,15 +930,25 @@ class DTPSClient:
 
                             yield FinishedMsg(comment="closed")
                             break
-                        if add_silence is not None:
-                            try:
-                                msg = await asyncio.wait_for(ws.receive(), timeout=add_silence)
-                            except asyncio.exceptions.TimeoutError:
-                                # logger.debug(f"add_silence {add_silence} expired")
-                                yield SilenceMsg(dt=add_silence)
-                                continue
-                        else:
-                            msg = await ws.receive()
+
+                        wmsg_task = asyncio.create_task(
+                            self._wait_until_shutdown(asyncio.create_task(ws.receive()))
+                        )
+
+                        try:
+                            if add_silence is not None:
+                                try:
+                                    msg = await asyncio.wait_for(wmsg_task, timeout=add_silence)
+                                except asyncio.exceptions.TimeoutError:
+                                    # logger.debug(f"add_silence {add_silence} expired")
+                                    yield SilenceMsg(dt=add_silence)
+                                    continue
+                            else:
+                                msg = await wmsg_task
+                        except ShutdownAsked:
+                            msg = f"shutdown asked: ending listen_url"
+                            yield FinishedMsg(comment=msg)
+                            break
 
                         if msg.type == aiohttp.WSMsgType.CLOSE:  # aiohttp-specific
                             if nreceived == 0:
@@ -1094,7 +1159,6 @@ class DTPSClient:
                     except StopContinuousLoop as e:
                         logger.error(f"obtained {e}")
                         should_break_outer = True
-
                         break
             except Exception as e:
                 msg = f"Error listening to {urlbase0!r}:\n{traceback.format_exc()}"
@@ -1119,10 +1183,27 @@ def escape_json_pointer(s: str) -> str:
     return s.replace("~", "~0").replace("/", "~1")
 
 
-async def _listen_and_callback(it: AsyncIterator[ListenURLEvents], cb: Callable[[RawData], Any]) -> None:
-    async for lue in it:
-        if isinstance(lue, InsertNotification):
-            cb(lue.raw_data)
+def unescape_json_pointer(s: str) -> str:
+    return s.replace("~1", "/").replace("~0", "~")
+
+
+@async_error_catcher
+async def _listen_and_callback(
+    desc: str, it: AsyncIterator[ListenURLEvents], cb: Callable[[RawData], Awaitable[None]]
+) -> None:
+    try:
+        logger.debug(f"_listen_and_callback ({desc}): starting")
+        i = 0
+        async for lue in it:
+            i += 1
+            logger.debug(f"_listen_and_callback ({desc}): {i} {lue}")
+            if isinstance(lue, InsertNotification):
+                await cb(lue.raw_data)
+
+    except CancelledError:
+        logger.debug(f"_listen_and_callback ({desc}): cancelled")
+        raise
+    logger.debug(f"_listen_and_callback ({desc}): finished")
 
 
 async def my_raise_for_status(resp, url0) -> None:
