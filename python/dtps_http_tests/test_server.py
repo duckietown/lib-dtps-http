@@ -17,18 +17,21 @@ from dtps_http import (
     DTPSClient,
     DTPSServer,
     interpret_command_line_and_start,
+    join,
+    make_http_unix_url,
     MIME_CBOR,
     MIME_JSON,
     MIME_YAML,
     parse_url_unescape,
     RawData,
     TopicNameV,
+    TopicProperties,
+    TopicRefAdd,
+    URLIndexer,
     URLString,
 )
-from dtps_http.structures import TopicProperties, TopicRefAdd
-from dtps_http.urls import join, make_http_unix_url, URLIndexer
-from dtps_http_tests.utils import test_timeout
 from . import logger
+from .utils import test_timeout
 
 
 class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):

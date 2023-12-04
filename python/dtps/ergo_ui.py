@@ -6,9 +6,6 @@ from typing import (
     Dict,
     List,
     Optional,
-    Sequence,
-    TYPE_CHECKING,
-    Union,
 )
 
 from dtps_http import DataSaved, NodeID, RawData, TopicRefAdd
@@ -120,7 +117,8 @@ class DTPSContext(ABC):
     @abstractmethod
     def publisher_context(self) -> "AsyncContextManager[PublisherInterface]":
         """
-        Returns an async context manager that returns a publisher that is cleaned up when the context is exited.
+        Returns an async context manager that returns a publisher that is cleaned up when the context is
+        exited.
 
         Example:
 

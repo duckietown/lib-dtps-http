@@ -1,6 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Awaitable, Callable, List, Optional, Tuple, cast
+from typing import AsyncIterator, Awaitable, Callable, cast, List, Optional, Tuple
 
 from aiohttp import ClientResponseError
 
@@ -16,9 +16,8 @@ from dtps_http import (
     TopicProperties,
     TopicRefAdd,
     URL,
-    URLTopic,
+    URLIndexer,
 )
-from dtps_http.urls import URLIndexer
 from . import logger
 from .config import ContextInfo, ContextManager
 from .ergo_ui import (

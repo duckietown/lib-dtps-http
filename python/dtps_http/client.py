@@ -1,5 +1,3 @@
-from urllib.parse import unquote
-
 import asyncio
 import json
 import os
@@ -24,6 +22,7 @@ from typing import (
     TYPE_CHECKING,
     TypeVar,
 )
+from urllib.parse import unquote
 
 import aiohttp
 import cbor2

@@ -1,4 +1,4 @@
-from logging import getLogger, DEBUG
+from logging import DEBUG, getLogger
 
 logger = getLogger(__name__)
 logger.setLevel(DEBUG)

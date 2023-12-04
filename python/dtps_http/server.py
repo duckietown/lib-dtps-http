@@ -856,7 +856,10 @@ class DTPSServer:
             if self._mount_points:
                 msg += f"| mount points: \n"
                 for k, source in self._mount_points.items():
-                    msg += f"| {k.as_dash_sep()!r}: {type(source).__name__} established = {source.established is not None}\n"
+                    msg += (
+                        f"| {k.as_dash_sep()!r}: {type(source).__name__} established = "
+                        f"{source.established is not None}\n"
+                    )
             raise KeyError(msg)
 
         origin_node = self.node_id
