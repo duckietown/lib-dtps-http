@@ -289,4 +289,5 @@ async def app_start(
             await s.add_available_url(url)
         logger.info("available URLs\n" + "".join("* " + _ + "\n" for _ in available_urls))
 
+    await s.started.wait()
     return ServerWrapped(s, runner, tunnel_process)
