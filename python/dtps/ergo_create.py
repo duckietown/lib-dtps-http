@@ -1,8 +1,11 @@
+import os
+import stat
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Awaitable, Callable, List, Optional, Tuple, Sequence
 
 from dtps_http import (
     app_start,
+    check_is_unix_socket,
     ContentInfo,
     DataSaved,
     DTPSServer,
@@ -27,6 +30,8 @@ __all__ = [
     "ContextManagerCreate",
 ]
 
+from . import logger
+
 
 class ContextManagerCreate(ContextManager):
     dtps_server_wrap: Optional[ServerWrapped]
@@ -50,6 +55,9 @@ class ContextManagerCreate(ContextManager):
             unix_paths=unix_paths,
             tunnel=None,
         )
+        for u in unix_paths:
+            check_is_unix_socket(u)
+
         self.dtps_server_wrap = a
 
     async def aclose(self) -> None:

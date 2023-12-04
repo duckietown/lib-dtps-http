@@ -1,7 +1,7 @@
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import AsyncIterator, cast, ClassVar, Dict, Iterator, List, Mapping, Optional, Tuple
+from typing import AsyncIterator, cast, Dict, List, Mapping, Optional, Tuple
 
 from dtps_http import (
     parse_url_unescape,
@@ -48,9 +48,14 @@ async def context(base_name: str = "self", environment: Optional[Mapping[str, st
     """
     base_name = base_name.lower()
 
-    if base_name not in ContextManager.instances:
-        await create_context(base_name, environment)
-    return ContextManager.instances[base_name].get_context()
+    context_manager = await create_context(base_name, environment)
+    return context_manager.get_context()
+    #
+    # if use_cached:
+    #     if base_name not in ContextManager.instances:
+    #
+    #     return ContextManager.instances[base_name].get_context()
+    #
 
 
 @asynccontextmanager
@@ -65,7 +70,7 @@ async def context_cleanup(
         await c.aclose()
 
 
-async def create_context(base_name: str, environment: Optional[Mapping[str, str]]) -> None:
+async def create_context(base_name: str, environment: Optional[Mapping[str, str]]) -> "ContextManager":
     contexts = get_context_info(environment)
     if base_name not in contexts.contexts:
         msg = f'Cannot find context "{base_name}" among {list(contexts.contexts)}'
@@ -73,11 +78,11 @@ async def create_context(base_name: str, environment: Optional[Mapping[str, str]
 
     context_info = contexts.contexts[base_name]
     logger.info(f'Creating context "{base_name}" with {context_info}')
-    await ContextManager.create(base_name, context_info)
+    return await ContextManager.create(base_name, context_info)
 
 
 class ContextManager:
-    instances: ClassVar[Dict[str, "ContextManager"]] = {}
+    # instances: ClassVar[Dict[str, "ContextManager"]] = {}
 
     context_info: "ContextInfo"
 
@@ -85,9 +90,11 @@ class ContextManager:
 
     @classmethod
     async def create(cls, base_name: str, context_info: "ContextInfo") -> "ContextManager":
-        if base_name in cls.instances:
-            msg = f'Context "{base_name}" already exists'
-            raise KeyError(msg)
+        # if base_name in cls.instances:
+        #     msg = f'Context "{base_name}" already exists'
+        #     raise KeyError(msg)
+
+        logger.info(f'Creating context "{base_name}" with {context_info}')
 
         if context_info.is_create():
             from .ergo_create import ContextManagerCreate
@@ -98,7 +105,7 @@ class ContextManager:
 
             cm = ContextManagerUse(base_name, context_info)
 
-        cls.instances[base_name] = cm
+        # cls.instances[base_name] = cm
         await cm.init()
         return cm
 

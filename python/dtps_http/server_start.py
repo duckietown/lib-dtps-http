@@ -259,12 +259,8 @@ async def app_start(
         if ("%" in up) or not up:
             msg = f"Unix path {up!r} is invalid"
             raise Exception(msg)
-        # if up.endswith("/"):
-        #     up = up[:-1]
 
         the_url = make_http_unix_url(up)
-        # path = up.replace("/", "%2F")
-        # the_url = f"http+unix://{path}/"
 
         logger.info(f"starting Unix server on path {up!r} - the URL is {the_url!r}")
 

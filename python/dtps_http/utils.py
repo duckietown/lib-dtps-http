@@ -1,5 +1,6 @@
 import functools
 import os
+import stat
 import traceback
 from asyncio import CancelledError
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional, TYPE_CHECKING, TypeVar, Union
@@ -13,6 +14,7 @@ from .constants import ENV_MASK_ORIGIN
 __all__ = [
     "async_error_catcher",
     "async_error_catcher_iterator",
+    "check_is_unix_socket",
     "method_lru_cache",
     "multidict_update",
     "should_mask_origin",
@@ -127,3 +129,24 @@ def is_truthy(s: str) -> Optional[bool]:
         return False
     else:
         return None  # The value is neither truthy nor falsy.
+
+
+def check_is_unix_socket(u: str) -> None:
+    exists = os.path.exists(u)
+    if not exists:
+        msg = f"Unix socket {u} does not exist.\n"
+
+        d = os.path.dirname(u)
+        if not os.path.exists(d):
+            msg += f" Directory {d} does not exist.\n"
+        else:
+            msg += f" Directory {d} exists.\n"
+            ls = os.listdir(d)
+            msg += f" Contents of {d} are {ls!r}\n"
+        raise ValueError(msg)
+
+    st = os.stat(u)
+    is_socket = stat.S_ISSOCK(st.st_mode)
+    if not is_socket:
+        msg = f"Path socket {u} exists but it is not a socket."
+        raise ValueError(msg)
