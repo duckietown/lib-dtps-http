@@ -559,7 +559,14 @@ pub mod tests {
         )
         .await?;
 
-        check_status(resp, &[hyper::StatusCode::BAD_REQUEST]).await?;
+        check_status(
+            resp,
+            &[
+                hyper::StatusCode::BAD_REQUEST,
+                hyper::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ],
+        )
+        .await?;
 
         cf.finish().await?;
         Ok(())

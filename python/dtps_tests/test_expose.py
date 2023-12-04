@@ -9,8 +9,11 @@ from dtps_tests import logger
 
 
 class TestExpose(IsolatedAsyncioTestCase):
-    @async_error_catcher
     async def test_expose(self):
+        await asyncio.wait_for(self._expose(), timeout=20)
+
+    @async_error_catcher
+    async def _expose(self):
         with tempfile.TemporaryDirectory() as td:
             socket_switchboard = os.path.join(td, "switchboard")
             socket_node = os.path.join(td, "node")

@@ -325,41 +325,40 @@ class DTPSServer:
     @async_error_catcher
     async def _ask_for_topics_continuous(self, name: TopicNameV, finfo: ForwardInfo) -> None:
         nickname = f"{self.nickname}:proxyreader({name.as_dash_sep()})"
-        while True:
-            try:
-                async with DTPSClient.create(nickname=nickname) as dtpsclient:
-                    url = URLIndexer(parse_url_unescape(finfo.urls[0]))
+        # while True:
+        try:
+            async with DTPSClient.create(nickname=nickname) as dtpsclient:
+                url = URLIndexer(parse_url_unescape(finfo.urls[0]))
 
-                    md = await dtpsclient.get_metadata(url)
-                    if md.answering is not None and finfo.expect_node_id is not None:
-                        if md.answering != finfo.expect_node_id:
-                            self.logger.error(
-                                f"Node {finfo.expect_node_id} expected but {md.answering} found"
-                            )
-                            await asyncio.sleep(1.0)
-                            continue
-                    # TODO: check node id
-                    best_url = url
-                    ti = await dtpsclient.ask_index(url)
-                    finfo.established = ForwardInfoEstablished(
-                        best_url,
-                        md=md,
-                        index_internal=TopicsIndex({}),
-                    )
-                    await self._process_change_topics(dtpsclient, name, ti)
+                md = await dtpsclient.get_metadata(url)
+                if md.answering is not None and finfo.expect_node_id is not None:
+                    if md.answering != finfo.expect_node_id:
+                        self.logger.error(f"Node {finfo.expect_node_id} expected but {md.answering} found")
+                        await asyncio.sleep(1.0)
+                        # continue
+                # TODO: check node id
+                best_url = url
+                ti = await dtpsclient.ask_index(url)
+                finfo.established = ForwardInfoEstablished(
+                    best_url,
+                    md=md,
+                    index_internal=TopicsIndex({}),
+                )
+                await self._process_change_topics(dtpsclient, name, ti)
 
-                    async def on_data(rd: RawData) -> None:
-                        od = rd.get_as_native_object()
-                        ti2_ = TopicsIndexWire.from_json(od)
-                        ti2 = ti2_.to_internal([best_url])
-                        await self._process_change_topics(dtpsclient, name, ti2)
+                async def on_data(rd: RawData) -> None:
+                    od = rd.get_as_native_object()
+                    ti2_ = TopicsIndexWire.from_json(od)
+                    ti2 = ti2_.to_internal([best_url])
+                    await self._process_change_topics(dtpsclient, name, ti2)
 
-                    t = await dtpsclient.listen_url(url, on_data, inline_data=True, raise_on_error=False)
-                    self.remember_task(t)
-                    await t
-            except Exception as e:
-                self.logger.error(f"Error in _ask_for_topics_continuous: {e}")
-                await asyncio.sleep(1.0)
+                t = await dtpsclient.listen_url(url, on_data, inline_data=True, raise_on_error=False)
+                self.remember_task(t)
+                await t
+        except Exception as e:
+            self.logger.error(f"Error in _ask_for_topics_continuous: {e}")
+            # await asyncio.sleep(1.0)
+            raise
 
     async def _process_change_topics(
         self, dtpsclient: DTPSClient, prefix: TopicNameV, ti: TopicsIndex
