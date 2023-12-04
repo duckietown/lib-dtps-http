@@ -15,7 +15,7 @@ from . import logger
 from .server import DTPSServer
 from .structures import Registration
 from .types import TopicNameV
-from .urls import parse_url_unescape, URLIndexer, make_http_unix_url, url_to_string
+from .urls import make_http_unix_url, parse_url_unescape, url_to_string, URLIndexer
 
 __all__ = [
     "ServerWrapped",
@@ -131,7 +131,7 @@ class ServerWrapped:
         self.server.logger.debug("closing runner")
 
         try:
-            await asyncio.wait_for(self.runner.cleanup(), timeout=2)
+            await asyncio.wait_for(self.runner.shutdown(), timeout=2)
         except asyncio.exceptions.TimeoutError:
             logger.warning("timeout waiting for runner cleanup")
         self.server.logger.debug("closing runner: done")

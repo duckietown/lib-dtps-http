@@ -39,7 +39,7 @@ class TestExpose(IsolatedAsyncioTestCase):
                         await out.publish(rd)
                         mountpoint = context_switchboard / "dtps" / "node" / "nodename"
                         await mountpoint.expose(context_self)
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(5)
 
                         out_mounted = mountpoint / "out"
 

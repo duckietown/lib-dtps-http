@@ -178,15 +178,15 @@ class DTPSClient:
         pass
 
     async def aclose(self) -> None:
-        self.logger.debug(f"DTPSClient: aclose: setting shutdown event")
+        # self.logger.debug(f"DTPSClient: aclose: setting shutdown event")
         self.shutdown_event.set()
         for t in self.tasks:
             t.cancel()
-        self.logger.debug(f"DTPSClient: aclose: gathering")
+        # self.logger.debug(f"DTPSClient: aclose: gathering")
         await asyncio.gather(*self.tasks, return_exceptions=True)
-        self.logger.debug(f"DTPSClient: aclose: closing S")
+        # self.logger.debug(f"DTPSClient: aclose: closing S")
         await self.S.aclose()
-        self.logger.debug(f"DTPSClient: aclose done")
+        # self.logger.debug(f"DTPSClient: aclose done")
 
     async def ask_index(self, url0: URLIndexer) -> TopicsIndex:
         url = self._look_cache(url0)
@@ -394,9 +394,9 @@ class DTPSClient:
             bandwidth = 100_000_000
             latency = 0.001
             host = url.host
-            self.logger.info(f"checking {url}...  path={repr(url)}")
+            self.logger.debug(f"checking {url}...  path={repr(url)}")
             if not os.path.exists(host):
-                self.logger.info(f" {url}: {host=!r} does not exist")
+                self.logger.warning(f" {url}: {host=!r} does not exist")
                 return None
             who_answers = await self.get_who_answers(url)
 

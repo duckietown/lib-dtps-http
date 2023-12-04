@@ -325,29 +325,41 @@ class DTPSServer:
     @async_error_catcher
     async def _ask_for_topics_continuous(self, name: TopicNameV, finfo: ForwardInfo) -> None:
         nickname = f"{self.nickname}:proxyreader({name.as_dash_sep()})"
-        async with DTPSClient.create(nickname=nickname) as dtpsclient:
-            url = URLIndexer(parse_url_unescape(finfo.urls[0]))
+        while True:
+            try:
+                async with DTPSClient.create(nickname=nickname) as dtpsclient:
+                    url = URLIndexer(parse_url_unescape(finfo.urls[0]))
 
-            md = await dtpsclient.get_metadata(url)
-            # TODO: check node id
-            best_url = url
-            ti = await dtpsclient.ask_index(url)
-            finfo.established = ForwardInfoEstablished(
-                best_url,
-                md=md,
-                index_internal=TopicsIndex({}),
-            )
-            await self._process_change_topics(dtpsclient, name, ti)
+                    md = await dtpsclient.get_metadata(url)
+                    if md.answering is not None and finfo.expect_node_id is not None:
+                        if md.answering != finfo.expect_node_id:
+                            self.logger.error(
+                                f"Node {finfo.expect_node_id} expected but {md.answering} found"
+                            )
+                            await asyncio.sleep(1.0)
+                            continue
+                    # TODO: check node id
+                    best_url = url
+                    ti = await dtpsclient.ask_index(url)
+                    finfo.established = ForwardInfoEstablished(
+                        best_url,
+                        md=md,
+                        index_internal=TopicsIndex({}),
+                    )
+                    await self._process_change_topics(dtpsclient, name, ti)
 
-            async def on_data(rd: RawData) -> None:
-                od = rd.get_as_native_object()
-                ti2_ = TopicsIndexWire.from_json(od)
-                ti2 = ti2_.to_internal([best_url])
-                await self._process_change_topics(dtpsclient, name, ti2)
+                    async def on_data(rd: RawData) -> None:
+                        od = rd.get_as_native_object()
+                        ti2_ = TopicsIndexWire.from_json(od)
+                        ti2 = ti2_.to_internal([best_url])
+                        await self._process_change_topics(dtpsclient, name, ti2)
 
-            t = await dtpsclient.listen_url(url, on_data, inline_data=True, raise_on_error=False)
-            self.remember_task(t)
-            await t
+                    t = await dtpsclient.listen_url(url, on_data, inline_data=True, raise_on_error=False)
+                    self.remember_task(t)
+                    await t
+            except Exception as e:
+                self.logger.error(f"Error in _ask_for_topics_continuous: {e}")
+                await asyncio.sleep(1.0)
 
     async def _process_change_topics(
         self, dtpsclient: DTPSClient, prefix: TopicNameV, ti: TopicsIndex
@@ -458,7 +470,6 @@ class DTPSServer:
                 self.logger.info(f"Found {name} in mountpoints")
                 if self._mount_points[name].established is not None:
                     self.logger.info(f"Found {name} in mountpoints and established is not None")
-
                     break
 
             await asyncio.sleep(0.1)
@@ -627,10 +638,10 @@ class DTPSServer:
 
     @async_error_catcher
     async def on_shutdown(self, _: web.Application) -> None:
-        self.logger.info("DTPSServer: on_shutdown")
+        self.logger.debug("DTPSServer: on_shutdown")
         for t in self.tasks:
             t.cancel()
-        self.logger.info("DTPSServer: on_shutdown done")
+        self.logger.debug("DTPSServer: on_shutdown done")
 
     def create_root_index(self) -> TopicsIndex:
         topics: Dict[TopicNameV, TopicRef] = {}
@@ -831,12 +842,22 @@ class DTPSServer:
                 subtopics.append((k, matched, rest, source))
 
         if not subtopics:
+            for k, source in self._mount_points.items():
+                if source.established is None and (isp := k.is_prefix_of(tn)):
+                    msg = f"This topic is on the mount point {k} but the connection is not established yet.\n"
+                    raise KeyError(msg)
+
             msg = f"Cannot find a matching topic for {url0!r}.\n"
             msg += f"| topic name: {tn.as_dash_sep()}\n"
             msg += f"| sources: \n"
             for k, source in sources.items():
                 msg += f"| {k.as_dash_sep()!r}: {type(source).__name__}\n"
             self.logger.debug(msg)
+
+            if self._mount_points:
+                msg += f"| mount points: \n"
+                for k, source in self._mount_points.items():
+                    msg += f"| {k.as_dash_sep()!r}: {type(source).__name__} established = {source.established is not None}\n"
             raise KeyError(msg)
 
         origin_node = self.node_id
