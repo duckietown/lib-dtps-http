@@ -3,7 +3,7 @@ import asyncio
 from typing import cast
 
 from dtps_http import (
-    async_error_catcher, DTPSClient, InsertNotification, join, parse_url_unescape,
+    async_error_catcher, DTPSClient, InsertNotification, parse_url_unescape,
     TopicNameV, TopicRef, URL, URLIndexer, URLString,
 )
 
@@ -18,7 +18,8 @@ async def read_continuous(urlbase0: URL) -> None:
         if not md.answering:
             raise Exception("Not a DTPS node")
         # we get the topics inside
-        topics = await dtpsclient.ask_topics(cast(URLIndexer, urlbase0))
+        index = await dtpsclient.ask_index(cast(URLIndexer, urlbase0))
+        topics = index.topics
         tasks = []
         topic_name: TopicNameV
         info: TopicRef
@@ -29,8 +30,8 @@ async def read_continuous(urlbase0: URL) -> None:
 
             # info.reachability gives the (possibly relative url) where
             # to find the topic. We need to join it with the base url of the request
-            abs_url = join(urlbase0, info.reachability[0].url)
-
+            # abs_url = join(urlbase0, info.reachability[0].url)
+            abs_url = info.reachability[0].url
             print(f'- topic: {topic_name.__dict__!r}: {abs_url}')
 
             # creates a task that listens to the topic

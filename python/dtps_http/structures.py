@@ -10,7 +10,7 @@ from pydantic.dataclasses import dataclass
 
 from .constants import HEADER_LINK_BENCHMARK, MIME_CBOR, MIME_JSON, MIME_TEXT
 from .types import ContentType, NodeID, SourceID, TopicNameS, TopicNameV, URLString
-from .urls import URLIndexer
+from .urls import join, URL, url_to_string, URLIndexer
 
 __all__ = [
     "ChannelInfo",
@@ -96,6 +96,26 @@ class ForwardingStep:
 
 
 @dataclass
+class TopicReachabilityWire:
+    url: URLString
+    answering: NodeID
+
+    # mostly for debugging
+    forwarders: List[ForwardingStep]
+
+    benchmark: LinkBenchmark
+
+    def to_internal(self, urlbase: URL) -> "TopicReachability":
+        url = join(urlbase, self.url)
+        return TopicReachability(
+            url=url_to_string(url),
+            answering=self.answering,
+            forwarders=self.forwarders,
+            benchmark=self.benchmark,
+        )
+
+
+@dataclass
 class TopicReachability:
     url: URLString
     answering: NodeID
@@ -104,6 +124,20 @@ class TopicReachability:
     forwarders: List[ForwardingStep]
 
     benchmark: LinkBenchmark
+
+    def __post_init__(self):
+        # s = url_to_string(self.url)
+        if "///" in self.url:
+            msg = f"Invalid URL: {self.url!r}"
+            raise ValueError(msg)
+
+    def to_wire(self) -> "TopicReachabilityWire":
+        return TopicReachabilityWire(
+            url=self.url,  # should I really do this?
+            answering=self.answering,
+            forwarders=self.forwarders,
+            benchmark=self.benchmark,
+        )
 
 
 @dataclass
@@ -120,6 +154,17 @@ class TopicProperties:
     def streamable_readonly(cls) -> "TopicProperties":
         return TopicProperties(
             streamable=True, pushable=False, readable=True, immutable=False, has_history=True, patchable=False
+        )
+
+    @classmethod
+    def readonly(cls) -> "TopicProperties":
+        return TopicProperties(
+            streamable=False,
+            pushable=False,
+            readable=True,
+            immutable=False,
+            has_history=False,
+            patchable=False,
         )
 
     @classmethod
@@ -258,6 +303,32 @@ class ContentInfo:
 
 
 @dataclass
+class TopicRefWire:
+    unique_id: SourceID  # unique id for the stream
+    origin_node: NodeID  # unique id of the node that created the stream
+    app_data: Dict[str, bytes]
+    reachability: List[TopicReachabilityWire]
+    created: int
+    properties: TopicProperties
+    content_info: ContentInfo
+
+    def to_internal(self, where_available: List[URL], /) -> "TopicRef":
+        reachability = []
+        for r in self.reachability:
+            for w in where_available:
+                reachability.append(r.to_internal(w))
+        return TopicRef(
+            unique_id=self.unique_id,
+            origin_node=self.origin_node,
+            app_data=self.app_data,
+            reachability=reachability,
+            created=self.created,
+            properties=self.properties,
+            content_info=self.content_info,
+        )
+
+
+@dataclass
 class TopicRef:
     unique_id: SourceID  # unique id for the stream
     origin_node: NodeID  # unique id of the node that created the stream
@@ -266,6 +337,20 @@ class TopicRef:
     created: int
     properties: TopicProperties
     content_info: ContentInfo
+
+    def to_wire(self) -> "TopicRefWire":
+        reachability = []
+        for r in self.reachability:
+            reachability.append(r.to_wire())
+        return TopicRefWire(
+            unique_id=self.unique_id,
+            origin_node=self.origin_node,
+            app_data=self.app_data,
+            reachability=reachability,
+            created=self.created,
+            properties=self.properties,
+            content_info=self.content_info,
+        )
 
 
 @dataclass
@@ -289,31 +374,58 @@ class TopicsIndex:
                 msg = f"Topic {k.as_dash_sep()!r} has no reachability"
                 raise AssertionError(msg)
 
-    @classmethod
-    def from_json(cls, s: Any) -> "TopicsIndex":
-        wire = TopicsIndexWire.from_json(s)
-        return wire.to_topics_index()
+    #
+    # @classmethod
+    # def from_json(cls, s: Any) -> "TopicsIndex":
+    #     wire = TopicsIndexWire.from_json(s)
+    #     return wire.to_topics_index()
 
     def to_wire(self) -> "TopicsIndexWire":
         topics = {}
         for k, v in self.topics.items():
-            topics[k.as_dash_sep()] = v
+            topics[k.as_dash_sep()] = v.to_wire()
+
         return TopicsIndexWire(topics=topics)
 
 
 @dataclass
 class TopicsIndexWire:
-    topics: Dict[TopicNameS, TopicRef]
+    topics: Dict[TopicNameS, TopicRefWire]
 
     @classmethod
     def from_json(cls, s: Any) -> "TopicsIndexWire":
         return parse_obj_as(cls, s)
 
-    def to_topics_index(self) -> "TopicsIndex":
+    def to_internal(self, where_this_available: List[URL]) -> "TopicsIndex":
         topics: Dict[TopicNameV, TopicRef] = {}
-        for k, v in self.topics.items():
-            topics[TopicNameV.from_dash_sep(k)] = v
+
+        for k, tr0 in self.topics.items():
+            topic = TopicNameV.from_dash_sep(k)
+
+            topics[topic] = tr0.to_internal(where_this_available)
+            #
+            # reachability: List[TopicReachabilityInternal] = []
+            # for r in tr0.reachability:
+            #
+            #
+            #     if "://" in r.url:
+            #         url = parse_url_unescape(r.url)
+            #
+            #         reachability.append(parse_url_unescape(r.url))
+            #     else:
+            #         for w in where_this_available:
+            #             reachability.append(r.to_internal(w))
+            #
+            #
+            # tr2 = replace(tr0, reachability=reachability)
+            # available[k] = tr2
+
         return TopicsIndex(topics=topics)
+        #
+        #
+        # for k, v in self.topics.items():
+        #     topics[TopicNameV.from_dash_sep(k)] = v
+        # return TopicsIndex(topics=topics)
 
 
 # used in websockets

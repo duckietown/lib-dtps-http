@@ -20,7 +20,7 @@ async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> Non
     last = []
     i = 0
 
-    def new_observation(topic_name: TopicNameV, data: RawData) -> None:
+    async def new_observation(topic_name: TopicNameV, data: RawData) -> None:
         nonlocal i
 
         current = time.time_ns()
@@ -48,11 +48,11 @@ async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> Non
                 f"{avg:.3f}ms" + f" min: {min_:.3f}ms max: {max_:.3f}ms]"
             )
 
-    subcriptions: List[asyncio.Task[None]] = []
+    subcriptions: "List[asyncio.Task[None]]" = []
     async with DTPSClient.create() as dtpsclient:
-        available = await dtpsclient.ask_topics(url)
+        available = await dtpsclient.ask_index(url)
 
-        for name, desc in available.items():
+        for name, desc in available.topics.items():
             # list_urls = "".join(f"\t{u} \n" for u in desc.urls)
             logger.info(
                 f"Found topic {name!r}:\n"

@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from dtps_http.urls import URLIndexer
 
 import jsonpatch
 
@@ -112,7 +113,7 @@ class TestAsyncServerFunction(unittest.TestCase):
             logger.info("waiting for server to start")
             await dtps_server.started.wait()
             logger.info("waiting for server to start: done")
-            url = parse_url_unescape(URLString(f"http://localhost:{port}/"))
+            url = URLIndexer(parse_url_unescape(URLString(f"http://localhost:{port}/")))
 
             tra = TopicRefAdd(
                 content_info=ContentInfo.simple(MIME_JSON),

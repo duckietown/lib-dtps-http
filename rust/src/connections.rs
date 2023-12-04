@@ -23,7 +23,7 @@ pub struct UnixCon {
 impl UnixCon {
     pub fn from_path(path: &str) -> Self {
         Self {
-            scheme: "unix+http".to_string(),
+            scheme: "http+unix".to_string(),
             socket_name: path.to_string(),
             path: "/".to_string(),
             query: None,

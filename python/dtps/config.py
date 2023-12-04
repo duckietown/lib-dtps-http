@@ -10,6 +10,7 @@ from dtps_http import (
     DTPSClient,
     DTPSServer,
     join,
+    NodeID,
     ObjectQueue,
     parse_url_unescape,
     RawData,
@@ -47,7 +48,7 @@ async def context(base_name: str = "self", environment: Optional[Mapping[str, st
     For example:
 
         DTPS_BASE_SELF = "http://localhost:2120/" # use an existing server
-        DTPS_BASE_SELF = "unix+http://[socket]/" # use an existing unix socket
+        DTPS_BASE_SELF = "http+unix://[socket]/" # use an existing unix socket
 
     We can also use the special prefix "create:" to create a new server.
     For example:
@@ -57,7 +58,7 @@ async def context(base_name: str = "self", environment: Optional[Mapping[str, st
     Moreover, we can use more than one base name, by adding a number at the end:
 
         DTPS_BASE_SELF_0 = "create:http://localhost:2120/" #
-        DTPS_BASE_SELF_1 = "create:unix+http://[socket]/"
+        DTPS_BASE_SELF_1 = "create:http+unix://[socket]/"
 
 
     You need to call context.aclose() at the end to clean up resources.
@@ -89,6 +90,7 @@ async def create_context(base_name: str, environment: Optional[Mapping[str, str]
         raise KeyError(msg)
 
     context_info = contexts.contexts[base_name]
+    logger.info(f'Creating context "{base_name}" with {context_info}')
     await ContextManager.create(base_name, context_info)
 
 
@@ -139,7 +141,7 @@ class ContextManagerCreate(ContextManager):
     async def init(self) -> None:
         # self.client = DTPSClient.create()
         # await self.client.init()
-        dtps_server = DTPSServer.create()
+        dtps_server = DTPSServer.create(nickname=self.base_name)
         tcps, unix_paths = self.context_info.get_tcp_and_unix()
 
         a = await app_start(
@@ -196,6 +198,17 @@ class ContextManagerCreateContext(DTPSContext):
         if self._publisher is not None:
             # TODO: cleanup here
             self._publisher = None
+
+    async def get_urls(self) -> List[str]:
+        server = self._get_server()
+        urls = server.available_urls
+        rurl = self._get_components_as_topic().as_relative_url()
+        return [f"{u}{rurl}" for u in urls]
+
+    async def get_node_id(self) -> Optional[str]:
+        # TODO: this could be remote
+        server = self._get_server()
+        return server.node_id
 
     def _get_server(self) -> DTPSServer:
         return self.master.dtps_server_wrap.server
@@ -270,6 +283,7 @@ class ContextManagerCreateContext(DTPSContext):
 
 class ContextManagerUse(ContextManager):
     best_url: URLTopic
+    all_urls: List[URL]
 
     # client: DTPSClient
     def __init__(self, base_name: str, context_info: "ContextInfo"):
@@ -283,6 +297,8 @@ class ContextManagerUse(ContextManager):
         await self.client.init()
         alternatives = [(parse_url_unescape(_.url), None) for _ in self.context_info.urls]
         best_url = await self.client.find_best_alternative(alternatives)
+
+        self.all_urls = [u for (u, _) in alternatives]
         if best_url is None:
             msg = f"Could not connect to any of {alternatives}"
             raise ValueError(msg)
@@ -330,6 +346,16 @@ class ContextManagerUseContext(DTPSContext):
 
     async def aclose(self) -> None:
         await self.master.aclose()
+
+    async def get_urls(self) -> List[str]:
+        all_urls = self.master.all_urls
+        rurl = self._get_components_as_topic().as_relative_url()
+        return [str(join(u, rurl)) for u in all_urls]
+
+    async def get_node_id(self) -> Optional[NodeID]:
+        url = await self._get_best_url()
+        md = await self.master.client.get_metadata(url)
+        return md.answering
 
     # async def terminate_publisher(self) -> None:
     # if self._publisher is not None:
@@ -388,8 +414,13 @@ class ContextManagerUseContext(DTPSContext):
     async def call(self, data: RawData) -> RawData:
         raise NotImplementedError()
 
-    async def expose(self, urls: "Sequence[str] | DTPSContext") -> "DTPSContext":
-        raise NotImplementedError()
+    async def expose(self, c: DTPSContext) -> "DTPSContext":
+        topic = self._get_components_as_topic()
+        url0 = self.master.best_url
+        urls = await c.get_urls()
+        node_id = await c.get_node_id()
+        await self.master.client.add_proxy(url0, topic, node_id, urls)
+        return self
 
     async def queue_create(self, parameters: Optional[TopicRefAdd] = None, /) -> "DTPSContext":
         topic = self._get_components_as_topic()
@@ -435,18 +466,22 @@ class ContextInfo:
     def get_tcp_and_unix(self) -> Tuple[List[Tuple[str, int]], List[str]]:
         tcp: List[Tuple[str, int]] = []
         unix: List[str] = []
-        for url in self.urls:
-            if url.url.startswith("unix+http://"):
-                u = parse_url_unescape(url.url)
-                unix.append(str(u.path))
-            elif url.url.startswith("http://"):
-                rest = url.url[len("http://") :]
-                host, _, rest = rest.partition("/")
-                host, _, port = host.partition(":")
-                port = int(port)
-                tcp.append((host, port))
+        for u in self.urls:
+            url_ = parse_url_unescape(u.url)
+            if url_.scheme == "http+unix":
+                host = url_.host
+                unix.append(host)
+
+            elif url_.scheme == "http" or url_.scheme == "https":
+                # rest = url.url[len("http://") :]
+                # host, _, rest = rest.partition("/")
+                # host, _, port = host.partition(":")
+                # port = int(port)
+                host = url_.host or "localhost"
+
+                tcp.append((host, url_.port))
             else:
-                msg = f'Invalid url "{url.url}". Must start with "http://" or "unix+http://".'
+                msg = f'Invalid url "{url_}". Must start with "http://" or "http+unix://".'
                 raise ValueError(msg)
         return tcp, unix
 

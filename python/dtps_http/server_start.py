@@ -15,7 +15,7 @@ from . import logger
 from .server import DTPSServer
 from .structures import Registration
 from .types import TopicNameV
-from .urls import parse_url_unescape, URLIndexer
+from .urls import parse_url_unescape, URLIndexer, make_http_unix_url, url_to_string
 
 __all__ = [
     "app_start",
@@ -126,7 +126,10 @@ class ServerWrapped:
             logger.info("terminating cloudflared tunnel")
             self.tunnel_process.terminate()
             await self.tunnel_process.wait()
+
+        self.server.logger.debug("closing runner")
         await self.runner.cleanup()
+        self.server.logger.debug("closing runner: done")
 
 
 async def app_start(
@@ -178,7 +181,6 @@ async def app_start(
             add_weird_addresses = False
             # add a weird address: for testing purposes
             if add_weird_addresses:
-                # TODO: add a non-existent path
                 the_url = f"http://8.8.12.2:{port}/"
                 available_urls.append(the_url)
                 # add a non-existente hostname
@@ -248,17 +250,25 @@ async def app_start(
     unix_paths.append(os.path.join(tmpdir, f"dtps-{s.node_id}"))
 
     for up in unix_paths:
+        if ("%" in up) or not up:
+            msg = f"Unix path {up!r} is invalid"
+            raise Exception(msg)
+        # if up.endswith("/"):
+        #     up = up[:-1]
+
+        the_url = make_http_unix_url(up)
+        # path = up.replace("/", "%2F")
+        # the_url = f"http+unix://{path}/"
+
+        logger.info(f"starting Unix server on path {up!r} - the URL is {the_url!r}")
+
         dn = os.path.dirname(up)
         os.makedirs(dn, exist_ok=True)
 
-        path = up.replace("/", "%2F")
-        the_url = f"http+unix://{path}/"
-
-        logger.info(f"starting Unix server on path {up!r} - the URL is {the_url!r}")
         unix_site = web.UnixSite(runner, up)
         await unix_site.start()
 
-        available_urls.append(the_url)
+        available_urls.append(url_to_string(the_url))
 
     if not available_urls:
         msg = "Please specify at least one of --tcp-port or --unix-path"

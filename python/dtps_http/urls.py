@@ -6,7 +6,6 @@ from urllib.parse import unquote
 
 from urllib3.util import parse_url, Url
 
-from . import logger
 from .types import URLString
 
 __all__ = [
@@ -18,7 +17,9 @@ __all__ = [
     "URLWSOffline",
     "get_relative_url",
     "join",
+    "make_http_unix_url",
     "parse_url_unescape",
+    "relative_url",
     "url_to_string",
 ]
 
@@ -48,11 +49,31 @@ def quote(s: str) -> str:
     return s.replace("/", "%2F")
 
 
+def make_http_unix_url(socket_path: str, url_path: Optional[str] = None) -> URL:
+    if url_path is None:
+        url_path = "/"
+    return URL(
+        scheme="http+unix",
+        host=quote(socket_path),
+        port=None,
+        path=url_path,
+        query=None,
+        auth=None,
+        fragment=None,
+    )
+
+
+def relative_url(rel: str) -> URL:
+    u = URL(scheme="rel", host="", port=None, path=rel, query=None, auth=None, fragment=None)
+
+    return u
+
+
 def parse_url_unescape(s: URLString) -> URL:
     parsed = parse_url(s)
     if parsed.path is None:
-        logger.warning(f"parse_url_unescape: path is None: {s!r}")
-        path = ""
+        # logger.warning(f"parse_url_unescape: path is None: {s!r}")
+        path = "/"
     else:
         path = parsed.path
     res = Url(  # type: ignore
@@ -66,9 +87,25 @@ def parse_url_unescape(s: URLString) -> URL:
     return cast(URL, res)
 
 
+def test_rel_url1() -> None:
+    rel = "a/b/c"
+    url = relative_url(rel)
+    urls = url_to_string(url)
+    if urls != rel:
+        raise AssertionError(f" url = {repr(url)} {urls=!r} != {rel=!r}")
+
+
 def url_to_string(url: URL) -> URLString:
     # noinspection PyProtectedMember
+    assert isinstance(url, URL), type(url)
     url2 = url._replace(host=quote(url.host) if url.host is not None else None)
+
+    if not url2.scheme and not url2.host and url2.port is None:
+        s = url2.path or "/"
+        if url2.query is not None:
+            s += "?" + url2.query
+        return URLString(s)
+
     return cast(URLString, str(url2))
 
 

@@ -10,7 +10,7 @@ from jsonpatch import JsonPatch
 
 from . import logger
 from .constants import CONTENT_TYPE_DTPS_INDEX_CBOR
-from .object_queue import ObjectTransformResult
+from .object_queue import ObjectTransformResult, TransformError
 from .structures import (
     ContentInfo,
     LinkBenchmark,
@@ -21,7 +21,7 @@ from .structures import (
     TopicsIndex,
 )
 from .types import ContentType, NodeID, SourceID, TopicNameV
-from .urls import get_relative_url
+from .urls import get_relative_url, parse_url_unescape, relative_url
 
 __all__ = [
     "ForwardedQueue",
@@ -267,16 +267,12 @@ class ForwardedQueue(Source):
     async def patch(
         self, request: web.Request, presented_as: str, server: "DTPSServer", patch: JsonPatch
     ) -> "ObjectTransformResult":
-        raise NotImplementedError(f"patch() for {self}")  # TODO: patch forwarded queue
+        raise NotImplementedError(f"patch() for {self}")  # TODO: DTSW-4787: patch forwarded queue
 
     async def post(
         self, request: web.Request, presented_as: str, server: "DTPSServer", rd: RawData
     ) -> "ObjectTransformResult":
-        raise NotImplementedError(f"post() for {self}")  # TODO: post forwarded queue
-        # oq = server.get_oq(self.topic_name)
-        #
-        # otr = await oq.publish(rd)
-        # return otr
+        raise NotImplementedError(f"post() for {self}")  # TODO: DTSW-4780: post forwarded queue
 
 
 @dataclass
@@ -347,43 +343,15 @@ class SourceComposition(Source):
         as_cbor = cbor2.dumps(asdict(data.to_wire()))
         return RawData(content_type=CONTENT_TYPE_DTPS_INDEX_CBOR, content=as_cbor)
 
-    #
-    # async def get_resolved_data0(
-    #     self, request: web.Request, presented_as: str, server: "DTPSServer"
-    # ) -> "ResolvedData":
-    #     res: Dict[str, Any] = {}
-    #     for k0, v in self.sources.items():
-    #         k = k0.as_dash_sep()
-    #         data = await v.get_resolved_data(request, presented_as, server)
-    #         if isinstance(data, RawData):
-    #             if "cbor" in data.content_type:
-    #                 res[k] = cbor2.loads(data.content)
-    #             elif "json" in data.content_type:
-    #                 res[k] = json.loads(data.content)
-    #             elif "yaml" in data.content_type:
-    #                 res[k] = yaml.safe_load(data.content)
-    #             else:
-    #                 res[k] = {"content": data.content, "content_type": data.content_type}
-    #         elif isinstance(data, Native):
-    #             res[k] = data.ob
-    #
-    #         elif isinstance(data, NotAvailableYet):
-    #             res[k] = None
-    #             pass
-    #         elif isinstance(data, NotFound):
-    #             res[k] = None
-    #             pass
-    #     return Native(res)
-
     async def patch(
         self, request: web.Request, presented_as: str, server: "DTPSServer", patch: JsonPatch
     ) -> "ObjectTransformResult":
-        raise NotImplementedError(f"patch() for {self}")  # TODO: patch SourceComposition
+        return TransformError(400, "Cannot patch SourceComposition")
 
     async def post(
         self, request: web.Request, presented_as: str, server: "DTPSServer", rd: RawData
     ) -> "ObjectTransformResult":
-        raise NotImplementedError(f"post() for {self}")  # TODO: post SourceComposition
+        return TransformError(400, "Cannot post to SourceComposition")
 
 
 @dataclass
@@ -450,10 +418,10 @@ class MetaInfo(Source):
     source: Source
 
     async def get_meta_info(self, presented_as: str, server: "DTPSServer") -> "TopicsIndex":
-        raise NotImplementedError(f"OurQueue.get_meta_info() for {self}")
+        raise NotImplementedError(f"OurQueue.get_meta_info() for {self}")  # TODO: DTSW-4789
 
     def get_properties(self, server: "DTPSServer") -> TopicProperties:
-        return self.source.get_properties(server)  # XXX
+        return TopicProperties.readonly()
 
     def get_inside_after(self, s: str) -> "Source":
         raise KeyError(f"get_inside_after({s!r}) not implemented for {self!r}")
@@ -464,17 +432,17 @@ class MetaInfo(Source):
     async def get_resolved_data(
         self, request: web.Request, presented_as: str, server: "DTPSServer"
     ) -> "ResolvedData":
-        raise NotImplementedError("MetaInfo.get_resolved_data()")
+        raise NotImplementedError("MetaInfo.get_resolved_data()")  # TODO: DTSW-4789
 
     async def patch(
         self, request: web.Request, presented_as: str, server: "DTPSServer", patch: JsonPatch
     ) -> "ObjectTransformResult":
-        raise NotImplementedError(f"patch() for {self}")
+        return TransformError(400, "Cannot PATCH MetaInfo")
 
     async def post(
         self, request: web.Request, presented_as: str, server: "DTPSServer", rd: RawData
     ) -> "ObjectTransformResult":
-        raise NotImplementedError(f"post() for {self}")  # TODO: post MetaInfo
+        return TransformError(400, "Cannot POST MetaInfo")
 
 
 TypeOfSource = Union[OurQueue, ForwardedQueue, SourceComposition, Transformed]

@@ -6,7 +6,7 @@ import traceback
 import uuid
 from asyncio import CancelledError
 from contextlib import contextmanager
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass as original_dataclass, replace
 from typing import Any, Awaitable, Callable, cast, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 import cbor2
@@ -25,8 +25,8 @@ from jsonpatch import (
 from multidict import CIMultiDict
 from pydantic.dataclasses import dataclass
 
-from . import __version__, logger
-from .client import DTPSClient, unescape_json_pointer
+from . import __version__, logger as logger0, TOPIC_PROXIED
+from .client import DTPSClient, FoundMetadata, unescape_json_pointer
 from .constants import (
     CONTENT_TYPE_DTPS_INDEX_CBOR,
     CONTENT_TYPE_TOPIC_HISTORY_CBOR,
@@ -70,6 +70,7 @@ from .structures import (
     TopicRef,
     TopicRefAdd,
     TopicsIndex,
+    TopicsIndexWire,
 )
 from .types import ContentType, NodeID, SourceID, TopicNameV, URLString
 from .types_of_source import (
@@ -81,7 +82,7 @@ from .types_of_source import (
     Source,
     SourceComposition,
 )
-from .urls import join, parse_url_unescape, URL, url_to_string, URLWS
+from .urls import join, parse_url_unescape, URL, url_to_string, URLIndexer, URLWS
 from .utils import async_error_catcher, multidict_update
 
 SEND_DATA_ARGNAME = "send_data"
@@ -106,6 +107,23 @@ class ForwardedTopic:
     content_info: ContentInfo
 
 
+@original_dataclass
+class ForwardInfoEstablished:
+    best_url: URL
+    md: FoundMetadata
+    index_internal: TopicsIndex
+
+
+@original_dataclass
+class ForwardInfo:
+    urls: List[URLString]
+    expect_node_id: Optional[NodeID]
+
+    established: Optional[ForwardInfoEstablished]
+    mask_origin: bool
+    task: "asyncio.Task[Any]"
+
+
 def get_static_dir() -> str:
     options = [
         pathlib.Path(__file__).parent / "static",
@@ -127,25 +145,35 @@ class DTPSServer:
     started: asyncio.Event
 
     _oqs: Dict[TopicNameV, ObjectQueue]
+    _mount_points: Dict[TopicNameV, ForwardInfo]
     _forwarded: Dict[TopicNameV, ForwardedTopic]
 
-    tasks: "list[asyncio.Task[Any]]"
+    tasks: "List[asyncio.Task[Any]]"
     digest_to_urls: Dict[str, List[URL]]
     node_app_data: Dict[str, bytes]
     registrations: List[Registration]
+    available_urls: "List[str]"
+    nickname: str
 
     @classmethod
     def create(
         cls,
         on_startup: "Sequence[Callable[[DTPSServer], Awaitable[None]]]" = (),
+        nickname: Optional[str] = None,
     ) -> "DTPSServer":
-        return cls(on_startup=on_startup)
+        return cls(on_startup=on_startup, nickname=nickname)
 
     def __init__(
         self,
         *,
         on_startup: "Sequence[Callable[[DTPSServer], Awaitable[None]]]" = (),
+        nickname: Optional[str] = None,
     ) -> None:
+        if nickname is None:
+            nickname = str(id(self))
+        self.nickname = nickname
+        self.logger = logger0.getChild(nickname)
+
         self.app = web.Application()
 
         self.node_app_data = {}
@@ -169,15 +197,15 @@ class DTPSServer:
         # mount a static directory for the web interface
 
         static_dir = get_static_dir()
-        logger.info(f"Using static dir: {static_dir}")
+        self.logger.info(f"Using static dir: {static_dir}")
         self.app.add_routes([web.static("/static", static_dir)])
         self.app.add_routes(routes)
 
         self.hub = Hub()
         self._oqs = {}
+        self._mount_points = {}
         self._forwarded = {}
         self.tasks = []
-        self.logger = logger
         self.available_urls = []
         self.node_id = NodeID(f"python-{str(uuid.uuid4())[:8]}")
 
@@ -194,16 +222,16 @@ class DTPSServer:
         return topic_name in self._forwarded
 
     def get_headers_alternatives(self, request: web.Request) -> CIMultiDict[str]:
-        original_url = request.url
+        original_url = str(request.url)
 
         # noinspection PyProtectedMember
         sock = request.transport._sock  # type: ignore
         sockname = sock.getsockname()
         if isinstance(sockname, str):
             path = sockname.replace("/", "%2F")
-            use_url = str(original_url).replace("http://", "http+unix://").replace("localhost", path)
+            use_url = original_url.replace("http://", "http+unix://").replace("localhost", path)
         else:
-            use_url = str(original_url)
+            use_url = original_url
 
         res: CIMultiDict[str] = CIMultiDict()
         if not self.available_urls:
@@ -211,11 +239,11 @@ class DTPSServer:
             return res
 
         alternatives: List[str] = []
-        url = str(use_url)
+        url = use_url
 
         for a in self.available_urls + [
-            f"http://127.0.0.1:{original_url.port}/",
-            f"http://localhost:{original_url.port}/",
+            f"http://127.0.0.1:{request.url.port}/",
+            f"http://localhost:{request.url.port}/",
         ]:
             if url.startswith(a):
                 for b in self.available_urls:
@@ -271,10 +299,159 @@ class DTPSServer:
             self._forwarded.pop(name)
             await self._update_lists()
 
-    async def add_forwarded(self, name: TopicNameV, forwarded: ForwardedTopic) -> None:
+    async def _add_proxied_mountpoint(
+        self, name: TopicNameV, node_id: Optional[NodeID], urls: List[URLString], mask_origin: bool
+    ) -> None:
+        if name in self._mount_points or name in self._oqs:
+            raise ValueError(f"Topic {name} already exists")
+
+        finfo = ForwardInfo(
+            urls=urls,
+            expect_node_id=node_id,
+            mask_origin=mask_origin,
+            task=None,  # type: ignore
+            established=None,
+        )
+        self._mount_points[name] = finfo
+        finfo.task = asyncio.create_task(self._ask_for_topics_continuous(name, finfo))
+        self.remember_task(finfo.task)
+
+    @async_error_catcher
+    async def _ask_for_topics_continuous(self, name: TopicNameV, finfo: ForwardInfo) -> None:
+        nickname = f"{self.nickname}:proxyreader({name.as_dash_sep()})"
+        async with DTPSClient.create(nickname=nickname) as dtpsclient:
+            url = URLIndexer(parse_url_unescape(finfo.urls[0]))
+
+            md = await dtpsclient.get_metadata(url)
+            # TODO: check node id
+            best_url = url
+            ti = await dtpsclient.ask_index(url)
+            finfo.established = ForwardInfoEstablished(
+                best_url,
+                md=md,
+                index_internal=TopicsIndex({}),
+            )
+            await self._process_change_topics(dtpsclient, name, ti)
+
+            async def on_data(rd: RawData) -> None:
+                od = rd.get_as_native_object()
+                ti2_ = TopicsIndexWire.from_json(od)
+                ti2 = ti2_.to_internal([best_url])
+                await self._process_change_topics(dtpsclient, name, ti2)
+
+            t = await dtpsclient.listen_url(url, on_data, inline_data=True, raise_on_error=False)
+            self.remember_task(t)
+            await t
+
+    async def _process_change_topics(
+        self, dtpsclient: DTPSClient, prefix: TopicNameV, ti: TopicsIndex
+    ) -> None:
+        info = self._mount_points[prefix]
+        if info.established is None:
+            raise AssertionError(f"Established is None for {prefix}")
+        previous = list(info.established.index_internal.topics)
+        current = list(ti.topics)
+        removed = set(previous) - set(current)
+        added = set(current) - set(previous)
+        self.logger.debug(f"added={added!r} removed={removed!r}")
+
+        for topic_name in removed:
+            new_topic = prefix + topic_name
+            if self.has_forwarded(new_topic):
+                self.logger.debug("removing topic %s", new_topic)
+                await self.remove_forward(new_topic)
+
+        for topic_name in added:
+            tr = ti.topics[topic_name]
+            new_topic = prefix + topic_name
+
+            if self.has_forwarded(new_topic):
+                self.logger.debug("already have topic %s", new_topic)
+                continue
+
+            self.logger.info(f"adding topic {tr}")
+            possible: List[Tuple[URL, TopicReachability]] = []
+            metadata = None
+            for reachability in tr.reachability:
+                urlhere = new_topic.as_relative_url()
+                # rurl = parse_url_unescape(reachability.url)
+                metadata = await dtpsclient.get_metadata(parse_url_unescape(reachability.url))
+                for m in metadata.alternative_urls:  # + [rurl]:
+                    reach_with_me = await dtpsclient.compute_with_hop(
+                        self.node_id,
+                        urlhere,
+                        connects_to=m,
+                        expects_answer_from=reachability.answering,
+                        forwarders=reachability.forwarders,
+                    )
+                    if reach_with_me is not None:
+                        try:
+                            xx = parse_url_unescape(reach_with_me.url)
+                        except Exception:
+                            self.logger.error(f"Could not parse {reach_with_me.url!r}")
+                            continue
+                        else:
+                            possible.append((xx, reach_with_me))
+                    else:
+                        pass  # logger.info(f"Could not proxy {new_topic!r} as {urlbase} {topic_name}
+                        # -> {m}")
+
+            if not possible:
+                self.logger.error(f"Topic {topic_name} cannot be reached")
+                return
+
+            assert metadata is not None  # XXX: this is not the best metadata
+
+            def choose_key(x: TopicReachability) -> Tuple[int, float, float]:
+                return x.benchmark.complexity, x.benchmark.latency_ns, -x.benchmark.bandwidth
+
+            possible.sort(key=lambda _: choose_key(_[1]))
+            url_to_use, r = possible[0]
+            mask_origin = False
+
+            if mask_origin:
+                tr2 = replace(tr, reachability=[r])
+            else:
+                tr2 = replace(tr, reachability=tr.reachability + [r])
+
+            self.logger.info(f"adding topic {new_topic} -> {repr(url_to_use)}")
+
+            # metadata_to_use = await dtpsclient.get_metadata(url_to_use)
+            fd = ForwardedTopic(
+                unique_id=tr2.unique_id,
+                origin_node=tr2.origin_node,
+                app_data=tr2.app_data,
+                reachability=tr2.reachability,
+                forward_url_data=metadata.origin,
+                forward_url_events=metadata.events_url,
+                forward_url_events_inline_data=metadata.events_data_inline_url,
+                content_info=tr2.content_info,  # FIXME: content info
+                properties=tr2.properties,
+            )
+
+            self.logger.info(
+                f"Proxying {new_topic!r} as    {topic_name} "
+                # "->  \n"
+                # f" available at\n: {json.dumps(asdict(tr), indent=2)} \n"
+                # f" proxied at\n: {json.dumps(asdict(fd), indent=2)} \n"
+            )
+
+            await self._add_forwarded(new_topic, fd)
+
+    async def expose(
+        self, name: TopicNameV, expect_node_id: Optional[NodeID], urls: List[URLString], mask_origin: bool
+    ) -> None:
+        oq = self.get_oq(TOPIC_PROXIED)
+        x = oq.last_data()
+        d = cast(dict, x.get_as_native_object())
+        d[name.as_dash_sep()] = {"node_id": expect_node_id, "urls": urls, "mask_origin": mask_origin}
+        await oq.publish_json(d)
+
+    async def _add_forwarded(self, name: TopicNameV, forwarded: ForwardedTopic) -> None:
         if name in self._forwarded or name in self._oqs:
             raise ValueError(f"Topic {name} already exists")
         self._forwarded[name] = forwarded
+        await self._update_lists()
 
     def get_oq(self, name: TopicNameV) -> ObjectQueue:
         if name in self._forwarded:
@@ -298,7 +475,7 @@ class DTPSServer:
         unique_id = get_unique_id(self.node_id, name)
 
         treach = TopicReachability(
-            url=URLString(name.as_relative_url()),
+            url=name.as_relative_url(),
             answering=self.node_id,
             forwarders=[],
             benchmark=LinkBenchmark.identity(),
@@ -357,6 +534,12 @@ class DTPSServer:
         await self.create_oq(TOPIC_CLOCK, content_info=ContentInfo.simple(MIME_JSON), max_history=10)
         await self.create_oq(TOPIC_AVAILABILITY, content_info=ContentInfo.simple(MIME_JSON), max_history=10)
         await self.create_oq(TOPIC_STATE_SUMMARY, content_info=ContentInfo.simple(MIME_JSON), max_history=10)
+
+        oq = await self.create_oq(TOPIC_PROXIED, content_info=ContentInfo.simple(MIME_JSON), max_history=10)
+        rd = RawData(content=b"{}", content_type=MIME_JSON)
+        await oq.publish(rd)
+        oq.subscribe(self.on_proxied_changed)
+
         await self.create_oq(
             TOPIC_STATE_NOTIFICATION, content_info=ContentInfo.simple(MIME_CBOR), max_history=10
         )
@@ -370,6 +553,21 @@ class DTPSServer:
             self.remember_task(asyncio.create_task(self._register(registration)))
 
         self.started.set()
+
+    async def on_proxied_changed(self, oq: ObjectQueue, _: int) -> None:
+        x = cast(dict, oq.last_data().get_as_native_object())
+        current = list(self._forwarded)
+        topics = list(TopicNameV.from_dash_sep(_) for _ in x)
+
+        added = set(topics) - set(current)
+        removed = set(current) - set(topics)
+        for r in removed:
+            await self.remove_forward(r)  # XXX
+        for a in added:
+            node_id = x[a.as_dash_sep()]["node_id"]
+            urls = x[a.as_dash_sep()]["urls"]
+            mask_origin = x[a.as_dash_sep()].get("mask_origin", False)
+            await self._add_proxied_mountpoint(a, node_id, urls, mask_origin=mask_origin)
 
     async def aclose(self) -> None:
         for t in self.tasks:
@@ -386,17 +584,17 @@ class DTPSServer:
                 changes = await self._try_register(r)
 
             except Exception as e:
-                logger.error(f"Error while registering {r}: {e}")
+                self.logger.error(f"Error while registering {r}: {e}")
                 await asyncio.sleep(1.0)
             else:
                 if n == 0:
-                    logger.info(f"Registered as {r.topic.as_dash_sep()} on {r.switchboard_url}")
+                    self.logger.info(f"Registered as {r.topic.as_dash_sep()} on {r.switchboard_url}")
                 else:
                     if changes:
-                        logger.info(f"Re-registered as {r.topic.as_dash_sep()} on {r.switchboard_url}")
+                        self.logger.info(f"Re-registered as {r.topic.as_dash_sep()} on {r.switchboard_url}")
 
                 n += 1
-                # TODO: just open a websocket connection and see when it closes
+                # TODO: DTSW-4782: just open a websocket connection and see when it closes
                 await asyncio.sleep(10.0)
 
     @async_error_catcher
@@ -405,7 +603,7 @@ class DTPSServer:
             # url = parse_url_unescape(r.switchboard_url)
             if not self.available_urls:
                 msg = f"Cannot register {r} because no available URLs"
-                logger.error(msg)
+                self.logger.error(msg)
                 raise ValueError(msg)
             postfix = r.namespace.as_relative_url()
             urls = [_ + postfix for _ in self.available_urls]
@@ -413,16 +611,17 @@ class DTPSServer:
 
     @async_error_catcher
     async def on_shutdown(self, _: web.Application) -> None:
-        self.logger.info("on_shutdown")
+        self.logger.info("DTPSServer: on_shutdown")
         for t in self.tasks:
             t.cancel()
+        self.logger.info("DTPSServer: on_shutdown done")
 
     def create_root_index(self) -> TopicsIndex:
         topics: Dict[TopicNameV, TopicRef] = {}
         for topic_name, oqs in self._oqs.items():
             qual_topic_name = topic_name
             reach = TopicReachability(
-                url=URLString(qual_topic_name.as_relative_url()),
+                url=qual_topic_name.as_relative_url(),
                 answering=self.node_id,
                 forwarders=[],
                 benchmark=LinkBenchmark.identity(),
@@ -449,7 +648,7 @@ class DTPSServer:
                 if x not in topics:
                     reachability = [
                         TopicReachability(
-                            url=URLString(x.as_relative_url()),
+                            url=x.as_relative_url(),
                             answering=self.node_id,
                             forwarders=[],
                             benchmark=LinkBenchmark.identity(),
@@ -541,7 +740,7 @@ class DTPSServer:
     @async_error_catcher
     async def serve_history(self, request: web.Request) -> web.StreamResponse:
         headers: CIMultiDict[str] = CIMultiDict()
-        # TODO: add nodeid
+        # TODO: DTSW-4783: add nodeid
         topic_name_s = request.match_info["topic"]
         try:
             source = self.resolve(topic_name_s)
@@ -567,7 +766,7 @@ class DTPSServer:
     @async_error_catcher
     async def serve_meta(self, request: web.Request) -> web.StreamResponse:
         headers: CIMultiDict[str] = CIMultiDict()
-        # TODO: add nodeid
+        # TODO: DTPS-4783: add nodeid
         topic_name_s = request.match_info["topic"]
         try:
             source = self.resolve(topic_name_s)
@@ -621,7 +820,7 @@ class DTPSServer:
             msg += f"| sources: \n"
             for k, source in sources.items():
                 msg += f"| {k.as_dash_sep()!r}: {type(source).__name__}\n"
-            logger.debug(msg)
+            self.logger.debug(msg)
             raise KeyError(msg)
 
         origin_node = self.node_id
@@ -665,7 +864,7 @@ class DTPSServer:
         try:
             source = self.resolve(topic_name_s)
         except KeyError as e:
-            msg = f"404: {request.url!r}\nCannot find topic '{topic_name_s}':\n{e}"
+            msg = f"404: {request.url!r}\nCannot find topic '{topic_name_s}':\n{e.args[0]}"
             # logger.error()
             # text = f'404: Cannot find topic "{topic_name_s}"'
             return web.HTTPNotFound(text=msg, headers=headers)
@@ -689,7 +888,7 @@ class DTPSServer:
         try:
             rs = await source.get_resolved_data(request, url, self)
         except KeyError as e:
-            logger.error(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {e}")
+            self.logger.error(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {e}")
             raise web.HTTPNotFound(text=f"404\n{e}", headers=headers) from e
 
         rd: Union[RawData, NotAvailableYet]
@@ -746,7 +945,7 @@ class DTPSServer:
         if is_image_content:
             # language=html
             html_index += f"""
-                <img id="data_field_image" src="data:{content_type};base64,{initial_data_html}"/>
+                <img id="data_field_image" src="data:{content_type};base64,{initial_data_html}" alt="image"/>
             
             """
         else:
@@ -916,7 +1115,7 @@ pre {{
         try:
             return self.resolve(topic_name_s)
         except KeyError as e:
-            logger.error(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {e}")
+            self.logger.error(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {e}")
             raise web.HTTPNotFound(text=f"404\n{e}", headers=self._headers(request)) from e
 
     @async_error_catcher
@@ -936,7 +1135,8 @@ pre {{
             if isinstance(otr, TransformError):
                 return web.Response(status=otr.http_code, text=otr.message, headers=headers)
             elif isinstance(otr, RawData):
-                logger.info(f"after POST otr: {otr}")
+                self.logger.info(f"after POST otr: {otr}")
+                # TODO: DTSW-4786: need to return a Location header
                 return web.Response(
                     status=200, headers=headers, content_type=otr.content_type, body=otr.content
                 )
@@ -945,10 +1145,10 @@ pre {{
 
     @contextmanager
     def _log_request(self, request: web.Request) -> Iterator[None]:
-        logger.debug(f"{request.method} {request.url}")
+        self.logger.debug(f"{request.method} {request.url}")
         try:
             yield
-        except Exception as e:
+        except Exception:
             # logger.error(f"{request.method} {request.url}: response {e}")
             raise
 
@@ -963,6 +1163,8 @@ pre {{
             topic_name = TopicNameV.from_relative_url(topic_name_s)
             if topic_name.is_root():
                 return await self.serve_patch_root(request)
+            # elif topic_name == TOPIC_PROXIED:
+            #     return await self.serve_patch_proxied(request)
 
             data = await request.read()
             patch = JsonPatch.from_string(data.decode("utf-8"))
@@ -990,7 +1192,9 @@ pre {{
 
             for operation in patch._ops:
                 if isinstance(operation, RemoveOperation):
-                    raise NotImplementedError(f"Cannot handle {operation!r}")
+                    raise NotImplementedError(
+                        f"Cannot handle {operation!r}"
+                    )  # TODO: remove topics not supported
                 elif isinstance(operation, AddOperation):
                     # logger.info(f"op: {operation.__dict__}, {operation.pointer.parts}")
                     topic = topic_name_from_json_pointer(operation.location)
@@ -1000,8 +1204,8 @@ pre {{
 
                     value = operation.operation["value"]
                     trf = TopicRefAdd.from_json(value)
-                    oq = await self.create_oq(topic, trf.content_info, trf.properties)
-                    logger.info(f"created new topic: '{topic.as_dash_sep()}'")
+                    await self.create_oq(topic, trf.content_info, trf.properties)
+                    self.logger.info(f"created new topic: '{topic.as_dash_sep()}'")
 
                 elif isinstance(operation, (ReplaceOperation, MoveOperation, TestOperation, CopyOperation)):
                     return web.Response(status=405)
@@ -1009,7 +1213,6 @@ pre {{
                     raise NotImplementedError(f"Cannot handle {operation!r}")
 
             headers = self._headers(request)
-            # TODO: should I return the new index?
             return web.Response(status=200, headers=headers)
 
     @async_error_catcher
@@ -1025,7 +1228,7 @@ pre {{
         digest = request.match_info["digest"]
         if topic_name not in self._oqs:
             msg = f"Cannot resolve topic: {request.url}\ntopic: {topic_name_s!r}"
-            logger.error(msg)
+            self.logger.error(msg)
             raise web.HTTPNotFound(text=msg, headers=headers)
         oq = self._oqs[topic_name]
         data = oq.get(digest)
@@ -1053,9 +1256,9 @@ pre {{
             msg = f"Cannot resolve topic: {request.url}\ntopic: {topic_name_s!r}"
             raise web.HTTPNotFound(text=msg, headers=headers)
 
-        # logger.info(
-        #     f"serve_events: {topic_name.as_dash_sep()} send_data={send_data} headers={request.headers}"
-        # )
+        self.logger.info(
+            f"serve_events: {topic_name.as_dash_sep()} send_data={send_data} headers={request.headers}"
+        )
         ws = web.WebSocketResponse()
         multidict_update(ws.headers, self.get_headers_alternatives(request))
         self._add_own_headers(ws.headers)
@@ -1156,24 +1359,24 @@ pre {{
                 break
 
             try:
-                # FIXME: logic not correct
+                # FIXME: DTSW-4785: logic not correct
                 if inline_data:
                     if fd.forward_url_events_inline_data is not None:
                         await self.serve_events_forward_simple(ws, fd.forward_url_events_inline_data)
                     else:
-                        raise NotImplementedError  # FIXME: wrong
+                        raise NotImplementedError  # FIXME: DTSW-4785: wrong
                         # await self.serve_events_forwarder_one(ws,  True)
                 else:
                     url = fd.forward_url_events
 
                     await self.serve_events_forwarder_one(ws, url, inline_data)
             except:
-                logger.error(f"Exception in serve_events_forwarder_one: {traceback.format_exc()}")
+                self.logger.error(f"Exception in serve_events_forwarder_one: {traceback.format_exc()}")
                 await asyncio.sleep(1)
 
     async def serve_events_forward_simple(self, ws_to_write: web.WebSocketResponse, url: URL) -> None:
         """Iterates using direct data in websocket."""
-        logger.debug(f"serve_events_forward_simple: {url} [no overhead forwarding]")
+        self.logger.debug(f"serve_events_forward_simple: {url} [no overhead forwarding]")
         from dtps_http import DTPSClient
 
         async with DTPSClient.create() as client:
@@ -1188,22 +1391,21 @@ pre {{
                         elif msg.type == WSMsgType.BINARY:
                             await ws_to_write.send_bytes(msg.data)
                         else:
-                            logger.warning(f"Unknown message type {msg.type}")
+                            self.logger.warning(f"Unknown message type {msg.type}")
 
     @async_error_catcher
     async def serve_events_forwarder_one(
         self, ws: web.WebSocketResponse, url: URLWS, inline_data: bool
     ) -> None:
         assert isinstance(url, URL)
-        use_remote_inline_data = True  # TODO: configurable
         # logger.debug(f"serve_events_forwarder_one: {url} {inline_data=} {use_remote_inline_data=}")
         from .client import DTPSClient
 
         async with DTPSClient.create() as client:
             async for lue in client.listen_url_events(
-                url, inline_data=use_remote_inline_data, raise_on_error=False, add_silence=None
+                url, inline_data=inline_data, raise_on_error=False, add_silence=None
             ):
-                raise NotImplemented  # FIXME
+                raise NotImplementedError  # FIXME: DTSW-4785:
 
                 if isinstance(lue, DataFromChannel):
                     ds = lue.data_saved
@@ -1212,7 +1414,7 @@ pre {{
                     digesturl = URLString(f"../data/{dr.digest}/")
                     urls_strings: List[URLString]
                     urls_strings = [url_to_string(_) for _ in urls] + [digesturl]
-                    # TODO: this doesn't work either, we need to save the data
+                    # TODO: DTSW-4785: this doesn't work either, we need to save the data
                     if inline_data:
                         availability = []
                         chunks_arriving = 1
@@ -1269,7 +1471,7 @@ def put_meta_headers(h: CIMultiDict[str], tp: TopicProperties) -> None:
 @async_error_catcher
 async def update_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, initial_delay: float) -> None:
     await asyncio.sleep(initial_delay)
-    logger.info(f"Starting clock {topic_name.as_relative_url()} with interval {interval}")
+    s.logger.info(f"Starting clock {topic_name.as_relative_url()} with interval {interval}")
     oq = s.get_oq(topic_name)
     while True:
         t = time.time_ns()
@@ -1278,7 +1480,7 @@ async def update_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, i
         try:
             await asyncio.sleep(interval)
         except CancelledError:
-            logger.info(f"Clock {topic_name.as_relative_url()} cancelled")
+            s.logger.info(f"Clock {topic_name.as_relative_url()} cancelled")
             break
 
 

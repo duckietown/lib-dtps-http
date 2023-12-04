@@ -30,12 +30,12 @@ class TopicNameV:
             if "/" in c:
                 raise ValueError(f"Invalid component {c!r} in {self!r}")
 
-    def as_relative_url(self) -> TopicNameS:
+    def as_relative_url(self) -> URLString:
         """returns either "" or a/b/c/ (with ending /)"""
         if not self.components:
-            return TopicNameS("")
+            return URLString("")
         else:
-            return TopicNameS("/".join(self.components) + "/")
+            return URLString("/".join(self.components) + "/")
 
     def as_dash_sep(self) -> TopicNameS:
         """returns either "" or a/b/c (without ending /)"""
@@ -45,6 +45,7 @@ class TopicNameV:
             return TopicNameS("/".join(self.components))
 
     def __str__(self) -> str:
+        return f"Topic({self.as_dash_sep()!r})"
         raise AssertionError("use as_relative_url()")
 
     @classmethod

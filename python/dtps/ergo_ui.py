@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Awaitable, Callable, Dict, List, Optional
 
+from dtps_http import NodeID
 from dtps_http.structures import DataSaved, RawData, TopicRefAdd
 
 __all__ = [
@@ -27,6 +28,14 @@ class DTPSContext(ABC):
         ...
 
     # TODO: - more information - dict[str, ...]
+
+    @abstractmethod
+    async def get_urls(self) -> List[str]:
+        """List urls that might reach this topic"""
+
+    @abstractmethod
+    async def get_node_id(self) -> Optional[NodeID]:
+        """Returns the node_id if this is a DTPS node."""
 
     # creation and deletion
 

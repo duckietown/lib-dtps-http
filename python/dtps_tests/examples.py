@@ -60,7 +60,7 @@ async def example3_register() -> None:
     #   DTPS_BASE_SELF_0 = "create:http://localhost:0/"
     #   DTPS_BASE_SELF_1 = "create:/tmp/sockets/nodename/"
     #   DTPS_BASE_SWITCHBOARD_ADD_0 = "http://:8000/dtps/node/nodename/"
-    #   DTPS_BASE_SWITCHBOARD_ADD_1 = "unix+http://:8000/dtps/node/nodename/"
+    #   DTPS_BASE_SWITCHBOARD_ADD_1 = "http+unix://:8000/dtps/node/nodename/"
 
     me = await context("self")
     switchboard = await context("switchboard_add")
@@ -73,7 +73,7 @@ async def example3_register() -> None:
 async def example4_connect2() -> None:
     # Environment example:
     #   DTPS_BASE_SWITCHBOARD = "http://:8000/dtps/node/nodename/"
-    #   DTPS_BASE_SWITCHBOARD_ADD_1 = "unix+http://:8000/dtps/node/nodename/"
+    #   DTPS_BASE_SWITCHBOARD_ADD_1 = "http+unix://:8000/dtps/node/nodename/"
 
     switchboard = await context("switchboard_add")
 
