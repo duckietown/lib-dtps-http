@@ -18,6 +18,7 @@ from .types import TopicNameV
 from .urls import parse_url_unescape, URLIndexer, make_http_unix_url, url_to_string
 
 __all__ = [
+    "ServerWrapped",
     "app_start",
     "interpret_command_line_and_start",
 ]

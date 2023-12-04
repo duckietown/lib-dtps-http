@@ -16,6 +16,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Sequence,
     Set,
     Tuple,
     TYPE_CHECKING,
@@ -45,6 +46,7 @@ from .constants import (
     REL_EVENTS_NODATA,
     REL_HISTORY,
     REL_META,
+    REL_STREAM_PUSH,
     TOPIC_PROXIED,
 )
 from .exceptions import EventListeningNotAvailable
@@ -103,22 +105,29 @@ class ProxyJob:
 
 @dataclass
 class FoundMetadata:
+    # The url that was used to get the metadata
     origin: URLTopic
-    # url alternative
+
+    # url alternatives (Location: headers)
     alternative_urls: List[URLTopic]
 
-    # se un nodo DTPS risponde
+    # NodeID if answering is a DTPS node
     answering: Optional[NodeID]
 
-    # eventi websocket con dati offline
+    # websocket with offline data
     events_url: Optional[URLWSOffline]
-    # eventi websocket con dati inline
+
+    # websocket with inline data
     events_data_inline_url: Optional[URLWSInline]
 
     # metadati della risorsa (il ContentInfo etc.)
     meta_url: Optional[URL]
-    # servizio history
+
+    # history url
     history_url: Optional[URL]
+
+    # url for stream push
+    stream_push_url: Optional[URLWS]
 
 
 class ShutdownAsked(Exception):
@@ -280,12 +289,12 @@ class DTPSClient:
         )
         return tr2
 
-    async def find_best_alternative(self, us: List[Tuple[URLTopic, Optional[NodeID]]]) -> Optional[URLTopic]:
+    async def find_best_alternative(self, us: Sequence[Tuple[U, Optional[NodeID]]]) -> Optional[U]:
         if not us:
             self.logger.warning("find_best_alternative: no alternatives")
             return None
         results: List[str] = []
-        possible: List[Tuple[float, float, float, URLTopic]] = []
+        possible: List[Tuple[float, float, float, U]] = []
         for a, expects_answer_from in us:
             assert isinstance(a, URL), a
             if (score := await self.can_use_url(a, expects_answer_from)) is not None:
@@ -497,7 +506,7 @@ class DTPSClient:
         return res
 
     async def add_proxy(
-        self, url0: URLIndexer, topic_name: TopicNameV, node_id: str, urls: List[str]
+        self, url0: URLIndexer, topic_name: TopicNameV, node_id: Optional[NodeID], urls: List[str]
     ) -> bool:
         """Returns true if there were changes to be made"""
 
@@ -619,6 +628,10 @@ class DTPSClient:
                         events_url = cast(URLWSOffline, join(url, links[REL_EVENTS_NODATA].url))
                     else:
                         events_url = None
+                    if REL_STREAM_PUSH in links:
+                        stream_push_url = cast(URLWS, join(url, links[REL_STREAM_PUSH].url))
+                    else:
+                        stream_push_url = None
 
                     if HEADER_NODE_ID not in resp.headers:
                         answering = None
@@ -648,6 +661,7 @@ class DTPSClient:
             events_url=events_url,
             events_data_inline_url=events_url_data,
             meta_url=meta_url,
+            stream_push_url=stream_push_url,
             history_url=history_url,
         )
 
@@ -1052,12 +1066,21 @@ class DTPSClient:
             async with session.ws_connect(use_url) as ws:
 
                 class PushInterfaceImpl(PushInterface):
-                    async def push_through(self, data: bytes, content_type: ContentType) -> None:
+                    async def push_through(self, data: bytes, content_type: ContentType) -> bool:
                         rd = RawData(content_type=content_type, content=data)
                         as_struct = {RawData.__name__: asdict(rd)}
                         cbor_data = cbor2.dumps(as_struct)
 
                         await ws.send_bytes(cbor_data)
+                        while True:
+                            response = await ws.receive()
+                            if response.type == aiohttp.WSMsgType.TEXT:
+                                text = response.data
+                                ok = text == "OK"
+                                return ok
+                            else:
+                                if response.type == aiohttp.WSMsgType.CLOSE:
+                                    return False
 
                 yield PushInterfaceImpl()
 
@@ -1166,6 +1189,36 @@ class DTPSClient:
             if should_break_outer:
                 break
             await asyncio.sleep(1.0)
+
+    @async_error_catcher
+    async def push_continuous(
+        self,
+        urlbase0: URL,
+        *,
+        queue_in: "asyncio.Queue[RawData]",
+        queue_out: "asyncio.Queue[bool]",
+    ) -> "asyncio.Task[None]":
+        try:
+            md = await self.get_metadata(urlbase0)
+        except Exception as e:
+            msg = f"Error getting metadata for {urlbase0!r}: {e!r}"
+            self.logger.error(msg)
+            raise ValueError(msg) from e
+
+        if md.stream_push_url is None:
+            raise ValueError(f"no stream push url in {md}")
+
+        async def pusher():
+            async with self.push_through_websocket(md.stream_push_url) as p:
+                while True:
+                    rd = await queue_in.get()
+
+                    success = await p.push_through(rd.content, rd.content_type)
+                    queue_in.task_done()
+                    queue_out.put_nowait(success)
+
+        task = asyncio.create_task(pusher())
+        return task
 
 
 class PushInterface(ABC):

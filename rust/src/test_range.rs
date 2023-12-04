@@ -1,5 +1,6 @@
 #![allow(unused_mut)]
 
+#[allow(non_snake_case)]
 #[cfg(test)]
 pub mod tests {
     use std::time::Duration;
@@ -34,6 +35,7 @@ pub mod tests {
     use crate::{
         add_proxy,
         client::{
+            make_request,
             post_cbor,
             post_json,
         },
@@ -68,6 +70,7 @@ pub mod tests {
         TypeOfConnection,
         CONTENT_TYPE_CBOR,
         CONTENT_TYPE_JSON,
+        CONTENT_TYPE_TEXT_PLAIN,
         DTPSR,
     };
 
@@ -479,16 +482,7 @@ pub mod tests {
         let con_topic = create_topic(&cf.con, &topic_name, &tra).await?;
         let h = hashmap! {"value" => "initial"};
 
-        // let con_original = cf.con.join(topic_name.as_relative_url())?;
-
         post_cbor(&con_topic, &h).await?;
-
-        // {
-        //     let mut ss = instance.ssa.lock().await;
-        //     ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
-        //     let h = hashmap! {"value" => "initial"};
-        //     ss.publish_object_as_cbor(&topic_name, &h, None)?;
-        // }
 
         let replace = ReplaceOperation {
             path: "/value".to_string(),
@@ -543,18 +537,29 @@ pub mod tests {
 
         info!("----\nTesting changing the value of a/b/A/B using post");
 
-        let B_address = con_topic.join("A/B/")?;
+        // let B_address = con_topic.join("A/B/")?;
         let h = vec!["second", "value"];
-        dtpserror_context!(post_json(&B_address, &h).await, "Cannot change using post",)?;
+        dtpserror_context!(post_json(&b_address, &h).await, "Cannot change using post",)?;
         let rd = get_rawdata(&con_topic).await?;
         info!("Getting result back: {rd:?}");
         let expected = json!({"A": {"B": ["second", "value"]}});
         assert_eq!(rd.get_as_json()?, expected);
 
-        //
-        // let rd = get_rawdata(&b_address).await?;
-        // let j = rd.get_as_json()?;
-        // info!("j {:#?}", j);
+        // let json_data = serde_json::to_vec(patch)?;
+        // debug_with_info!("patch_data out: {:#?}", String::from_utf8(json_data.clone()));
+
+        let body = "not a json";
+        // now check invalid patch operations
+        let resp = make_request(
+            &con_topic,
+            hyper::Method::PATCH,
+            body.as_bytes(),
+            Some(CONTENT_TYPE_TEXT_PLAIN),
+            None,
+        )
+        .await?;
+
+        check_status(resp, &[hyper::StatusCode::BAD_REQUEST]).await?;
 
         cf.finish().await?;
         Ok(())
@@ -661,5 +666,17 @@ pub mod tests {
         instance.finish().await?;
         instance2.finish().await?;
         Ok(())
+    }
+
+    async fn check_status(resp: hyper::Response<hyper::Body>, allowed_codes: &[hyper::StatusCode]) -> DTPSR<()> {
+        let status = resp.status();
+        if !allowed_codes.contains(&status) {
+            let content = hyper::body::to_bytes(resp.into_body()).await?;
+            let string = String::from_utf8(content.to_vec()).unwrap();
+            // write error and panic
+            DTPSError::other(format!("Expected {allowed_codes:?}, got {status}\n{string:?}"))
+        } else {
+            Ok(())
+        }
     }
 }

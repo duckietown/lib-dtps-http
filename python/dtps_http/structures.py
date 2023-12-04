@@ -37,6 +37,7 @@ __all__ = [
     "TopicProperties",
     "TopicReachability",
     "TopicRef",
+    "TopicRefAdd",
     "TopicsIndex",
     "TransportData",
     "WarningMsg",

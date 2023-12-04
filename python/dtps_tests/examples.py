@@ -14,6 +14,7 @@ async def example1_process_data() -> None:
     node_input = await (me / "dtps" / "node" / "in").queue_create()
     node_output = await (me / "dtps" / "node" / "out").queue_create()
 
+    publisher = await node_output.publisher()
     async with node_output.publisher() as publisher:
 
         async def on_input(data: RawData) -> None:

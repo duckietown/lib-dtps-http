@@ -239,7 +239,7 @@ pub async fn serve_master_patch(
         let s = format!("We do not support PATCH with content type {content_type}");
         error_with_info!("{s}");
         let res = http::Response::builder()
-            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .status(StatusCode::BAD_REQUEST)
             .body(Body::from(s))
             .unwrap();
         return Ok(res);

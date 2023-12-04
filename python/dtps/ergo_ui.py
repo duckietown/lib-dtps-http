@@ -1,13 +1,22 @@
 from abc import ABC, abstractmethod
-from typing import Awaitable, Callable, Dict, List, Optional
+from typing import (
+    AsyncContextManager,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    TYPE_CHECKING,
+    Union,
+)
 
-from dtps_http import NodeID
-from dtps_http.structures import DataSaved, RawData, TopicRefAdd
+from dtps_http import DataSaved, NodeID, RawData, TopicRefAdd
 
 __all__ = [
     "ConnectionInterface",
     "DTPSContext",
-    "HistoryContext",
+    "HistoryInterface",
     "SubscriptionInterface",
 ]
 
@@ -15,19 +24,43 @@ __all__ = [
 class DTPSContext(ABC):
     @abstractmethod
     def navigate(self, *components: str) -> "DTPSContext":
-        """gets a sub-resource"""
+        """
+        Gets a sub-resource
+
+        Example:
+
+            context = context.navigate('a', 'b', 'c')
+
+        Slashes are normalized, so the following is equivalent:
+
+            context = context.navigate('a/b/c')
+        """
         ...
 
     def __truediv__(self, other: str) -> "DTPSContext":
+        """
+        Shortcut for navigate.
+
+        Can be used to navigate to a sub-resource using a path-like syntax:
+
+            context = context / 'a' / 'b' / 'c'
+
+        Slashes are normalized, so the following is equivalent:
+
+            context = context / 'a/b' / 'c'
+
+        """
         components = other.split("/")
         return self.navigate(*components)
 
     @abstractmethod
     async def list(self) -> List[str]:
-        """List subtopics"""
-        ...
+        """
+        List the subtopics.
 
-    # TODO: - more information - dict[str, ...]
+        TODO: what information should be returned? Should it be a dict? Should it be recursive?
+
+        """
 
     @abstractmethod
     async def get_urls(self) -> List[str]:
@@ -64,7 +97,7 @@ class DTPSContext(ABC):
         ...
 
     @abstractmethod
-    async def history(self) -> "Optional[HistoryContext]":
+    async def history(self) -> "Optional[HistoryInterface]":
         """Returns None if history is not available."""
         ...
 
@@ -72,16 +105,34 @@ class DTPSContext(ABC):
 
     @abstractmethod
     async def publish(self, data: RawData, /) -> None:
+        """Publishes data to the resource. Meant to be used for infrequent pushes.
+        For frequent pushes, use the publisher interface."""
         ...
 
     @abstractmethod
     async def publisher(self) -> "PublisherInterface":
-        ...
+        """
+        Returns a publisher that can be used to publish data to the resource.
+        This call creates a connection that will be terminated only when the publisher is closed
+        using the terminate() method.
+        """
+
+    @abstractmethod
+    def publisher_context(self) -> "AsyncContextManager[PublisherInterface]":
+        """
+        Returns an async context manager that returns a publisher that is cleaned up when the context is exited.
+
+        Example:
+
+        async with context.publisher_context() as publisher:
+            for _ in range(10):
+                await publisher.publish(data)
+
+        """
 
     @abstractmethod
     async def call(self, data: RawData, /) -> RawData:
         """RPC call (push with response)"""
-        ...
 
     # proxy
 
@@ -92,31 +143,35 @@ class DTPSContext(ABC):
 
         returns self
         """
-        ...
 
     @abstractmethod
     async def queue_create(self, parameters: Optional[TopicRefAdd] = None, /) -> "DTPSContext":
-        """Returns self"""
-        ...
+        """
+        Creates this resource (if it doesn't exist).
+        Returns self.
+        """
 
     # connection
 
     @abstractmethod
     async def connect_to(self, context: "DTPSContext", /) -> "ConnectionInterface":
-        """Add a connection between topics with the given service level."""
-        ...
+        """Add a connection between this resource, and the resource identified by the argument"""
 
     @abstractmethod
     async def aclose(self) -> None:
-        """Clean up all resources"""
+        """
+        Clean up all resources associated to the root of this context.
+
+        """
 
 
-class HistoryContext(ABC):
+class HistoryInterface(ABC):
     @abstractmethod
     async def summary(self, nmax: int, /) -> Dict[int, DataSaved]:
-        ...
+        """Returns a summary of the history, with at most nmax entries."""
 
     async def get(self, index: int, /) -> RawData:
+        """Returns the data at the given index."""
         ...
 
 
@@ -130,13 +185,12 @@ class ConnectionInterface(ABC):
 class PublisherInterface(ABC):
     @abstractmethod
     async def publish(self, rd: RawData, /) -> None:
-        pass
-        # await self.publish(rd)
+        """Publishes data to the resource"""
+        ...
 
     @abstractmethod
     async def terminate(self) -> None:
         """Stops the publisher"""
-        ...
 
 
 class SubscriptionInterface(ABC):

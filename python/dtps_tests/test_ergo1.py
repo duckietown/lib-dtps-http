@@ -1,8 +1,10 @@
 import asyncio
+import os
+import tempfile
 from unittest import IsolatedAsyncioTestCase
 
 from dtps import context_cleanup, DTPSContext
-from dtps_http import app_start, DTPSServer, MIME_TEXT, RawData
+from dtps_http import app_start, DTPSServer, make_http_unix_url, MIME_TEXT, RawData
 from dtps_tests import logger
 
 
@@ -42,27 +44,32 @@ async def go(base: DTPSContext) -> None:
 
 class TestCreate(IsolatedAsyncioTestCase):
     async def test_create(self):
-        environment = {"DTPS_BASE_SELF": "create:http://localhost:8001/"}
-        async with context_cleanup("self", environment) as c:
-            await go(c)
+        with tempfile.TemporaryDirectory() as td:
+            socket = os.path.join(td, "socket")
+            url_switchboard = make_http_unix_url(socket)
+
+            environment = {"DTPS_BASE_SELF": f"create:{url_switchboard}"}
+            async with context_cleanup("self", environment) as c:
+                await go(c)
 
 
 class TestUse(IsolatedAsyncioTestCase):
     async def test_use(self):
         # create a server
-        port = 8432
-        dtps_server = DTPSServer.create()
+        with tempfile.TemporaryDirectory() as td:
+            socket = os.path.join(td, "socket")
+            url = make_http_unix_url(socket)
 
-        a = await app_start(
-            dtps_server,
-            tcps=(("localhost", port),),
-            unix_paths=[],
-            tunnel=None,
-        )
-        async with a:
-            # await asyncio.sleep(10)
+            dtps_server = DTPSServer.create()
 
-            environment = {"DTPS_BASE_SELF": f"http://localhost:{port}/"}
-            async with context_cleanup("self", environment) as c:
-                await go(c)
-                # logger.debug("test down, cleaning up")
+            a = await app_start(
+                dtps_server,
+                unix_paths=[socket],
+            )
+            async with a:
+                # await asyncio.sleep(10)
+
+                environment = {"DTPS_BASE_SELF": f"{url}"}
+                async with context_cleanup("self", environment) as c:
+                    await go(c)
+                    # logger.debug("test down, cleaning up")

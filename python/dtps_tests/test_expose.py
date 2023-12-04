@@ -26,8 +26,6 @@ class TestExpose(IsolatedAsyncioTestCase):
             )
 
             async with switchboard:
-                # await asyncio.sleep(10)
-
                 environment = {
                     "DTPS_BASE_SELF": f"create:{url_node}",
                     "DTPS_BASE_SWITCHBOARD": f"{url_switchboard}",
@@ -41,7 +39,7 @@ class TestExpose(IsolatedAsyncioTestCase):
                         await out.publish(rd)
                         mountpoint = context_switchboard / "dtps" / "node" / "nodename"
                         await mountpoint.expose(context_self)
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(3)
 
                         out_mounted = mountpoint / "out"
 

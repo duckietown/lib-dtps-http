@@ -3,7 +3,9 @@ from .types import ContentType, TopicNameV
 __all__ = [
     "CONTENT_TYPE_DTPS_INDEX",
     "CONTENT_TYPE_DTPS_INDEX_CBOR",
+    "CONTENT_TYPE_PATCH_CBOR",
     "CONTENT_TYPE_PATCH_JSON",
+    "CONTENT_TYPE_PATCH_YAML",
     "CONTENT_TYPE_TOPIC_HISTORY_CBOR",
     "ENV_MASK_ORIGIN",
     "EVENTS_SUFFIX",
@@ -19,6 +21,7 @@ __all__ = [
     "MIME_HTML",
     "MIME_JPEG",
     "MIME_JSON",
+    "MIME_OCTET",
     "MIME_TEXT",
     "MIME_YAML",
     "REL_EVENTS_DATA",
@@ -60,16 +63,20 @@ CONTENT_TYPE_DTPS_INDEX = ContentType("application/vnd.dt.dtps-index")
 CONTENT_TYPE_DTPS_INDEX_CBOR = ContentType("application/vnd.dt.dtps-index+cbor")
 CONTENT_TYPE_TOPIC_HISTORY_CBOR = ContentType("application/vnd.dt.dtps-history+cbor")
 CONTENT_TYPE_PATCH_JSON = ContentType("application/json-patch+json")
+CONTENT_TYPE_PATCH_YAML = ContentType("application/json-patch+yaml")
+CONTENT_TYPE_PATCH_CBOR = ContentType("application/json-patch+cbor")
 
 HEADER_NO_AVAIL = "X-dtps-debug-Content-Location-Not-Available"
 HEADER_CONTENT_LOCATION = "Content-Location"
 
 REL_EVENTS_NODATA = "dtps-events"
 REL_EVENTS_DATA = "dtps-events-inline-data"
+REL_STREAM_PUSH = "dtps-events-push"
 REL_META = "dtps-meta"
 REL_HISTORY = "dtps-history"
 
 EVENTS_SUFFIX = ":events"
+REL_STREAM_PUSH_SUFFIX = ":push"
 REL_URL_META = ":meta"
 REL_URL_HISTORY = ":history"
 

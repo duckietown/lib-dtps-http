@@ -4,6 +4,7 @@ from dataclasses import dataclass as original_dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 import cbor2
+import yaml
 from aiopubsub import Hub, Key, Publisher, Subscriber
 
 from . import logger
@@ -11,6 +12,7 @@ from .constants import (
     MIME_CBOR,
     MIME_JSON,
     MIME_TEXT,
+    MIME_YAML,
 )
 from .structures import (
     ChannelInfo,
@@ -34,7 +36,7 @@ __all__ = [
     "TransformError",
 ]
 
-SUB_ID = str
+SUB_ID = int
 K_INDEX = "index"
 
 
@@ -94,6 +96,8 @@ class ObjectQueue:
         self.stored = []
         self.saved = {}
         self._transform = transform
+        self.listeners = {}
+        self.nlisteners = 0
 
     def get_channel_info(self) -> ChannelInfo:
         if not self.stored:
@@ -120,6 +124,11 @@ class ObjectQueue:
     async def publish_json(self, obj: object, content_type: ContentType = MIME_JSON) -> ObjectTransformResult:
         """Publish a python object as a JSON encoded object."""
         data = json.dumps(obj)
+        return await self.publish(RawData(content=data.encode(), content_type=content_type))
+
+    async def publish_yaml(self, obj: object, content_type: ContentType = MIME_YAML) -> ObjectTransformResult:
+        """Publish a python object as a JSON encoded object."""
+        data = yaml.dump(obj)
         return await self.publish(RawData(content=data.encode(), content_type=content_type))
 
     async def publish(self, obj0: RawData, /) -> ObjectTransformResult:
@@ -187,20 +196,33 @@ class ObjectQueue:
         return self._data[digest]
 
     def subscribe(self, callback: "Callable[[ObjectQueue, int], Awaitable[None]]") -> SUB_ID:
-        def wrap_callback(_key: Key, msg: Any):
-            return callback(self, msg)
+        listener_id = self.nlisteners
+        self.nlisteners += 1
 
-        # wrap_callback = lambda key, msg: callback(self, msg)
+        wrap_callback = Wrapper(callback, self, listener_id)
 
-        self._sub.add_async_listener(Key(self._name.as_relative_url(), K_INDEX), wrap_callback)
-        # last_used = list(self._sub._listeners)[-1]
-        return ""  # TODO DTSW-4776 unsubscribe/subscribe not implemented
+        key = Key(self._name.as_relative_url(), K_INDEX)
+
+        self._sub.add_async_listener(key, wrap_callback)
+        # self._sub.remove_listener(key, wrap_callback)
+        self.listeners[listener_id] = (key, wrap_callback)
+
+        return listener_id
 
     async def aclose(self) -> None:
-        await self._sub.remove_all_listeners()
+        for sub_id in list(self.listeners):
+            await self.unsubscribe(sub_id)
+        # await self._sub.remove_all_listeners()
 
-    def unsubscribe(self, sub_id: SUB_ID) -> None:
-        pass  # TODO: DTSW-4776  unsubscribe/subscribe not implemented
+    async def unsubscribe(self, sub_id: SUB_ID) -> None:
+        if sub_id not in self.listeners:
+            logger.warning(f"Subscription {sub_id} not found")
+            return
+        key, callback = self.listeners.pop(sub_id)
+        try:
+            await self._sub.remove_listener(key, callback)
+        except Exception as e:
+            logger.error(f"Could not unsubscribe {sub_id}: {e}")
 
     def get_data_ready(self, ds: DataSaved, presented_as: str, inline_data: bool) -> DataReady:
         actual_url = self._name.as_relative_url() + "data/" + ds.digest + "/"
@@ -225,3 +247,21 @@ class ObjectQueue:
             origin_node=self.tr.origin_node,
         )
         return data
+
+
+class Wrapper:
+    def __init__(
+        self, f: "Callable[[ObjectQueue, int], Awaitable[None]]", oq: ObjectQueue, listener_id: SUB_ID
+    ):
+        self.f = f
+        self.oq = oq
+        self.listener_id = listener_id
+
+    def __str__(self):
+        return f"Wrapper({self.listener_id})"
+
+    def __repr__(self):
+        return f"Wrapper({self.listener_id})"
+
+    async def __call__(self, _key: Key, msg: Any):
+        return await self.f(self.oq, msg)

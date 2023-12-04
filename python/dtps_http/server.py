@@ -29,6 +29,9 @@ from . import __version__, logger as logger0, TOPIC_PROXIED
 from .client import DTPSClient, FoundMetadata, unescape_json_pointer
 from .constants import (
     CONTENT_TYPE_DTPS_INDEX_CBOR,
+    CONTENT_TYPE_PATCH_CBOR,
+    CONTENT_TYPE_PATCH_JSON,
+    CONTENT_TYPE_PATCH_YAML,
     CONTENT_TYPE_TOPIC_HISTORY_CBOR,
     EVENTS_SUFFIX,
     HEADER_CONTENT_LOCATION,
@@ -44,6 +47,8 @@ from .constants import (
     REL_EVENTS_NODATA,
     REL_HISTORY,
     REL_META,
+    REL_STREAM_PUSH,
+    REL_STREAM_PUSH_SUFFIX,
     REL_URL_HISTORY,
     REL_URL_META,
     TOPIC_AVAILABILITY,
@@ -187,6 +192,7 @@ class DTPSServer:
         routes.get("/{topic:.*}" + EVENTS_SUFFIX + "/")(self.serve_events)
         routes.get("/{topic:.*}" + REL_URL_META + "/")(self.serve_meta)
         routes.get("/{topic:.*}" + REL_URL_HISTORY + "/")(self.serve_history)
+        routes.get("/{topic:.*}" + REL_STREAM_PUSH_SUFFIX + "/")(self.serve_push_stream)
 
         routes.get("/{topic:.*}/data/{digest}/")(self.serve_data_get)
         routes.get("/data/{digest}/")(self.serve_data_get)
@@ -446,6 +452,16 @@ class DTPSServer:
         d = cast(dict, x.get_as_native_object())
         d[name.as_dash_sep()] = {"node_id": expect_node_id, "urls": urls, "mask_origin": mask_origin}
         await oq.publish_json(d)
+
+        while True:
+            if name in self._mount_points:
+                self.logger.info(f"Found {name} in mountpoints")
+                if self._mount_points[name].established is not None:
+                    self.logger.info(f"Found {name} in mountpoints and established is not None")
+
+                    break
+
+            await asyncio.sleep(0.1)
 
     async def _add_forwarded(self, name: TopicNameV, forwarded: ForwardedTopic) -> None:
         if name in self._forwarded or name in self._oqs:
@@ -1167,7 +1183,20 @@ pre {{
             #     return await self.serve_patch_proxied(request)
 
             data = await request.read()
-            patch = JsonPatch.from_string(data.decode("utf-8"))
+
+            content_type = request.headers.get("Content-Type", "application/json")
+            if content_type == CONTENT_TYPE_PATCH_JSON:
+                decoded = data.decode("utf-8")
+                patch = JsonPatch.from_string(decoded)
+            elif content_type == CONTENT_TYPE_PATCH_CBOR:
+                p = cbor2.loads(data)
+                patch = JsonPatch(p)
+            elif content_type == CONTENT_TYPE_PATCH_YAML:
+                p = yaml.safe_load(data)
+                patch = JsonPatch(p)
+            else:
+                msg = "Unsupported content type for patch: {content_type}. I can do json and cbor"
+                return web.Response(status=415, text=msg)
 
             source = self.resolve(topic_name_s)
 
@@ -1186,8 +1215,20 @@ pre {{
     async def serve_patch_root(self, request: web.Request) -> web.Response:
         with self._log_request(request):
             data = await request.read()
-            decoded = data.decode("utf-8")
-            patch = JsonPatch.from_string(decoded)
+
+            content_type = request.headers.get("Content-Type", "application/json")
+            if content_type == CONTENT_TYPE_PATCH_JSON:
+                decoded = data.decode("utf-8")
+                patch = JsonPatch.from_string(decoded)
+            elif content_type == CONTENT_TYPE_PATCH_CBOR:
+                p = cbor2.loads(data)
+                patch = JsonPatch(p)
+            elif content_type == CONTENT_TYPE_PATCH_YAML:
+                p = yaml.safe_load(data)
+                patch = JsonPatch(p)
+            else:
+                msg = "Unsupported content type for patch: {content_type}. I can do json and cbor"
+                return web.Response(status=415, text=msg)
             # logger.info(f"decoded: {decoded} patch: {patch}")
 
             for operation in patch._ops:
@@ -1232,7 +1273,6 @@ pre {{
             raise web.HTTPNotFound(text=msg, headers=headers)
         oq = self._oqs[topic_name]
         data = oq.get(digest)
-        # headers[HEADER_SEE_EVENTS] = f"../events/"
         headers[HEADER_DATA_UNIQUE_ID] = oq.tr.unique_id
         headers[HEADER_DATA_ORIGIN_NODE_ID] = oq.tr.origin_node
 
@@ -1293,19 +1333,6 @@ pre {{
             mdata = oq_.saved[i]
             digest = mdata.digest
 
-            # if send_data:
-            #     nchunks = 1
-            #     availability_ = []
-            # else:
-            #     nchunks = 0
-            #     availability_ = [ResourceAvailability(url=URLString(f"../data/{digest}/"),
-            #                                           available_until=time.time() + 60)]
-
-            # data = DataReady(sequence=i, time_inserted=mdata.time_inserted, digest=mdata.digest,
-            #                  content_type=mdata.content_type, content_length=mdata.content_length,
-            #                  availability=availability_, chunks_arriving=nchunks, clocks=mdata.clocks,
-            #                  unique_id=oq_.tr.unique_id, origin_node=oq_.tr.origin_node, )
-
             presented_as = request.url.path
             data = oq_.get_data_ready(mdata, presented_as, inline_data=send_data)
 
@@ -1313,8 +1340,6 @@ pre {{
                 exit_event.set()
                 return
 
-            # dt_ns = time.time_ns() - data.time_inserted
-            # logger.info(f"Sending data {data.sequence} {data.digest} send delay {dt_ns/1e6:.1f}ms")
             try:
                 await ws.send_bytes(get_tagged_cbor(data))
             except ConnectionResetError:
@@ -1338,11 +1363,69 @@ pre {{
             await send_message(oq_, last.index)
 
         s = oq_.subscribe(send_message)
+
         try:
             await exit_event.wait()
             await ws.close()
         finally:
-            oq_.unsubscribe(s)
+            await oq_.unsubscribe(s)
+
+        return ws
+
+    @async_error_catcher
+    async def serve_push_stream(self, request: web.Request) -> web.WebSocketResponse:
+        headers: CIMultiDict[str] = CIMultiDict()
+        self._add_own_headers(headers)
+
+        topic_name_s = request.match_info["topic"]
+        try:
+            source = self.resolve(topic_name_s)
+        except KeyError as e:
+            raise web.HTTPNotFound(text=f"{e.args[0]}") from e
+
+        if isinstance(source, OurQueue):
+            return await self.serve_push_stream_oq(request, source)
+        else:
+            raise web.HTTPBadRequest(text=f"Topic {topic_name_s} is not a queue")
+
+    async def serve_push_stream_oq(self, request: web.Request, oq: OurQueue) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        multidict_update(ws.headers, self.get_headers_alternatives(request))
+        self._add_own_headers(ws.headers)
+
+        await ws.prepare(request)
+
+        oq_ = self._oqs[oq.topic_name]
+
+        while True:
+            msg = await ws.receive()
+            self.logger.debug(f"serve_push_stream_oq: received {msg}")
+
+            if msg.type == WSMsgType.CLOSE:
+                break
+
+            elif msg.type == WSMsgType.BINARY:
+                # read cbor
+                try:
+                    data = cbor2.loads(msg.data)
+                except:
+                    self.logger.error(f"Cannot decode {msg.data!r}")
+                    break
+                # logger.info(f"received: {data}")
+                # interpret as RawData
+
+                if RawData.__name__ in data:
+                    inside = data[RawData.__name__]
+                    rd = RawData(inside["content"], inside["content_type"])
+
+                    await oq_.publish(rd)
+                    await ws.send_str("OK")
+                else:
+                    self.logger.error(f"Cannot handle {data!r}")
+            else:
+                self.logger.error(f"Cannot handle {msg!r}")
+
+        await ws.close()
 
         return ws
 
@@ -1459,6 +1542,9 @@ def put_meta_headers(h: CIMultiDict[str], tp: TopicProperties) -> None:
     if tp.streamable:
         put_link_header(h, f"{EVENTS_SUFFIX}/", REL_EVENTS_NODATA, "websocket")
         put_link_header(h, f"{EVENTS_SUFFIX}/?send_data=1", REL_EVENTS_DATA, "websocket")
+
+    if tp.pushable:
+        put_link_header(h, f"{REL_STREAM_PUSH_SUFFIX}/", REL_STREAM_PUSH, "websocket")
     put_link_header(h, f"{REL_URL_META}/", REL_META, CONTENT_TYPE_DTPS_INDEX_CBOR)
 
     if tp.has_history:

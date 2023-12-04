@@ -24,12 +24,13 @@ pub static TOPIC_STATE_SUMMARY: &str = "dtps/state";
 
 pub static CONTENT_TYPE_CBOR: &str = "application/cbor";
 pub static CONTENT_TYPE_JSON: &str = "application/json";
-pub static CONTENT_TYPE_PATCH_CBOR: &str = "application/cbor-patch+cbor";
+pub static CONTENT_TYPE_PATCH_CBOR: &str = "application/json-patch+cbor";
 pub static CONTENT_TYPE_PATCH_JSON: &str = "application/json-patch+json";
 pub static CONTENT_TYPE_PLAIN: &str = "text/plain";
 pub static CONTENT_TYPE_YAML: &str = "application/yaml";
 pub static EVENTS_SUFFIX: &str = ":events";
 pub static REL_EVENTS_DATA: &str = "dtps-events-inline-data";
+pub static REL_STREAM_PUSH: &str = "dtps-events-push";
 pub static REL_EVENTS_NODATA: &str = "dtps-events";
 
 pub static REL_PROXIED: &str = "dtps-proxied";
