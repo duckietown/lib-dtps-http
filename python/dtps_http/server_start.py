@@ -126,10 +126,14 @@ class ServerWrapped:
         if self.tunnel_process is not None:
             logger.info("terminating cloudflared tunnel")
             self.tunnel_process.terminate()
-            await self.tunnel_process.wait()
+            # await self.tunnel_process.wait()
 
         self.server.logger.debug("closing runner")
-        await self.runner.cleanup()
+
+        try:
+            await asyncio.wait_for(self.runner.cleanup(), timeout=2)
+        except asyncio.exceptions.TimeoutError:
+            logger.warning("timeout waiting for runner cleanup")
         self.server.logger.debug("closing runner: done")
 
 
