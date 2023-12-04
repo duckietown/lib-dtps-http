@@ -1,7 +1,7 @@
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import AsyncIterator, cast, Dict, List, Mapping, Optional, Tuple
+from typing import AsyncIterator, cast, ClassVar, Dict, List, Mapping, Optional, Tuple
 
 from dtps_http import (
     parse_url_unescape,
@@ -47,15 +47,15 @@ async def context(base_name: str = "self", environment: Optional[Mapping[str, st
 
     """
     base_name = base_name.lower()
+    if environment is None and base_name in ContextManager.instances:
+        context_manager = ContextManager.instances[base_name].get_context()
+    else:
+        context_manager = await create_context(base_name, environment)
 
-    context_manager = await create_context(base_name, environment)
+    if base_name not in ContextManager.instances:
+        ContextManager.instances[base_name] = context_manager
+
     return context_manager.get_context()
-    #
-    # if use_cached:
-    #     if base_name not in ContextManager.instances:
-    #
-    #     return ContextManager.instances[base_name].get_context()
-    #
 
 
 @asynccontextmanager
@@ -82,7 +82,7 @@ async def create_context(base_name: str, environment: Optional[Mapping[str, str]
 
 
 class ContextManager:
-    # instances: ClassVar[Dict[str, "ContextManager"]] = {}
+    instances: ClassVar[Dict[str, "ContextManager"]] = {}
 
     context_info: "ContextInfo"
 
