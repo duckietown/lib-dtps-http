@@ -8,7 +8,7 @@ url1 = cast(URLString, "http+unix://%2Ftmp%2Fmine/topics/clock3/data/3?debug=1")
 
 
 def test_parse_urls1() -> None:
-    """The standard library's urllib.parse.urlparse() does not unescape the host part of the URL."""
+    # """The standard library's urllib.parse.urlparse() does not unescape the host part of the URL."""
     parsed = parse_url(url1)
     print(repr(parsed))
     assert parsed.scheme == "http+unix"
@@ -19,7 +19,7 @@ def test_parse_urls1() -> None:
 
 
 def test_parse_url2() -> None:
-    """We have a custom function that does unescape the host part of the URL."""
+    # """We have a custom function that does unescape the host part of the URL."""
     parsed = parse_url_unescape(url1)
     print(repr(parsed))
     assert parsed.scheme == "http+unix"
@@ -30,7 +30,7 @@ def test_parse_url2() -> None:
 
 
 def test_parse_url3() -> None:
-    """We have a custom function that does unescape the host part of the URL."""
+    # """We have a custom function that does unescape the host part of the URL."""
     url3 = URLString("http://localhost/")
     parsed = parse_url_unescape(url3)
     joined = join(parsed, "/topic?debug=1")
@@ -43,7 +43,7 @@ def test_parse_url3() -> None:
 
 
 def test_parse_url4() -> None:
-    """We have a custom function that does unescape the host part of the URL."""
+    # """We have a custom function that does unescape the host part of the URL."""
     url3 = URLString("")
     parsed = parse_url_unescape(url3)
     print(repr(parsed))

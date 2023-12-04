@@ -1196,6 +1196,13 @@ pre {{
             headers = self._headers(request)
 
             topic_name_s: str = request.match_info["topic"]
+
+            try:
+                source = self.resolve(topic_name_s)
+            except KeyError as e:
+                # self.logger.error(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {e}")
+                raise web.HTTPNotFound(text=f"404\n{e.args[0]}", headers=headers) from e
+
             topic_name = TopicNameV.from_relative_url(topic_name_s)
             if topic_name.is_root():
                 return await self.serve_patch_root(request)
@@ -1217,8 +1224,6 @@ pre {{
             else:
                 msg = "Unsupported content type for patch: {content_type}. I can do json and cbor"
                 return web.Response(status=415, text=msg)
-
-            source = self.resolve(topic_name_s)
 
             otr = await source.patch(request, presented_as, self, patch)
 

@@ -1,3 +1,5 @@
+from urllib.parse import unquote
+
 import asyncio
 import json
 import os
@@ -42,6 +44,7 @@ from .constants import (
     HEADER_CONTENT_LOCATION,
     HEADER_NODE_ID,
     MIME_JSON,
+    MIME_OCTET,
     REL_EVENTS_DATA,
     REL_EVENTS_NODATA,
     REL_HISTORY,
@@ -479,10 +482,10 @@ class DTPSClient:
     async def my_session(
         self, url: URL, /, *, conn_timeout: Optional[float] = None
     ) -> AsyncIterator[Tuple[aiohttp.ClientSession, URLString]]:
-        assert isinstance(url, URL)
+        assert isinstance(url, URL), url
         if url.scheme == "http+unix":
-            connector = UnixConnector(path=url.host)
-
+            path = unquote(url.host)
+            connector = UnixConnector(path=path)
             #  noinspection PyProtectedMember
             use_url = url_to_string(url._replace(scheme="http", host="localhost"))
         elif url.scheme in ("http", "https"):
@@ -493,6 +496,7 @@ class DTPSClient:
 
         timeout = aiohttp.ClientTimeout(total=conn_timeout)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            self.logger.debug(f"my_session: {url} -> {use_url}")
             yield session, use_url
 
     async def get_proxied(self, url0: URLIndexer) -> Dict[TopicNameV, ProxyJob]:
@@ -556,7 +560,7 @@ class DTPSClient:
             async with self.my_session(url, conn_timeout=2) as (session, use_url):
                 async with session.patch(use_url, data=data, headers=headers) as resp:
                     res_bytes: bytes = await resp.read()
-                    content_type = ContentType(resp.headers.get("content-type", "application/octet-stream"))
+                    content_type = ContentType(resp.headers.get("content-type", MIME_OCTET))
                     rd = RawData(content=res_bytes, content_type=content_type)
 
                     if not resp.ok:

@@ -115,6 +115,7 @@ class ServerWrapped:
         self.tunnel_process = tunnel_process
 
     async def __aenter__(self) -> DTPSServer:
+        await self.server.started.wait()
         return self.server
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:

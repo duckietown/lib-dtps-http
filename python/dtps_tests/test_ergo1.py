@@ -5,6 +5,7 @@ from unittest import IsolatedAsyncioTestCase
 
 from dtps import context_cleanup, DTPSContext
 from dtps_http import app_start, DTPSServer, make_http_unix_url, MIME_TEXT, RawData
+from dtps_http_tests.utils import test_timeout
 from dtps_tests import logger
 
 
@@ -43,6 +44,7 @@ async def go(base: DTPSContext) -> None:
 
 
 class TestCreate(IsolatedAsyncioTestCase):
+    @test_timeout(10)
     async def test_create(self):
         with tempfile.TemporaryDirectory() as td:
             socket = os.path.join(td, "socket")
@@ -54,6 +56,7 @@ class TestCreate(IsolatedAsyncioTestCase):
 
 
 class TestUse(IsolatedAsyncioTestCase):
+    @test_timeout(10)
     async def test_use(self):
         # create a server
         with tempfile.TemporaryDirectory() as td:

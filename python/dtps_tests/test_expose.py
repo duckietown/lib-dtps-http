@@ -5,15 +5,14 @@ from unittest import IsolatedAsyncioTestCase
 
 from dtps import context_cleanup
 from dtps_http import app_start, async_error_catcher, DTPSServer, make_http_unix_url, MIME_TEXT, RawData
+from dtps_http_tests.utils import test_timeout
 from dtps_tests import logger
 
 
 class TestExpose(IsolatedAsyncioTestCase):
-    async def test_expose(self):
-        await asyncio.wait_for(self._expose(), timeout=20)
-
+    @test_timeout(20)
     @async_error_catcher
-    async def _expose(self):
+    async def test_expose(self):
         with tempfile.TemporaryDirectory() as td:
             socket_switchboard = os.path.join(td, "switchboard")
             socket_node = os.path.join(td, "node")
