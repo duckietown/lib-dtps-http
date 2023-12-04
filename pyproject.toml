@@ -10,6 +10,7 @@ version = "0.0.0"
 description = ""
 authors = ["Andrea Censi <AndreaCensi@users.noreply.github.com>"]
 packages = [
+    { from = "python", include = "dtps" },
     { from = "python", include = "dtps_http" },
     { from = "python", include = "dtps_http_programs" },
 ]
