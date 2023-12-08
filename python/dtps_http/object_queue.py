@@ -1,6 +1,6 @@
 import json
 import time
-from dataclasses import dataclass as original_dataclass
+from dataclasses import dataclass, dataclass as original_dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 import cbor2
@@ -54,6 +54,15 @@ class TransformError:
 
 
 ObjectTransformResult = Union[RawData, TransformError]
+
+
+@dataclass
+class SuccessPostResult:
+    redirect_url: str
+
+
+PostResult = Union[DataReady, TransformError]
+
 ObjectTransformFunction = Callable[[ObjectTransformContext], Awaitable[ObjectTransformResult]]
 
 
@@ -112,26 +121,26 @@ class ObjectQueue:
         ci = ChannelInfo(queue_created=self.tr.created, num_total=self._seq, newest=newest, oldest=oldest)
         return ci
 
-    async def publish_text(self, text: str, content_type: ContentType = MIME_TEXT) -> ObjectTransformResult:
+    async def publish_text(self, text: str, content_type: ContentType = MIME_TEXT) -> PostResult:
         data = text.encode("utf-8")
         return await self.publish(RawData(content=data, content_type=content_type))
 
-    async def publish_cbor(self, obj: object, content_type: ContentType = MIME_CBOR) -> ObjectTransformResult:
+    async def publish_cbor(self, obj: object, content_type: ContentType = MIME_CBOR) -> PostResult:
         """Publish a python object as a cbor2 encoded object."""
         data = cbor2.dumps(obj)
         return await self.publish(RawData(content=data, content_type=content_type))
 
-    async def publish_json(self, obj: object, content_type: ContentType = MIME_JSON) -> ObjectTransformResult:
+    async def publish_json(self, obj: object, content_type: ContentType = MIME_JSON) -> PostResult:
         """Publish a python object as a JSON encoded object."""
         data = json.dumps(obj)
         return await self.publish(RawData(content=data.encode(), content_type=content_type))
 
-    async def publish_yaml(self, obj: object, content_type: ContentType = MIME_YAML) -> ObjectTransformResult:
+    async def publish_yaml(self, obj: object, content_type: ContentType = MIME_YAML) -> PostResult:
         """Publish a python object as a JSON encoded object."""
         data = yaml.dump(obj)
         return await self.publish(RawData(content=data.encode(), content_type=content_type))
 
-    async def publish(self, obj0: RawData, /) -> ObjectTransformResult:
+    async def publish(self, obj0: RawData, /) -> PostResult:
         """
         Publish raw bytes.
 
@@ -171,7 +180,10 @@ class ObjectQueue:
         self._pub.publish(
             Key(self._name.as_relative_url(), K_INDEX), use_seq
         )  # logger.debug(f"published #{self._seq} {self._name}: {obj!r}")
-        return obj
+
+        reached_at = self._name.as_relative_url()
+        data_ready = self.get_data_ready(ds, reached_at, False)
+        return data_ready
 
     def current_clocks(self) -> Clocks:
         clocks = Clocks.empty()

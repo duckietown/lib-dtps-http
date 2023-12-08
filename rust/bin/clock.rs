@@ -4,22 +4,12 @@ use chrono::prelude::*;
 use schemars::schema_for;
 use tokio::{
     spawn,
-    time::{
-        interval,
-        Duration,
-    },
+    time::{interval, Duration},
 };
 
 use dtps_http::{
-    create_server_from_command_line,
-    error_with_info,
-    init_logging,
-    show_errors,
-    utils::time_nanos_i64,
-    ServerStateAccess,
-    TopicName,
-    TopicProperties,
-    DTPSR,
+    create_server_from_command_line, error_with_info, init_logging, show_errors, utils::time_nanos_i64,
+    ServerStateAccess, TopicName, TopicProperties, DTPSR,
 };
 
 async fn clock_go(state: ServerStateAccess, topic_name: &str, interval_s: f32) -> DTPSR<()> {

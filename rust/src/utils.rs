@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    time::SystemTime,
-};
+use std::{collections::HashMap, time::SystemTime};
 
 pub fn divide_in_components(pstr: &str, sep: char) -> Vec<String> {
     let mut pstr = pstr.to_string();

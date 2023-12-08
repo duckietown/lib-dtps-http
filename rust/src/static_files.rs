@@ -1,18 +1,9 @@
 use http::Response;
 use hyper::Body;
-use include_dir::{
-    include_dir,
-    Dir,
-};
-use maud::{
-    html,
-    DOCTYPE,
-};
+use include_dir::{include_dir, Dir};
+use maud::{html, DOCTYPE};
 use mime_guess::from_path;
-use warp::{
-    Rejection,
-    Reply,
-};
+use warp::{Rejection, Reply};
 
 use crate::HandlersResponse;
 

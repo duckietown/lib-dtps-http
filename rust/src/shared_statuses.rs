@@ -1,14 +1,8 @@
 use std::sync::Arc;
 
-use tokio::sync::{
-    Mutex,
-    Notify,
-};
+use tokio::sync::{Mutex, Notify};
 
-use crate::{
-    DTPSError,
-    DTPSR,
-};
+use crate::{DTPSError, DTPSR};
 
 #[derive(Debug, Clone)]
 pub struct SharedStatusNotification {

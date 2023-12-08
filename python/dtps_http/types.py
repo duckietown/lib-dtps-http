@@ -46,7 +46,7 @@ class TopicNameV:
 
     def __str__(self) -> str:
         return f"Topic({self.as_dash_sep()!r})"
-        raise AssertionError("use as_relative_url()")
+        # raise AssertionError("use as_relative_url()")
 
     @classmethod
     def root(cls) -> "TopicNameV":
@@ -110,3 +110,15 @@ class TopicNameV:
 
     def nontrivial_prefixes(self) -> Sequence[Self]:
         return [TopicNameV(self.components[:i]) for i in range(1, len(self.components))]
+
+    def __lt__(self, other):
+        return self.components < other.components
+
+    def __le__(self, other):
+        return self.components <= other.components
+
+    def __gt__(self, other):
+        return self.components > other.components
+
+    def __ge__(self, other):
+        return self.components >= other.components

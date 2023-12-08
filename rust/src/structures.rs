@@ -1,24 +1,12 @@
-use std::collections::{
-    HashMap,
-    HashSet,
-};
+use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
 use derive_more::Constructor;
 use schemars::JsonSchema;
-use serde::{
-    Deserialize,
-    Serialize,
-};
+use serde::{Deserialize, Serialize};
 use serde_cbor::Value as CBORValue;
 
-use crate::{
-    divide_in_components,
-    object_queues::InsertNotification,
-    Clocks,
-    TypeOfConnection,
-    DTPSR,
-};
+use crate::{divide_in_components, object_queues::InsertNotification, Clocks, TypeOfConnection, DTPSR};
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, PartialEq)]
 pub struct RawData {

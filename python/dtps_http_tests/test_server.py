@@ -3,13 +3,14 @@ import json
 import os
 import tempfile
 import unittest
-from typing import Literal
+from typing import Literal, cast
 
 import cbor2
 import yaml
 
 from dtps_http import (
     app_start,
+    async_error_catcher,
     CONTENT_TYPE_PATCH_CBOR,
     CONTENT_TYPE_PATCH_JSON,
     CONTENT_TYPE_PATCH_YAML,
@@ -36,6 +37,7 @@ from .utils import test_timeout
 
 class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
     @test_timeout(10)
+    @async_error_catcher
     async def test_push1(self):
         with tempfile.TemporaryDirectory() as td:
             socket_node = os.path.join(td, "node")
@@ -56,7 +58,7 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
                     )
                     topic = TopicNameV.from_dash_sep("a/b")
 
-                    await client.add_topic(url0, topic, parameters)
+                    await client.add_topic(cast(URLIndexer, url0), topic, parameters)
 
                     queue_in: "asyncio.Queue[RawData]" = asyncio.Queue()
                     queue_out = asyncio.Queue()
@@ -90,6 +92,8 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
                         raise Exception(f"received={received!r} != sent={sent!r}")
                     task_push.cancel()
                     task_sub.cancel()
+
+                    logger.info(f"test finished")
                     # task_server.cancel()
                     # await task_push
                     # await task_sub

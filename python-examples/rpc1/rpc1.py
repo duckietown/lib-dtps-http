@@ -30,11 +30,9 @@ async def transform(x: ObjectTransformContext) -> ObjectTransformResult:
         )
         return result
     else:
-        # return error
         return TransformError(400, f"Expected an even integer, got {number}")
 
 
-# IN, OUT my topics
 @async_error_catcher
 async def on_startup(s: DTPSServer) -> None:
     IN = TopicNameV.from_dash_sep("node/rpc")

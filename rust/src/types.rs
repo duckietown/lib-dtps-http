@@ -1,34 +1,17 @@
 use std::{
-    fmt::{
-        Debug,
-        Formatter,
-    },
+    fmt::{Debug, Formatter},
     ops::Add,
 };
 
 use colored::Colorize;
 use schemars::{
     gen::SchemaGenerator,
-    schema::{
-        Schema,
-        SchemaObject,
-    },
+    schema::{Schema, SchemaObject},
     JsonSchema,
 };
-use serde::{
-    Deserialize,
-    Deserializer,
-    Serialize,
-    Serializer,
-};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::{
-    divide_in_components,
-    server_state::ConnectionJobWire,
-    vec_concat,
-    DTPSError,
-    DTPSR,
-};
+use crate::{divide_in_components, server_state::ConnectionJobWire, vec_concat, DTPSError, DTPSR};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CompositeName {

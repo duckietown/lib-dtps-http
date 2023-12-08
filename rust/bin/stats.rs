@@ -5,20 +5,11 @@ use std::error;
 
 use clap::Parser;
 use futures::future::join_all;
-use tokio::{
-    spawn,
-    task::JoinHandle,
-};
+use tokio::{spawn, task::JoinHandle};
 
 use dtps_http::{
-    compute_best_alternative,
-    debug_with_info,
-    estimate_latencies,
-    get_index,
-    get_metadata,
-    init_logging,
-    parse_url_ext,
-    warn_with_info,
+    compute_best_alternative, debug_with_info, estimate_latencies, get_index, get_metadata, init_logging,
+    parse_url_ext, warn_with_info,
 };
 
 /// Parameters for client
@@ -48,7 +39,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     let md = get_metadata(&bc).await?;
     // debug_with_info!("metadata:\n{:#?}", md);
     md.get_answering()?;
-    let best = compute_best_alternative(&md.alternative_urls, md.answering.unwrap().as_str()).await?;
+    let best = compute_best_alternative(&md.alternative_urls, md.answering).await?;
     warn_with_info!("Best connection: {} ", best);
 
     let x = get_index(&best).await?;

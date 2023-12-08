@@ -1,17 +1,9 @@
 use url::Url;
 
 use crate::{
-    info_with_info,
-    normalize_path,
-    DTPSError,
-    FilePaths,
-    TypeOfConnection,
-    TypeOfConnection::{
-        TCP,
-        UNIX,
-    },
-    UnixCon,
-    DTPSR,
+    info_with_info, normalize_path, DTPSError, FilePaths, TypeOfConnection,
+    TypeOfConnection::{TCP, UNIX},
+    UnixCon, DTPSR,
 };
 
 fn get_scheme_part(s0: &str) -> Option<&str> {
@@ -213,10 +205,7 @@ fn normalize_dot_dot(path: &str) -> String {
 mod tests {
     use rstest::rstest;
 
-    use crate::{
-        debug_with_info,
-        FilePaths,
-    };
+    use crate::{debug_with_info, FilePaths};
 
     use super::*;
 

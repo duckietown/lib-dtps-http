@@ -1,20 +1,9 @@
 use crate::{
-    connections::TypeOfConnection,
-    get_metadata,
-    init_logging,
-    DTPSError,
-    DTPSServer,
-    ServerStateAccess,
-    TopicName,
-    TopicProperties,
-    CONTENT_TYPE_JSON,
-    DTPSR,
+    connections::TypeOfConnection, get_metadata, init_logging, DTPSError, DTPSServer, ServerStateAccess, TopicName,
+    TopicProperties, CONTENT_TYPE_JSON, DTPSR,
 };
 use chrono::Duration;
-use futures::{
-    SinkExt,
-    StreamExt,
-};
+use futures::{SinkExt, StreamExt};
 use log::info;
 use maplit::hashmap;
 use tempfile::tempdir;
@@ -22,14 +11,8 @@ use tokio::task::JoinHandle;
 
 use crate::client::check_unix_socket;
 use tokio::{
-    process::{
-        Child,
-        Command,
-    },
-    sync::broadcast::{
-        error::RecvError,
-        Receiver as BroadcastReceiver,
-    },
+    process::{Child, Command},
+    sync::broadcast::{error::RecvError, Receiver as BroadcastReceiver},
 };
 
 pub struct ConnectionFixture {
@@ -150,20 +133,11 @@ pub async fn instance_rust() -> TestFixture {
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        connections::TypeOfConnection,
-        init_logging,
-        DTPSServer,
-        ServerStateAccess,
-        TopicName,
-        TopicProperties,
-        CONTENT_TYPE_JSON,
-        DTPSR,
+        connections::TypeOfConnection, init_logging, DTPSServer, ServerStateAccess, TopicName, TopicProperties,
+        CONTENT_TYPE_JSON, DTPSR,
     };
     use chrono::Duration;
     use maplit::hashmap;
-    use rstest::{
-        fixture,
-        rstest,
-    };
+    use rstest::{fixture, rstest};
     use tokio::task::JoinHandle;
 }

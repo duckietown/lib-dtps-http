@@ -1,21 +1,10 @@
-use std::{
-    collections::HashMap,
-    future::Future,
-    pin::Pin,
-    time::Duration,
-};
+use std::{collections::HashMap, future::Future, pin::Pin, time::Duration};
 
 use tokio::task::JoinHandle;
 
 use crate::{
-    debug_with_info,
-    dtpserror_other,
-    error_with_info,
-    server_state::Status,
-    shared_statuses::SharedStatusNotification,
-    types::CompositeName,
-    ServerStateAccess,
-    DTPSR,
+    debug_with_info, dtpserror_other, error_with_info, server_state::Status, shared_statuses::SharedStatusNotification,
+    types::CompositeName, ServerStateAccess, DTPSR,
 };
 
 pub type JobFunctionType = Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send>;

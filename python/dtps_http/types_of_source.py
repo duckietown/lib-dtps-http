@@ -10,7 +10,7 @@ from jsonpatch import JsonPatch
 
 from . import logger
 from .constants import CONTENT_TYPE_DTPS_INDEX_CBOR
-from .object_queue import ObjectTransformResult, TransformError
+from .object_queue import ObjectTransformResult, PostResult, TransformError
 from .structures import (
     ContentInfo,
     LinkBenchmark,
@@ -81,9 +81,7 @@ class Source(ABC):
         ...
 
     @abstractmethod
-    async def get_resolved_data(
-        self, request: web.Request, presented_as: str, server: "DTPSServer"
-    ) -> "ResolvedData":
+    async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData":
         ...
 
     @abstractmethod
@@ -91,15 +89,21 @@ class Source(ABC):
         raise NotImplementedError(f"Source.get_meta_info() for {self}")
 
     @abstractmethod
-    async def patch(
-        self, request: web.Request, presented_as: str, server: "DTPSServer", patch: JsonPatch
-    ) -> "ObjectTransformResult":
+    async def patch(self, presented_as: str, server: "DTPSServer", patch: JsonPatch) -> "PostResult":
         ...
 
     @abstractmethod
-    async def post(
-        self, request: web.Request, presented_as: str, server: "DTPSServer", rd: RawData
-    ) -> "ObjectTransformResult":
+    async def publish(self, presented_as: str, server: "DTPSServer", rd: RawData) -> "PostResult":
+        ...
+
+    @abstractmethod
+    async def call(
+        self, presented_as: str, server: "DTPSServer", rd: RawData
+    ) -> Union[RawData, TransformError]:
+        ...
+
+    @abstractmethod
+    async def get_source_node_id(self, server: "DTPSServer") -> Optional[NodeID]:
         ...
 
 
@@ -173,6 +177,9 @@ def get_inside(
 class OurQueue(Source):
     topic_name: TopicNameV
 
+    async def get_source_node_id(self, server: "DTPSServer") -> Optional[NodeID]:
+        return server.node_id
+
     async def get_meta_info(self, presented_as: str, server: "DTPSServer") -> "TopicsIndex":
         oq = server.get_oq(self.topic_name)
         tr = oq.tr
@@ -197,25 +204,30 @@ class OurQueue(Source):
     def get_inside(self, s: str, /) -> "Source":
         return Transformed(self, GetInside((s,)))
 
-    async def get_resolved_data(
-        self, request: web.Request, presented_as: str, server: "DTPSServer"
-    ) -> "ResolvedData":
+    async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData":
         oq = server.get_oq(self.topic_name)
         if not oq.stored:
             return NotAvailableYet(f"no data yet for {self.topic_name.as_dash_sep()}")
         return oq.last_data()
 
-    async def post(
-        self, request: web.Request, presented_as: str, server: "DTPSServer", rd: RawData
-    ) -> "ObjectTransformResult":
+    async def publish(self, presented_as: str, server: "DTPSServer", rd: RawData) -> "PostResult":
         oq = server.get_oq(self.topic_name)
 
         otr = await oq.publish(rd)
         return otr
 
-    async def patch(
-        self, request: web.Request, presented_as: str, server: "DTPSServer", patch: JsonPatch
-    ) -> "ObjectTransformResult":
+    async def call(
+        self, presented_as: str, server: "DTPSServer", rd: RawData
+    ) -> Union[RawData, TransformError]:
+        oq = server.get_oq(self.topic_name)
+
+        otr = await oq.publish(rd)
+        if isinstance(otr, TransformError):
+            return otr
+        else:
+            return oq.get(otr.digest)
+
+    async def patch(self, presented_as: str, server: "DTPSServer", patch: JsonPatch) -> "PostResult":
         oq = server.get_oq(self.topic_name)
         last_data = oq.last_data()
         ob = last_data.get_as_native_object()
@@ -236,22 +248,23 @@ class OurQueue(Source):
 class ForwardedQueue(Source):
     topic_name: TopicNameV
 
+    async def get_source_node_id(self, server: "DTPSServer") -> Optional[NodeID]:
+        return server._forwarded[self.topic_name].origin_node
+
     async def get_meta_info(self, presented_as: str, server: "DTPSServer") -> "TopicsIndex":
-        raise NotImplementedError(f"OurQueue.get_meta_info() for {self}")
+        raise NotImplementedError(f"get_meta_info() for {self}")  # XXX:
 
     def get_inside_after(self, s: str) -> "Source":
-        raise KeyError(f"get_inside_after({s!r}) not implemented for {self!r}")
+        raise KeyError(f"get_inside_after({s!r}) not implemented for {self!r}")  # XXX:
 
     def get_inside(self, s: str, /) -> "Source":
-        raise KeyError(f"get_inside({s!r}) not implemented for {self!r}")
+        raise KeyError(f"get_inside({s!r}) not implemented for {self!r}")  # XXX:
 
     def get_properties(self, server: "DTPSServer") -> TopicProperties:
         fd = server._forwarded[self.topic_name]
         return fd.properties
 
-    async def get_resolved_data(
-        self, request: web.Request, presented_as: str, server: "DTPSServer"
-    ) -> "ResolvedData":
+    async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData":
         url_data = server._forwarded[self.topic_name].forward_url_data
         from dtps_http import DTPSClient, my_raise_for_status
 
@@ -265,14 +278,17 @@ class ForwardedQueue(Source):
                     return data
 
     async def patch(
-        self, request: web.Request, presented_as: str, server: "DTPSServer", patch: JsonPatch
+        self, presented_as: str, server: "DTPSServer", patch: JsonPatch
     ) -> "ObjectTransformResult":
         raise NotImplementedError(f"patch() for {self}")  # TODO: DTSW-4787: patch forwarded queue
 
-    async def post(
-        self, request: web.Request, presented_as: str, server: "DTPSServer", rd: RawData
-    ) -> "ObjectTransformResult":
-        raise NotImplementedError(f"post() for {self}")  # TODO: DTSW-4780: post forwarded queue
+    async def publish(self, presented_as: str, server: "DTPSServer", rd: RawData) -> "PostResult":
+        raise NotImplementedError(f"publish() for {self}")  # TODO: DTSW-4780: post forwarded queue
+
+    async def call(
+        self, presented_as: str, server: "DTPSServer", rd: RawData
+    ) -> Union[RawData, TransformError]:
+        raise NotImplementedError(f"call() for {self}")  # TODO:  call forwarded queue
 
 
 @dataclass
@@ -281,6 +297,9 @@ class SourceComposition(Source):
     sources: Dict[TopicNameV, Source]
     unique_id: SourceID
     origin_node: NodeID
+
+    async def get_source_node_id(self, server: "DTPSServer") -> Optional[NodeID]:
+        return self.origin_node
 
     async def get_meta_info(self, presented_as: str, server: "DTPSServer") -> "TopicsIndex":
         topics = {}
@@ -336,22 +355,23 @@ class SourceComposition(Source):
     def get_inside(self, s: str, /) -> "Source":
         raise KeyError(f"get_inside({s!r}) not implemented for {self!r}")
 
-    async def get_resolved_data(
-        self, request: web.Request, presented_as: str, server: "DTPSServer"
-    ) -> "ResolvedData":
+    async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData":
         data = await self.get_meta_info(presented_as, server)
         as_cbor = cbor2.dumps(asdict(data.to_wire()))
         return RawData(content_type=CONTENT_TYPE_DTPS_INDEX_CBOR, content=as_cbor)
 
     async def patch(
-        self, request: web.Request, presented_as: str, server: "DTPSServer", patch: JsonPatch
+        self, presented_as: str, server: "DTPSServer", patch: JsonPatch
     ) -> "ObjectTransformResult":
         return TransformError(400, "Cannot patch SourceComposition")
 
-    async def post(
-        self, request: web.Request, presented_as: str, server: "DTPSServer", rd: RawData
-    ) -> "ObjectTransformResult":
+    async def publish(self, presented_as: str, server: "DTPSServer", rd: RawData) -> "PostResult":
         return TransformError(400, "Cannot post to SourceComposition")
+
+    async def call(
+        self, presented_as: str, server: "DTPSServer", rd: RawData
+    ) -> Union[RawData, TransformError]:
+        return TransformError(400, "Cannot call SourceComposition")
 
 
 @dataclass
@@ -359,48 +379,48 @@ class Transformed(Source):
     source: Source
     transform: Transform
 
+    async def get_source_node_id(self, server: "DTPSServer") -> Optional[NodeID]:
+        return await self.source.get_source_node_id(server)
+
     async def get_meta_info(self, presented_as: str, server: "DTPSServer") -> "TopicsIndex":
-        raise NotImplementedError(f"OurQueue.get_meta_info() for {self}")
+        raise NotImplementedError(f"OurQueue.get_meta_info() for {self}")  # XXX
 
     def get_inside_after(self, s: str) -> "Source":
-        raise KeyError(f"get_inside_after({s!r}) not implemented for {self!r}")
+        raise KeyError(f"get_inside_after({s!r}) not implemented for {self!r}")  # XXX
 
     def get_inside(self, s: str, /) -> "Source":
         return Transformed(self.source, self.transform.get_transform_inside(s))
 
-    async def get_resolved_data(
-        self, request: web.Request, presented_as: str, server: "DTPSServer"
-    ) -> "ResolvedData":
-        data = await self.source.get_resolved_data(request, presented_as, server)
+    async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData":
+        data = await self.source.get_resolved_data(presented_as, server)
         return self.transform.transform(data)
 
     def get_properties(self, server: "DTPSServer") -> TopicProperties:
         return self.source.get_properties(server)
 
-    async def patch(
-        self, request: web.Request, presented_as: str, server: "DTPSServer", patch: JsonPatch
-    ) -> "ObjectTransformResult":
+    async def patch(self, presented_as: str, server: "DTPSServer", patch: JsonPatch) -> "PostResult":
         # logger.debug(f"Transformed.patch() {self} {patch}")
         if isinstance(self.transform, GetInside):
             patch2 = add_prefix_to_patch(self.transform.components, patch)
-            return await self.source.patch(request, presented_as, server, patch2)
+            return await self.source.patch(presented_as, server, patch2)
         else:
             raise NotImplementedError(f"patch() for {self}")
 
-        # raise NotImplementedError(f"patch() for {self}")
-
-    async def post(
-        self, request: web.Request, presented_as: str, server: "DTPSServer", rd: RawData
-    ) -> "ObjectTransformResult":
+    async def publish(self, presented_as: str, server: "DTPSServer", rd: RawData) -> "PostResult":
         if isinstance(self.transform, GetInside):
             native = rd.get_as_native_object()
             path = "".join("/" + o for o in self.transform.components)
             ops = [{"op": "replace", "path": path, "value": native}]
             patch = JsonPatch(ops)
 
-            return await self.source.patch(request, presented_as, server, patch)
+            return await self.source.patch(presented_as, server, patch)
         else:
             raise NotImplementedError(f"patch() for {self}")
+
+    async def call(
+        self, presented_as: str, server: "DTPSServer", rd: RawData
+    ) -> Union[RawData, TransformError]:
+        return TransformError(400, "Cannot call Transformed")
 
 
 def add_prefix_to_patch(prefix: Tuple[str, ...], patch: JsonPatch) -> JsonPatch:
@@ -417,6 +437,9 @@ def add_prefix_to_patch(prefix: Tuple[str, ...], patch: JsonPatch) -> JsonPatch:
 class MetaInfo(Source):
     source: Source
 
+    async def get_source_node_id(self, server: "DTPSServer") -> Optional[NodeID]:
+        return await self.source.get_source_node_id(server)
+
     async def get_meta_info(self, presented_as: str, server: "DTPSServer") -> "TopicsIndex":
         raise NotImplementedError(f"OurQueue.get_meta_info() for {self}")  # TODO: DTSW-4789
 
@@ -429,20 +452,21 @@ class MetaInfo(Source):
     def get_inside(self, s: str, /) -> "Source":
         raise KeyError(f"get_inside({s!r}) not implemented for {self!r}")
 
-    async def get_resolved_data(
-        self, request: web.Request, presented_as: str, server: "DTPSServer"
-    ) -> "ResolvedData":
+    async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData":
         raise NotImplementedError("MetaInfo.get_resolved_data()")  # TODO: DTSW-4789
 
     async def patch(
-        self, request: web.Request, presented_as: str, server: "DTPSServer", patch: JsonPatch
+        self, presented_as: str, server: "DTPSServer", patch: JsonPatch
     ) -> "ObjectTransformResult":
         return TransformError(400, "Cannot PATCH MetaInfo")
 
-    async def post(
-        self, request: web.Request, presented_as: str, server: "DTPSServer", rd: RawData
-    ) -> "ObjectTransformResult":
+    async def publish(self, presented_as: str, server: "DTPSServer", rd: RawData) -> "PostResult":
         return TransformError(400, "Cannot POST MetaInfo")
+
+    async def call(
+        self, presented_as: str, server: "DTPSServer", rd: RawData
+    ) -> Union[RawData, TransformError]:
+        return TransformError(400, "Cannot call MetaInfo")
 
 
 TypeOfSource = Union[OurQueue, ForwardedQueue, SourceComposition, Transformed]

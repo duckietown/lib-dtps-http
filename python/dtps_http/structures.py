@@ -5,12 +5,13 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 
 import cbor2
 from multidict import CIMultiDict
-from pydantic import parse_obj_as
+from .utils import pydantic_parse
 from pydantic.dataclasses import dataclass
 
+from .utils import pydantic_parse
 from .constants import HEADER_LINK_BENCHMARK, MIME_CBOR, MIME_JSON, MIME_TEXT
 from .types import ContentType, NodeID, SourceID, TopicNameS, TopicNameV, URLString
-from .urls import join, URL, url_to_string, URLIndexer
+from .urls import join, parse_url_unescape, URL, url_to_string, URLIndexer
 
 __all__ = [
     "ChannelInfo",
@@ -30,6 +31,7 @@ __all__ = [
     "ListenURLEvents",
     "Metadata",
     "MinMax",
+    "ProxyJob",
     "RawData",
     "Registration",
     "ResourceAvailability",
@@ -362,7 +364,7 @@ class TopicRefAdd:
 
     @classmethod
     def from_json(cls, s: Any) -> "TopicRefAdd":
-        return parse_obj_as(cls, s)
+        return pydantic_parse(cls, s)
 
 
 @dataclass
@@ -374,12 +376,6 @@ class TopicsIndex:
             if not v.reachability:
                 msg = f"Topic {k.as_dash_sep()!r} has no reachability"
                 raise AssertionError(msg)
-
-    #
-    # @classmethod
-    # def from_json(cls, s: Any) -> "TopicsIndex":
-    #     wire = TopicsIndexWire.from_json(s)
-    #     return wire.to_topics_index()
 
     def to_wire(self) -> "TopicsIndexWire":
         topics = {}
@@ -395,7 +391,7 @@ class TopicsIndexWire:
 
     @classmethod
     def from_json(cls, s: Any) -> "TopicsIndexWire":
-        return parse_obj_as(cls, s)
+        return pydantic_parse(cls, s)
 
     def to_internal(self, where_this_available: List[URL]) -> "TopicsIndex":
         topics: Dict[TopicNameV, TopicRef] = {}
@@ -404,32 +400,8 @@ class TopicsIndexWire:
             topic = TopicNameV.from_dash_sep(k)
 
             topics[topic] = tr0.to_internal(where_this_available)
-            #
-            # reachability: List[TopicReachabilityInternal] = []
-            # for r in tr0.reachability:
-            #
-            #
-            #     if "://" in r.url:
-            #         url = parse_url_unescape(r.url)
-            #
-            #         reachability.append(parse_url_unescape(r.url))
-            #     else:
-            #         for w in where_this_available:
-            #             reachability.append(r.to_internal(w))
-            #
-            #
-            # tr2 = replace(tr0, reachability=reachability)
-            # available[k] = tr2
 
         return TopicsIndex(topics=topics)
-        #
-        #
-        # for k, v in self.topics.items():
-        #     topics[TopicNameV.from_dash_sep(k)] = v
-        # return TopicsIndex(topics=topics)
-
-
-# used in websockets
 
 
 @dataclass
@@ -454,7 +426,7 @@ class ChannelInfo:
     @classmethod
     def from_cbor(cls, s: bytes) -> "ChannelInfo":
         struct = cbor2.loads(s)
-        return parse_obj_as(cls, struct)
+        return pydantic_parse(cls, struct)
 
 
 @dataclass
@@ -468,7 +440,7 @@ class Chunk:
     @classmethod
     def from_cbor(cls, s: bytes) -> "Chunk":
         struct = cbor2.loads(s)
-        return parse_obj_as(cls, struct)
+        return pydantic_parse(cls, struct)
 
 
 @dataclass
@@ -487,12 +459,14 @@ class DataReady:
     @classmethod
     def from_json_string(cls, s: str) -> "DataReady":
         struct = json.loads(s)
-        return parse_obj_as(cls, struct)
+        return pydantic_parse(cls, struct)
 
     @classmethod
     def from_cbor(cls, s: bytes) -> "DataReady":
         struct = cbor2.loads(s)
-        return parse_obj_as(cls, struct)
+        if not isinstance(struct, dict):
+            raise ValueError(f"Expected a dictionary here: {s}\n{struct}")
+        return pydantic_parse(cls, struct)
 
     def as_data_saved(self) -> DataSaved:
         return DataSaved(
@@ -547,7 +521,7 @@ def channel_msgs_parse(d: bytes) -> "ChannelMsgs":
             # noinspection PyTypeChecker
             # return TypeAdapter(T).validate_python(struct[T.__name__])
             data = struct[T.__name__]
-            return parse_obj_as(T, data)
+            return pydantic_parse(T, data)
 
     raise ValueError(f"unexpected value {struct}")
 
@@ -573,3 +547,21 @@ class Registration:
 
 ChannelMsgs = Union[ChannelInfo, DataReady, Chunk, FinishedMsg, ErrorMsg, WarningMsg, SilenceMsg]
 ListenURLEvents = Union[InsertNotification, WarningMsg, ErrorMsg, FinishedMsg, SilenceMsg]
+
+
+@dataclass
+class ProxyJob:
+    node_id: Optional[NodeID]
+    urls: List[URLString]
+    mask_origin: bool
+
+    @classmethod
+    def from_json(cls, s: Any) -> "ProxyJob":
+        return pydantic_parse(cls, s)
+
+    def __post_init__(self):
+        if not self.urls:
+            msg = "Empty urls"
+            raise ValueError(msg)
+        for u in self.urls:
+            parse_url_unescape(u)

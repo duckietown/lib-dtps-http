@@ -1,16 +1,8 @@
-use std::{
-    fmt,
-    fmt::Display,
-    path::PathBuf,
-};
+use std::{fmt, fmt::Display, path::PathBuf};
 
 use url::Url;
 
-use crate::{
-    join_path,
-    parse_url_ext,
-    DTPSR,
-};
+use crate::{join_path, parse_url_ext, DTPSR};
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub struct UnixCon {

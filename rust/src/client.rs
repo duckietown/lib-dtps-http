@@ -1,91 +1,33 @@
-use std::{
-    any::Any,
-    collections::HashSet,
-    fmt::Debug,
-    os::unix::fs::FileTypeExt,
-    path::Path,
-    time::Duration,
-};
+use std::{any::Any, collections::HashSet, fmt::Debug, os::unix::fs::FileTypeExt, path::Path, time::Duration};
 
 use anyhow::Context;
 use bytes::Bytes;
 use futures::StreamExt;
 use hex;
-use hyper::{
-    self,
-    Client,
-};
+use hyper::{self, Client};
 use hyper_tls::HttpsConnector;
 use hyperlocal::UnixClientExt;
-use json_patch::{
-    AddOperation,
-    Patch as JsonPatch,
-    Patch,
-    PatchOperation,
-    RemoveOperation,
-};
+use json_patch::{AddOperation, Patch as JsonPatch, Patch, PatchOperation, RemoveOperation};
 use maplit::hashmap;
 use serde::Serialize;
 use tokio::{
-    sync::broadcast::{
-        error::RecvError,
-        Receiver,
-        Receiver as BroadcastReceiver,
-    },
+    sync::broadcast::{error::RecvError, Receiver, Receiver as BroadcastReceiver},
     task::JoinHandle,
     time::timeout,
 };
 use tungstenite::Message as TM;
 use warp::reply::Response;
 
+use crate::signals_logic::MASK_ORIGIN;
 use crate::{
-    context,
-    debug_with_info,
-    error_with_info,
-    get_content_type,
-    info_with_info,
-    internal_assertion,
-    join_ext,
-    not_available,
-    not_implemented,
-    not_reachable,
-    object_queues::InsertNotification,
-    open_websocket_connection,
-    parse_url_ext,
-    put_header_accept,
-    put_header_content_type,
-    server_state::ConnectionJob,
-    time_nanos,
-    types::CompositeName,
-    warn_with_info,
-    DTPSError,
-    DataSaved,
-    FoundMetadata,
-    History,
-    LinkBenchmark,
-    LinkHeader,
-    ListenURLEvents,
-    MsgServerToClient,
-    ProxyJob,
-    RawData,
-    TopicName,
-    TopicRefAdd,
-    TopicsIndexInternal,
-    TopicsIndexWire,
-    TypeOfConnection,
-    CONTENT_TYPE_DTPS_INDEX,
-    CONTENT_TYPE_DTPS_INDEX_CBOR,
-    CONTENT_TYPE_PATCH_JSON,
-    CONTENT_TYPE_TOPIC_HISTORY_CBOR,
-    DTPSR,
-    HEADER_CONTENT_LOCATION,
-    HEADER_NODE_ID,
-    REL_CONNECTIONS,
-    REL_EVENTS_DATA,
-    REL_EVENTS_NODATA,
-    REL_HISTORY,
-    REL_META,
-    REL_PROXIED,
+    context, debug_with_info, error_with_info, get_content_type, info_with_info, internal_assertion, join_ext,
+    not_available, not_implemented, not_reachable, object_queues::InsertNotification, open_websocket_connection,
+    parse_url_ext, put_header_accept, put_header_content_type, server_state::ConnectionJob, time_nanos,
+    types::CompositeName, warn_with_info, DTPSError, DataSaved, FoundMetadata, History, LinkBenchmark, LinkHeader,
+    ListenURLEvents, MsgServerToClient, ProxyJob, RawData, TopicName, TopicRefAdd, TopicsIndexInternal,
+    TopicsIndexWire, TypeOfConnection, CONTENT_TYPE_DTPS_INDEX, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_PATCH_JSON,
+    CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR, HEADER_CONTENT_LOCATION, HEADER_NODE_ID, REL_CONNECTIONS, REL_EVENTS_DATA,
+    REL_EVENTS_NODATA, REL_HISTORY, REL_META, REL_PROXIED,
 };
 
 /// Note: need to have use futures::{StreamExt} in scope to use this
@@ -437,6 +379,7 @@ pub async fn post_data(con: &TypeOfConnection, rd: &RawData) -> DTPSR<RawData> {
         content: body_bytes,
         content_type,
     };
+
     Ok(x0)
 }
 
@@ -499,7 +442,7 @@ pub enum UrlResult {
     Accessible(LinkBenchmark),
 }
 
-pub async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResult {
+pub async fn get_stats(con: &TypeOfConnection, expect_node_id: Option<String>) -> UrlResult {
     let md = get_metadata(con).await;
     let complexity = match con {
         TypeOfConnection::TCP(_) => 2,
@@ -529,30 +472,36 @@ pub async fn get_stats(con: &TypeOfConnection, expect_node_id: &str) -> UrlResul
 
             UrlResult::Inaccessible(s)
         }
-        Ok(md_) => match md_.answering {
-            None => UrlResult::WrongNodeAnswering,
-            Some(answering) => {
-                if answering != expect_node_id {
-                    UrlResult::WrongNodeAnswering
-                } else {
-                    let latency_ns = md_.latency_ns;
-                    let lb = LinkBenchmark {
-                        complexity,
-                        bandwidth: 100_000_000,
-                        latency_ns,
-                        reliability_percent,
-                        hops: 1,
-                    };
-                    UrlResult::Accessible(lb)
-                }
+        Ok(md_) => {
+            if incompatible(&expect_node_id, &md_.answering) {
+                UrlResult::WrongNodeAnswering
+            } else {
+                let latency_ns = md_.latency_ns;
+                let lb = LinkBenchmark {
+                    complexity,
+                    bandwidth: 100_000_000,
+                    latency_ns,
+                    reliability_percent,
+                    hops: 1,
+                };
+                UrlResult::Accessible(lb)
             }
-        },
+        }
+    }
+}
+
+pub fn incompatible(expect_node_id: &Option<String>, answering: &Option<String>) -> bool {
+    match (expect_node_id, answering) {
+        (None, None) => false,
+        (None, Some(_)) => false,
+        (Some(_), None) => true,
+        (Some(e), Some(a)) => e != a,
     }
 }
 
 pub async fn compute_best_alternative(
     alternatives: &HashSet<TypeOfConnection>,
-    expect_node_id: &str,
+    expect_node_id: Option<String>,
 ) -> DTPSR<TypeOfConnection> {
     let mut possible_urls: Vec<TypeOfConnection> = Vec::new();
     let mut possible_stats: Vec<LinkBenchmark> = Vec::new();
@@ -561,7 +510,7 @@ pub async fn compute_best_alternative(
     for alternative in alternatives.iter() {
         i += 1;
         debug_with_info!("Trying {}/{}: {}", i, n, alternative);
-        let result_future = get_stats(alternative, expect_node_id);
+        let result_future = get_stats(alternative, expect_node_id.clone());
 
         let result = match timeout(Duration::from_millis(2000), result_future).await {
             Ok(r) => r,
@@ -858,8 +807,9 @@ pub fn unescape_json_patch(s: &str) -> String {
 pub async fn add_proxy(
     conbase: &TypeOfConnection,
     mountpoint: &TopicName,
-    node_id: String,
+    node_id: Option<String>,
     urls: &[TypeOfConnection],
+    mask_origin: bool,
 ) -> DTPSR<()> {
     let md = get_metadata(conbase).await?;
     let url = match md.proxied_url {
@@ -872,18 +822,23 @@ pub async fn add_proxy(
         Some(url) => url,
     };
 
-    let patch = create_add_proxy_patch(mountpoint, node_id, urls)?;
+    let patch = create_add_proxy_patch(mountpoint, node_id, urls, mask_origin)?;
 
     patch_data(&url, &patch).await
 }
 
 fn create_add_proxy_patch(
     mountpoint: &TopicName,
-    node_id: String,
+    node_id: Option<String>,
     urls: &[TypeOfConnection],
+    mask_origin: bool,
 ) -> Result<Patch, DTPSError> {
     let urls = urls.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-    let pj = ProxyJob { node_id, urls };
+    let pj = ProxyJob {
+        node_id,
+        urls,
+        mask_origin,
+    };
 
     let mut path: String = String::new();
     path.push('/');

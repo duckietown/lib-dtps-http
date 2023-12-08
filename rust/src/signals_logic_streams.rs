@@ -1,12 +1,6 @@
 use std::{
-    cmp::{
-        max,
-        min,
-    },
-    collections::{
-        BTreeMap,
-        HashSet,
-    },
+    cmp::{max, min},
+    collections::{BTreeMap, HashSet},
     fmt::Debug,
 };
 use tokio::sync::broadcast::Receiver as BroadcastReceiver;
@@ -14,53 +8,18 @@ use tokio::sync::broadcast::Receiver as BroadcastReceiver;
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use chrono::Local;
-use serde_cbor::{
-    Value as CBORValue,
-    Value::Null as CBORNull,
-};
+use serde_cbor::{Value as CBORValue, Value::Null as CBORNull};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::{
-    client::{
-        get_events_stream_inline,
-        get_rawdata_status,
-    },
-    debug_with_info,
-    error_with_info,
-    get_channel_info_message,
-    get_metadata,
-    is_prefix_of,
-    merge_clocks,
-    not_implemented,
-    putinside,
+    client::{get_events_stream_inline, get_rawdata_status},
+    debug_with_info, error_with_info, get_channel_info_message, get_metadata, is_prefix_of, merge_clocks,
+    not_implemented, putinside,
     utils::time_nanos_i64,
-    warn_with_info,
-    ActualUpdate,
-    ChannelInfo,
-    Clocks,
-    DTPSError,
-    DataSaved,
-    DataStream,
-    ErrorMsg,
-    FinishedMsg,
-    GetStream,
-    InsertNotification,
-    ListenURLEvents,
-    RawData,
-    ResolvedData,
-    ServerStateAccess,
-    SilenceMsg,
-    SourceComposition,
-    TopicName,
-    TopicProperties,
-    TopicsIndexInternal,
-    TopicsIndexWire,
-    Transforms,
-    TypeOFSource,
-    TypeOfConnection,
-    WarningMsg,
-    CONTENT_TYPE_DTPS_INDEX_CBOR,
-    DTPSR,
+    warn_with_info, ActualUpdate, ChannelInfo, Clocks, DTPSError, DataSaved, DataStream, ErrorMsg, FinishedMsg,
+    GetStream, InsertNotification, ListenURLEvents, RawData, ResolvedData, ServerStateAccess, SilenceMsg,
+    SourceComposition, TopicName, TopicProperties, TopicsIndexInternal, TopicsIndexWire, Transforms, TypeOFSource,
+    TypeOfConnection, WarningMsg, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
 };
 
 #[async_recursion]

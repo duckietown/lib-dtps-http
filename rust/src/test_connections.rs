@@ -6,25 +6,12 @@ pub mod tests {
     use rstest::rstest;
 
     use crate::{
-        add_proxy,
-        add_tpt_connection,
+        add_proxy, add_tpt_connection,
         client::remove_tpt_connection,
-        debug_with_info,
-        init_logging,
-        post_json,
+        debug_with_info, init_logging, post_json,
         test_fixtures::TestFixture,
-        test_range::tests::{
-            instance,
-            node1,
-            node2,
-            switchboard,
-        },
-        ConnectionJob,
-        ServiceMode,
-        TopicName,
-        TopicProperties,
-        CONTENT_TYPE_CBOR,
-        DTPSR,
+        test_range::tests::{instance, node1, node2, switchboard},
+        ConnectionJob, ServiceMode, TopicName, TopicProperties, CONTENT_TYPE_CBOR, DTPSR,
     };
 
     #[rstest]
@@ -198,19 +185,22 @@ pub mod tests {
         let node2_topic2 = node2_prefix.clone() + topic2.clone();
 
         let urls = vec![node1.cf.con.clone()];
+        let mask_origin = false;
         add_proxy(
             &switchboard.cf.con,
             &node1_prefix,
-            node1.server.get_node_id().await,
+            Some(node1.server.get_node_id().await),
             &urls,
+            mask_origin,
         )
         .await?;
         let urls = vec![node2.cf.con.clone()];
         add_proxy(
             &switchboard.cf.con,
             &node2_prefix,
-            node2.server.get_node_id().await,
+            Some(node2.server.get_node_id().await),
             &urls,
+            mask_origin,
         )
         .await?;
 

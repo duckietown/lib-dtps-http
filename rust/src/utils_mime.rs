@@ -1,9 +1,4 @@
-use crate::{
-    CONTENT_TYPE_CBOR,
-    CONTENT_TYPE_JSON,
-    CONTENT_TYPE_PLAIN,
-    CONTENT_TYPE_YAML,
-};
+use crate::{CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, CONTENT_TYPE_PLAIN, CONTENT_TYPE_YAML};
 
 pub fn is_html(content_type: &str) -> bool {
     content_type.starts_with("text/html")

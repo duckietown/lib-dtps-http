@@ -4,7 +4,7 @@ import tempfile
 from unittest import IsolatedAsyncioTestCase
 
 from dtps import context_cleanup, DTPSContext
-from dtps_http import app_start, DTPSServer, make_http_unix_url, MIME_TEXT, RawData
+from dtps_http import app_start, DTPSServer, make_http_unix_url, MIME_TEXT, RawData, url_to_string
 from dtps_http_tests.utils import test_timeout
 from dtps_tests import logger
 
@@ -50,7 +50,7 @@ class TestCreate(IsolatedAsyncioTestCase):
             socket = os.path.join(td, "socket")
             url_switchboard = make_http_unix_url(socket)
 
-            environment = {"DTPS_BASE_SELF": f"create:{url_switchboard}"}
+            environment = {"DTPS_BASE_SELF": f"create:{url_to_string(url_switchboard)}"}
             async with context_cleanup("self", environment) as c:
                 await go(c)
 
@@ -72,7 +72,7 @@ class TestUse(IsolatedAsyncioTestCase):
             async with a:
                 # await asyncio.sleep(10)
 
-                environment = {"DTPS_BASE_SELF": f"{url}"}
+                environment = {"DTPS_BASE_SELF": f"{url_to_string(url)}"}
                 async with context_cleanup("self", environment) as c:
                     await go(c)
                     # logger.debug("test down, cleaning up")

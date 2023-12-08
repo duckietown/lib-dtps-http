@@ -19,7 +19,6 @@ __all__ = [
     "join",
     "make_http_unix_url",
     "parse_url_unescape",
-    "relative_url",
     "url_to_string",
 ]
 
@@ -54,19 +53,13 @@ def make_http_unix_url(socket_path: str, url_path: Optional[str] = None) -> URL:
         url_path = "/"
     return URL(
         scheme="http+unix",
-        host=quote(socket_path),
+        host=socket_path,
         port=None,
         path=url_path,
         query=None,
         auth=None,
         fragment=None,
     )
-
-
-def relative_url(rel: str) -> URL:
-    u = URL(scheme="rel", host="", port=None, path=rel, query=None, auth=None, fragment=None)
-
-    return u
 
 
 def parse_url_unescape(s: URLString) -> URL:
@@ -76,6 +69,7 @@ def parse_url_unescape(s: URLString) -> URL:
         path = "/"
     else:
         path = parsed.path
+
     res = Url(  # type: ignore
         scheme=parsed.scheme,
         host=unquote(parsed.host) if parsed.host is not None else None,
@@ -84,15 +78,11 @@ def parse_url_unescape(s: URLString) -> URL:
         query=parsed.query,
     )
 
+    if res.scheme == "http+unix" and res.host is None:
+        msg = f"This url seems invalid: Expected to have a non-null host:\n  {s!r}"
+        raise ValueError(msg)
+
     return cast(URL, res)
-
-
-def test_rel_url1() -> None:
-    rel = "a/b/c"
-    url = relative_url(rel)
-    urls = url_to_string(url)
-    if urls != rel:
-        raise AssertionError(f" url = {repr(url)} {urls=!r} != {rel=!r}")
 
 
 def url_to_string(url: URL) -> URLString:
@@ -106,7 +96,9 @@ def url_to_string(url: URL) -> URLString:
             s += "?" + url2.query
         return URLString(s)
 
-    return cast(URLString, str(url2))
+    res = cast(URLString, str(url2))
+    parse_url_unescape(res)
+    return res
 
 
 def join(url: URL, path0: str) -> URL:

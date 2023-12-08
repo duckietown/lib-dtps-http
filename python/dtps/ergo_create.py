@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Awaitable, Callable, List, Optional, Tuple
+from typing import AsyncIterator, Awaitable, Callable, cast, List, Optional, Sequence, Tuple, Union
 
 from dtps_http import (
     app_start,
@@ -7,13 +7,27 @@ from dtps_http import (
     ContentInfo,
     DataSaved,
     DTPSServer,
+    join,
     MIME_OCTET,
+    NodeID,
     ObjectQueue,
+    parse_url_unescape,
     RawData,
     ServerWrapped,
     TopicNameV,
     TopicProperties,
     TopicRefAdd,
+    url_to_string,
+    URLString,
+)
+from dtps_http.object_queue import ObjectTransformContext, transform_identity, TransformError
+from dtps_http.types_of_source import (
+    ForwardedQueue,
+    Native,
+    NotAvailableYet,
+    NotFound,
+    OurQueue,
+    SourceComposition,
 )
 from .config import ContextInfo, ContextManager
 from .ergo_ui import (
@@ -21,6 +35,7 @@ from .ergo_ui import (
     DTPSContext,
     HistoryInterface,
     PublisherInterface,
+    RPCFunction,
     SubscriptionInterface,
 )
 
@@ -40,8 +55,6 @@ class ContextManagerCreate(ContextManager):
         assert self.context_info.is_create()
 
     async def init(self) -> None:
-        # self.client = DTPSClient.create()
-        # await self.client.init()
         dtps_server = DTPSServer.create(nickname=self.base_name)
         tcps, unix_paths = self.context_info.get_tcp_and_unix()
 
@@ -68,6 +81,9 @@ class ContextManagerCreate(ContextManager):
 
     def get_context(self) -> "DTPSContext":
         return self.get_context_by_components(())
+
+    def __repr__(self) -> str:
+        return f"ContextManagerCreate({self.base_name!r})"
 
 
 class ContextManagerCreateContextPublisher(PublisherInterface):
@@ -103,13 +119,24 @@ class ContextManagerCreateContext(DTPSContext):
     async def get_urls(self) -> List[str]:
         server = self._get_server()
         urls = server.available_urls
-        rurl = self._get_components_as_topic().as_relative_url()
-        return [f"{u}{rurl}" for u in urls]
 
-    async def get_node_id(self) -> Optional[str]:
-        # TODO: DTSW-4793: this could be remote
+        rurl = self._get_components_as_topic().as_relative_url()
+        res = []
+        for u in urls:
+            u2 = parse_url_unescape(u)
+            um = join(u2, rurl)
+            res.append(url_to_string(um))
+
+        for u in res:
+            parse_url_unescape(u)
+        return res
+
+    async def get_node_id(self) -> Optional[NodeID]:
         server = self._get_server()
-        return server.node_id
+        topic = self._get_components_as_topic()
+        resolve = server._resolve_tn(topic, url0=topic.as_relative_url())
+        # server.logger.info(f"get_node_id - resolve: {resolve}")
+        return await resolve.get_source_node_id(server)
 
     def _get_server(self) -> DTPSServer:
         if self.master.dtps_server_wrap is None:
@@ -128,11 +155,51 @@ class ContextManagerCreateContext(DTPSContext):
 
     async def remove(self) -> None:
         # TODO: DTSW-4799: implement remove
-        raise NotImplementedError()
+        topic = self._get_components_as_topic()
+        server = self._get_server()
+        try:
+            source = server._resolve_tn(topic, url0=topic.as_relative_url())
+        except KeyError:
+            raise
+
+        if isinstance(source, OurQueue):
+            await server.remove_oq(topic)
+        elif isinstance(source, ForwardedQueue):
+            msg = "Cannot remove a forwarded queue"
+            raise NotImplementedError(msg)
+        elif isinstance(source, SourceComposition):
+            msg = "Cannot remove a source composition queue"
+            raise NotImplementedError(msg)
+        else:
+            msg = f"Cannot remove a {source}"
+            raise NotImplementedError(msg)
+
+    async def exists(self) -> bool:
+        topic = self._get_components_as_topic()
+        server = self._get_server()
+        try:
+            server._resolve_tn(topic, url0=topic.as_relative_url())
+        except KeyError:
+            return False
+        else:
+            return True
 
     async def data_get(self) -> RawData:
-        oq0 = self._get_server().get_oq(self._get_components_as_topic())
-        return oq0.last_data()
+        topic = self._get_components_as_topic()
+        server = self._get_server()
+        url0 = topic.as_relative_url()
+        source = server._resolve_tn(topic, url0=url0)
+        res = await source.get_resolved_data(url0, server)
+        if isinstance(res, RawData):
+            return res
+        elif isinstance(res, NotFound):
+            raise KeyError(f"Topic {topic} not found")
+        elif isinstance(res, NotAvailableYet):
+            raise Exception("Not available yet")  # XXX
+        elif isinstance(res, Native):
+            return RawData.cbor_from_native_object(res.ob)
+        else:
+            raise AssertionError(f"Unexpected {res}")
 
     async def subscribe(self, on_data: Callable[[RawData], Awaitable[None]], /) -> "SubscriptionInterface":
         oq0 = self._get_server().get_oq(self._get_components_as_topic())
@@ -169,13 +236,36 @@ class ContextManagerCreateContext(DTPSContext):
 
     async def call(self, data: RawData, /) -> RawData:
         # TODO: DTSW-4795: implement call
-        raise NotImplementedError()
+        server = self._get_server()
+        topic = self._get_components_as_topic()
+        url0 = topic.as_relative_url()
+        resolve = server._resolve_tn(topic, url0=url0)
+        res = await resolve.call(url0, server, data)
+        # queue = server.get_oq(topic)
+        # res = await queue.publish(data)
+        if isinstance(res, TransformError):
+            raise Exception(f"{res.http_code}: {res.message}")
+        return res
 
-    async def expose(self, urls: "Sequence[str] | DTPSContext", /) -> "DTPSContext":
-        # TODO: DTSW-4796: implement expose
-        raise NotImplementedError()
+    async def expose(self, p: "Sequence[str] | DTPSContext", /) -> None:
+        if isinstance(p, DTPSContext):
+            urls = await p.get_urls()
+            node_id = await p.get_node_id()
+        else:
+            urls = cast(Sequence[URLString], p)
+            node_id = None
 
-    async def queue_create(self, parameters: Optional[TopicRefAdd] = None, /) -> "DTPSContext":
+        mask_origin = False
+        server = self._get_server()
+        topic = self._get_components_as_topic()
+        await server.expose(topic, node_id, urls, mask_origin=mask_origin)
+
+    async def queue_create(
+        self,
+        *,
+        parameters: Optional[TopicRefAdd] = None,
+        transform: Optional[RPCFunction] = None,
+    ) -> "DTPSContext":
         server = self._get_server()
         topic = self._get_components_as_topic()
         if parameters is None:
@@ -184,11 +274,22 @@ class ContextManagerCreateContext(DTPSContext):
                 properties=TopicProperties.rw_pushable(),
                 app_data={},
             )
+        if transform is None:
+            transform_use = transform_identity
+        else:
 
-        await server.create_oq(topic, content_info=parameters.content_info, tp=parameters.properties)
+            async def transform_use(otc: ObjectTransformContext) -> Union[RawData, TransformError]:
+                return await transform(otc.raw_data)
+
+        await server.create_oq(
+            topic, content_info=parameters.content_info, tp=parameters.properties, transform=transform_use
+        )
 
         return self
 
     async def connect_to(self, c: "DTPSContext", /) -> "ConnectionInterface":
         # TODO: DTSW-4797: ContextManagerCreateContext: implement connect()
         raise NotImplementedError()
+
+    def __repr__(self) -> str:
+        return f"ContextManagerCreateContext({self.components!r}, {self.master!r})"

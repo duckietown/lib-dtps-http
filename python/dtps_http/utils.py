@@ -3,9 +3,21 @@ import os
 import stat
 import traceback
 from asyncio import CancelledError
-from typing import Any, AsyncIterator, Awaitable, Callable, Optional, TYPE_CHECKING, TypeVar, Union
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Dict,
+    Optional,
+    TYPE_CHECKING,
+    Type,
+    TypeVar,
+    Union,
+)
 
 from multidict import CIMultiDict, CIMultiDictProxy
+from pydantic import parse_obj_as
 from typing_extensions import ParamSpec
 
 from . import logger
@@ -17,6 +29,7 @@ __all__ = [
     "check_is_unix_socket",
     "method_lru_cache",
     "multidict_update",
+    "pydantic_parse",
     "should_mask_origin",
 ]
 
@@ -150,3 +163,10 @@ def check_is_unix_socket(u: str) -> None:
     if not is_socket:
         msg = f"Path socket {u} exists but it is not a socket."
         raise ValueError(msg)
+
+
+X = TypeVar("X")
+
+
+def pydantic_parse(T: Type[X], d: Any) -> X:
+    return parse_obj_as(T, d)

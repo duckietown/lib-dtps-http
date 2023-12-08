@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-};
+use std::{collections::HashMap, path::PathBuf};
 
 use async_trait::async_trait;
 
@@ -10,26 +7,9 @@ use futures::StreamExt;
 use maplit::hashmap;
 
 use crate::{
-    debug_with_info,
-    not_implemented,
-    urls::make_relative,
-    ContentInfo,
-    DTPSError,
-    DataProps,
-    ForwardingStep,
-    GetMeta,
-    LinkBenchmark,
-    ServerStateAccess,
-    SourceComposition,
-    TopicName,
-    TopicReachabilityInternal,
-    TopicRefInternal,
-    TopicsIndexInternal,
-    TypeOFSource,
-    TypeOfConnection,
-    TypeOfConnection::Relative,
-    DTPSR,
-    MASK_ORIGIN,
+    debug_with_info, not_implemented, urls::make_relative, ContentInfo, DTPSError, DataProps, ForwardingStep, GetMeta,
+    LinkBenchmark, ServerStateAccess, SourceComposition, TopicName, TopicReachabilityInternal, TopicRefInternal,
+    TopicsIndexInternal, TypeOFSource, TypeOfConnection, TypeOfConnection::Relative, DTPSR, MASK_ORIGIN,
 };
 
 async fn get_sc_meta(

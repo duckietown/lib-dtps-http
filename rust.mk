@@ -1,6 +1,6 @@
 all:
 
-tag=andreacensi/dtps-rust-demo
+tag=duckietown/dtps-switchboard
 
 RELEASE='--release' # 0.5ms
 RELEASE='' # 2.5
@@ -68,7 +68,7 @@ test-coverage:
 
 
 demo-registration-server:
-	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rs-server-example-clock -- --tcp-port 9765 --unix-path /tmp/demo1-a'
+	cargo watch -c -w static -w rust/src -w rust/bin -E RUST_BACKTRACE=full   -x 'run $(RELEASE) --bin dtps-http-rs-server-- --tcp-port 9765 --unix-path /tmp/demo1-a'
 
 demo-registration-client:
 	dtps-http-py-server-example-clock --tcp-port 8081 --unix-path /tmp/mine \

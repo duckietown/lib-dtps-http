@@ -1,7 +1,18 @@
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import AsyncIterator, cast, ClassVar, Dict, List, Mapping, Optional, Tuple
+from typing import (
+    AsyncContextManager,
+    AsyncIterator,
+    cast,
+    ClassVar,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+    TYPE_CHECKING,
+)
 
 from dtps_http import parse_url_unescape, ServerWrapped, URLString
 from . import logger
@@ -43,27 +54,37 @@ async def context(base_name: str = "self", environment: Optional[Mapping[str, st
 
     """
     base_name = base_name.lower()
-    if environment is None and base_name in ContextManager.instances:
-        context_manager = ContextManager.instances[base_name].get_context()
+    if environment is None:
+        if base_name in ContextManager.instances:
+            return ContextManager.instances[base_name].get_context()
+        else:
+            context_manager = await create_context(base_name, environment)
+            ContextManager.instances[base_name] = context_manager
+            return context_manager.get_context()
     else:
         context_manager = await create_context(base_name, environment)
-
-    if base_name not in ContextManager.instances:
-        ContextManager.instances[base_name] = context_manager
-
-    return context_manager.get_context()
+        return context_manager.get_context()
 
 
-@asynccontextmanager
-async def context_cleanup(
-    base_name: str = "self", environment: Optional[Mapping[str, str]] = None
-) -> AsyncIterator[DTPSContext]:
-    """Context manager to open a context and clean-up later."""
-    c = await context(base_name, environment)
-    try:
-        yield c
-    finally:
-        await c.aclose()
+if TYPE_CHECKING:
+
+    def context_cleanup(
+        base_name: str = "self", environment: Optional[Mapping[str, str]] = None
+    ) -> AsyncContextManager[DTPSContext]:
+        ...
+
+else:
+
+    @asynccontextmanager
+    async def context_cleanup(
+        base_name: str = "self", environment: Optional[Mapping[str, str]] = None
+    ) -> AsyncIterator[DTPSContext]:
+        """Context manager to open a context and clean-up later."""
+        c = await context(base_name, environment)
+        try:
+            yield c
+        finally:
+            await c.aclose()
 
 
 async def create_context(base_name: str, environment: Optional[Mapping[str, str]]) -> "ContextManager":
@@ -73,7 +94,7 @@ async def create_context(base_name: str, environment: Optional[Mapping[str, str]
         raise KeyError(msg)
 
     context_info = contexts.contexts[base_name]
-    logger.info(f'Creating context "{base_name}" with {context_info}')
+    logger.info(f'Creating context "{base_name}" with {context_info} for environment {environment}')
     return await ContextManager.create(base_name, context_info)
 
 
@@ -90,7 +111,7 @@ class ContextManager:
         #     msg = f'Context "{base_name}" already exists'
         #     raise KeyError(msg)
 
-        logger.info(f'Creating context "{base_name}" with {context_info}')
+        # logger.info(f'Creating context "{base_name}" with {context_info}')
 
         if context_info.is_create():
             from .ergo_create import ContextManagerCreate
@@ -113,6 +134,9 @@ class ContextManager:
 class ContextUrl:
     url: URLString
     create: bool
+
+    def __post_init__(self) -> None:
+        parse_url_unescape(self.url)
 
 
 @dataclass
@@ -176,11 +200,18 @@ def get_context_info(environment: Optional[Mapping[str, str]]) -> ContextsInfo:
             contexts[name] = ContextInfo(urls=[])
 
         if v.startswith("create:"):
-            rest = cast(URLString, v[len("create:") :])
-            contexts[name].urls.append(ContextUrl(url=rest, create=True))
+            x = cast(URLString, v[len("create:") :])
+            create = True
+
         else:
-            v = cast(URLString, v)
-            contexts[name].urls.append(ContextUrl(url=v, create=False))
+            x = cast(URLString, v)
+            create = False
+        try:
+            parse_url_unescape(x)
+        except ValueError as e:
+            msg = f"Invalid url given by environment:\n{k} = {v}."
+            raise ValueError(msg) from e
+        contexts[name].urls.append(ContextUrl(url=x, create=create))
 
     for name, info in contexts.items():
         all_create = all(x.create for x in info.urls)

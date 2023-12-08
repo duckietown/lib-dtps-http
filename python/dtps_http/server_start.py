@@ -6,7 +6,7 @@ import socket
 import sys
 import tempfile
 from socket import AddressFamily
-from typing import Iterator, List, Optional, Sequence, Tuple
+from typing import Iterator, List, Optional, Sequence, Tuple, cast
 
 import psutil
 from aiohttp import web
@@ -14,7 +14,7 @@ from aiohttp import web
 from . import logger
 from .server import DTPSServer
 from .structures import Registration
-from .types import TopicNameV
+from .types import TopicNameV, URLString
 from .urls import make_http_unix_url, parse_url_unescape, url_to_string, URLIndexer
 
 __all__ = [
@@ -145,17 +145,17 @@ async def app_start(
     unix_paths: Sequence[str] = (),
     tunnel: Optional[str] = None,
     no_alternatives: bool = False,
-    extra_advertise: Optional[List[str]] = None,
+    extra_advertise: Optional[List[URLString]] = None,
 ) -> ServerWrapped:
     runner = web.AppRunner(s.app)
     await runner.setup()
 
     tunnel_process = None
 
-    available_urls: List[str] = []
+    available_urls: List[URLString] = []
     for tcp in tcps:
         tcp_host, port = tcp
-        the_url0 = f"http://{tcp_host}:{port}/"
+        the_url0 = cast(URLString, f"http://{tcp_host}:{port}/")
         logger.info(f"Starting TCP server - the URL is {the_url0!r}")
 
         tcp_site = web.TCPSite(runner, tcp_host, port)
@@ -178,27 +178,27 @@ async def app_start(
                 if address.startswith("127."):
                     continue
 
-                the_url = f"http://{address}:{port}/"
+                the_url = cast(URLString, f"http://{address}:{port}/")
                 available_urls.append(the_url)
 
-            the_url = f"http://{socket.gethostname()}:{port}/"
+            the_url = cast(URLString, f"http://{socket.gethostname()}:{port}/")
             available_urls.append(the_url)
 
             add_weird_addresses = False
             # add a weird address: for testing purposes
             if add_weird_addresses:
-                the_url = f"http://8.8.12.2:{port}/"
+                the_url = cast(URLString, f"http://8.8.12.2:{port}/")
                 available_urls.append(the_url)
                 # add a non-existente hostname
-                the_url = f"http://dewde.invalid.com:{port}/"
+                the_url = cast(URLString, f"http://dewde.invalid.com:{port}/")
                 available_urls.append(the_url)
                 # add a wrong port
-                the_url = f"http://localhost:12345/"
+                the_url = cast(URLString, f"http://localhost:12345/")
                 available_urls.append(the_url)
                 # add a wrong host
-                the_url = f"http://google.com/"
+                the_url = cast(URLString, f"http://google.com/")
                 available_urls.append(the_url)
-                the_url = f"{the_url}/wrong/path/"
+                the_url = cast(URLString, f"{the_url}/wrong/path/")
                 available_urls.append(the_url)
 
             for interface, family, address in get_ip_addresses():
@@ -208,7 +208,7 @@ async def app_start(
                 if address.startswith("::1") or address.startswith("fe80:"):
                     continue
 
-                the_url = f"http://[{address}]:{port}/"
+                the_url = cast(URLString, f"http://[{address}]:{port}/")
 
                 available_urls.append(the_url)
 
@@ -281,7 +281,7 @@ async def app_start(
         available_urls.extend(extra_advertise)
 
     if not no_alternatives:
-        for url in available_urls:
+        for url in sorted(available_urls):
             await s.add_available_url(url)
         logger.info("available URLs\n" + "".join("* " + _ + "\n" for _ in available_urls))
 

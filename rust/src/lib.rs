@@ -6,13 +6,7 @@ pub use indent::indent_all_with;
 
 use cbor_manipulation::*;
 use client::*;
-pub use client::{
-    compute_best_alternative,
-    estimate_latencies,
-    get_index,
-    get_metadata,
-    ms_from_ns,
-};
+pub use client::{compute_best_alternative, estimate_latencies, get_index, get_metadata, ms_from_ns};
 use clocks::*;
 use connections::*;
 pub use constants::*;
@@ -24,11 +18,7 @@ use logs::*;
 use misc::*;
 use object_queues::*;
 use server::*;
-pub use server::{
-    create_server_from_command_line,
-    DTPSServer,
-    ServerStateAccess,
-};
+pub use server::{create_server_from_command_line, DTPSServer, ServerStateAccess};
 pub use server_state::show_errors;
 use server_state::*;
 use signals_logic::*;

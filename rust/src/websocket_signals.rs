@@ -1,27 +1,14 @@
 use bytes::Bytes;
 use derive_more::Constructor;
-use serde::{
-    Deserialize,
-    Serialize,
-};
+use serde::{Deserialize, Serialize};
 
-use crate::{
-    DataReady,
-    RawData,
-};
+use crate::{DataReady, RawData};
 
 #[cfg(test)]
 mod test {
-    use serde_cbor::{
-        from_slice,
-        to_vec,
-    };
+    use serde_cbor::{from_slice, to_vec};
 
-    use crate::{
-        info_with_info,
-        init_logging,
-        MsgServerToClient,
-    };
+    use crate::{info_with_info, init_logging, MsgServerToClient};
 
     // create a test that checks the serialization of MsgServerToClient to CBOR
     // and back

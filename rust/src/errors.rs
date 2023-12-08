@@ -1,22 +1,12 @@
-use std::{
-    fmt::Debug,
-    net::AddrParseError,
-};
+use std::{fmt::Debug, net::AddrParseError};
 
 use anyhow::Result;
 use http::StatusCode;
 use hyper::Body;
 use indent::indent_all_with;
-use warp::{
-    Rejection,
-    Reply,
-};
+use warp::{Rejection, Reply};
 
-use crate::{
-    debug_with_info,
-    error_with_info,
-    server::HandlersResponse,
-};
+use crate::{debug_with_info, error_with_info, server::HandlersResponse};
 
 #[derive(thiserror::Error, Debug)]
 pub enum DTPSError {

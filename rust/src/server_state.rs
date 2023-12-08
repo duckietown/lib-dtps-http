@@ -1,16 +1,10 @@
 use std::{
     cmp::max,
-    collections::{
-        HashMap,
-        HashSet,
-    },
+    collections::{HashMap, HashSet},
     env,
     fmt::Debug,
     future::Future,
-    path::{
-        Path,
-        PathBuf,
-    },
+    path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
 };
@@ -23,110 +17,44 @@ use futures::StreamExt;
 use indent::indent_all_with;
 use maplit::hashmap;
 use path_clean::PathClean;
-use schemars::{
-    schema::RootSchema,
-    schema_for,
-    JsonSchema,
-};
-use serde::{
-    de::DeserializeOwned,
-    Deserialize,
-    Serialize,
-};
-use strum_macros::{
-    Display,
-    EnumString,
-};
+use schemars::{schema::RootSchema, schema_for, JsonSchema};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use strum_macros::{Display, EnumString};
 use tokio::{
     sync::{
-        broadcast::{
-            error::RecvError,
-            Receiver,
-            Receiver as BroadcastReceiver,
-        },
+        broadcast::{error::RecvError, Receiver, Receiver as BroadcastReceiver},
         mpsc,
         mpsc::UnboundedSender,
     },
     time::sleep,
 };
 
+use crate::client::incompatible;
 use crate::{
     client::wrap_recv,
-    compute_best_alternative,
-    context,
-    debug_with_info,
-    error_with_info,
-    get_events_stream_inline,
-    get_index,
-    get_metadata,
-    get_queue_id,
-    get_random_node_id,
-    get_stats,
-    info_with_info,
-    internal_assertion,
-    internal_jobs::{
-        InternalJobManager,
-        JobFunctionType,
-    },
-    invalid_input,
-    is_prefix_of,
-    not_available,
-    not_implemented,
-    not_reachable,
+    compute_best_alternative, context, debug_with_info, error_with_info, get_events_stream_inline, get_index,
+    get_metadata, get_queue_id, get_random_node_id, get_stats, info_with_info, internal_assertion,
+    internal_jobs::{InternalJobManager, JobFunctionType},
+    invalid_input, is_prefix_of, not_available, not_implemented, not_reachable,
     shared_statuses::SharedStatusNotification,
-    signals_logic::{
-        GetStream,
-        Pushable,
-    },
+    signals_logic::{GetStream, Pushable},
     signals_logic_resolve::interpret_path,
     sniff_type_resource,
     types::CompositeName,
     utils::time_nanos_i64,
-    warn_with_info,
-    Clocks,
-    ContentInfo,
-    DTPSError,
-    DataSaved,
-    FilePaths,
-    ForwardingStep,
-    FoundMetadata,
-    InsertNotification,
-    LinkBenchmark,
-    ListenURLEvents,
-    NodeAppData,
-    ObjectQueue,
-    RawData,
-    ServerStateAccess,
-    TopicName,
-    TopicProperties,
-    TopicReachabilityInternal,
-    TopicRefInternal,
-    TopicsIndexInternal,
-    TopicsIndexWire,
-    TypeOfConnection,
-    TypeOfResource,
-    UrlResult,
-    CONTENT_TYPE_CBOR,
-    CONTENT_TYPE_DTPS_INDEX_CBOR,
-    CONTENT_TYPE_JSON,
-    CONTENT_TYPE_PLAIN,
-    CONTENT_TYPE_YAML,
-    DTPSR,
-    MASK_ORIGIN,
-    TOPIC_CONNECTIONS,
-    TOPIC_LIST_AVAILABILITY,
-    TOPIC_LIST_CLOCK,
-    TOPIC_LIST_NAME,
-    TOPIC_LOGS,
-    TOPIC_PROXIED,
-    TOPIC_STATE_NOTIFICATION,
-    TOPIC_STATE_SUMMARY,
+    warn_with_info, Clocks, ContentInfo, DTPSError, DataSaved, FilePaths, ForwardingStep, FoundMetadata,
+    InsertNotification, LinkBenchmark, ListenURLEvents, NodeAppData, ObjectQueue, RawData, ServerStateAccess,
+    TopicName, TopicProperties, TopicReachabilityInternal, TopicRefInternal, TopicsIndexInternal, TopicsIndexWire,
+    TypeOfConnection, TypeOfResource, UrlResult, CONTENT_TYPE_CBOR, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_JSON,
+    CONTENT_TYPE_PLAIN, CONTENT_TYPE_YAML, DTPSR, MASK_ORIGIN, TOPIC_CONNECTIONS, TOPIC_LIST_AVAILABILITY,
+    TOPIC_LIST_CLOCK, TOPIC_LIST_NAME, TOPIC_LOGS, TOPIC_PROXIED, TOPIC_STATE_NOTIFICATION, TOPIC_STATE_SUMMARY,
 };
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 pub struct ProxyJob {
-    pub node_id: String,
+    pub node_id: Option<String>,
     pub urls: Vec<String>,
+    pub mask_origin: bool, // TODO: mask_origin not supported in Rust
 }
 
 type Proxied = HashMap<String, ProxyJob>;
@@ -597,7 +525,7 @@ impl ServerState {
         &mut self,
         topic_name: &TopicName,
         cons: &Vec<TypeOfConnection>,
-        expect_node_id: String,
+        expect_node_id: Option<String>,
         ssa: ServerStateAccess,
     ) -> DTPSR<()> {
         if self.proxied.contains_key(topic_name) {
@@ -1386,7 +1314,7 @@ pub async fn sniff_and_start_proxy(
         TypeOfResource::DTPSIndex { node_id } => {
             let mut ss = ss_mutex.lock().await;
             let urls = vec![url.clone()];
-            ss.add_proxy_connection(&mounted_at, &urls, node_id, ss_mutex.clone())?;
+            ss.add_proxy_connection(&mounted_at, &urls, Some(node_id), ss_mutex.clone())?;
             Ok(())
             // not_implemented!("observe_proxy: TypeOfResource::DTPSIndex")
             // ss.add_proxy_connection(&subcription_name, &url, ss_mutex).await
@@ -1411,11 +1339,11 @@ pub async fn handle_proxy_other(
 pub async fn observe_node_proxy(
     mounted_at: TopicName,
     cons: Vec<TypeOfConnection>,
-    expect_node_id: String,
+    expect_node_id: Option<String>,
     ss_mutex: ServerStateAccess,
 ) -> DTPSR<()> {
     let cons_set = HashSet::from_iter(cons.clone().into_iter());
-    let url = compute_best_alternative(&cons_set, &expect_node_id).await?;
+    let url = compute_best_alternative(&cons_set, expect_node_id.clone()).await?;
     let (md, index_internal_at_t0) = loop {
         match get_proxy_info(&url).await {
             Ok(s) => break s,
@@ -1437,11 +1365,12 @@ pub async fn observe_node_proxy(
             return not_available!("Nobody is answering {url:}:\n{md:?}");
         }
         Some(n) => {
-            if n != &expect_node_id {
+            if incompatible(&expect_node_id, &md.answering) {
                 return not_available!(
-                    "observe_node_proxy: invalid proxy connection: we expect {expect_node_id} but we find {n} at {url}",
+                "observe_node_proxy: invalid proxy connection: we expect {expect_node_id:?} but we find {n} at {url}",
                 );
-            };
+            }
+
             n.clone()
         }
     };
@@ -1455,7 +1384,7 @@ pub async fn observe_node_proxy(
         }
     }
 
-    let stats = get_stats(&url, who_answers.as_ref()).await;
+    let stats = get_stats(&url, Some(who_answers)).await;
     let link1 = match stats {
         UrlResult::Inaccessible(_) => {
             // TODO

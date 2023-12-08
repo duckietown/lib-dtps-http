@@ -41,6 +41,7 @@ from . import logger as logger0
 from .constants import (
     CONTENT_TYPE_PATCH_JSON,
     HEADER_CONTENT_LOCATION,
+    HEADER_DATA_ORIGIN_NODE_ID,
     HEADER_NODE_ID,
     MIME_JSON,
     MIME_OCTET,
@@ -64,6 +65,7 @@ from .structures import (
     InsertNotification,
     LinkBenchmark,
     ListenURLEvents,
+    ProxyJob,
     RawData,
     SilenceMsg,
     TopicReachability,
@@ -100,12 +102,6 @@ X = TypeVar("X")
 
 
 @dataclass
-class ProxyJob:
-    node_id: str
-    urls: List[str]
-
-
-@dataclass
 class FoundMetadata:
     # The url that was used to get the metadata
     origin: URLTopic
@@ -115,6 +111,8 @@ class FoundMetadata:
 
     # NodeID if answering is a DTPS node
     answering: Optional[NodeID]
+
+    origin_node: Optional[NodeID]  # # HEADER_DATA_ORIGIN_NODE_ID
 
     # websocket with offline data
     events_url: Optional[URLWSOffline]
@@ -185,7 +183,7 @@ class DTPSClient:
         for t in self.tasks:
             t.cancel()
         # self.logger.debug(f"DTPSClient: aclose: gathering")
-        await asyncio.gather(*self.tasks, return_exceptions=True)
+        # await asyncio.gather(*self.tasks, return_exceptions=True)
         # self.logger.debug(f"DTPSClient: aclose: closing S")
         await self.S.aclose()
         # self.logger.debug(f"DTPSClient: aclose done")
@@ -231,8 +229,25 @@ class DTPSClient:
         async with self.my_session(url) as (session, use_url):
             async with session.post(use_url, data=rd.content, headers=headers) as resp:
                 await my_raise_for_status(resp, url0)
-                assert resp.status == 200, resp
-                await self.prefer_alternative(url, resp)  # just memorize
+                assert resp.status in [200, 201], resp
+                await self.prefer_alternative(url, resp)
+
+    async def call(self, url0: URL, rd: RawData) -> RawData:
+        url = self._look_cache(url0)
+
+        headers = {"content-type": rd.content_type}
+
+        async with self.my_session(url) as (session, use_url):
+            async with session.post(use_url, data=rd.content, headers=headers) as resp:
+                await my_raise_for_status(resp, url0)
+                assert resp.status in [200, 201], resp
+                await self.prefer_alternative(url, resp)
+                location = resp.headers.get("Location")
+                if not location:
+                    raise ValueError(f"no location header in {resp}")
+
+                url_redirect = join(url, location)
+            return await self.get(url_redirect, accept=None)
 
     async def prefer_alternative(self, current: U, resp: aiohttp.ClientResponse) -> Optional[U]:
         assert isinstance(current, URL), current
@@ -368,7 +383,7 @@ class DTPSClient:
                 who_answers = await self.get_who_answers(url)
 
                 if expects_answer_from is not None and who_answers != expects_answer_from:
-                    msg = f"wrong {who_answers=} header in {url}, expected {expects_answer_from}"
+                    msg = f"can_use_url: wrong {who_answers=} header in {url}, expected {expects_answer_from}"
                     self.logger.error(msg)
 
                     #
@@ -468,35 +483,37 @@ class DTPSClient:
 
         return res
 
-    # if TYPE_CHECKING:
+    if TYPE_CHECKING:
 
-    #     def my_session(
-    #         self, url: URL, /, *, conn_timeout: Optional[float] = None
-    #     ) -> AsyncContextManager[Tuple[aiohttp.ClientSession, URLString]]:
-    #         ...
+        def my_session(
+            self, url: URL, /, *, conn_timeout: Optional[float] = None
+        ) -> AsyncContextManager[Tuple[aiohttp.ClientSession, URLString]]:
+            ...
 
-    # else:
+    else:
 
-    @asynccontextmanager
-    async def my_session(
-        self, url: URL, /, *, conn_timeout: Optional[float] = None
-    ) -> AsyncIterator[Tuple[aiohttp.ClientSession, URLString]]:
-        assert isinstance(url, URL), url
-        if url.scheme == "http+unix":
-            path = unquote(url.host)
-            connector = UnixConnector(path=path)
-            #  noinspection PyProtectedMember
-            use_url = url_to_string(url._replace(scheme="http", host="localhost"))
-        elif url.scheme in ("http", "https"):
-            connector = TCPConnector()
-            use_url = url_to_string(url)
-        else:
-            raise ValueError(f"unknown scheme {url.scheme!r} for {repr(url)}")
+        @asynccontextmanager
+        async def my_session(
+            self, url: URL, /, *, conn_timeout: Optional[float] = None
+        ) -> AsyncIterator[Tuple[aiohttp.ClientSession, URLString]]:
+            assert isinstance(url, URL), url
+            if url.scheme == "http+unix":
+                if url.host is None:
+                    raise AssertionError(f"no host in {url!r}")
+                path = unquote(url.host)
+                connector = UnixConnector(path=path)
+                #  noinspection PyProtectedMember
+                use_url = url_to_string(url._replace(scheme="http", host="localhost"))
+            elif url.scheme in ("http", "https"):
+                connector = TCPConnector()
+                use_url = url_to_string(url)
+            else:
+                raise ValueError(f"unknown scheme {url.scheme!r} for {repr(url)}")
 
-        timeout = aiohttp.ClientTimeout(total=conn_timeout)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            self.logger.debug(f"my_session: {url} -> {use_url}")
-            yield session, use_url
+            timeout = aiohttp.ClientTimeout(total=conn_timeout)
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                self.logger.debug(f"my_session: {url} -> {use_url}")
+                yield session, use_url
 
     async def get_proxied(self, url0: URLIndexer) -> Dict[TopicNameV, ProxyJob]:
         url = join(url0, TOPIC_PROXIED.as_relative_url())
@@ -505,11 +522,16 @@ class DTPSClient:
         js = json.loads(rd.content)
         res: Dict[TopicNameV, ProxyJob] = {}
         for k, v in js.items():
-            res[TopicNameV.from_dash_sep(k)] = ProxyJob(v["node_id"], v["urls"])
+            res[TopicNameV.from_dash_sep(k)] = ProxyJob.from_json(v)
         return res
 
     async def add_proxy(
-        self, url0: URLIndexer, topic_name: TopicNameV, node_id: Optional[NodeID], urls: List[str]
+        self,
+        url0: URLIndexer,
+        topic_name: TopicNameV,
+        node_id: Optional[NodeID],
+        urls: List[URLString],
+        mask_origin: bool,
     ) -> bool:
         """Returns true if there were changes to be made"""
 
@@ -527,7 +549,8 @@ class DTPSClient:
                     }
                 )
         else:
-            patch.append({"op": "add", "path": path, "value": {"node_id": node_id, "urls": urls}})
+            proxy_job = ProxyJob(node_id, urls, mask_origin)
+            patch.append({"op": "add", "path": path, "value": asdict(proxy_job)})
         as_json = json.dumps(patch).encode("utf-8")
         url = join(url0, TOPIC_PROXIED.as_relative_url())
         res = await self.patch(url, CONTENT_TYPE_PATCH_JSON, as_json)
@@ -606,6 +629,16 @@ class DTPSClient:
             self.logger.error(f"cannot connect to {url=!r} {use_url=!r} \n{traceback.format_exc()}")
             raise
 
+    async def delete(self, url0: URL) -> None:
+        headers = {}
+
+        url = self._look_cache(url0)
+        use_url = None
+        async with self.my_session(url, conn_timeout=2) as (session, use_url):
+            async with session.delete(use_url) as resp:
+                res_bytes: bytes = await resp.read()
+                resp.raise_for_status()
+
     async def get_metadata(self, url0: URLTopic) -> FoundMetadata:
         url = self._look_cache(url0)
         use_url = None
@@ -650,6 +683,11 @@ class DTPSClient:
                     else:
                         meta_url = join(url, resp.headers[REL_META])
 
+                    if HEADER_DATA_ORIGIN_NODE_ID not in resp.headers:
+                        origin_node = None
+                    else:
+                        origin_node = NodeID(resp.headers[HEADER_DATA_ORIGIN_NODE_ID])
+
         except:
             #  (TimeoutError, ClientConnectorError):
             # logger.error(f"cannot connect to {url0=!r} {use_url=!r} \n{traceback.format_exc()}")
@@ -662,6 +700,7 @@ class DTPSClient:
             urls,
             answering=answering,
             events_url=events_url,
+            origin_node=origin_node,
             events_data_inline_url=events_url_data,
             meta_url=meta_url,
             stream_push_url=stream_push_url,
@@ -715,13 +754,15 @@ class DTPSClient:
             if metadata.events_data_inline_url is not None:
                 url_events = metadata.events_data_inline_url
             else:
-                raise EventListeningNotAvailable(f"cannot find metadata {url_topic}: {metadata}")
+                msg = f"cannot find field events_data_inline_url for url\n  {url_to_string(url_topic)}\n  {metadata=}"
+                raise EventListeningNotAvailable(msg)
 
         else:
             if metadata.events_url is not None:
                 url_events = metadata.events_url
             else:
-                raise EventListeningNotAvailable(f"cannot find metadata {url_topic}: {metadata}")
+                msg = f"cannot find events_url for\n  {url_to_string(url_topic)}\n  {metadata=}"
+                raise EventListeningNotAvailable(msg)
 
         # logger.info(f"listening to  {url_topic} -> {metadata} -> {url_events}")
         desc = f"{url_topic} inline={inline_data}"
@@ -822,6 +863,7 @@ class DTPSClient:
                         else:
                             wmsg = await wmsg_task
                     except ShutdownAsked:
+                        await ws.close(message=b"shutdown asked")
                         msg = f"shutdown asked: ending listen_url"
                         yield FinishedMsg(comment=msg)
                         break
@@ -851,6 +893,7 @@ class DTPSClient:
                             self.logger.error(s)
                             yield ErrorMsg(comment=s)
                             if raise_on_error:
+                                await ws.close(message=s.encode())
                                 raise Exception(s)
                         yield FinishedMsg(comment="closing")
                         break
@@ -859,6 +902,7 @@ class DTPSClient:
                         self.logger.error(s)
                         yield ErrorMsg(comment=s)
                         if raise_on_error:
+                            await ws.close(message=s.encode())
                             raise Exception(s)
 
                     elif wmsg.type == aiohttp.WSMsgType.BINARY:
@@ -869,6 +913,7 @@ class DTPSClient:
                             self.logger.error(msg)
                             yield ErrorMsg(comment=msg)
                             if raise_on_error:
+                                await ws.close(message=msg.encode())
                                 raise Exception(msg) from e
                             continue
 
@@ -880,6 +925,7 @@ class DTPSClient:
                                 self.logger.error(msg)
                                 yield ErrorMsg(comment=msg)
                                 if raise_on_error:
+                                    await ws.close(message=msg.encode())
                                     raise Exception(msg) from e
                                 continue
 
@@ -895,6 +941,7 @@ class DTPSClient:
                             self.logger.error(s)
                             yield ErrorMsg(comment=s)
                             if raise_on_error:
+                                await ws.close(message=s.encode())
                                 raise Exception(s)
 
                     else:
@@ -902,6 +949,7 @@ class DTPSClient:
                         self.logger.debug(s)
                         yield ErrorMsg(comment=s)
                         if raise_on_error:
+                            await ws.close(message=s.encode())
                             raise Exception(s)
 
     async def _download_from_urls(self, urlbase: URL, dr: DataReady) -> RawData:
@@ -933,7 +981,6 @@ class DTPSClient:
                 #  noinspection PyProtectedMember
                 # headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())
                 # logger.info(f"websocket to {url_websockets} ready\n{headers}")
-
                 try:
                     while True:
                         if ws.closed:
@@ -1211,22 +1258,24 @@ class DTPSClient:
         if md.stream_push_url is None:
             raise ValueError(f"no stream push url in {md}")
 
-        async def pusher():
-            async with self.push_through_websocket(md.stream_push_url) as p:
-                while True:
-                    rd = await queue_in.get()
-
-                    success = await p.push_through(rd.content, rd.content_type)
-                    queue_in.task_done()
-                    queue_out.put_nowait(success)
-
-        task = asyncio.create_task(pusher())
+        task = asyncio.create_task(pusher(self, md.stream_push_url, queue_in, queue_out))
         return task
+
+
+async def pusher(
+    client: DTPSClient, to_url: URLWS, queue_in: "asyncio.Queue[RawData]", queue_out: "asyncio.Queue[bool]"
+):
+    async with client.push_through_websocket(to_url) as p:
+        while True:
+            rd = await queue_in.get()
+            success = await p.push_through(rd.content, rd.content_type)
+            queue_in.task_done()
+            queue_out.put_nowait(success)
 
 
 class PushInterface(ABC):
     @abstractmethod
-    async def push_through(self, data: bytes, content_type: ContentType) -> None:
+    async def push_through(self, data: bytes, content_type: ContentType) -> bool:
         ...
 
 

@@ -5,73 +5,24 @@
 pub mod tests {
     use std::time::Duration;
 
-    use json_patch::{
-        AddOperation,
-        Patch,
-        PatchOperation,
-        ReplaceOperation,
-    };
+    use json_patch::{AddOperation, Patch, PatchOperation, ReplaceOperation};
     use log::info;
     use maplit::hashmap;
-    use rstest::{
-        fixture,
-        rstest,
-    };
-    use schemars::{
-        schema_for,
-        JsonSchema,
-        _private::NoSerialize,
-    };
-    use serde::{
-        Deserialize,
-        Serialize,
-    };
+    use rstest::{fixture, rstest};
+    use schemars::{schema_for, JsonSchema, _private::NoSerialize};
+    use serde::{Deserialize, Serialize};
     use serde_json::json;
-    use tokio::{
-        process::Command,
-        task::JoinHandle,
-    };
+    use tokio::{process::Command, task::JoinHandle};
 
     use crate::{
         add_proxy,
-        client::{
-            make_request,
-            post_cbor,
-            post_json,
-        },
-        create_topic,
-        debug_with_info,
-        delete_topic,
-        dtpserror_context,
-        error_with_info,
-        get_events_stream_inline,
-        get_metadata,
-        get_rawdata,
-        init_logging,
-        patch_data,
-        post_data,
-        remove_proxy,
-        test_fixtures::{
-            instance_python_test_fixture,
-            instance_rust,
-            ConnectionFixture,
-            TestFixture,
-        },
+        client::{make_request, post_cbor, post_json},
+        create_topic, debug_with_info, delete_topic, dtpserror_context, error_with_info, get_events_stream_inline,
+        get_metadata, get_rawdata, init_logging, patch_data, post_data, remove_proxy,
+        test_fixtures::{instance_python_test_fixture, instance_rust, ConnectionFixture, TestFixture},
         test_python::check_server,
-        ContentInfo,
-        DTPSError,
-        DTPSServer,
-        ListenURLEvents,
-        RawData,
-        ServerStateAccess,
-        TopicName,
-        TopicProperties,
-        TopicRefAdd,
-        TypeOfConnection,
-        CONTENT_TYPE_CBOR,
-        CONTENT_TYPE_JSON,
-        CONTENT_TYPE_TEXT_PLAIN,
-        DTPSR,
+        ContentInfo, DTPSError, DTPSServer, ListenURLEvents, RawData, ServerStateAccess, TopicName, TopicProperties,
+        TopicRefAdd, TypeOfConnection, CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT_PLAIN, DTPSR,
     };
 
     #[fixture]
@@ -660,8 +611,23 @@ pub mod tests {
 
         let node_id = instance.server.get_node_id().await;
         let urls = vec![instance.cf.con.clone()];
-        add_proxy(&instance2.cf.con, &mounted_at, node_id.clone(), &urls).await?;
-        add_proxy(&instance2.cf.con, &mounted_at, node_id.clone(), &urls).await?;
+        let mask_origin = false;
+        add_proxy(
+            &instance2.cf.con,
+            &mounted_at,
+            Some(node_id.clone()),
+            &urls,
+            mask_origin,
+        )
+        .await?;
+        add_proxy(
+            &instance2.cf.con,
+            &mounted_at,
+            Some(node_id.clone()),
+            &urls,
+            mask_origin,
+        )
+        .await?;
         // sleep 5 seconds
         tokio::time::sleep(Duration::from_millis(2000)).await;
 

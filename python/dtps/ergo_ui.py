@@ -6,9 +6,17 @@ from typing import (
     Dict,
     List,
     Optional,
+    Sequence,
 )
 
-from dtps_http import DataSaved, NodeID, RawData, TopicRefAdd
+from dtps_http import (
+    DataSaved,
+    NodeID,
+    ObjectTransformResult,
+    RawData,
+    TopicRefAdd,
+    URLString,
+)
 
 __all__ = [
     "ConnectionInterface",
@@ -16,6 +24,9 @@ __all__ = [
     "HistoryInterface",
     "SubscriptionInterface",
 ]
+
+_ = Sequence
+RPCFunction = Callable[[RawData], Awaitable[ObjectTransformResult]]
 
 
 class DTPSContext(ABC):
@@ -51,6 +62,13 @@ class DTPSContext(ABC):
         return self.navigate(*components)
 
     @abstractmethod
+    async def exists(self) -> bool:
+        """
+        Checks if this resource exists.
+
+        """
+
+    @abstractmethod
     async def list(self) -> List[str]:
         """
         List the subtopics.
@@ -60,7 +78,7 @@ class DTPSContext(ABC):
         """
 
     @abstractmethod
-    async def get_urls(self) -> List[str]:
+    async def get_urls(self) -> List[URLString]:
         """List urls that might reach this topic"""
 
     @abstractmethod
@@ -135,7 +153,7 @@ class DTPSContext(ABC):
     # proxy
 
     @abstractmethod
-    async def expose(self, urls: "Sequence[str] | DTPSContext", /) -> "DTPSContext":
+    async def expose(self, urls: "Sequence[str] | DTPSContext", /) -> None:
         """
         Creates this topic as a proxy to the given urls or to the context..
 
@@ -143,7 +161,12 @@ class DTPSContext(ABC):
         """
 
     @abstractmethod
-    async def queue_create(self, parameters: Optional[TopicRefAdd] = None, /) -> "DTPSContext":
+    async def queue_create(
+        self,
+        *,
+        parameters: Optional[TopicRefAdd] = None,
+        transform: Optional[RPCFunction] = None,
+    ) -> "DTPSContext":
         """
         Creates this resource (if it doesn't exist).
         Returns self.

@@ -1,32 +1,15 @@
-use futures::{
-    SinkExt,
-    StreamExt,
-};
+use futures::{SinkExt, StreamExt};
 use tempfile::tempdir;
 
 use tokio::{
     process::Command,
-    sync::broadcast::{
-        error::RecvError,
-        Receiver as BroadcastReceiver,
-    },
+    sync::broadcast::{error::RecvError, Receiver as BroadcastReceiver},
     task::JoinHandle,
 };
 
 use crate::{
-    client::get_rawdata_accept,
-    debug_with_info,
-    get_events_stream_inline,
-    get_history,
-    get_index,
-    get_metadata,
-    info_with_info,
-    DTPSError,
-    ListenURLEvents,
-    TopicName,
-    TypeOfConnection,
-    DTPSR,
-    TOPIC_LIST_CLOCK,
+    client::get_rawdata_accept, debug_with_info, get_events_stream_inline, get_history, get_index, get_metadata,
+    info_with_info, DTPSError, ListenURLEvents, TopicName, TypeOfConnection, DTPSR, TOPIC_LIST_CLOCK,
 };
 
 #[cfg(test)]
@@ -34,11 +17,7 @@ mod tests {
     use log::info;
     use std::fmt::Debug;
 
-    use crate::{
-        init_logging,
-        test_range,
-        TypeOfConnection,
-    };
+    use crate::{init_logging, test_range, TypeOfConnection};
 
     use super::*;
 

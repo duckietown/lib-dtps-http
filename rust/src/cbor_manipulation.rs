@@ -1,19 +1,9 @@
-use maud::{
-    html,
-    PreEscaped,
-};
+use maud::{html, PreEscaped};
 use serde::Serialize;
 
 use crate::{
-    identify_presentation,
-    not_implemented,
-    utils_yaml::generate_html_from_cbor,
-    ContentPresentation,
-    DTPSError,
-    RawData,
-    CONTENT_TYPE_CBOR,
-    CONTENT_TYPE_JSON,
-    DTPSR,
+    identify_presentation, not_implemented, utils_yaml::generate_html_from_cbor, ContentPresentation, DTPSError,
+    RawData, CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, DTPSR,
 };
 
 impl RawData {

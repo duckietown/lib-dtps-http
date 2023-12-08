@@ -10,12 +10,14 @@ from dtps_http import (
     join,
     MIME_OCTET,
     NodeID,
+    ObjectTransformFunction,
     parse_url_unescape,
     RawData,
     TopicNameV,
     TopicProperties,
     TopicRefAdd,
     URL,
+    url_to_string,
     URLIndexer,
 )
 from . import logger
@@ -37,7 +39,8 @@ class ContextManagerUse(ContextManager):
     best_url: URLIndexer
     all_urls: List[URL]
 
-    # client: DTPSClient
+    client: DTPSClient
+
     def __init__(self, base_name: str, context_info: "ContextInfo"):
         self.client = DTPSClient()
         self.context_info = context_info
@@ -54,7 +57,6 @@ class ContextManagerUse(ContextManager):
         if best_url is None:
             msg = f"Could not connect to any of {alternatives}"
             raise ValueError(msg)
-        # logger.debug(f'best_url for "{self.base_name}": {best_url}')
 
         self.best_url = best_url
 
@@ -110,12 +112,34 @@ class ContextManagerUseContext(DTPSContext):
     async def get_urls(self) -> List[str]:
         all_urls = self.master.all_urls
         rurl = self._get_components_as_topic().as_relative_url()
-        return [str(join(u, rurl)) for u in all_urls]
+        return [url_to_string(join(u, rurl)) for u in all_urls]
 
     async def get_node_id(self) -> Optional[NodeID]:
         url = await self._get_best_url()
         md = await self.master.client.get_metadata(url)
-        return md.answering
+        return md.origin_node
+        # logger.debug(f"get_node_id: {url} -> {md}")
+        # if md.meta_url is None:
+        #     logger.debug(f"get_node_id: {url} -> no meta info")
+        #     return md.answering
+        # else:
+        #     res = await self.master.client.get(md.meta_url, None)
+        #     logger.debug(f"get_node_id: {url} -> {res}")
+        #
+        # return md.answering
+
+    async def exists(self) -> bool:
+        url = await self._get_best_url()
+        client = self.master.client
+        try:
+            await client.get_metadata(url)
+            return True
+        except ClientResponseError as e:
+            if e.status == 404:
+                logger.info(f"exists: {url} -> 404 -> {e}")
+                return False
+            else:
+                raise
 
     def _get_components_as_topic(self) -> TopicNameV:
         return TopicNameV.from_components(self.components)
@@ -129,7 +153,8 @@ class ContextManagerUseContext(DTPSContext):
 
     async def remove(self) -> None:
         # TODO: DTSW-4801: implement remove()
-        raise NotImplementedError()
+        url = await self._get_best_url()
+        return await self.master.client.delete(url)
 
     async def data_get(self) -> RawData:
         url = await self._get_best_url()
@@ -178,20 +203,31 @@ class ContextManagerUseContext(DTPSContext):
 
     async def call(self, data: RawData) -> RawData:
         # TODO: DTSW-4804: [use] implement connect_to
-        raise NotImplementedError()
+        client = self.master.client
+        url = await self._get_best_url()
+        return await client.call(url, data)
 
     async def expose(self, c: DTPSContext) -> "DTPSContext":
         topic = self._get_components_as_topic()
         url0 = self.master.best_url
         urls = await c.get_urls()
         node_id = await c.get_node_id()
-        await self.master.client.add_proxy(cast(URLIndexer, url0), topic, node_id, urls)
+        await self.master.client.add_proxy(cast(URLIndexer, url0), topic, node_id, urls, mask_origin=False)
         return self
 
-    async def queue_create(self, parameters: Optional[TopicRefAdd] = None, /) -> "DTPSContext":
+    async def queue_create(
+        self,
+        *,
+        parameters: Optional[TopicRefAdd] = None,
+        transform: Optional[ObjectTransformFunction] = None,
+    ) -> "DTPSContext":
         topic = self._get_components_as_topic()
 
         url = await self._get_best_url()
+
+        if transform is not None:
+            msg = "transform is not supported for remote queues"
+            raise ValueError(msg)
 
         try:
             md = await self.master.client.get_metadata(url)

@@ -2,10 +2,7 @@ use std::collections::HashMap;
 
 use derive_more::Constructor;
 
-use serde::{
-    Deserialize,
-    Serialize,
-};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Constructor, PartialEq)]
 pub struct MinMax<T: Ord + Clone + PartialEq> {

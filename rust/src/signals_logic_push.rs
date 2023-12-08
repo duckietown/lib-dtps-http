@@ -1,45 +1,19 @@
 use anyhow::Context;
 use async_trait::async_trait;
 use futures::StreamExt;
-use json_patch::{
-    patch,
-    Patch,
-    PatchOperation,
-    ReplaceOperation,
-};
+use json_patch::{patch, Patch, PatchOperation, ReplaceOperation};
 
 use crate::{
     client::post_data,
     clocks::Clocks,
-    context,
-    debug_with_info,
-    dtpserror_other,
-    error_with_info,
-    internal_assertion,
-    invalid_input,
-    not_implemented,
+    context, debug_with_info, dtpserror_other, error_with_info, internal_assertion, invalid_input, not_implemented,
     parse_url_ext,
     server::handle_topic_post,
-    server_state::{
-        ConnectionJob,
-        ConnectionJobWire,
-    },
+    server_state::{ConnectionJob, ConnectionJobWire},
     signals_logic::Pushable,
     signals_logic_patch::add_prefix_to_patch,
-    unescape_json_patch,
-    DTPSError,
-    Patchable,
-    ProxyJob,
-    RawData,
-    ServerStateAccess,
-    SourceComposition,
-    TopicName,
-    TopicRefAdd,
-    Transforms,
-    TypeOFSource,
-    DTPSR,
-    TOPIC_CONNECTIONS,
-    TOPIC_PROXIED,
+    unescape_json_patch, DTPSError, Patchable, ProxyJob, RawData, ServerStateAccess, SourceComposition, TopicName,
+    TopicRefAdd, Transforms, TypeOFSource, DTPSR, TOPIC_CONNECTIONS, TOPIC_PROXIED,
 };
 
 #[async_trait]

@@ -1,21 +1,11 @@
 use bytes::Bytes;
 
-use serde::{
-    de::DeserializeOwned,
-    Deserialize,
-    Serialize,
-};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use sha256::digest;
 
 use crate::{
-    identify_presentation,
-    ContentPresentation,
-    DTPSError,
-    RawData,
-    CONTENT_TYPE_CBOR,
-    CONTENT_TYPE_JSON,
-    DTPSR,
+    identify_presentation, ContentPresentation, DTPSError, RawData, CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, DTPSR,
 };
 
 impl RawData {

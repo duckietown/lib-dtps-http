@@ -31,7 +31,7 @@ async def read_continuous(urlbase0: URL) -> None:
             # info.reachability gives the (possibly relative url) where
             # to find the topic. We need to join it with the base url of the request
             # abs_url = join(urlbase0, info.reachability[0].url)
-            abs_url = info.reachability[0].url
+            abs_url = parse_url_unescape(info.reachability[0].url)
             print(f'- topic: {topic_name.__dict__!r}: {abs_url}')
 
             # creates a task that listens to the topic

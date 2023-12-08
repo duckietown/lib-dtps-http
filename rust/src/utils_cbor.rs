@@ -4,22 +4,11 @@ use anyhow::Context;
 
 use futures::StreamExt;
 
-use serde_cbor::Value::{
-    Null as CBORNull,
-    Text as CBORText,
-};
+use serde_cbor::Value::{Null as CBORNull, Text as CBORText};
 
 use crate::{
-    context,
-    debug_with_info,
-    dtpserror_other,
-    DTPSError,
-    ResolvedData,
-    ResolvedData::{
-        NotAvailableYet,
-        NotFound,
-        Regular,
-    },
+    context, debug_with_info, dtpserror_other, DTPSError, ResolvedData,
+    ResolvedData::{NotAvailableYet, NotFound, Regular},
     DTPSR,
 };
 

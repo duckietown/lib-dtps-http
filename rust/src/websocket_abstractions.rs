@@ -7,55 +7,26 @@ use base64::{
     Engine as _, // keep
 };
 use futures::{
-    stream::{
-        SplitSink,
-        SplitStream,
-    },
-    SinkExt,
-    StreamExt,
+    stream::{SplitSink, SplitStream},
+    SinkExt, StreamExt,
 };
 use rand::Rng;
 use tokio::{
-    net::{
-        TcpStream,
-        UnixStream,
-    },
+    net::{TcpStream, UnixStream},
     sync::broadcast,
     task::JoinHandle,
 };
 use tokio_tungstenite::{
-    client_async_with_config,
-    connect_async,
-    tungstenite::protocol::WebSocketConfig,
-    MaybeTlsStream,
-    WebSocketStream,
+    client_async_with_config, connect_async, tungstenite::protocol::WebSocketConfig, MaybeTlsStream, WebSocketStream,
 };
-use tungstenite::{
-    error::ProtocolError,
-    handshake::client::Request,
-    Error,
-    Message as TM,
-};
+use tungstenite::{error::ProtocolError, handshake::client::Request, Error, Message as TM};
 use url::Url;
 
 use crate::{
-    debug_with_info,
-    error_with_info,
-    info_with_info,
-    not_implemented,
-    not_reachable,
-    show_errors,
-    DTPSError,
-    ServerStateAccess,
-    TypeOfConnection,
-    TypeOfConnection::{
-        Relative,
-        Same,
-        TCP,
-        UNIX,
-    },
-    UnixCon,
-    DTPSR,
+    debug_with_info, error_with_info, info_with_info, not_implemented, not_reachable, show_errors, DTPSError,
+    ServerStateAccess, TypeOfConnection,
+    TypeOfConnection::{Relative, Same, TCP, UNIX},
+    UnixCon, DTPSR,
 };
 
 #[async_trait]

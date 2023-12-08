@@ -1,8 +1,4 @@
-use maud::{
-    html,
-    Markup,
-    Render,
-};
+use maud::{html, Markup, Render};
 use serde_cbor::Value;
 
 //

@@ -1,23 +1,10 @@
 use std::collections::HashMap;
 
 use maplit::hashmap;
-use schemars::{
-    schema::RootSchema,
-    JsonSchema,
-};
-use serde::{
-    Deserialize,
-    Serialize,
-};
+use schemars::{schema::RootSchema, JsonSchema};
+use serde::{Deserialize, Serialize};
 
-use crate::{
-    join_con,
-    join_ext,
-    LinkBenchmark,
-    RawData,
-    TopicName,
-    TypeOfConnection,
-};
+use crate::{join_con, join_ext, LinkBenchmark, RawData, TopicName, TypeOfConnection};
 
 pub type NodeAppData = String;
 

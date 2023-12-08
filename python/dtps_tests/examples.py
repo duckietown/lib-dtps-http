@@ -14,8 +14,7 @@ async def example1_process_data() -> None:
     node_input = await (me / "dtps" / "node" / "in").queue_create()
     node_output = await (me / "dtps" / "node" / "out").queue_create()
 
-    publisher = await node_output.publisher()
-    async with node_output.publisher() as publisher:
+    async with node_output.publisher_context() as publisher:
 
         async def on_input(data: RawData) -> None:
             await publisher.publish(data)
@@ -66,8 +65,6 @@ async def example3_register() -> None:
     me = await context("self")
     switchboard = await context("switchboard_add")
 
-    # await switchboard.proxy_create(await me.urls())
-
     await switchboard.expose(me)
 
 
@@ -78,8 +75,7 @@ async def example4_connect2() -> None:
 
     switchboard = await context("switchboard_add")
 
-    node1_out = switchboard.navigate("dtps/node/node1")
-    node2_in = switchboard.navigate("dtps/node/node2")
-    # await switchboard.proxy_create(await me.urls())
+    node1_out = switchboard / "dtps/node/node1"
+    node2_in = switchboard / "dtps/node/node2"
 
     await node1_out.connect_to(node2_in)

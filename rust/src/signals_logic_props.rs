@@ -1,9 +1,4 @@
-use crate::{
-    DataProps,
-    SourceComposition,
-    TopicProperties,
-    TypeOFSource,
-};
+use crate::{DataProps, SourceComposition, TopicProperties, TypeOFSource};
 
 impl DataProps for TypeOFSource {
     fn get_properties(&self) -> TopicProperties {

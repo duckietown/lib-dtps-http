@@ -3,28 +3,25 @@
 FROM rust as builder1
 ENV USER root
 WORKDIR /wd
-COPY .git .git
 COPY rust rust
-COPY static static
+COPY rustfmt.toml .
 COPY Cargo.toml .
-# RUN --mount=type=cache,target=/usr/local/cargo/registry \
-# --release
+COPY static static
+RUN find .
+
 ARG CARGO_PROFILE=release
 ARG DEST=release
 
 RUN cargo build --profile $CARGO_PROFILE --target-dir /wd/target
-RUN #find /wd/target -type f
-RUN ls -a -l /wd/target/$DEST
-RUN cp /wd/target/$DEST/dtps-http-rust-clock /tmp/app
-RUN chown root:root /tmp/app
-RUN ls -a -l /tmp/app
-RUN /tmp/app --version
+RUN rm -rf /wd/target/$DEST/deps/
+RUN rm -rf /wd/target/$DEST/build/
+RUN rm -rf /wd/target/$DEST/examples/
+RUN rm -rf /wd/target/$DEST/incremental/
 
 # get cloudflare executable
 
 FROM alpine/curl as builder2
 ARG TARGETARCH
-#ENV USER root
 # important: -L follows redirects
 RUN curl -L -o /tmp/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$TARGETARCH
 RUN chown root:root /tmp/cloudflared
@@ -35,20 +32,19 @@ FROM ubuntu:22.04
 # FROM alpine
 WORKDIR /wd
 
-COPY --from=builder2 /tmp/cloudflared /wd/cloudflared
+RUN apt-get update && apt-get install -y ca-certificates # needed for https to work
 
-COPY --from=builder1 /tmp/app /wd/app
-#RUN #ls -a -l /wd
-#RUN chmod +x /wd/app
-#RUN chown root:root /wd/app
-##RUN ls -a -l /wd/app
-#RUN ls -a -l /
+COPY --from=builder2 /tmp/cloudflared /usr/bin
 
-ENV RUST_LOG=warn,dtps_http=debug
-RUN <<EOF 
-    ./cloudflared --version
-    ./app --version
-EOF
+ARG DEST=release
+COPY --from=builder1 /wd/target/$DEST /usr/bin
+RUN ls -a -l -h -S /usr/bin
+
+ENV RUST_LOG="warn,dtps_http=debug"
 ENV RUST_BACKTRACE=full
+RUN <<EOF
+    /usr/bin/cloudflared --version
+    /usr/bin/dtps-http-rs-server --version
+EOF
 
-ENTRYPOINT ["/wd/app", "--cloudflare-executable=/wd/cloudflared"]
+ENTRYPOINT ["/usr/bin/dtps-http-rs-server"]

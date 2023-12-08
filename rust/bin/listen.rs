@@ -6,14 +6,8 @@ use std::error;
 use clap::Parser;
 
 use dtps_http::{
-    client::{
-        get_events_stream_inline,
-        wrap_recv,
-    },
-    debug_with_info,
-    get_metadata,
-    init_logging,
-    parse_url_ext,
+    client::{get_events_stream_inline, wrap_recv},
+    debug_with_info, get_metadata, init_logging, parse_url_ext,
 };
 
 /// Parameters for client

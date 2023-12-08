@@ -1,16 +1,10 @@
 use std::{
-    cmp::{
-        min,
-        Ordering,
-    },
+    cmp::{min, Ordering},
     ops::Add,
 };
 
 use schemars::JsonSchema;
-use serde::{
-    Deserialize,
-    Serialize,
-};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, PartialEq, Eq)]
 pub struct LinkBenchmark {

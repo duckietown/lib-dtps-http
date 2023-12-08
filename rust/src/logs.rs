@@ -1,8 +1,4 @@
-use std::{
-    env,
-    env::VarError,
-    sync::Once,
-};
+use std::{env, env::VarError, sync::Once};
 
 use crate::built_info;
 
