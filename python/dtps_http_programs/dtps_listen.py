@@ -15,6 +15,8 @@ from dtps_http import (
     StopContinuousLoop,
     URL,
 )
+from dtps_http.client import ListenDataInterface
+from dtps_http.structures import ListenURLEvents
 from . import logger
 
 __all__ = [
@@ -37,22 +39,17 @@ async def dtps_listen_main_f(
     t0 = time.time()
     nmessages = 0
     error_msgs = []
-    async with DTPSClient.create() as client:
-        async for d in client.listen_continuous(
-            url,
-            expect_node,
-            switch_identity_ok=switch_identity_ok,
-            raise_on_error=raise_on_error,
-            add_silence=1,
-            inline_data=inline_data,
-        ):
+    async with DTPSClient.create(shutdown_event=None) as client:
+        ld: ListenDataInterface
+
+        async def callback(d: ListenURLEvents):
             io = StringIO()
             pprint(d, stream=io)
             data = io.getvalue().strip()
             logger.info(data)
             if isinstance(d, FinishedMsg):
                 logger.info("Finished")
-                break
+
             if isinstance(d, ErrorMsg):
                 error_msgs.append(d)
                 # if raise_on_error:
@@ -60,10 +57,8 @@ async def dtps_listen_main_f(
             dt = time.time() - t0
             if dt > max_time:
                 logger.info("Timeout")
-                break
             if nmessages > max_messages:
                 logger.info("Max messages")
-                break
             if len(error_msgs) > max_errors:
                 if raise_on_error:
                     details = "".join(
@@ -71,6 +66,17 @@ async def dtps_listen_main_f(
                     )
                     msg = f"Found error messages:\n{details}"
                     raise StopContinuousLoop(msg)
+
+        ld = await client.listen_continuous(
+            url,
+            expect_node,
+            switch_identity_ok=switch_identity_ok,
+            raise_on_error=raise_on_error,
+            add_silence=1,
+            inline_data=inline_data,
+            callback=callback,
+        )
+
     if error_msgs and raise_on_error:
         details = "".join(
             f"=== {i} ===\n" + x.comment + "\n===========\n\n" for i, x in enumerate(error_msgs)

@@ -20,6 +20,7 @@ from dtps_http import (
     url_to_string,
     URLIndexer,
 )
+from dtps_http.client import ListenDataInterface
 from . import logger
 from .config import ContextInfo, ContextManager
 from .ergo_ui import (
@@ -42,7 +43,7 @@ class ContextManagerUse(ContextManager):
     client: DTPSClient
 
     def __init__(self, base_name: str, context_info: "ContextInfo"):
-        self.client = DTPSClient()
+        self.client = DTPSClient(nickname=base_name, shutdown_event=None)
         self.context_info = context_info
         self.contexts = {}
         self.base_name = base_name
@@ -101,6 +102,14 @@ class ContextManagerUseContextPublisher(PublisherInterface):
         self.task_push.cancel()
 
 
+class ContextManagerUseSubscription(SubscriptionInterface):
+    def __init__(self, ldi: ListenDataInterface):
+        self.ldi = ldi
+
+    async def unsubscribe(self) -> None:
+        await self.ldi.stop()
+
+
 class ContextManagerUseContext(DTPSContext):
     def __init__(self, master: ContextManagerUse, components: Tuple[str, ...]):
         self.master = master
@@ -118,15 +127,6 @@ class ContextManagerUseContext(DTPSContext):
         url = await self._get_best_url()
         md = await self.master.client.get_metadata(url)
         return md.origin_node
-        # logger.debug(f"get_node_id: {url} -> {md}")
-        # if md.meta_url is None:
-        #     logger.debug(f"get_node_id: {url} -> no meta info")
-        #     return md.answering
-        # else:
-        #     res = await self.master.client.get(md.meta_url, None)
-        #     logger.debug(f"get_node_id: {url} -> {res}")
-        #
-        # return md.answering
 
     async def exists(self) -> bool:
         url = await self._get_best_url()
@@ -152,7 +152,6 @@ class ContextManagerUseContext(DTPSContext):
         raise NotImplementedError()
 
     async def remove(self) -> None:
-        # TODO: DTSW-4801: implement remove()
         url = await self._get_best_url()
         return await self.master.client.delete(url)
 
@@ -162,18 +161,9 @@ class ContextManagerUseContext(DTPSContext):
 
     async def subscribe(self, on_data: Callable[[RawData], Awaitable[None]], /) -> "SubscriptionInterface":
         url = await self._get_best_url()
-        t = await self.master.client.listen_url(url, on_data, inline_data=False, raise_on_error=False)
-        logger.debug(f"subscribed to {url} -> {t}")
-
-        class Subscription(SubscriptionInterface):
-            def __init__(self, t0: asyncio.Task):
-                self.t0 = t0
-
-            async def unsubscribe(self) -> None:
-                self.t0.cancel()
-                # await self.t0
-
-        return Subscription(t)
+        ldi = await self.master.client.listen_url(url, on_data, inline_data=False, raise_on_error=False)
+        # logger.debug(f"subscribed to {url} -> {t}")
+        return ContextManagerUseSubscription(ldi)
 
     async def history(self) -> "Optional[HistoryInterface]":
         # TODO: DTSW-4803: [use] implement history

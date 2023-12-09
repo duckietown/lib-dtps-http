@@ -42,16 +42,20 @@ async def read_continuous(urlbase0: URL) -> None:
 
 
 async def listen(dtpsclient: DTPSClient, abs_url: URL, tn: str, ) -> None:
-    async for rd in dtpsclient.listen_continuous(abs_url,
-                                                 expect_node=None,
-                                                 inline_data=True,
-                                                 add_silence=None,
-                                                 raise_on_error=False,
-                                                 switch_identity_ok=False):
+    async def callback(rd):
         if isinstance(rd, InsertNotification):
             print(f'{tn}: {rd.raw_data.content.decode("utf-8")}')
         else:
             print(f'{tn}: {rd!r}')
+
+    ldi = await dtpsclient.listen_continuous(abs_url,
+                                                 expect_node=None,
+                                                 inline_data=True,
+                                                 add_silence=None,
+                                                 raise_on_error=False,
+                                                 callback=callback,
+                                                 switch_identity_ok=False)
+       
 
 
 def subscribe_main() -> None:

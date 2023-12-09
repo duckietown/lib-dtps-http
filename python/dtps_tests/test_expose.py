@@ -16,7 +16,6 @@ from dtps_http import (
 )
 from dtps_http_tests.utils import test_timeout
 from dtps_tests import logger
-
 from .utils import create_use_pair
 
 
@@ -72,7 +71,7 @@ class TestExpose(IsolatedAsyncioTestCase):
 
     @test_timeout(20)
     @async_error_catcher
-    async def test_expose2(self):
+    async def test_expose_correct_node_id(self):
         async with create_use_pair("expose2a") as (context_a_local, context_a_remote):
             async with create_use_pair("expose2b") as (context_b_local, context_b_remote):
                 b_node_id = await context_b_remote.get_node_id()
@@ -96,3 +95,45 @@ class TestExpose(IsolatedAsyncioTestCase):
                 b_node_id_of_mounted_root = await b_mounted.get_node_id()
 
                 self.assertEqual(b_node_id, b_node_id_of_mounted_root)
+
+    @test_timeout(20)
+    @async_error_catcher
+    async def test_expose3_events(self):
+        """Reads events from a topic mounted on a remote node."""
+        async with create_use_pair("expose3b") as (context_b_local, context_b_remote):
+            async with create_use_pair("expose3a") as (context_a_local, context_a_remote):
+                topic = "my/topic"
+                b_topic = await (context_b_remote / topic).queue_create()
+
+                mountpoint = "mnt/b"
+                b_mounted = context_a_remote / mountpoint
+                await b_mounted.expose(context_b_remote)
+                await asyncio.sleep(2)
+
+                b_topic_mounted = b_mounted / topic
+                received_proxy = []
+                received_direct = []
+                sent = []
+
+                async def on_received_proxy(rec: RawData):
+                    logger.info(f"proxy: {rec}")
+                    received_proxy.append(rec)
+
+                async def on_received_direct(rec: RawData):
+                    logger.info(f"direct: {rec}")
+                    received_direct.append(rec)
+
+                sub1 = await b_topic_mounted.subscribe(on_received_proxy)
+                sub2 = await b_topic.subscribe(on_received_direct)
+
+                for i in range(10):
+                    rd = RawData.json_from_native_object({"count": i})
+                    await b_topic.publish(rd)
+                    sent.append(rd)
+                    await asyncio.sleep(0.1)
+
+                await asyncio.sleep(5)
+                self.assertEqual(received_direct, sent)
+                self.assertEqual(received_proxy, sent)
+                await sub1.unsubscribe()
+                await sub2.unsubscribe()

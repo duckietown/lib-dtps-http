@@ -6,7 +6,7 @@ import socket
 import sys
 import tempfile
 from socket import AddressFamily
-from typing import Iterator, List, Optional, Sequence, Tuple, cast
+from typing import cast, Iterator, List, Optional, Sequence, Tuple
 
 import psutil
 from aiohttp import web

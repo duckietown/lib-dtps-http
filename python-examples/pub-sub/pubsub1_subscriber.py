@@ -5,7 +5,8 @@ from typing import Optional
 
 from dtps_http import (
     async_error_catcher, ContentType, DataSaved, DTPSClient, ErrorMsg, FinishedMsg,
-    InsertNotification, NodeID, parse_url_unescape, RawData, SilenceMsg, URL, URLString, WarningMsg,
+    InsertNotification, ListenURLEvents, NodeID, parse_url_unescape, RawData, SilenceMsg, URL, URLString,
+    WarningMsg,
 )
 
 
@@ -29,12 +30,7 @@ async def read_continuous(urlbase0: URL) -> None:
         # (e.g. when the node is restarted)
         switch_identity_ok: bool = False
 
-        async for rd in dtpsclient.listen_continuous(urlbase0,
-                                                     expect_node=expect_node,
-                                                     inline_data=inline_data,
-                                                     add_silence=add_silence,
-                                                     raise_on_error=raise_on_error,
-                                                     switch_identity_ok=switch_identity_ok):
+        async def callback(rd: ListenURLEvents) -> None:
             pprint(rd)
 
             # you will get different kinds of messages
@@ -66,6 +62,14 @@ async def read_continuous(urlbase0: URL) -> None:
             else:
                 raise Exception(f"Unknown message type {type(rd)}")
 
+        ldi = await dtpsclient.listen_continuous(urlbase0,
+                                           expect_node=expect_node,
+                                           inline_data=inline_data,
+                                           add_silence=add_silence,
+                                           raise_on_error=raise_on_error,
+                                           callback=callback,
+                                           switch_identity_ok=switch_identity_ok)
+        await ldi.wait_for_done()
 
 def subscribe_main() -> None:
     parser = argparse.ArgumentParser()

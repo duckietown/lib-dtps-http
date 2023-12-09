@@ -14,7 +14,7 @@ def test_multidict1() -> None:
     d2.add("a", "3")
 
     d2.update(d1)
-    print(f"{d2=!r}")
+    # print(f"{d2=!r}")
     # print(d2)
     assert list(d2) == ["a", "a"]
 

@@ -3,7 +3,7 @@ import json
 import os
 import tempfile
 import unittest
-from typing import Literal, cast
+from typing import cast, Literal
 
 import cbor2
 import yaml
@@ -70,9 +70,7 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
                         logger.info(f"found {rd!r}")
                         received.append(rd_)
 
-                    task_sub = await client.listen_url(
-                        url_topic, found, inline_data=True, raise_on_error=True
-                    )
+                    ldi = await client.listen_url(url_topic, found, inline_data=True, raise_on_error=True)
                     task_push = await client.push_continuous(
                         url_topic, queue_in=queue_in, queue_out=queue_out
                     )
@@ -91,7 +89,7 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
                     if received != sent:
                         raise Exception(f"received={received!r} != sent={sent!r}")
                     task_push.cancel()
-                    task_sub.cancel()
+                    await ldi.stop()
 
                     logger.info(f"test finished")
                     # task_server.cancel()

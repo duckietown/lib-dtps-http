@@ -1,5 +1,4 @@
 from typing import Union
-from typing import Union
 from unittest import IsolatedAsyncioTestCase
 
 from dtps_http import (
@@ -9,8 +8,8 @@ from dtps_http import (
 )
 from dtps_http.object_queue import TransformError
 from dtps_http_tests.utils import test_timeout
-from .utils import create_use_pair
 from . import logger
+from .utils import create_use_pair
 
 
 class TestCall(IsolatedAsyncioTestCase):

@@ -266,9 +266,9 @@ class ForwardedQueue(Source):
 
     async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData":
         url_data = server._forwarded[self.topic_name].forward_url_data
-        from dtps_http import DTPSClient, my_raise_for_status
+        from dtps_http import my_raise_for_status
 
-        async with DTPSClient.create() as dtpsclient:
+        async with server._client() as dtpsclient:
             async with dtpsclient.my_session(url_data) as (session2, use_url2):
                 async with session2.get(use_url2) as resp_data:
                     await my_raise_for_status(resp_data, url_data)

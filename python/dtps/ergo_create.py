@@ -100,9 +100,12 @@ class ContextManagerCreateContextPublisher(PublisherInterface):
 
 
 class ContextManagerCreateContextSubscriber(SubscriptionInterface):
+    def __init__(self, sub_id, oq0: ObjectQueue) -> None:
+        self.sub_id = sub_id
+        self.oq0 = oq0
+
     async def unsubscribe(self) -> None:
-        # TODO: DTSW-4792: implement
-        pass
+        await self.oq0.unsubscribe(self.sub_id)
 
 
 class ContextManagerCreateContext(DTPSContext):
@@ -211,11 +214,7 @@ class ContextManagerCreateContext(DTPSContext):
 
         sub_id = oq0.subscribe(wrap)
 
-        class Subscription(SubscriptionInterface):
-            async def unsubscribe(self) -> None:
-                await oq0.unsubscribe(sub_id)
-
-        return Subscription()
+        return ContextManagerCreateContextSubscriber(sub_id, oq0)
 
     async def history(self) -> "Optional[HistoryInterface]":
         # TODO: DTSW-4794: implement history

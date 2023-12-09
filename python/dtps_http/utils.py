@@ -3,18 +3,7 @@ import os
 import stat
 import traceback
 from asyncio import CancelledError
-from typing import (
-    Any,
-    AsyncIterator,
-    Awaitable,
-    Callable,
-    Dict,
-    Optional,
-    TYPE_CHECKING,
-    Type,
-    TypeVar,
-    Union,
-)
+from typing import Any, AsyncIterator, Awaitable, Callable, Optional, Type, TYPE_CHECKING, TypeVar, Union
 
 from multidict import CIMultiDict, CIMultiDictProxy
 from pydantic import parse_obj_as
@@ -61,7 +50,9 @@ else:
             except CancelledError:
                 raise
             except BaseException:
-                logger.error(f"Exception in async in {func.__name__}:\n{traceback.format_exc()}")
+                logger.error(
+                    f"async_error_catcher: Exception in async in {func.__name__}:\n{traceback.format_exc()}"
+                )
                 raise
 
         return wrapper

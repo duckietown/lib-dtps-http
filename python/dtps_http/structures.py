@@ -5,19 +5,19 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 
 import cbor2
 from multidict import CIMultiDict
-from .utils import pydantic_parse
 from pydantic.dataclasses import dataclass
 
-from .utils import pydantic_parse
 from .constants import HEADER_LINK_BENCHMARK, MIME_CBOR, MIME_JSON, MIME_TEXT
 from .types import ContentType, NodeID, SourceID, TopicNameS, TopicNameV, URLString
 from .urls import join, parse_url_unescape, URL, url_to_string, URLIndexer
+from .utils import pydantic_parse
 
 __all__ = [
     "ChannelInfo",
     "ChannelInfoDesc",
     "Chunk",
     "Clocks",
+    "ConnectionEstablished",
     "ContentInfo",
     "DataDesc",
     "DataReady",
@@ -491,6 +491,11 @@ History = Dict[int, DataReady]
 
 
 @dataclass
+class ConnectionEstablished:
+    comment: str
+
+
+@dataclass
 class WarningMsg:
     comment: str
 
@@ -546,7 +551,14 @@ class Registration:
 
 
 ChannelMsgs = Union[ChannelInfo, DataReady, Chunk, FinishedMsg, ErrorMsg, WarningMsg, SilenceMsg]
-ListenURLEvents = Union[InsertNotification, WarningMsg, ErrorMsg, FinishedMsg, SilenceMsg]
+ListenURLEvents = Union[
+    ConnectionEstablished,
+    InsertNotification,
+    WarningMsg,
+    ErrorMsg,
+    FinishedMsg,
+    SilenceMsg,
+]
 
 
 @dataclass

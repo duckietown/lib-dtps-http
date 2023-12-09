@@ -3,7 +3,7 @@ import json
 import os
 import traceback
 from abc import ABC, abstractmethod
-from asyncio import CancelledError
+from asyncio import CancelledError, Event
 from contextlib import asynccontextmanager, AsyncExitStack
 from dataclasses import asdict, dataclass
 from typing import (
@@ -28,6 +28,7 @@ import aiohttp
 import cbor2
 import jsonpatch
 from aiohttp import (
+    ClientResponse,
     ClientResponseError,
     ClientWebSocketResponse,
     TCPConnector,
@@ -58,6 +59,7 @@ from .structures import (
     channel_msgs_parse,
     ChannelInfo,
     Chunk,
+    ConnectionEstablished,
     DataReady,
     ErrorMsg,
     FinishedMsg,
@@ -86,7 +88,7 @@ from .urls import (
     URLWSInline,
     URLWSOffline,
 )
-from .utils import async_error_catcher, async_error_catcher_iterator, method_lru_cache
+from .utils import async_error_catcher, check_is_unix_socket, method_lru_cache
 
 __all__ = [
     "DTPSClient",
@@ -134,26 +136,82 @@ class ShutdownAsked(Exception):
     pass
 
 
+class ListenDataInterface(ABC):
+    @abstractmethod
+    async def stop(self) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def wait_for_done(self) -> None:
+        raise NotImplementedError()
+
+    async def wait_for_done_or_stop_on_event(self, shutdown_event: asyncio.Event) -> None:
+        wait1 = asyncio.create_task(shutdown_event.wait())
+        wait2 = asyncio.create_task(self.wait_for_done())
+        done, pending = await asyncio.wait([wait1, wait2], return_when=asyncio.FIRST_COMPLETED)
+        if shutdown_event.is_set():
+            wait2.cancel()
+            await self.stop()
+        else:
+            return
+
+
+@dataclass
+class ListenDataImpl(ListenDataInterface):
+    stop_condition: asyncio.Event
+    task: "asyncio.Task[None]"
+
+    async def stop(self):
+        self.stop_condition.set()
+        # self.task.cancel()
+        await self.wait_for_done()
+        try:
+            await asyncio.wait_for(self.task, 5)
+        except asyncio.TimeoutError:
+            msg = f"ListenDataImpl: stop: timeout waiting for {self.task}"
+            logger0.error(msg)
+            self.task.cancel()
+            return
+
+    async def wait_for_done(self):
+        try:
+            await self.task
+        except CancelledError:
+            pass
+
+
+class ConditionSatistied(Exception):
+    pass
+
+
 class DTPSClient:
     if TYPE_CHECKING:
 
         @classmethod
-        def create(cls, nickname: Optional[str] = None) -> "AsyncContextManager[DTPSClient]":
+        def create(
+            cls, nickname: Optional[str] = None, shutdown_event: Optional[asyncio.Event] = None
+        ) -> "AsyncContextManager[DTPSClient]":
             ...
 
     else:
 
         @classmethod
         @asynccontextmanager
-        async def create(cls, nickname: Optional[str] = None) -> "AsyncIterator[DTPSClient]":
-            ob = cls(nickname=nickname)
+        async def create(
+            cls, nickname: Optional[str] = None, shutdown_event: Optional[asyncio.Event] = None
+        ) -> "AsyncIterator[DTPSClient]":
+            ob = cls(nickname=nickname, shutdown_event=shutdown_event)
             await ob.init()
             try:
                 yield ob
             finally:
                 await ob.aclose()
 
-    def __init__(self, nickname: Optional[str] = None) -> None:
+    def __init__(self, nickname: Optional[str], shutdown_event: Optional[asyncio.Event]) -> None:
+        if shutdown_event is None:
+            shutdown_event = asyncio.Event()
+
+        self.shutdown_event = shutdown_event
         self.S = AsyncExitStack()
         self.tasks = []
         self.sessions = {}
@@ -165,6 +223,9 @@ class DTPSClient:
         self.nickname = nickname
         self.logger = logger0.getChild(nickname)
         self.shutdown_event = asyncio.Event()
+
+    def remember_task(self, task: asyncio.Task) -> None:
+        self.tasks.append(task)
 
     tasks: "List[asyncio.Task[Any]]"
     blacklist_protocol_host_port: Set[Tuple[str, str, int]]
@@ -504,6 +565,13 @@ class DTPSClient:
                 connector = UnixConnector(path=path)
                 #  noinspection PyProtectedMember
                 use_url = url_to_string(url._replace(scheme="http", host="localhost"))
+
+                try:
+                    check_is_unix_socket(path)
+                except ValueError as e:
+                    msg = f"Cannot connect to url because the path does not exist: {url!r}"
+                    raise ValueError(msg) from e
+
             elif url.scheme in ("http", "https"):
                 connector = TCPConnector()
                 use_url = url_to_string(url)
@@ -732,7 +800,7 @@ class DTPSClient:
         *,
         inline_data: bool,
         raise_on_error: bool,
-    ) -> "asyncio.Task[None]":
+    ) -> ListenDataInterface:
         available = await self.ask_index(urlbase)
         topic = available.topics[topic_name]
         url = cast(URLTopic, await self.choose_best(topic.reachability))
@@ -746,7 +814,8 @@ class DTPSClient:
         *,
         inline_data: bool,
         raise_on_error: bool,
-    ) -> "asyncio.Task[None]":
+        # stop_condition: Optional[asyncio.Event] = None,
+    ) -> ListenDataInterface:
         url_topic = self._look_cache(url_topic)
         metadata = await self.get_metadata(url_topic)
 
@@ -754,7 +823,10 @@ class DTPSClient:
             if metadata.events_data_inline_url is not None:
                 url_events = metadata.events_data_inline_url
             else:
-                msg = f"cannot find field events_data_inline_url for url\n  {url_to_string(url_topic)}\n  {metadata=}"
+                msg = (
+                    f"cannot find field events_data_inline_url for url\n  {url_to_string(url_topic)}\n  "
+                    f"{metadata=}"
+                )
                 raise EventListeningNotAvailable(msg)
 
         else:
@@ -765,53 +837,82 @@ class DTPSClient:
                 raise EventListeningNotAvailable(msg)
 
         # logger.info(f"listening to  {url_topic} -> {metadata} -> {url_events}")
-        desc = f"{url_topic} inline={inline_data}"
-        it = self.listen_url_events(
-            url_events, inline_data=inline_data, raise_on_error=raise_on_error, add_silence=None
-        )
-        t = asyncio.create_task(_listen_and_callback(desc, it, cb))
-        self.tasks.append(t)
-        return t
+        # desc = f"{url_topic} inline={inline_data}"
 
-    async def listen_url_events(
+        async def filter_data(lue: ListenURLEvents) -> None:
+            if isinstance(lue, InsertNotification):
+                await cb(lue.raw_data)
+
+        return await self.listen_url_events3(
+            url_events,
+            inline_data=inline_data,
+            raise_on_error=raise_on_error,
+            add_silence=None,
+            callback=filter_data,  # stop_condition=stop_condition
+        )
+
+    async def listen_url_events3(
         self,
         url_events: URLWS,
         *,
         inline_data: bool,
         raise_on_error: bool,
         add_silence: Optional[float],
-    ) -> "AsyncIterator[ListenURLEvents]":
+        callback: Callable[[ListenURLEvents], Awaitable[None]],
+        # stop_condition: "Optional[asyncio.Event]",
+    ) -> ListenDataInterface:
+        # if stop_condition is None:
+        stop_condition = asyncio.Event()
         if inline_data:
-            if "?" not in url_to_string(url_events):
-                raise ValueError(f"inline data requested but no ? in {url_events}")
-            async for _ in self.listen_url_events_with_data_inline(
-                url_events, raise_on_error=raise_on_error, add_silence=add_silence
-            ):
-                yield _
+            # if "?" not in url_to_string(url_events):
+            #     raise ValueError(f"inline data requested but no ? in {url_events}")
+            task = asyncio.create_task(
+                self.listen_url_events_with_data_inline(
+                    url_events,
+                    raise_on_error=raise_on_error,
+                    add_silence=add_silence,
+                    callback=callback,
+                    stop_condition=stop_condition,
+                )
+            )
         else:
-            async for _ in self.listen_url_events_with_data_offline(
-                url_events, raise_on_error=raise_on_error, add_silence=add_silence
-            ):
-                yield _
-            self.logger.info(f"listen_url_events {url_events} finished")
+            task = asyncio.create_task(
+                self.listen_url_events_with_data_offline(
+                    url_events,
+                    raise_on_error=raise_on_error,
+                    add_silence=add_silence,
+                    callback=callback,
+                    stop_condition=stop_condition,
+                )
+            )
+        self.remember_task(task)
 
-    async def _wait_until_shutdown(self, a: "asyncio.Task[X]") -> X:
-        """Waits for an event, or for the shutdown event. In that case we raise ShutdownAsked"""
+        return ListenDataImpl(stop_condition, task)
+
+    async def _wait_until_shutdown(self, a: "asyncio.Task[X]", condition: Event) -> X:
+        """Waits for an event, or for the shutdown event. In that case we raise ShutdownAsked.
+        if the condition is set, we raise ConditionSatistied.
+        """
         t_wait = asyncio.create_task(self.shutdown_event.wait())
-        tasks = [
-            t_wait,
-            a,
-        ]
+        condition_wait = asyncio.create_task(condition.wait())
+        tasks = [t_wait, a, condition_wait]
         try:
             finished, unfinished = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         except CancelledError:
             a.cancel()
             t_wait.cancel()
+            condition_wait.cancel()
             raise
 
         if self.shutdown_event.is_set():
             a.cancel()
+            condition_wait.cancel()
             raise ShutdownAsked()
+        elif condition.is_set():
+            a.cancel()
+            t_wait.cancel()
+            raise ConditionSatistied()
+
         else:
             t_wait.cancel()
             assert len(finished) == 1
@@ -823,7 +924,9 @@ class DTPSClient:
         *,
         raise_on_error: bool,
         add_silence: Optional[float],
-    ) -> AsyncIterator[ListenURLEvents]:
+        callback: Callable[[ListenURLEvents], Awaitable[None]],
+        stop_condition: "asyncio.Event",
+    ) -> None:
         """Iterates using direct data using side loading"""
         use_url: URLString
         nreceived = 0
@@ -840,16 +943,16 @@ class DTPSClient:
                         if nreceived == 0:
                             s = "Closed, but not even one event received"
                             self.logger.error(s)
-                            yield ErrorMsg(comment=s)
+                            await callback(ErrorMsg(comment=s))
                             if raise_on_error:
                                 raise Exception(s)
 
-                        yield FinishedMsg(comment="closed")
+                        await callback(FinishedMsg(comment="closed"))
                         break
                     wmsg: WSMessage
 
                     wmsg_task = asyncio.create_task(
-                        self._wait_until_shutdown(asyncio.create_task(ws.receive()))
+                        self._wait_until_shutdown(asyncio.create_task(ws.receive()), stop_condition)
                     )
 
                     try:
@@ -858,14 +961,19 @@ class DTPSClient:
                                 wmsg = await asyncio.wait_for(wmsg_task, timeout=add_silence)
                             except asyncio.exceptions.TimeoutError:
                                 # logger.debug(f"add_silence {add_silence} expired")
-                                yield SilenceMsg(dt=add_silence)
+                                await callback(SilenceMsg(dt=add_silence))
                                 continue
                         else:
                             wmsg = await wmsg_task
                     except ShutdownAsked:
                         await ws.close(message=b"shutdown asked")
                         msg = f"shutdown asked: ending listen_url"
-                        yield FinishedMsg(comment=msg)
+                        await callback(FinishedMsg(comment=msg))
+                        break
+                    except ConditionSatistied:
+                        await ws.close(message=b"condition satisfied")
+                        msg = f"condition satisfied: ending listen_url"
+                        await callback(FinishedMsg(comment=msg))
                         break
 
                     self.logger.info(f"raw: {wmsg}")
@@ -874,16 +982,16 @@ class DTPSClient:
                             if nreceived == 0:
                                 s = "Closed, but not even one event received"
                                 self.logger.error(s)
-                                yield ErrorMsg(comment=s)
+                                await callback(ErrorMsg(comment=s))
                                 if raise_on_error:
                                     raise Exception(s)
 
-                            yield FinishedMsg(comment="closed")
+                            await callback(FinishedMsg(comment="closed"))
                         else:
                             s = f"Closing with error: {wmsg.data}"
                             self.logger.error(s)
-                            yield ErrorMsg(comment=s)
-                            yield FinishedMsg(comment="closed")
+                            await callback(ErrorMsg(comment=s))
+                            await callback(FinishedMsg(comment="closed"))
                             if raise_on_error:
                                 raise Exception(s)
                         break
@@ -891,16 +999,16 @@ class DTPSClient:
                         if nreceived == 0:
                             s = "Closing, but not even one event received"
                             self.logger.error(s)
-                            yield ErrorMsg(comment=s)
+                            await callback(ErrorMsg(comment=s))
                             if raise_on_error:
                                 await ws.close(message=s.encode())
                                 raise Exception(s)
-                        yield FinishedMsg(comment="closing")
+                        await callback(FinishedMsg(comment="closing"))
                         break
                     elif wmsg.type == aiohttp.WSMsgType.ERROR:
                         s = str(wmsg.data)
                         self.logger.error(s)
-                        yield ErrorMsg(comment=s)
+                        await callback(ErrorMsg(comment=s))
                         if raise_on_error:
                             await ws.close(message=s.encode())
                             raise Exception(s)
@@ -911,7 +1019,7 @@ class DTPSClient:
                         except Exception as e:
                             msg = f"error in parsing\n{wmsg.data!r}\nerror:\n{e.__class__.__name__} {e!r}"
                             self.logger.error(msg)
-                            yield ErrorMsg(comment=msg)
+                            await callback(ErrorMsg(comment=msg))
                             if raise_on_error:
                                 await ws.close(message=msg.encode())
                                 raise Exception(msg) from e
@@ -923,23 +1031,23 @@ class DTPSClient:
                             except Exception as e:
                                 msg = f"error in downloading {cm}: {e.__class__.__name__} {e!r}"
                                 self.logger.error(msg)
-                                yield ErrorMsg(comment=msg)
+                                await callback(ErrorMsg(comment=msg))
                                 if raise_on_error:
                                     await ws.close(message=msg.encode())
                                     raise Exception(msg) from e
                                 continue
 
-                            yield InsertNotification(data_saved=cm.as_data_saved(), raw_data=data)
+                            await callback(InsertNotification(data_saved=cm.as_data_saved(), raw_data=data))
                         elif isinstance(cm, ChannelInfo):
                             nreceived += 1
                             # logger.info(f"channel info {cm}")
                             pass
                         elif isinstance(cm, (WarningMsg, ErrorMsg, FinishedMsg)):
-                            yield cm
+                            await callback(cm)
                         else:
                             s = f"cannot interpret"
                             self.logger.error(s)
-                            yield ErrorMsg(comment=s)
+                            await callback(ErrorMsg(comment=s))
                             if raise_on_error:
                                 await ws.close(message=s.encode())
                                 raise Exception(s)
@@ -947,10 +1055,11 @@ class DTPSClient:
                     else:
                         s = f"unexpected message type {wmsg.type} {wmsg.data!r}"
                         self.logger.debug(s)
-                        yield ErrorMsg(comment=s)
+                        await callback(ErrorMsg(comment=s))
                         if raise_on_error:
                             await ws.close(message=s.encode())
                             raise Exception(s)
+        return None
 
     async def _download_from_urls(self, urlbase: URL, dr: DataReady) -> RawData:
         url_datas = [join(urlbase, _.url) for _ in dr.availability]
@@ -965,16 +1074,19 @@ class DTPSClient:
 
         return await self.get(url_data, accept=dr.content_type)
 
-    @async_error_catcher_iterator
+    @async_error_catcher
     async def listen_url_events_with_data_inline(
         self,
         url_websockets: URLWS,
         raise_on_error: bool,
         add_silence: Optional[float],
-    ) -> "AsyncIterator[ListenURLEvents]":
+        callback: Callable[[ListenURLEvents], Awaitable[None]],
+        stop_condition: "asyncio.Event",
+    ) -> None:
         """Iterates using direct data in websocket."""
         self.logger.info(f"listen_url_events_with_data_inline {url_websockets}")
         nreceived = 0
+        received_first = False
         async with self.my_session(url_websockets) as (session, use_url):
             ws: ClientWebSocketResponse
             async with session.ws_connect(use_url) as ws:
@@ -982,16 +1094,16 @@ class DTPSClient:
                 # headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())
                 # logger.info(f"websocket to {url_websockets} ready\n{headers}")
                 try:
-                    while True:
+                    while not stop_condition.is_set():
                         if ws.closed:
                             if nreceived == 0:
-                                yield ErrorMsg(comment="Closed, but not even one event received")
+                                await callback(ErrorMsg(comment="Closed, but not even one event received"))
 
-                            yield FinishedMsg(comment="closed")
+                            await callback(FinishedMsg(comment="closed"))
                             break
 
                         wmsg_task = asyncio.create_task(
-                            self._wait_until_shutdown(asyncio.create_task(ws.receive()))
+                            self._wait_until_shutdown(asyncio.create_task(ws.receive()), stop_condition)
                         )
 
                         try:
@@ -1000,28 +1112,36 @@ class DTPSClient:
                                     msg = await asyncio.wait_for(wmsg_task, timeout=add_silence)
                                 except asyncio.exceptions.TimeoutError:
                                     # logger.debug(f"add_silence {add_silence} expired")
-                                    yield SilenceMsg(dt=add_silence)
+                                    await callback(SilenceMsg(dt=add_silence))
                                     continue
                             else:
                                 msg = await wmsg_task
                         except ShutdownAsked:
                             msg = f"shutdown asked: ending listen_url"
-                            yield FinishedMsg(comment=msg)
+                            await callback(FinishedMsg(comment=msg))
                             break
+                        except ConditionSatistied:
+                            msg = f"condition satisfied: ending listen_url"
+                            await callback(FinishedMsg(comment=msg))
+                            break
+
+                        if not received_first:
+                            await callback(ConnectionEstablished(comment=f"received {msg}"))
+                            received_first = False
 
                         if msg.type == aiohttp.WSMsgType.CLOSE:  # aiohttp-specific
                             if nreceived == 0:
-                                yield ErrorMsg(comment="Closed, but not even one event received")
+                                await callback(ErrorMsg(comment="Closed, but not even one event received"))
 
-                            yield FinishedMsg(comment="closed")
+                            await callback(FinishedMsg(comment="closed"))
                             break
                         elif msg.type == aiohttp.WSMsgType.CLOSING:  # aiohttp-specific
                             if nreceived == 0:
-                                yield ErrorMsg(comment="Closing, but not even one event received")
-                            yield FinishedMsg(comment="closing")
+                                await callback(ErrorMsg(comment="Closing, but not even one event received"))
+                            await callback(FinishedMsg(comment="closing"))
                             break
                         elif msg.type == aiohttp.WSMsgType.ERROR:
-                            yield ErrorMsg(comment=str(msg.data))
+                            await callback(ErrorMsg(comment=str(msg.data)))
                             if raise_on_error:
                                 raise Exception(str(msg.data))
 
@@ -1031,7 +1151,7 @@ class DTPSClient:
                             except Exception as e:
                                 s = f"error in parsing {msg.data!r}: {e.__class__.__name__} {e!r}"
                                 self.logger.error(s)
-                                yield ErrorMsg(comment=s)
+                                await callback(ErrorMsg(comment=s))
                                 if raise_on_error:
                                     raise Exception(s)
                                 continue
@@ -1041,7 +1161,7 @@ class DTPSClient:
                                     if dr.chunks_arriving == 0:
                                         s = f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}"
                                         self.logger.error(s)
-                                        yield ErrorMsg(comment=s)
+                                        await callback(ErrorMsg(comment=s))
                                         if raise_on_error:
                                             raise Exception(s)
 
@@ -1058,7 +1178,7 @@ class DTPSClient:
                                         else:
                                             s = f"unexpected message {msg!r}"
                                             self.logger.error(s)
-                                            yield ErrorMsg(comment=s)
+                                            await callback(ErrorMsg(comment=s))
                                             if raise_on_error:
                                                 raise Exception(s)
                                             continue
@@ -1066,7 +1186,7 @@ class DTPSClient:
                                     if len(data) != dr.content_length:
                                         s = f"unexpected data length {len(data)} != {dr.content_length}\n{dr}"
                                         self.logger.error(s)
-                                        yield ErrorMsg(comment=s)
+                                        await callback(ErrorMsg(comment=s))
                                         if raise_on_error:
                                             raise Exception(
                                                 f"unexpected data length {len(data)} != {dr.content_length}"
@@ -1074,24 +1194,24 @@ class DTPSClient:
 
                                     raw_data = RawData(content_type=dr.content_type, content=data)
                                     x = InsertNotification(data_saved=dr.as_data_saved(), raw_data=raw_data)
-                                    yield x
+                                    await callback(x)
 
                                 elif isinstance(cm, ChannelInfo):
                                     nreceived += 1
                                     # logger.info(f"channel info {cm}")
                                 elif isinstance(cm, (WarningMsg, ErrorMsg, FinishedMsg)):
-                                    yield cm
+                                    await callback(cm)
                                 else:
                                     s = f"unexpected message {cm!r}"
                                     self.logger.error(s)
-                                    yield ErrorMsg(comment=s)
+                                    await callback(ErrorMsg(comment=s))
                                     if raise_on_error:
                                         raise Exception(s)
 
                         else:
                             s = f"unexpected message type {msg.type} {msg.data!r}"
                             self.logger.error(s)
-                            yield ErrorMsg(comment=s)
+                            await callback(ErrorMsg(comment=s))
                             if raise_on_error:
                                 raise Exception(s)
                             continue
@@ -1103,6 +1223,7 @@ class DTPSClient:
                     raise
                 else:
                     await ws.close(code=WSCloseCode.OK)
+        return None
 
     @asynccontextmanager
     async def push_through_websocket(
@@ -1134,7 +1255,7 @@ class DTPSClient:
 
                 yield PushInterfaceImpl()
 
-    @async_error_catcher_iterator
+    @async_error_catcher
     async def listen_continuous(
         self,
         urlbase0: URL,
@@ -1144,8 +1265,40 @@ class DTPSClient:
         raise_on_error: bool,
         add_silence: Optional[float],
         inline_data: bool,
-    ) -> AsyncIterator[ListenURLEvents]:
-        while True:
+        callback: Callable[[ListenURLEvents], Awaitable[None]],
+    ) -> ListenDataInterface:
+        i = ListenDataContinuousImp(None)
+        t = asyncio.create_task(
+            self._listen_continuous_(
+                urlbase0,
+                expect_node,
+                switch_identity_ok=switch_identity_ok,
+                raise_on_error=raise_on_error,
+                add_silence=add_silence,
+                inline_data=inline_data,
+                callback=callback,
+                ldi=i,
+            )
+        )
+        i.task = t
+        self.remember_task(t)
+
+        return i
+
+    @async_error_catcher
+    async def _listen_continuous_(
+        self,
+        urlbase0: URL,
+        expect_node: Optional[NodeID],
+        *,
+        ldi: "ListenDataContinuousImp",
+        switch_identity_ok: bool,
+        raise_on_error: bool,
+        add_silence: Optional[float],
+        inline_data: bool,
+        callback: Callable[[ListenURLEvents], Awaitable[None]],
+    ):
+        while not ldi.stop_condition.is_set():
             try:
                 md = await self.get_metadata(urlbase0)
             except Exception as e:
@@ -1201,9 +1354,14 @@ class DTPSClient:
                     await asyncio.sleep(2.0)
                     continue
 
-                iterator = self.listen_url_events(
-                    md.events_url, raise_on_error=raise_on_error, inline_data=False, add_silence=add_silence
+                listen_data = await self.listen_url_events3(
+                    md.events_url,
+                    raise_on_error=raise_on_error,
+                    inline_data=False,
+                    add_silence=add_silence,
+                    callback=callback,  # stop_condition=stop_condition
                 )
+
             else:
                 if md.events_data_inline_url is None:
                     msg = f"This resource does not support inline data events."
@@ -1212,22 +1370,29 @@ class DTPSClient:
                         raise Exception(msg)
                     await asyncio.sleep(2.0)
                     continue
-                iterator = self.listen_url_events(
+                listen_data = await self.listen_url_events3(
                     md.events_data_inline_url,
                     raise_on_error=raise_on_error,
                     inline_data=True,
                     add_silence=add_silence,
+                    callback=callback,
                 )
 
             should_break_outer = False
             try:
-                async for _ in iterator:
+                try:
+                    finish = asyncio.create_task(listen_data.wait_for_done())
                     try:
-                        yield _
-                    except StopContinuousLoop as e:
-                        self.logger.error(f"obtained {e}")
-                        should_break_outer = True
-                        break
+                        await self._wait_until_shutdown(finish, ldi.stop_condition)
+                    except ShutdownAsked:
+                        return
+                    except ConditionSatistied:
+                        return
+
+                except StopContinuousLoop as e:
+                    self.logger.error(f"obtained {e}")
+                    should_break_outer = True
+                    break
             except Exception as e:
                 msg = f"Error listening to {urlbase0!r}:\n{traceback.format_exc()}"
                 self.logger.error(msg)
@@ -1259,6 +1424,8 @@ class DTPSClient:
             raise ValueError(f"no stream push url in {md}")
 
         task = asyncio.create_task(pusher(self, md.stream_push_url, queue_in, queue_out))
+        self.remember_task(task)
+
         return task
 
 
@@ -1306,14 +1473,22 @@ async def _listen_and_callback(
     # logger.debug(f"_listen_and_callback ({desc}): finished")
 
 
-async def my_raise_for_status(resp, url0) -> None:
+async def my_raise_for_status(resp: ClientResponse, url0: URL) -> None:
     if not resp.ok:
         # reason should always be not None for a started response
         assert resp.reason is not None
         msg = await resp.read()
-        # msg = msg.decode("utf-8")
-        message = f"url0: {url0}\n{resp.reason}\n---\n{msg}---"
-        resp.release()
+        try:
+            msg = msg.decode("utf-8")
+        except:
+            pass
+
+        message = ""
+        message += f"method: {resp.method}\n"
+        message += f"url0: {url_to_string(url0)}\n"
+        message += f"reason: {resp.reason}\n"
+        message += f"msg:\n{msg}\n"
+
         raise ClientResponseError(
             resp.request_info,
             resp.history,
@@ -1325,3 +1500,23 @@ async def my_raise_for_status(resp, url0) -> None:
 
 class StopContinuousLoop(Exception):
     pass
+
+
+class ListenDataContinuousImp(ListenDataInterface):
+    ldi: Optional[ListenDataInterface] = None
+    stop_condition: Event
+    task: "Optional[asyncio.Task[None]]"
+
+    def __init__(self, ldi: Optional[ListenDataInterface]):
+        self.ldi = ldi
+        self.stop_condition = asyncio.Event()
+        self.task = None
+
+    async def stop(self) -> None:
+        self.stop_condition.set()
+        assert self.task is not None
+        await self.task
+
+    async def wait_for_done(self) -> None:
+        assert self.task is not None
+        await self.task
