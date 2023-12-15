@@ -1452,13 +1452,17 @@ pre {{
         ws.headers[HEADER_DATA_UNIQUE_ID] = oq_.tr.unique_id
         ws.headers[HEADER_DATA_ORIGIN_NODE_ID] = oq_.tr.origin_node
         await ws.prepare(request)
+        self.logger.debug(f"serve_events: {request.url} topic_name={topic_name_s} send_data={send_data}")
 
         exit_event = asyncio.Event()
         ci = oq_.get_channel_info()
 
+        self.logger.debug(f"serve_events: {request.url} sending {ci}")
         await ws.send_bytes(get_tagged_cbor(ci))
 
+        @async_error_catcher
         async def send_message(_: ObjectQueue, i: int) -> None:
+            self.logger.debug(f"serve_events: new message {i}")
             mdata = oq_.saved[i]
             digest = mdata.digest
 
@@ -1486,12 +1490,12 @@ pre {{
                     exit_event.set()
                     pass
 
+        s = oq_.subscribe(send_message)
+
         if oq_.stored:
             last = oq_.last()
 
             await send_message(oq_, last.index)
-
-        s = oq_.subscribe(send_message)
 
         try:
             await exit_event.wait()

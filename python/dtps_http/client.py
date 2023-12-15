@@ -848,6 +848,7 @@ class DTPSClient:
         connection_event = asyncio.Event()
 
         async def filter_data(lue: ListenURLEvents) -> None:
+            # logger.debug(f"filter_data: {lue}")
             if isinstance(lue, ErrorMsg):
                 logger.error(f"error in {url_events}: {lue.comment}")
             elif isinstance(lue, WarningMsg):
@@ -896,29 +897,30 @@ class DTPSClient:
     ) -> ListenDataInterface:
         # if stop_condition is None:
         stop_condition = asyncio.Event()
-        if inline_data:
-            # if "?" not in url_to_string(url_events):
-            #     raise ValueError(f"inline data requested but no ? in {url_events}")
-            task = asyncio.create_task(
-                self.listen_url_events_with_data_inline(
-                    url_events,
-                    raise_on_error=raise_on_error,
-                    add_silence=add_silence,
-                    callback=callback,
-                    stop_condition=stop_condition,
-                )
+        # if inline_data:
+        # if "?" not in url_to_string(url_events):
+        #     raise ValueError(f"inline data requested but no ? in {url_events}")
+        task = asyncio.create_task(
+            self.listen_url_events_(
+                url_events,
+                inline_data=inline_data,
+                raise_on_error=raise_on_error,
+                add_silence=add_silence,
+                callback=callback,
+                stop_condition=stop_condition,
             )
-        else:
-            task = asyncio.create_task(
-                self.listen_url_events_with_data_offline(
-                    url_events,
-                    raise_on_error=raise_on_error,
-                    add_silence=add_silence,
-                    callback=callback,
-                    stop_condition=stop_condition,
-                )
-            )
-        self.remember_task(task)
+        )
+        # else:
+        #     task = asyncio.create_task(
+        #         self.listen_url_events_with_data_offline(
+        #             url_events,
+        #             raise_on_error=raise_on_error,
+        #             add_silence=add_silence,
+        #             callback=callback,
+        #             stop_condition=stop_condition,
+        #         )
+        #     )
+        # self.remember_task(task)
 
         return ListenDataImpl(stop_condition, task)
 
@@ -951,157 +953,167 @@ class DTPSClient:
             assert len(finished) == 1
             return finished.pop().result()
 
-    @async_error_catcher
-    async def listen_url_events_with_data_offline(
-        self,
-        url_websockets: URLWS,
-        *,
-        raise_on_error: bool,
-        add_silence: Optional[float],
-        callback: Callable[[ListenURLEvents], Awaitable[None]],
-        stop_condition: "asyncio.Event",
-    ) -> None:
-        """Iterates using direct data using side loading"""
-        use_url: URLString
-        nreceived = 0
-
-        await callback(WarningMsg(comment=f"opening session to {url_websockets}"))
-        async with self.my_session(url_websockets) as (session, use_url):
-            ws: ClientWebSocketResponse
-            async with session.ws_connect(use_url) as ws:
-                await callback(WarningMsg(comment=f"opening session to {url_websockets}: ok"))
-                #  noinspection PyProtectedMember
-                # headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())
-                # logger.info(f"websocket to {url_websockets} ready\n{headers}")
-
-                while True:
-                    if ws.closed:
-                        if nreceived == 0:
-                            s = "Closed, but not even one event received"
-                            self.logger.error(s)
-                            await callback(ErrorMsg(comment=s))
-                            if raise_on_error:
-                                raise Exception(s)
-
-                        await callback(FinishedMsg(comment="closed"))
-                        break
-                    wmsg: WSMessage
-
-                    wmsg_task = asyncio.create_task(
-                        self._wait_until_shutdown(asyncio.create_task(ws.receive()), stop_condition)
-                    )
-
-                    try:
-                        if add_silence is not None:
-                            try:
-                                wmsg = await asyncio.wait_for(wmsg_task, timeout=add_silence)
-                            except asyncio.exceptions.TimeoutError:
-                                # logger.debug(f"add_silence {add_silence} expired")
-                                await callback(SilenceMsg(dt=add_silence, comment=f"nreceived={nreceived}"))
-                                continue
-                        else:
-                            wmsg = await wmsg_task
-                    except ShutdownAsked:
-                        await ws.close(message=b"shutdown asked")
-                        msg = f"shutdown asked: ending listen_url"
-                        await callback(FinishedMsg(comment=msg))
-                        break
-                    except ConditionSatistied:
-                        await ws.close(message=b"condition satisfied")
-                        msg = f"condition satisfied: ending listen_url"
-                        await callback(FinishedMsg(comment=msg))
-                        break
-                    except CancelledError:
-                        raise
-                    except:
-                        logger.error(traceback.format_exc())
-                        raise
-
-                    # self.logger.info(f"raw: {wmsg}")
-                    if wmsg.type == aiohttp.WSMsgType.CLOSE:  # aiohttp-specific
-                        if wmsg.data == WSCloseCode.OK:
-                            if nreceived == 0:
-                                s = "Closed, but not even one event received"
-                                self.logger.error(s)
-                                await callback(ErrorMsg(comment=s))
-                                if raise_on_error:
-                                    raise Exception(s)
-
-                            await callback(FinishedMsg(comment="closed"))
-                        else:
-                            s = f"Closing with error: {wmsg.data}"
-                            self.logger.error(s)
-                            await callback(ErrorMsg(comment=s))
-                            await callback(FinishedMsg(comment="closed"))
-                            if raise_on_error:
-                                raise Exception(s)
-                        break
-                    elif wmsg.type == aiohttp.WSMsgType.CLOSING:  # aiohttp-specific
-                        if nreceived == 0:
-                            s = "Closing, but not even one event received"
-                            self.logger.error(s)
-                            await callback(ErrorMsg(comment=s))
-                            if raise_on_error:
-                                await ws.close(message=s.encode())
-                                raise Exception(s)
-                        await callback(FinishedMsg(comment="closing"))
-                        break
-                    elif wmsg.type == aiohttp.WSMsgType.ERROR:
-                        s = str(wmsg.data)
-                        self.logger.error(s)
-                        await callback(ErrorMsg(comment=s))
-                        if raise_on_error:
-                            await ws.close(message=s.encode())
-                            raise Exception(s)
-
-                    elif wmsg.type == aiohttp.WSMsgType.BINARY:
-                        try:
-                            cm = channel_msgs_parse(wmsg.data)
-                        except Exception as e:
-                            msg = f"error in parsing\n{wmsg.data!r}\nerror:\n{e.__class__.__name__} {e!r}"
-                            self.logger.error(msg)
-                            await callback(ErrorMsg(comment=msg))
-                            if raise_on_error:
-                                await ws.close(message=msg.encode())
-                                raise Exception(msg) from e
-                            continue
-
-                        if isinstance(cm, DataReady):
-                            try:
-                                # TODO: re-use the same session for gets
-                                data = await self._download_from_urls(url_websockets, cm)
-                            except Exception as e:
-                                msg = f"error in downloading {cm}: {e.__class__.__name__} {e!r}"
-                                self.logger.error(msg)
-                                await callback(ErrorMsg(comment=msg))
-                                if raise_on_error:
-                                    await ws.close(message=msg.encode())
-                                    raise Exception(msg) from e
-                                continue
-
-                            await callback(InsertNotification(data_saved=cm.as_data_saved(), raw_data=data))
-                        elif isinstance(cm, ChannelInfo):
-                            nreceived += 1
-                            # logger.info(f"channel info {cm}")
-                            pass
-                        elif isinstance(cm, (WarningMsg, ErrorMsg, FinishedMsg)):
-                            await callback(cm)
-                        else:
-                            s = f"cannot interpret"
-                            self.logger.error(s)
-                            await callback(ErrorMsg(comment=s))
-                            if raise_on_error:
-                                await ws.close(message=s.encode())
-                                raise Exception(s)
-
-                    else:
-                        s = f"unexpected message type {wmsg.type} {wmsg.data!r}"
-                        self.logger.debug(s)
-                        await callback(ErrorMsg(comment=s))
-                        if raise_on_error:
-                            await ws.close(message=s.encode())
-                            raise Exception(s)
-        return None
+    # @async_error_catcher
+    # async def listen_url_events_with_data_offline(
+    #     self,
+    #     url_websockets: URLWS,
+    #     *,
+    #     raise_on_error: bool,
+    #     add_silence: Optional[float],
+    #     callback: Callable[[ListenURLEvents], Awaitable[None]],
+    #     stop_condition: "asyncio.Event",
+    # ) -> None:
+    #     """Iterates using direct data using side loading"""
+    #     use_url: URLString
+    #     nreceived = 0
+    #     received_first = False
+    #
+    #     await callback(WarningMsg(comment=f"opening session to {url_websockets}"))
+    #     async with self.my_session(url_websockets) as (session, use_url):
+    #         ws: ClientWebSocketResponse
+    #         async with session.ws_connect(use_url) as ws:
+    #             await callback(WarningMsg(comment=f"opening session to {url_websockets}: ok"))
+    #             #  noinspection PyProtectedMember
+    #             # headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())
+    #             # logger.info(f"websocket to {url_websockets} ready\n{headers}")
+    #
+    #             while True:
+    #                 if ws.closed:
+    #                     if nreceived == 0:
+    #                         s = "Closed, but not even one event received"
+    #                         self.logger.error(s)
+    #                         await callback(ErrorMsg(comment=s))
+    #                         if raise_on_error:
+    #                             raise Exception(s)
+    #
+    #                     await callback(FinishedMsg(comment="closed"))
+    #                     break
+    #                 wmsg: WSMessage
+    #
+    #                 wmsg_task = asyncio.create_task(
+    #                     self._wait_until_shutdown(asyncio.create_task(ws.receive()), stop_condition)
+    #                 )
+    #
+    #                 try:
+    #                     if add_silence is not None:
+    #                         try:
+    #                             wmsg = await asyncio.wait_for(wmsg_task, timeout=add_silence)
+    #                         except asyncio.exceptions.TimeoutError:
+    #                             # logger.debug(f"add_silence {add_silence} expired")
+    #                             await callback(SilenceMsg(dt=add_silence, comment=f"nreceived={nreceived}"))
+    #                             continue
+    #                     else:
+    #                         wmsg = await wmsg_task
+    #                 except ShutdownAsked:
+    #                     msg = f"shutdown asked: ending listen_url"
+    #
+    #                     await ws.close(message=msg.encode())
+    #                     logger.info(msg)
+    #                     await callback(FinishedMsg(comment=msg))
+    #                     break
+    #                 except ConditionSatistied:
+    #                     msg = f"condition satisfied: ending listen_url"
+    #
+    #                     logger.info(msg)
+    #                     await ws.close(message=msg.encode())
+    #                     await callback(FinishedMsg(comment=msg))
+    #                     break
+    #                 except CancelledError:
+    #                     raise
+    #                 except:
+    #                     logger.error(traceback.format_exc())
+    #                     raise
+    #
+    #                 # self.logger.info(f"raw: {wmsg}")
+    #                 if wmsg.type == aiohttp.WSMsgType.CLOSE:  # aiohttp-specific
+    #                     if wmsg.data == WSCloseCode.OK:
+    #                         if nreceived == 0:
+    #                             s = "Closed, but not even one event received"
+    #                             self.logger.error(s)
+    #                             await callback(ErrorMsg(comment=s))
+    #                             if raise_on_error:
+    #                                 raise Exception(s)
+    #
+    #                         await callback(FinishedMsg(comment="closed"))
+    #                     else:
+    #                         s = f"Closing with error: {wmsg.data}"
+    #                         self.logger.error(s)
+    #                         await callback(ErrorMsg(comment=s))
+    #                         await callback(FinishedMsg(comment="closed"))
+    #                         if raise_on_error:
+    #                             raise Exception(s)
+    #                     break
+    #                 elif wmsg.type == aiohttp.WSMsgType.CLOSING:  # aiohttp-specific
+    #                     if nreceived == 0:
+    #                         s = "Closing, but not even one event received"
+    #                         self.logger.error(s)
+    #                         await callback(ErrorMsg(comment=s))
+    #                         if raise_on_error:
+    #                             await ws.close(message=s.encode())
+    #                             raise Exception(s)
+    #                     await callback(FinishedMsg(comment="closing"))
+    #                     break
+    #                 elif wmsg.type == aiohttp.WSMsgType.ERROR:
+    #                     s = str(wmsg.data)
+    #                     self.logger.error(s)
+    #                     await callback(ErrorMsg(comment=s))
+    #                     if raise_on_error:
+    #                         await ws.close(message=s.encode())
+    #                         raise Exception(s)
+    #
+    #                 elif wmsg.type == aiohttp.WSMsgType.BINARY:
+    #                     if not received_first:
+    #                         await callback(ConnectionEstablished(comment=f"received {msg}"))
+    #                         received_first = True
+    #
+    #                     try:
+    #                         cm = channel_msgs_parse(wmsg.data)
+    #                     except Exception as e:
+    #                         msg = f"error in parsing\n{wmsg.data!r}\nerror:\n{e.__class__.__name__} {e!r}"
+    #                         self.logger.error(msg)
+    #                         await callback(ErrorMsg(comment=msg))
+    #                         if raise_on_error:
+    #                             await ws.close(message=msg.encode())
+    #                             raise Exception(msg) from e
+    #                         continue
+    #
+    #                     if isinstance(cm, DataReady):
+    #                         try:
+    #                             # TODO: re-use the same session for gets
+    #                             logger.debug(f"downloading {url_websockets} from {cm}")
+    #                             data = await self._download_from_urls(url_websockets, cm)
+    #                         except Exception as e:
+    #                             msg = f"error in downloading {cm}: {e.__class__.__name__} {e!r}"
+    #                             self.logger.error(msg)
+    #                             await callback(ErrorMsg(comment=msg))
+    #                             if raise_on_error:
+    #                                 await ws.close(message=msg.encode())
+    #                                 raise Exception(msg) from e
+    #                             continue
+    #
+    #                         await callback(InsertNotification(data_saved=cm.as_data_saved(), raw_data=data))
+    #                     elif isinstance(cm, ChannelInfo):
+    #                         nreceived += 1
+    #                         # logger.info(f"channel info {cm}")
+    #                         pass
+    #                     elif isinstance(cm, (WarningMsg, ErrorMsg, FinishedMsg)):
+    #                         await callback(cm)
+    #                     else:
+    #                         s = f"cannot interpret"
+    #                         self.logger.error(s)
+    #                         await callback(ErrorMsg(comment=s))
+    #                         if raise_on_error:
+    #                             await ws.close(message=s.encode())
+    #                             raise Exception(s)
+    #
+    #                 else:
+    #                     s = f"unexpected message type {wmsg.type} {wmsg.data!r}"
+    #                     self.logger.debug(s)
+    #                     await callback(ErrorMsg(comment=s))
+    #                     if raise_on_error:
+    #                         await ws.close(message=s.encode())
+    #                         raise Exception(s)
+    #     return None
 
     async def _download_from_urls(self, urlbase: URL, dr: DataReady) -> RawData:
         url_datas = [join(urlbase, _.url) for _ in dr.availability]
@@ -1116,11 +1128,23 @@ class DTPSClient:
 
         return await self.get(url_data, accept=dr.content_type)
 
+    async def wait_for_next_message(
+        self,
+        ws: ClientWebSocketResponse,
+        stop_condition: "asyncio.Event",
+        on_silence=Optional[Tuple[float, Callable]],
+    ) -> WSMessage:
+        while True:
+            msg = await ws.receive()
+            if msg.type == aiohttp.WSMsgType.CLOSE:
+                pass
+
     @async_error_catcher
-    async def listen_url_events_with_data_inline(
+    async def listen_url_events_(
         self,
         url_websockets: URLWS,
         raise_on_error: bool,
+        inline_data: bool,
         add_silence: Optional[float],
         callback: Callable[[ListenURLEvents], Awaitable[None]],
         stop_condition: "asyncio.Event",
@@ -1132,6 +1156,7 @@ class DTPSClient:
         async with self.my_session(url_websockets) as (session, use_url):
             ws: ClientWebSocketResponse
             async with session.ws_connect(use_url) as ws:
+                # await callback(ConnectionEstablished(comment=f"opened session to {url_websockets}"))
                 #  noinspection PyProtectedMember
                 # headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())
                 # logger.info(f"websocket to {url_websockets} ready\n{headers}")
@@ -1171,7 +1196,7 @@ class DTPSClient:
 
                         if not received_first:
                             await callback(ConnectionEstablished(comment=f"received {msg}"))
-                            received_first = False
+                            received_first = True
 
                         if msg.type == aiohttp.WSMsgType.CLOSE:  # aiohttp-specific
                             if nreceived == 0:
@@ -1202,43 +1227,70 @@ class DTPSClient:
                             else:
                                 if isinstance(cm, DataReady):
                                     dr = cm
-                                    if dr.chunks_arriving == 0:
-                                        s = f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}"
-                                        self.logger.error(s)
-                                        await callback(ErrorMsg(comment=s))
-                                        if raise_on_error:
-                                            raise Exception(s)
 
-                                    #  create a byte array initialized at
-
-                                    data = b""
-                                    for _ in range(dr.chunks_arriving):
-                                        msg = await ws.receive()
-
-                                        cm = channel_msgs_parse(msg.data)
-
-                                        if isinstance(cm, Chunk):
-                                            data += cm.data
-                                        else:
-                                            s = f"unexpected message {msg!r}"
+                                    if inline_data:
+                                        if dr.chunks_arriving == 0:
+                                            s = f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}, {inline_data=}"
                                             self.logger.error(s)
                                             await callback(ErrorMsg(comment=s))
                                             if raise_on_error:
                                                 raise Exception(s)
+
+                                        #  create a byte array initialized at
+
+                                        data = b""
+                                        for _ in range(dr.chunks_arriving):
+                                            msg = await ws.receive()
+                                            cm = channel_msgs_parse(msg.data)  # FIXME: need to use primitives
+
+                                            if isinstance(cm, Chunk):
+                                                data += cm.data
+                                            else:
+                                                s = f"unexpected message {msg!r}"
+                                                self.logger.error(s)
+                                                await callback(ErrorMsg(comment=s))
+                                                if raise_on_error:
+                                                    raise Exception(s)
+                                                continue
+
+                                        if len(data) != dr.content_length:
+                                            s = f"unexpected data length {len(data)} != {dr.content_length}\n{dr}"
+                                            self.logger.error(s)
+                                            await callback(ErrorMsg(comment=s))
+                                            if raise_on_error:
+                                                raise Exception(
+                                                    f"unexpected data length {len(data)} != {dr.content_length}"
+                                                )
+
+                                        raw_data = RawData(content_type=dr.content_type, content=data)
+                                        x = InsertNotification(
+                                            data_saved=dr.as_data_saved(), raw_data=raw_data
+                                        )
+                                        await callback(x)
+                                    else:
+                                        if dr.chunks_arriving > 0:
+                                            s = f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}, {inline_data=}"
+                                            self.logger.error(s)
+                                            await callback(ErrorMsg(comment=s))
+                                            if raise_on_error:
+                                                raise Exception(s)
+
+                                        try:
+                                            # TODO: re-use the same session for gets
+                                            logger.debug(f"downloading {url_websockets} from {cm}")
+                                            data = await self._download_from_urls(url_websockets, cm)
+                                        except Exception as e:
+                                            msg = f"error in downloading {cm}: {e.__class__.__name__} {e!r}"
+                                            self.logger.error(msg)
+                                            await callback(ErrorMsg(comment=msg))
+                                            if raise_on_error:
+                                                await ws.close(message=msg.encode())
+                                                raise Exception(msg) from e
                                             continue
 
-                                    if len(data) != dr.content_length:
-                                        s = f"unexpected data length {len(data)} != {dr.content_length}\n{dr}"
-                                        self.logger.error(s)
-                                        await callback(ErrorMsg(comment=s))
-                                        if raise_on_error:
-                                            raise Exception(
-                                                f"unexpected data length {len(data)} != {dr.content_length}"
-                                            )
-
-                                    raw_data = RawData(content_type=dr.content_type, content=data)
-                                    x = InsertNotification(data_saved=dr.as_data_saved(), raw_data=raw_data)
-                                    await callback(x)
+                                        await callback(
+                                            InsertNotification(data_saved=cm.as_data_saved(), raw_data=data)
+                                        )
 
                                 elif isinstance(cm, ChannelInfo):
                                     nreceived += 1

@@ -165,7 +165,7 @@ class ContextManagerUseContext(DTPSContext):
         url = await self._get_best_url()
         # ldi = await self.master.client.listen_url(url, on_data, inline_data=False, raise_on_error=False)
         inline_data = max_frequency is None
-        ldi = await self.master.client.listen_url(url, on_data, inline_data=inline_data, raise_on_error=False)
+        ldi = await self.master.client.listen_url(url, on_data, inline_data=inline_data, raise_on_error=True)
         # logger.debug(f"subscribed to {url} -> {t}")
         return ContextManagerUseSubscription(ldi)
 

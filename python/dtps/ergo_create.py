@@ -214,6 +214,9 @@ class ContextManagerCreateContext(DTPSContext):
             data: RawData = oq.get(saved.digest)
             await on_data(data)
 
+        if oq0.stored:
+            data2: RawData = oq0.get(oq0.last().digest)
+            await on_data(data2)
         sub_id = oq0.subscribe(wrap)
 
         return ContextManagerCreateContextSubscriber(sub_id, oq0)
