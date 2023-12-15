@@ -156,8 +156,5 @@ def check_is_unix_socket(u: str) -> None:
         raise ValueError(msg)
 
 
-X = TypeVar("X")
-
-
 def pydantic_parse(T: Type[X], d: Any) -> X:
     return parse_obj_as(T, d)

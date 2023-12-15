@@ -92,10 +92,12 @@ mod test_python;
 #[cfg(test)]
 mod test_range;
 
+mod client_websocket_push;
 mod shared_statuses;
 #[cfg(test)]
 mod test_connections;
 mod test_fixtures;
+use client_websocket_push::*;
 
 use internal_jobs::*;
 use signals_logic_push::*;

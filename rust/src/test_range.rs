@@ -1,5 +1,7 @@
 #![allow(unused_mut)]
 
+use crate::test_fixtures::ConnectionFixture;
+
 #[allow(non_snake_case)]
 #[cfg(test)]
 pub mod tests {
@@ -21,8 +23,9 @@ pub mod tests {
         get_metadata, get_rawdata, init_logging, patch_data, post_data, remove_proxy,
         test_fixtures::{instance_python_test_fixture, instance_rust, ConnectionFixture, TestFixture},
         test_python::check_server,
-        ContentInfo, DTPSError, DTPSServer, ListenURLEvents, RawData, ServerStateAccess, TopicName, TopicProperties,
-        TopicRefAdd, TypeOfConnection, CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT_PLAIN, DTPSR,
+        websocket_push, ContentInfo, DTPSError, DTPSServer, ListenURLEvents, RawData, ServerStateAccess, TopicName,
+        TopicProperties, TopicRefAdd, TypeOfConnection, CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT_PLAIN,
+        DTPSR,
     };
 
     #[fixture]
@@ -375,7 +378,7 @@ pub mod tests {
             .await?;
         let url = instance2.cf.con.to_string();
         let url = format!("{url}{path}");
-        let cmd = vec![
+        let cmd = [
             "dtps-http-py-listen",
             "--max-time",
             "5",
@@ -651,5 +654,48 @@ pub mod tests {
         } else {
             Ok(())
         }
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_websocket_push_rust(#[future] instance: TestFixture) -> DTPSR<()> {
+        check_websocket_push(instance.cf).await
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_websocket_push_python(#[future] instance_python: ConnectionFixture) -> DTPSR<()> {
+        check_websocket_push(instance_python).await
+    }
+
+    async fn check_websocket_push(instance: ConnectionFixture) -> DTPSR<()> {
+        init_logging();
+
+        let topic_name = TopicName::from_dash_sep("a/b")?;
+
+        create_topic(
+            &instance.con,
+            &topic_name,
+            &TopicRefAdd {
+                app_data: Default::default(),
+                properties: TopicProperties::rw(),
+                content_info: ContentInfo::simple(CONTENT_TYPE_CBOR, None),
+            },
+        )
+        .await?;
+
+        let con_topic = instance.con.join(topic_name.as_relative_url())?;
+
+        let mut push_interface = websocket_push(con_topic).await?;
+        let rd = RawData::cbor(serde_cbor::to_vec(&42)?);
+        push_interface.push(&rd).await?;
+        push_interface.push(&rd).await?;
+        push_interface.stop().await?;
+        // push_interface.send_object(&42).await?;
+        instance.finish().await?;
+
+        Ok(())
     }
 }

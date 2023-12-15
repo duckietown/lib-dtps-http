@@ -97,6 +97,21 @@ pub enum MsgServerToClient {
     SilenceMsg(SilenceMsg),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PushResult {
+    pub result: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum MsgWebsocketPushServerToClient {
+    PushResult(PushResult),
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum MsgWebsocketPushClientToServer {
+    RawData(RawData),
+}
+
 /// These are the messages that a user of the API will get when,
 /// for example, listening to a URL.
 #[derive(Debug, PartialEq, Clone)]
@@ -179,6 +194,10 @@ pub struct FoundMetadata {
 
     pub connections_url: Option<TypeOfConnection>,
     pub proxied_url: Option<TypeOfConnection>,
+
+    //  url for webhook push protocol
+    pub stream_push_url: Option<TypeOfConnection>,
+
     /// nanoseconds
     pub latency_ns: u128,
     pub content_type: String,

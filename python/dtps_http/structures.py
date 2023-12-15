@@ -513,6 +513,7 @@ class FinishedMsg:
 @dataclass
 class SilenceMsg:
     dt: float
+    comment: str
 
 
 def channel_msgs_parse(d: bytes) -> "ChannelMsgs":
@@ -577,3 +578,17 @@ class ProxyJob:
             raise ValueError(msg)
         for u in self.urls:
             parse_url_unescape(u)
+
+
+@dataclass(frozen=True)
+class PushResult:
+    result: bool
+    message: str
+
+    @classmethod
+    def from_json(cls, s: Any) -> "PushResult":
+        return pydantic_parse(cls, s)
+
+
+MsgWebsocketPushServerToClient = PushResult
+MsgWebsocketPushClientToServer = RawData

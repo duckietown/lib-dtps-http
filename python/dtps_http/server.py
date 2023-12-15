@@ -38,7 +38,8 @@ from jsonpatch import (
 from multidict import CIMultiDict
 from pydantic.dataclasses import dataclass
 
-from . import __version__, logger as logger0, TOPIC_PROXIED
+from . import __version__, logger as logger0
+from .constants import TOPIC_PROXIED
 from .client import DTPSClient, FoundMetadata, unescape_json_pointer
 from .constants import (
     CONTENT_TYPE_DTPS_INDEX_CBOR,
@@ -82,6 +83,7 @@ from .structures import (
     is_structure,
     LinkBenchmark,
     ProxyJob,
+    PushResult,
     RawData,
     Registration,
     TopicProperties,
@@ -991,7 +993,7 @@ class DTPSServer:
                 source = self.resolve(topic_name_s)
             except KeyError as e:
                 msg = f"404: {request.url!r}\nCannot find topic '{topic_name_s}':\n{e.args[0]}"
-                self.logger.error(msg)
+                # self.logger.error(msg)
                 # text = f'404: Cannot find topic "{topic_name_s}"'
                 return web.HTTPNotFound(text=msg, headers=headers)
 
@@ -1538,29 +1540,39 @@ pre {{
                 except:
                     msg = f"Cannot decode {msg.data!r}"
                     self.logger.error(msg)
-                    await ws.send_str(msg)
+                    result = PushResult(False, msg)
+                    await ws.send_bytes(get_tagged_cbor(result))
                     continue
                 # logger.info(f"received: {data}")
                 # interpret as RawData
                 if not isinstance(data, dict):
                     msg = f"Cannot handle {data!r}"
                     self.logger.error(msg)
-                    await ws.send_str(msg)
+                    result = PushResult(False, msg)
+                    await ws.send_bytes(get_tagged_cbor(result))
                     continue
 
                 if RawData.__name__ in data:
                     inside = data[RawData.__name__]
                     rd = RawData(inside["content"], inside["content_type"])
                     await oq_.publish(rd)
-                    await ws.send_str("OK")
+
+                    result = PushResult(True, "")
+                    await ws.send_bytes(get_tagged_cbor(result))
+
                 else:
                     msg = f"Cannot handle {data!r}"
                     self.logger.error(msg)
-                    await ws.send_str(msg)
+                    result = PushResult(False, msg)
+                    await ws.send_bytes(get_tagged_cbor(result))
+
                     continue
 
             else:
-                self.logger.error(f"Cannot handle message type {msg!r}")
+                msg = f"Cannot handle message type {msg!r}"
+                self.logger.error(msg)
+                result = PushResult(False, msg)
+                await ws.send_bytes(get_tagged_cbor(result))
 
         await ws.close()
 

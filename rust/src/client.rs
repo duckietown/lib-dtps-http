@@ -2,20 +2,21 @@ use std::{any::Any, collections::HashSet, fmt::Debug, os::unix::fs::FileTypeExt,
 
 use anyhow::Context;
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use hex;
 use hyper::{self, Client};
 use hyper_tls::HttpsConnector;
 use hyperlocal::UnixClientExt;
 use json_patch::{AddOperation, Patch as JsonPatch, Patch, PatchOperation, RemoveOperation};
 use maplit::hashmap;
+use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::{
     sync::broadcast::{error::RecvError, Receiver, Receiver as BroadcastReceiver},
     task::JoinHandle,
     time::timeout,
 };
-use tungstenite::Message as TM;
+use tungstenite::{Message as TM, Message};
 use warp::reply::Response;
 
 use crate::signals_logic::MASK_ORIGIN;
@@ -23,11 +24,12 @@ use crate::{
     context, debug_with_info, error_with_info, get_content_type, info_with_info, internal_assertion, join_ext,
     not_available, not_implemented, not_reachable, object_queues::InsertNotification, open_websocket_connection,
     parse_url_ext, put_header_accept, put_header_content_type, server_state::ConnectionJob, time_nanos,
-    types::CompositeName, warn_with_info, DTPSError, DataSaved, FoundMetadata, History, LinkBenchmark, LinkHeader,
-    ListenURLEvents, MsgServerToClient, ProxyJob, RawData, TopicName, TopicRefAdd, TopicsIndexInternal,
-    TopicsIndexWire, TypeOfConnection, CONTENT_TYPE_DTPS_INDEX, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_PATCH_JSON,
-    CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR, HEADER_CONTENT_LOCATION, HEADER_NODE_ID, REL_CONNECTIONS, REL_EVENTS_DATA,
-    REL_EVENTS_NODATA, REL_HISTORY, REL_META, REL_PROXIED,
+    types::CompositeName, warn_with_info, DTPSError, DataSaved, ErrorMsg, FinishedMsg, FoundMetadata, History,
+    LinkBenchmark, LinkHeader, ListenURLEvents, MsgClientToServer, MsgServerToClient, ProxyJob, RawData, TopicName,
+    TopicRefAdd, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection, CONTENT_TYPE_DTPS_INDEX,
+    CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR,
+    HEADER_CONTENT_LOCATION, HEADER_NODE_ID, REL_CONNECTIONS, REL_EVENTS_DATA, REL_EVENTS_NODATA, REL_HISTORY,
+    REL_META, REL_PROXIED, REL_STREAM_PUSH,
 };
 
 /// Note: need to have use futures::{StreamExt} in scope to use this
@@ -135,7 +137,25 @@ pub fn ms_from_ns(ns: u128) -> f64 {
     (ns as f64) / 1_000_000.0
 }
 
-pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<Option<MsgServerToClient>> {
+pub async fn send_to_server<T>(tx: &mut futures::channel::mpsc::UnboundedSender<TM>, m: &T) -> DTPSR<()>
+where
+    T: Serialize,
+{
+    let ascbor = serde_cbor::to_vec(m)?;
+    let msg = TM::binary(ascbor);
+    match tx.send(msg).await {
+        Ok(_) => return Ok(()),
+        Err(e) => {
+            return Err(DTPSError::Other(e.to_string()));
+        }
+    }
+}
+
+// returns None if closed
+pub async fn receive_from_server<T>(rx: &mut Receiver<TM>) -> DTPSR<Option<T>>
+where
+    T: DeserializeOwned,
+{
     let msg = match rx.recv().await {
         Ok(msg) => msg,
         Err(e) => {
@@ -155,7 +175,7 @@ pub async fn receive_from_server(rx: &mut Receiver<TM>) -> DTPSR<Option<MsgServe
     }
     let data = msg.clone().into_data();
 
-    let msg_from_server: MsgServerToClient = match serde_cbor::from_slice::<MsgServerToClient>(&data) {
+    let msg_from_server: T = match serde_cbor::from_slice::<T>(&data) {
         Ok(dr_) => {
             // debug_with_info!("dr: {:#?}", dr_);
             dr_
@@ -742,7 +762,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     let history_url = get_if_exists(REL_HISTORY);
     let connections_url = get_if_exists(REL_CONNECTIONS);
     let proxied_url = get_if_exists(REL_PROXIED);
-
+    let stream_push_url = get_if_exists(REL_STREAM_PUSH);
     let base_url = conbase.clone();
     let md = FoundMetadata {
         base_url,
@@ -756,6 +776,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
         content_type,
         proxied_url,
         connections_url,
+        stream_push_url,
     };
 
     Ok(md)

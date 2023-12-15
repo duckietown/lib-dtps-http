@@ -105,6 +105,33 @@ pub struct OtherProxied {
     pub op: OtherProxyInfo,
 }
 
+//  ../node/    ("indice"
+//   .../node/out1
+//   .../node/out2
+
+// sub ../node/          -> ti notifica quando i topic cambiano
+
+// {'out1':  TopicProperties(), 'out2': }
+
+// sub ../node/:deref:/  -> ti notiifan quando i dati cambiano
+
+//  {'out1': 'data1', 'out2': 'data2'}
+
+// TODO: create Jira issue for this
+// sub ../node/:deref:/:diff:/
+
+// [{'op': reaplce, path='/' , value: {'out1': 'data1', 'out2': 'data2'} ]
+// [{'op': replace, 'path': '/out1', 'value': 'data1'}]
+
+// TODO: create statistic endpoint
+// ../topic/:stats:/
+
+// {
+//
+// }
+
+// TODO: tell node not to produce data if nobody is looking at it
+
 pub struct DataStream {
     pub channel_info: ChannelInfo,
 

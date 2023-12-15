@@ -31,6 +31,8 @@ pub static CONTENT_TYPE_YAML: &str = "application/yaml";
 pub static EVENTS_SUFFIX: &str = ":events";
 pub static REL_EVENTS_DATA: &str = "dtps-events-inline-data";
 pub static REL_STREAM_PUSH: &str = "dtps-events-push";
+pub static EVENTS_STREAM_PUSH_SUFFIX: &str = ":events-push";
+
 pub static REL_EVENTS_NODATA: &str = "dtps-events";
 
 pub static REL_PROXIED: &str = "dtps-proxied";

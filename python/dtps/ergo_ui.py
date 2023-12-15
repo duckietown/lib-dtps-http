@@ -102,6 +102,7 @@ class DTPSContext(ABC):
         self,
         on_data: Callable[[RawData], Awaitable[None]],
         /,
+        max_frequency: Optional[float] = None,
         # service_level=None,
         # timeout: Optional[float] = None
     ) -> "SubscriptionInterface":
@@ -212,6 +213,14 @@ class PublisherInterface(ABC):
     @abstractmethod
     async def terminate(self) -> None:
         """Stops the publisher"""
+
+    # TODO: add function to get number of connections
+    # TODO: should we pass back the desired frequency? (max of all frequencies)
+    # TODO: banddwidth?
+    # @abstractmethod
+    # async def num_connections(self) -> RawData:
+    #     """Publishes data to the resource and waits for the response"""
+    #     ...
 
 
 class SubscriptionInterface(ABC):

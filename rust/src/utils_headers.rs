@@ -5,9 +5,10 @@ use maplit::hashmap;
 
 use crate::{
     get_id_string, ServerState, TopicName, TopicProperties, CONTENT_TYPE, CONTENT_TYPE_DTPS_INDEX_CBOR,
-    CONTENT_TYPE_JSON, CONTENT_TYPE_OCTET_STREAM, DTPSR, EVENTS_SUFFIX, HEADER_DATA_ORIGIN_NODE_ID,
-    HEADER_DATA_UNIQUE_ID, HEADER_NODE_ID, REL_CONNECTIONS, REL_EVENTS_DATA, REL_EVENTS_NODATA, REL_HISTORY, REL_META,
-    REL_PROXIED, REL_URL_META, TOPIC_CONNECTIONS, TOPIC_PROXIED, URL_HISTORY,
+    CONTENT_TYPE_JSON, CONTENT_TYPE_OCTET_STREAM, DTPSR, EVENTS_STREAM_PUSH_SUFFIX, EVENTS_SUFFIX,
+    HEADER_DATA_ORIGIN_NODE_ID, HEADER_DATA_UNIQUE_ID, HEADER_NODE_ID, REL_CONNECTIONS, REL_EVENTS_DATA,
+    REL_EVENTS_NODATA, REL_HISTORY, REL_META, REL_PROXIED, REL_STREAM_PUSH, REL_URL_META, TOPIC_CONNECTIONS,
+    TOPIC_PROXIED, URL_HISTORY,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,6 +103,14 @@ pub fn put_meta_headers(h: &mut HeaderMap<HeaderValue>, tp: &TopicProperties) {
             h,
             &format!("{EVENTS_SUFFIX}/?send_data=1"),
             REL_EVENTS_DATA,
+            Some("websocket"),
+        );
+    }
+    if tp.pushable {
+        put_link_header(
+            h,
+            &format!("{EVENTS_STREAM_PUSH_SUFFIX}/"),
+            REL_STREAM_PUSH,
             Some("websocket"),
         );
     }

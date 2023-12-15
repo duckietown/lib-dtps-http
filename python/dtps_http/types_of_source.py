@@ -78,6 +78,7 @@ class Source(ABC):
 
     @abstractmethod
     def get_inside(self, s: str, /) -> "Source":
+        """source / "a" / "b" """
         ...
 
     @abstractmethod

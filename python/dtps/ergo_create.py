@@ -204,7 +204,9 @@ class ContextManagerCreateContext(DTPSContext):
         else:
             raise AssertionError(f"Unexpected {res}")
 
-    async def subscribe(self, on_data: Callable[[RawData], Awaitable[None]], /) -> "SubscriptionInterface":
+    async def subscribe(
+        self, on_data: Callable[[RawData], Awaitable[None]], /, max_frequency: Optional[float] = None
+    ) -> "SubscriptionInterface":
         oq0 = self._get_server().get_oq(self._get_components_as_topic())
 
         async def wrap(oq: ObjectQueue, i: int) -> None:

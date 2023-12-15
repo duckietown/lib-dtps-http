@@ -82,7 +82,8 @@ pub enum DTPSError {
     // TokioSendError(#[from] tokio::sync::broadcast::error::SendError),
     #[error(transparent)]
     MPSCError(#[from] std::sync::mpsc::RecvError),
-
+    // #[error(transparent)]
+    // MPSCSendError(#[from] std::sync::mpsc::SendError),
     #[error("{context}---\n{source}")]
     Context { context: String, source: Box<DTPSError> },
 }
@@ -111,6 +112,12 @@ impl DTPSError {
 
 impl From<&str> for DTPSError {
     fn from(item: &str) -> Self {
+        DTPSError::Other(item.to_string())
+    }
+}
+
+impl<T> From<tokio::sync::mpsc::error::SendError<T>> for DTPSError {
+    fn from(item: tokio::sync::mpsc::error::SendError<T>) -> Self {
         DTPSError::Other(item.to_string())
     }
 }

@@ -38,7 +38,7 @@ from aiohttp import (
 )
 from tcp_latency import measure_latency
 
-from . import logger as logger0
+from . import logger, logger as logger0
 from .constants import (
     CONTENT_TYPE_PATCH_JSON,
     HEADER_CONTENT_LOCATION,
@@ -68,6 +68,7 @@ from .structures import (
     LinkBenchmark,
     ListenURLEvents,
     ProxyJob,
+    PushResult,
     RawData,
     SilenceMsg,
     TopicReachability,
@@ -530,7 +531,8 @@ class DTPSClient:
             #               self.obtained_answer[key] = None
             #           else:
             #               self.obtained_answer[key] = NodeID(resp.headers[HEADER_NODE_ID])
-
+            except CancelledError:
+                raise
             except:
                 self.logger.exception(f"error checking {url} {traceback.format_exc()}")
                 return None
@@ -580,7 +582,7 @@ class DTPSClient:
 
             timeout = aiohttp.ClientTimeout(total=conn_timeout)
             async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                self.logger.debug(f"my_session: {url} -> {use_url}")
+                # self.logger.debug(f"my_session: {url} -> {use_url}")
                 yield session, use_url
 
     async def get_proxied(self, url0: URLIndexer) -> Dict[TopicNameV, ProxyJob]:
@@ -662,6 +664,8 @@ class DTPSClient:
 
                     return rd
 
+        except CancelledError:
+            raise
         except:
             self.logger.error(f"cannot connect to {url=!r} {use_url=!r} \n{traceback.format_exc()}")
             raise
@@ -692,7 +696,8 @@ class DTPSClient:
                             f"GET gave a different content type ({accept=!r}, {content_type}\n{url0=}"
                         )
                     return rd
-
+        except CancelledError:
+            raise
         except:
             self.logger.error(f"cannot connect to {url=!r} {use_url=!r} \n{traceback.format_exc()}")
             raise
@@ -814,6 +819,7 @@ class DTPSClient:
         *,
         inline_data: bool,
         raise_on_error: bool,
+        connection_timeout: float = 10,
         # stop_condition: Optional[asyncio.Event] = None,
     ) -> ListenDataInterface:
         url_topic = self._look_cache(url_topic)
@@ -839,17 +845,44 @@ class DTPSClient:
         # logger.info(f"listening to  {url_topic} -> {metadata} -> {url_events}")
         # desc = f"{url_topic} inline={inline_data}"
 
-        async def filter_data(lue: ListenURLEvents) -> None:
-            if isinstance(lue, InsertNotification):
-                await cb(lue.raw_data)
+        connection_event = asyncio.Event()
 
-        return await self.listen_url_events3(
+        async def filter_data(lue: ListenURLEvents) -> None:
+            if isinstance(lue, ErrorMsg):
+                logger.error(f"error in {url_events}: {lue.comment}")
+            elif isinstance(lue, WarningMsg):
+                logger.warning(f"warning in {url_events}: {lue.comment}")
+            elif isinstance(lue, SilenceMsg):
+                logger.debug(f"silence in {url_events}: {lue.comment}")
+            elif isinstance(lue, FinishedMsg):
+                logger.debug(f"finished in {url_events}: {lue.comment}")
+            elif isinstance(lue, ConnectionEstablished):
+                logger.debug(f"connection established in {url_events}")
+
+                connection_event.set()
+            elif isinstance(lue, InsertNotification):
+                try:
+                    await cb(lue.raw_data)
+                except CancelledError:
+                    raise
+                except:
+                    logger.error(f"error in handler: {traceback.format_exc()}")
+                    return
+            else:
+                logger.error(f"unknown {lue}")
+                raise ValueError(f"unknown {lue}")
+
+        li = await self.listen_url_events3(
             url_events,
             inline_data=inline_data,
             raise_on_error=raise_on_error,
             add_silence=None,
             callback=filter_data,  # stop_condition=stop_condition
         )
+
+        await asyncio.wait_for(connection_event.wait(), timeout=connection_timeout)
+
+        return li
 
     async def listen_url_events3(
         self,
@@ -918,6 +951,7 @@ class DTPSClient:
             assert len(finished) == 1
             return finished.pop().result()
 
+    @async_error_catcher
     async def listen_url_events_with_data_offline(
         self,
         url_websockets: URLWS,
@@ -931,9 +965,11 @@ class DTPSClient:
         use_url: URLString
         nreceived = 0
 
+        await callback(WarningMsg(comment=f"opening session to {url_websockets}"))
         async with self.my_session(url_websockets) as (session, use_url):
             ws: ClientWebSocketResponse
             async with session.ws_connect(use_url) as ws:
+                await callback(WarningMsg(comment=f"opening session to {url_websockets}: ok"))
                 #  noinspection PyProtectedMember
                 # headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())
                 # logger.info(f"websocket to {url_websockets} ready\n{headers}")
@@ -961,7 +997,7 @@ class DTPSClient:
                                 wmsg = await asyncio.wait_for(wmsg_task, timeout=add_silence)
                             except asyncio.exceptions.TimeoutError:
                                 # logger.debug(f"add_silence {add_silence} expired")
-                                await callback(SilenceMsg(dt=add_silence))
+                                await callback(SilenceMsg(dt=add_silence, comment=f"nreceived={nreceived}"))
                                 continue
                         else:
                             wmsg = await wmsg_task
@@ -975,8 +1011,13 @@ class DTPSClient:
                         msg = f"condition satisfied: ending listen_url"
                         await callback(FinishedMsg(comment=msg))
                         break
+                    except CancelledError:
+                        raise
+                    except:
+                        logger.error(traceback.format_exc())
+                        raise
 
-                    self.logger.info(f"raw: {wmsg}")
+                    # self.logger.info(f"raw: {wmsg}")
                     if wmsg.type == aiohttp.WSMsgType.CLOSE:  # aiohttp-specific
                         if wmsg.data == WSCloseCode.OK:
                             if nreceived == 0:
@@ -1027,6 +1068,7 @@ class DTPSClient:
 
                         if isinstance(cm, DataReady):
                             try:
+                                # TODO: re-use the same session for gets
                                 data = await self._download_from_urls(url_websockets, cm)
                             except Exception as e:
                                 msg = f"error in downloading {cm}: {e.__class__.__name__} {e!r}"
@@ -1112,7 +1154,9 @@ class DTPSClient:
                                     msg = await asyncio.wait_for(wmsg_task, timeout=add_silence)
                                 except asyncio.exceptions.TimeoutError:
                                     # logger.debug(f"add_silence {add_silence} expired")
-                                    await callback(SilenceMsg(dt=add_silence))
+                                    await callback(
+                                        SilenceMsg(dt=add_silence, comment=f"nreceived={nreceived}")
+                                    )
                                     continue
                             else:
                                 msg = await wmsg_task
@@ -1215,7 +1259,8 @@ class DTPSClient:
                             if raise_on_error:
                                 raise Exception(s)
                             continue
-
+                except CancelledError:
+                    raise
                 except Exception as e:
                     msg = str(e)[:100]
                     await ws.close(code=WSCloseCode.ABNORMAL_CLOSURE, message=msg.encode())
@@ -1231,6 +1276,8 @@ class DTPSClient:
         url_websockets: URLWS,
     ) -> "AsyncIterator[PushInterface]":
         """Iterates using direct data using side loading"""
+        from .server import get_tagged_cbor
+
         use_url: URLString
         async with self.my_session(url_websockets) as (session, use_url):
             ws: ClientWebSocketResponse
@@ -1239,19 +1286,21 @@ class DTPSClient:
                 class PushInterfaceImpl(PushInterface):
                     async def push_through(self, data: bytes, content_type: ContentType) -> bool:
                         rd = RawData(content_type=content_type, content=data)
-                        as_struct = {RawData.__name__: asdict(rd)}
-                        cbor_data = cbor2.dumps(as_struct)
 
-                        await ws.send_bytes(cbor_data)
+                        await ws.send_bytes(get_tagged_cbor(rd))
                         while True:
                             response = await ws.receive()
-                            if response.type == aiohttp.WSMsgType.TEXT:
-                                text = response.data
-                                ok = text == "OK"
-                                return ok
+                            if response.type == aiohttp.WSMsgType.CLOSE:
+                                return False
+
+                            elif response.type == aiohttp.WSMsgType.BINARY:
+                                as_struct = cbor2.loads(response.data)
+                                pr = PushResult.from_json(as_struct)
+
+                                return pr.result
                             else:
-                                if response.type == aiohttp.WSMsgType.CLOSE:
-                                    return False
+                                logger.error(f"unexpected {response}")
+                                continue
 
                 yield PushInterfaceImpl()
 
@@ -1393,6 +1442,8 @@ class DTPSClient:
                     self.logger.error(f"obtained {e}")
                     should_break_outer = True
                     break
+            except CancelledError:
+                raise
             except Exception as e:
                 msg = f"Error listening to {urlbase0!r}:\n{traceback.format_exc()}"
                 self.logger.error(msg)

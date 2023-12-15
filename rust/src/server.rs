@@ -30,7 +30,7 @@ use warp::{hyper::Body, reply::Response, Filter, Rejection};
 
 use crate::{
     cloudflare::open_cloudflare, constants::*, debug_with_info, divide_in_components, epoch, error_other,
-    error_with_info, format_digest_path, format_nanos, handle_rejection, handle_websocket_generic2,
+    error_with_info, format_digest_path, format_nanos, handle_events_push, handle_rejection, handle_websocket_generic2,
     html_utils::make_html, info_with_info, internal_jobs::JobFunctionType, interpret_path, invalid_input,
     parse_url_ext, put_common_headers, put_header_content_type, put_header_location, serve_master_get,
     serve_master_head, serve_master_patch, serve_master_post, server_state::ConnectionJob, show_errors,
@@ -151,8 +151,31 @@ impl DTPSServer {
                     ws.on_upgrade(move |socket| handle_websocket_generic2(path, socket, state1, send_data))
                 }
             });
+        let topic_event_s_push = warp::path::full()
+            .and_then(|path: warp::path::FullPath| async move {
+                let path1 = path.as_str();
+                let segments: Vec<String> = divide_in_components(path1, '/');
+                let last = segments.last();
+                if last == Some(&EVENTS_STREAM_PUSH_SUFFIX.to_string()) {
+                    let start = path.as_str().rfind(EVENTS_STREAM_PUSH_SUFFIX).unwrap();
+                    let part = &path.as_str()[..start];
+                    // debug_with_info!("websocket raw {path1:?} -> {part:?}");
+                    Ok(part.to_string())
+                } else {
+                    Err(warp::reject::reject())
+                }
+            })
+            .and(clone_access.clone())
+            // .and(warp::query::<EventsQuery>())
+            .and(warp::ws())
+            .map({
+                move |path: String, state1: ServerStateAccess, ws: warp::ws::Ws| {
+                    ws.on_upgrade(move |socket| handle_events_push(path, socket, state1))
+                }
+            });
 
         let the_routes = topic_generic_events_route2
+            .or(topic_event_s_push)
             .or(master_route_head)
             .or(master_route_get)
             .or(master_route_post)
@@ -1096,28 +1119,6 @@ pub async fn pull_<T: DeserializeOwned + Clone + Send>(
         }
     }
     Ok(())
-}
-
-pub async fn do_receiving(
-    topic_name2: TopicName,
-    ss_mutex: ServerStateAccess,
-    mut receiver: UnboundedReceiverStream<MsgClientToServer>,
-) {
-    let topic_name = topic_name2.clone();
-    loop {
-        match receiver.next().await {
-            None => {
-                debug_with_info!("do_receiving: receiver.next() returned None");
-                // finished = true;
-                break;
-            }
-            Some(MsgClientToServer::RawData(rd)) => {
-                let mut ss0 = ss_mutex.lock().await;
-
-                let _ds = ss0.publish(&topic_name, &rd.content, &rd.content_type, None);
-            }
-        }
-    }
 }
 
 pub async fn collect_statuses(ssa: ServerStateAccess, mut rx: Receiver<ListenURLEvents>) -> DTPSR<()> {

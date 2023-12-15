@@ -14,14 +14,16 @@ use warp::{http::header, hyper::Body, reply::Response, ws::Message as WarpMessag
 use crate::{
     clocks::Clocks, debug_with_info, display_printable, divide_in_components, error_with_info, get_accept_header,
     get_header_with_default, get_series_of_messages_for_notification_, handle_topic_post, interpret_path, make_html,
-    make_request, put_alternative_locations, receive_from_websocket, send_as_ws_cbor, serve_static_file_path,
-    signals_logic::Pushable, utils_headers, utils_headers::put_patchable_headers, utils_mime, DTPSError, DataProps,
-    DataStream, ErrorMsg, FinishedMsg, GetMeta, GetStream, HandlersResponse, ListenURLEvents, MsgClientToServer,
-    MsgServerToClient, ObjectQueue, Patchable, RawData, ResolveDataSingle, ResolvedData, ServerStateAccess, TopicName,
-    TopicProperties, TopicsIndexInternal, TypeOFSource, WarningMsg, CONTENT_TYPE, CONTENT_TYPE_OCTET_STREAM,
-    CONTENT_TYPE_PATCH_CBOR, CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_TEXT_HTML, CONTENT_TYPE_TEXT_PLAIN,
-    CONTENT_TYPE_YAML, DTPSR, JAVASCRIPT_SEND,
+    make_request, put_alternative_locations, receive_from_websocket, send_as_ws_cbor, send_to_server,
+    serve_static_file_path, signals_logic::Pushable, utils_headers, utils_headers::put_patchable_headers, utils_mime,
+    DTPSError, DataProps, DataStream, ErrorMsg, FinishedMsg, GetMeta, GetStream, HandlersResponse, ListenURLEvents,
+    MsgClientToServer, MsgServerToClient, MsgWebsocketPushClientToServer, MsgWebsocketPushServerToClient, ObjectQueue,
+    Patchable, PushResult, RawData, ResolveDataSingle, ResolvedData, ServerStateAccess, TopicName, TopicProperties,
+    TopicsIndexInternal, TypeOFSource, WarningMsg, CONTENT_TYPE, CONTENT_TYPE_OCTET_STREAM, CONTENT_TYPE_PATCH_CBOR,
+    CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_TEXT_HTML, CONTENT_TYPE_TEXT_PLAIN, CONTENT_TYPE_YAML, DTPSR,
+    JAVASCRIPT_SEND,
 };
+use tungstenite::Message as TM;
 
 pub async fn serve_master_post(
     path: warp::path::FullPath,
@@ -608,17 +610,12 @@ pub async fn visualize_data(
     }
 }
 
-pub async fn handle_websocket_generic2(
-    path: String,
-    ws: warp::ws::WebSocket,
-    state: ServerStateAccess,
-    send_data: bool,
-) {
+pub async fn handle_websocket_generic2(path: String, ws: warp::ws::WebSocket, ssa: ServerStateAccess, send_data: bool) {
     debug_with_info!("WEBSOCKET {path} send_data={send_data}");
     let (mut ws_tx, ws_rx) = ws.split();
     let (receiver, join_handle) = receive_from_websocket(ws_rx);
 
-    match handle_websocket_generic2_(path, &mut ws_tx, receiver, state, send_data).await {
+    match handle_websocket_generic2_(path, &mut ws_tx, receiver, ssa, send_data).await {
         Ok(_) => {
             let msg = WarpMessage::close_with(CloseCode::Normal, "ok");
             let _ = ws_tx.send(msg).await.map_err(|e| {
@@ -647,22 +644,20 @@ pub async fn handle_websocket_generic2_(
     path: String,
     ws_tx: &mut SplitSink<warp::ws::WebSocket, WarpMessage>,
     _receiver: UnboundedReceiverStream<MsgClientToServer>,
-    state: ServerStateAccess,
+    ssa: ServerStateAccess,
     send_data: bool,
 ) -> DTPSR<()> {
     let referrer = None;
     let query = HashMap::new();
 
     let ds = {
-        let ss = state.lock().await;
+        let ss = ssa.lock().await;
         interpret_path(&path, &query, &referrer, &ss).await
     }?;
-    let stream = ds.get_data_stream(path.as_str(), state.clone()).await?;
+    let stream = ds.get_data_stream(path.as_str(), ssa.clone()).await?;
 
-    handle_websocket_data_stream(ws_tx, stream, send_data, state.clone()).await
+    handle_websocket_data_stream(ws_tx, stream, send_data, ssa.clone()).await
 }
-
-const DELTA_WEBSOCKET_AVAIL: f64 = 30.0;
 
 pub async fn handle_websocket_data_stream(
     ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
@@ -736,6 +731,84 @@ pub async fn handle_websocket_data_stream(
     ws_tx.close().await?;
     Ok(())
 }
+
+pub async fn handle_events_push(path: String, ws: warp::ws::WebSocket, ssa: ServerStateAccess) {
+    debug_with_info!("WEBSOCKET push {path}");
+    let (mut ws_tx, ws_rx) = ws.split();
+    let (receiver, join_handle) = receive_from_websocket(ws_rx);
+
+    match handle_events_push_(path, &mut ws_tx, receiver, ssa).await {
+        Ok(_) => {
+            let msg = WarpMessage::close_with(CloseCode::Normal, "ok");
+            let _ = ws_tx.send(msg).await.map_err(|e| {
+                debug_with_info!("Cannot send closing code: {:?}", e);
+            });
+        }
+        Err(e) => {
+            let s = format!("handle_websocket_generic2:\n{}", e);
+            debug_with_info!("{s}");
+            let msgs = vec![MsgServerToClient::ErrorMsg(ErrorMsg { comment: s.clone() })];
+            send_as_ws_cbor(&msgs, &mut ws_tx).await.unwrap();
+
+            // get first 16 chars
+            let reason = s.chars().take(16).collect::<String>();
+            let msg = WarpMessage::close_with(CloseCode::Error, reason);
+            let _ = ws_tx.send(msg).await.map_err(|e| {
+                debug_with_info!("Cannot send closing error: {:?}", e);
+            });
+        }
+    }
+
+    let _ = join_handle.await;
+}
+
+pub async fn handle_events_push_(
+    path: String,
+    ws_tx: &mut SplitSink<warp::ws::WebSocket, WarpMessage>,
+    mut receiver: UnboundedReceiverStream<MsgWebsocketPushClientToServer>,
+    ssa: ServerStateAccess,
+) -> DTPSR<()> {
+    let referrer = None;
+    let query = HashMap::new();
+
+    let ds = {
+        let ss = ssa.lock().await;
+        interpret_path(&path, &query, &referrer, &ss).await
+    }?;
+
+    loop {
+        match receiver.next().await {
+            None => {
+                debug_with_info!("do_receiving: receiver.next() returned None");
+                return Ok(());
+            }
+            Some(MsgWebsocketPushClientToServer::RawData(rd)) => {
+                let res = ds.push(ssa.clone(), &rd, &Clocks::default()).await;
+                let pr = match res {
+                    Ok(_) => MsgWebsocketPushServerToClient::PushResult(PushResult {
+                        result: true,
+                        message: "".to_string(),
+                    }),
+                    Err(e) => {
+                        let s = format!("Cannot push: {}", e);
+                        MsgWebsocketPushServerToClient::PushResult(PushResult {
+                            result: false,
+                            message: s,
+                        })
+                    }
+                };
+
+                let ascbor = serde_cbor::to_vec(&pr)?;
+                let msg = warp::ws::Message::binary(ascbor);
+
+                ws_tx.send(msg).await?;
+            }
+        }
+    }
+}
+
+const DELTA_WEBSOCKET_AVAIL: f64 = 30.0;
+
 //
 // pub async fn handle_websocket_forwarded(
 //     state: ServerStateAccess,
