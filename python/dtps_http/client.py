@@ -89,7 +89,7 @@ from .urls import (
     URLWSInline,
     URLWSOffline,
 )
-from .utils import async_error_catcher, check_is_unix_socket, method_lru_cache
+from .utils import async_error_catcher, check_is_unix_socket, method_lru_cache, parse_tagged
 
 __all__ = [
     "DTPSClient",
@@ -1295,8 +1295,7 @@ class DTPSClient:
 
                             elif response.type == aiohttp.WSMsgType.BINARY:
                                 as_struct = cbor2.loads(response.data)
-                                pr = PushResult.from_json(as_struct)
-
+                                pr = parse_tagged(as_struct, PushResult)
                                 return pr.result
                             else:
                                 logger.error(f"unexpected {response}")
@@ -1480,6 +1479,7 @@ class DTPSClient:
         return task
 
 
+@async_error_catcher
 async def pusher(
     client: DTPSClient, to_url: URLWS, queue_in: "asyncio.Queue[RawData]", queue_out: "asyncio.Queue[bool]"
 ):

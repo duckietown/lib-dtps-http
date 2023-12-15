@@ -50,7 +50,6 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
                 url0 = make_http_unix_url(socket_node)
 
                 async with DTPSClient.create() as client:
-                    # await client.
                     parameters = TopicRefAdd(
                         content_info=ContentInfo.simple(MIME_JSON),
                         properties=TopicProperties.rw_pushable(),

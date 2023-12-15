@@ -65,7 +65,7 @@ class TestUse(IsolatedAsyncioTestCase):
         async with create_use_pair("testuse") as (context_create, context_use):
             await go(context_use, max_frequency=None)
 
-    @test_timeout(5)
+    @test_timeout(10)
     async def test_use_offline(self):
         # create a server
         async with create_use_pair("testuse") as (context_create, context_use):

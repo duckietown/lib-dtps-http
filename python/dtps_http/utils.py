@@ -3,7 +3,19 @@ import os
 import stat
 import traceback
 from asyncio import CancelledError
-from typing import Any, AsyncIterator, Awaitable, Callable, Optional, Type, TYPE_CHECKING, TypeVar, Union
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Dict,
+    Optional,
+    Tuple,
+    Type,
+    TYPE_CHECKING,
+    TypeVar,
+    Union,
+)
 
 from multidict import CIMultiDict, CIMultiDictProxy
 from pydantic import parse_obj_as
@@ -18,6 +30,7 @@ __all__ = [
     "check_is_unix_socket",
     "method_lru_cache",
     "multidict_update",
+    "parse_tagged",
     "pydantic_parse",
     "should_mask_origin",
 ]
@@ -154,6 +167,21 @@ def check_is_unix_socket(u: str) -> None:
     if not is_socket:
         msg = f"Path socket {u} exists but it is not a socket."
         raise ValueError(msg)
+
+
+def parse_tagged(d: Dict[str, Any], *Ts: Type[X]) -> X:
+    if not isinstance(d, dict):
+        raise ValueError(f"parse_tagged: {d!r} is not a dict")
+
+    for T in Ts:
+        kn = T.__name__
+        if kn in d:
+            vals = d[kn]
+            if not isinstance(vals, dict):
+                raise ValueError(f"parse_tagged: {d!r} has {kn!r} but it is not a dict")
+            return pydantic_parse(T, vals)
+
+    raise ValueError(f"parse_tagged: {d!r} does not have any of {Ts!r}")
 
 
 def pydantic_parse(T: Type[X], d: Any) -> X:
