@@ -66,7 +66,7 @@ pub async fn listen_events_websocket(
             client_verbs::get_rawdata(&url).await?.content.to_vec()
         } else {
             let mut content: Vec<u8> = Vec::with_capacity(dr.content_length);
-            for _ in 0..(dr.chunks_arriving) {
+            for _ in 0..dr.chunks_arriving {
                 let msg_from_server = utils_websocket::receive_from_server(&mut rx).await?;
 
                 let chunk = match msg_from_server {

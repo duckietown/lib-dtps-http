@@ -92,7 +92,6 @@ class ContextManagerUseContextPublisher(PublisherInterface):
         )
 
     async def publish(self, rd: RawData, /) -> None:
-        # TODO: DTSW-4800: use websocket publishing
         await self.queue_in.put(rd)
         success = await self.queue_out.get()
         if not success:

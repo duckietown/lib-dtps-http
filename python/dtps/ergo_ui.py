@@ -131,6 +131,19 @@ class DTPSContext(ABC):
         Returns a publisher that can be used to publish data to the resource.
         This call creates a connection that will be terminated only when the publisher is closed
         using the terminate() method.
+
+
+
+        Example:
+
+            publisher = await context.publisher()
+
+            try:
+                for _ in range(10):
+                    await publisher.publish(data)
+            finally:
+                await publisher.terminate()
+
         """
 
     @abstractmethod
@@ -141,9 +154,9 @@ class DTPSContext(ABC):
 
         Example:
 
-        async with context.publisher_context() as publisher:
-            for _ in range(10):
-                await publisher.publish(data)
+            async with context.publisher_context() as publisher:
+                for _ in range(10):
+                    await publisher.publish(data)
 
         """
 

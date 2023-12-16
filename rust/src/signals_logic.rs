@@ -171,10 +171,7 @@ pub fn should_use_origin() -> bool {
     match env::var(ENV_MASK_ORIGIN) {
         Ok(value) => {
             // If the environment variable is set, check its truthiness.
-            match is_truthy(&value) {
-                None => DEFAULT_MASK_ORIGIN,
-                Some(x) => x,
-            }
+            is_truthy(&value).unwrap_or_else(|| DEFAULT_MASK_ORIGIN)
         }
         // If the environment variable is not set, return the default value.
         Err(_) => DEFAULT_MASK_ORIGIN,

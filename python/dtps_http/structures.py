@@ -1,7 +1,7 @@
 import hashlib
 import json
 from dataclasses import asdict
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, cast, Dict, List, NewType, Optional, Sequence, Union
 
 import cbor2
 from multidict import CIMultiDict
@@ -43,7 +43,6 @@ __all__ = [
     "TopicsIndex",
     "TransportData",
     "WarningMsg",
-    "channel_msgs_parse",
     "is_structure",
 ]
 
@@ -177,6 +176,14 @@ class TopicProperties:
         )
 
 
+Digest = NewType("Digest", str)
+
+
+def get_digest(s: bytes) -> Digest:
+    s = hashlib.sha256(s).hexdigest()
+    return cast(Digest, f"sha256:{s}")
+
+
 @dataclass
 class RawData:
     content: bytes
@@ -194,9 +201,8 @@ class RawData:
     def json_from_native_object(cls, ob: object) -> "RawData":
         return cls(content=json.dumps(ob).encode(), content_type=MIME_JSON)
 
-    def digest(self) -> str:
-        s = hashlib.sha256(self.content).hexdigest()
-        return f"sha256:{s}"
+    def digest(self) -> Digest:
+        return get_digest(self.content)
 
     def get_as_yaml(self) -> str:
         ob = self.get_as_native_object()
@@ -514,22 +520,6 @@ class FinishedMsg:
 class SilenceMsg:
     dt: float
     comment: str
-
-
-def channel_msgs_parse(d: bytes) -> "ChannelMsgs":
-    struct = cbor2.loads(d)
-    if not isinstance(struct, dict):
-        msg = "Expected a dictionary here"
-        raise ValueError(f"{msg}: {d}\n{struct}")
-
-    for T in (ChannelInfo, DataReady, Chunk, FinishedMsg, ErrorMsg, WarningMsg, SilenceMsg):
-        if T.__name__ in struct:
-            # noinspection PyTypeChecker
-            # return TypeAdapter(T).validate_python(struct[T.__name__])
-            data = struct[T.__name__]
-            return pydantic_parse(T, data)
-
-    raise ValueError(f"unexpected value {struct}")
 
 
 @dataclass

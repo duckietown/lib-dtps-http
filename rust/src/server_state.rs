@@ -299,10 +299,7 @@ impl StatusSummary {
 
 impl ServerState {
     pub fn new(node_app_data: Option<HashMap<String, NodeAppData>>) -> DTPSR<Self> {
-        let node_app_data = match node_app_data {
-            Some(x) => x,
-            None => HashMap::new(),
-        };
+        let node_app_data = node_app_data.unwrap_or_else(|| HashMap::new());
         let node_id = format!("rust-{}", get_random_node_id());
 
         let mut oqs: HashMap<TopicName, ObjectQueue> = HashMap::new();

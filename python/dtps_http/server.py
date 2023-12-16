@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass as original_dataclass, replace
 from typing import (
     Any,
+    AsyncContextManager,
     AsyncIterator,
     Awaitable,
     Callable,
@@ -19,6 +20,7 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
+    TYPE_CHECKING,
     Union,
 )
 
@@ -39,7 +41,6 @@ from multidict import CIMultiDict
 from pydantic.dataclasses import dataclass
 
 from . import __version__, logger as logger0
-from .constants import TOPIC_PROXIED
 from .client import DTPSClient, FoundMetadata, unescape_json_pointer
 from .constants import (
     CONTENT_TYPE_DTPS_INDEX_CBOR,
@@ -69,6 +70,7 @@ from .constants import (
     TOPIC_CLOCK,
     TOPIC_LIST,
     TOPIC_LOGS,
+    TOPIC_PROXIED,
     TOPIC_STATE_NOTIFICATION,
     TOPIC_STATE_SUMMARY,
 )
@@ -78,14 +80,18 @@ from .structures import (
     Chunk,
     ContentInfo,
     DataReady,
+    Digest,
+    get_digest,
     InsertNotification,
     is_image,
     is_structure,
     LinkBenchmark,
+    ListenURLEvents,
     ProxyJob,
     PushResult,
     RawData,
     Registration,
+    ResourceAvailability,
     TopicProperties,
     TopicReachability,
     TopicRef,
@@ -163,6 +169,78 @@ def get_static_dir() -> str:
     raise FileNotFoundError(msg)
 
 
+from dataclasses import dataclass
+from typing import Set
+
+
+@dataclass
+class SavedBlob:
+    content: bytes
+    who_needs_it: Set[str]
+    deadline: float
+
+
+class BlobManager:
+    blobs: Dict[Digest, SavedBlob]
+    blobs_forgotten: Dict[Digest, float]
+
+    def __init__(self):
+        self.blobs = {}
+        self.blobs_forgotten = {}
+
+    def cleanup_blobs(self) -> None:
+        now = time.time()
+        todrop = []
+
+        for digest, sb in list(self.blobs.items()):
+            no_one_needs_it = len(sb.who_needs_it) == 0
+            deadline_passed = now > sb.deadline
+            if no_one_needs_it and deadline_passed:
+                todrop.append(digest)
+
+        for digest in todrop:
+            # print(f"Dropping blob {digest} because deadline passed")
+            self.blobs.pop(digest, None)
+            self.blobs_forgotten[digest] = now
+
+    def release_blob(self, digest: Digest, who_needs_it: str):
+        if digest not in self.blobs:
+            return
+        sb = self.blobs[digest]
+        sb.who_needs_it.remove(who_needs_it)
+        if len(sb.who_needs_it) == 0:
+            deadline_passed = time.time() > sb.deadline
+            if deadline_passed:
+                self.blobs.pop(digest, None)
+                self.blobs_forgotten[digest] = time.time()
+
+    def save_blob(self, content: bytes, who_needs_it: str) -> Digest:
+        digest = get_digest(content)
+        if digest not in self.blobs:
+            self.blobs[digest] = SavedBlob(
+                content=content,
+                who_needs_it={who_needs_it},
+                deadline=time.time(),
+            )
+        else:
+            sb = self.blobs[digest]
+            sb.who_needs_it.add(who_needs_it)
+        return digest
+
+    def save_blob_deadline(self, content: bytes, deadline: float) -> Digest:
+        digest = get_digest(content)
+        if digest not in self.blobs:
+            self.blobs[digest] = SavedBlob(
+                content=content,
+                who_needs_it=set(),
+                deadline=deadline,
+            )
+        else:
+            sb = self.blobs[digest]
+            sb.deadline = max(deadline, sb.deadline)
+        return digest
+
+
 class DTPSServer:
     node_id: NodeID
 
@@ -179,6 +257,8 @@ class DTPSServer:
     registrations: List[Registration]
     available_urls: "List[URLString]"
     nickname: str
+
+    blob_manager: BlobManager
 
     @classmethod
     def create(
@@ -208,6 +288,7 @@ class DTPSServer:
         self._more_on_startup = on_startup
         self.app.on_startup.append(self.on_startup)
         # self.app.on_shutdown.append(self.on_shutdown)
+        routes.get("/{ignore:.*}/:blobs/{digest}/{content_type_base64:.*}")(self.serve_blob)
 
         routes.get("/{topic:.*}" + EVENTS_SUFFIX + "/")(self.serve_events)
         routes.get("/{topic:.*}" + REL_URL_META + "/")(self.serve_meta)
@@ -221,6 +302,8 @@ class DTPSServer:
 
         routes.get("/{topic:.*}")(self.serve_get)
         routes.delete("/{topic:.*}")(self.serve_delete)
+
+        self.blob_manager = BlobManager()
 
         # mount a static directory for the web interface
         static_dir = get_static_dir()
@@ -420,51 +503,52 @@ class DTPSServer:
                 self.logger.debug("already have topic %s", new_topic)
                 continue
 
-            self.logger.info(f"adding topic {tr}")
-            possible: List[Tuple[URL, TopicReachability]] = []
-            metadata = None
+            # self.logger.info(f"adding topic {tr}")
+            possible: List[TopicReachability] = []
             for reachability in tr.reachability:
-                urlhere = new_topic.as_relative_url()
+                # urlhere = new_topic.as_relative_url()
                 # rurl = parse_url_unescape(reachability.url)
-                metadata = await dtpsclient.get_metadata(parse_url_unescape(reachability.url))
-                for m in metadata.alternative_urls:  # + [rurl]:
+                metadata0 = await dtpsclient.get_metadata(parse_url_unescape(reachability.url))
+                for m in metadata0.alternative_urls:  # + [rurl]:
                     reach_with_me = await dtpsclient.compute_with_hop(
                         self.node_id,
-                        urlhere,
                         connects_to=m,
                         expects_answer_from=reachability.answering,
                         forwarders=reachability.forwarders,
                     )
                     if reach_with_me is not None:
-                        try:
-                            xx = parse_url_unescape(reach_with_me.url)
-                        except Exception:
-                            self.logger.error(f"Could not parse {reach_with_me.url!r}")
-                            continue
-                        else:
-                            possible.append((xx, reach_with_me))
+                        # try:
+                        #     # xx = join(m, reach_with_me.url)
+                        #     xx = m
+                        # except Exception:
+                        #     self.logger.error(f"Could not parse {reach_with_me.url!r}")
+                        #     continue
+                        # else:
+                        possible.append(reach_with_me)
                     else:
                         pass  # logger.info(f"Could not proxy {new_topic!r} as {urlbase} {topic_name}
                         # -> {m}")
 
             if not possible:
                 self.logger.error(f"Topic {topic_name} cannot be reached")
-                return
-
-            assert metadata is not None  # XXX: this is not the best metadata
+                continue
 
             def choose_key(x: TopicReachability) -> Tuple[int, float, float]:
                 return x.benchmark.complexity, x.benchmark.latency_ns, -x.benchmark.bandwidth
 
-            possible.sort(key=lambda _: choose_key(_[1]))
-            url_to_use, r = possible[0]
+            possible.sort(key=choose_key)
+            r = possible[0]
+            url_to_use = parse_url_unescape(r.url)
+            assert isinstance(url_to_use, URL), url_to_use
+
+            metadata = await dtpsclient.get_metadata(url_to_use)
 
             if mask_origin:
                 tr2 = replace(tr, reachability=[r])
             else:
                 tr2 = replace(tr, reachability=tr.reachability + [r])
 
-            self.logger.info(f"adding topic {new_topic} -> {repr(url_to_use)}")
+            # self.logger.info(f"adding topic {new_topic} -> {repr(url_to_use)}")
 
             # metadata_to_use = await dtpsclient.get_metadata(url_to_use)
             fd = ForwardedTopic(
@@ -478,13 +562,13 @@ class DTPSServer:
                 content_info=tr2.content_info,  # FIXME: content info
                 properties=tr2.properties,
             )
-
-            self.logger.info(
-                f"Proxying {new_topic!r} as    {topic_name} "
-                # "->  \n"
-                # f" available at\n: {json.dumps(asdict(tr), indent=2)} \n"
-                # f" proxied at\n: {json.dumps(asdict(fd), indent=2)} \n"
-            )
+            #
+            # self.logger.info(
+            #     f"Proxying {new_topic} as    {topic_name}  with metadata = {metadata!r} \n"
+            #     # "->  \n"
+            #     # f" available at\n: {json.dumps(asdict(tr), indent=2)} \n"
+            #     # f" proxied at\n: {json.dumps(asdict(fd), indent=2)} \n"
+            # )
 
             await self._add_forwarded(new_topic, fd)
 
@@ -809,7 +893,10 @@ class DTPSServer:
     @async_error_catcher
     async def serve_history(self, request: web.Request) -> web.StreamResponse:
         headers: CIMultiDict[str] = CIMultiDict()
-        # TODO: DTSW-4783: add nodeid
+        add_nocache_headers(headers)
+        multidict_update(headers, self.get_headers_alternatives(request))
+        self._add_own_headers(headers)
+
         topic_name_s = request.match_info["topic"]
         try:
             source = self.resolve(topic_name_s)
@@ -835,7 +922,10 @@ class DTPSServer:
     @async_error_catcher
     async def serve_meta(self, request: web.Request) -> web.StreamResponse:
         headers: CIMultiDict[str] = CIMultiDict()
-        # TODO: DTPS-4783: add nodeid
+        add_nocache_headers(headers)
+        multidict_update(headers, self.get_headers_alternatives(request))
+        self._add_own_headers(headers)
+
         topic_name_s = request.match_info["topic"]
         try:
             source = self.resolve(topic_name_s)
@@ -1275,7 +1365,6 @@ pre {{
                 for r in pr.availability:
                     headers.add("Location", r.url)
 
-                # TODO: DTSW-4786: need to return a Location header
                 return web.Response(
                     status=201, headers=headers  # content_type=otr.content_type, body=otr.content
                 )
@@ -1336,7 +1425,6 @@ pre {{
                 for r in otr.availability:
                     headers.add("Location", r.url)
 
-                # TODO: DTSW-4786: need to return a Location header
                 return web.Response(
                     status=201, headers=headers  # content_type=otr.content_type, body=otr.content
                 )
@@ -1389,6 +1477,36 @@ pre {{
             return web.Response(status=200, headers=headers)
 
     @async_error_catcher
+    async def serve_blob(self, request: web.Request) -> web.Response:
+        headers: CIMultiDict[str] = CIMultiDict()
+        multidict_update(headers, self.get_headers_alternatives(request))
+        self._add_own_headers(headers)
+
+        digest = request.match_info["digest"]
+        content_type_base64 = request.match_info["content_type_base64"]
+        content_type = base64.urlsafe_b64decode(content_type_base64.encode()).decode("ascii")
+
+        if digest in self.blob_manager.blobs:
+            blob = self.blob_manager.blobs[digest]
+            return web.Response(body=blob.content, headers=headers, content_type=content_type)
+        else:
+            msg = f"Cannot resolve blob: {request.url}\ndigest: {digest!r}"
+            self.logger.error(msg)
+            raise web.HTTPNotFound(text=msg, headers=headers)
+
+    # routes.get("/{ignore:.*}/:blobs/{digest}/{content_type}")(self.serve_blob)
+
+    def _store_data(self, rd: RawData, available_for: float, presented_as: str) -> Tuple[URLString, float]:
+        now = time.time()
+        deadline = now + available_for
+        digest = self.blob_manager.save_blob_deadline(rd.content, deadline)
+
+        b64 = base64.urlsafe_b64encode(rd.content_type.encode()).decode("ascii")
+
+        url = URLString(f"./:blobs/{digest}/{b64}")
+        return url, now + available_for
+
+    @async_error_catcher
     async def serve_data_get(self, request: web.Request) -> web.Response:
         headers: CIMultiDict[str] = CIMultiDict()
         multidict_update(headers, self.get_headers_alternatives(request))
@@ -1412,6 +1530,8 @@ pre {{
 
     @async_error_catcher
     async def serve_events(self, request: web.Request) -> web.WebSocketResponse:
+        presented_as = request.url.path
+
         if SEND_DATA_ARGNAME in request.query:
             send_data = True
         else:
@@ -1445,7 +1565,8 @@ pre {{
 
             await ws.prepare(request)
 
-            await self.serve_events_forwarder(ws, fd, send_data)
+            self.logger.info(f"serve_events_forwarder: {request.url} topic_name={topic_name_s} fd={fd}")
+            await self.serve_events_forwarder(ws, presented_as, fd, send_data)
             return ws
 
         oq_ = self._oqs[topic_name]
@@ -1482,10 +1603,9 @@ pre {{
             if send_data:
                 the_bytes = oq_.get(digest).content
                 chunk = Chunk(digest=digest, i=0, n=1, index=0, data=the_bytes)
-                as_cbor = get_tagged_cbor(chunk)
 
                 try:
-                    await ws.send_bytes(as_cbor)
+                    await ws.send_bytes(get_tagged_cbor(chunk))
                 except ConnectionResetError:
                     exit_event.set()
                     pass
@@ -1586,6 +1706,7 @@ pre {{
     async def serve_events_forwarder(
         self,
         ws: web.WebSocketResponse,
+        presented_as: str,
         fd: ForwardedTopic,
         inline_data: bool,
     ) -> None:
@@ -1599,7 +1720,7 @@ pre {{
                         await self.serve_events_forward_simple(ws, url)
                     elif (url := fd.forward_url_events) is not None:
                         await self.serve_events_forwarder_one(
-                            ws, url, inline_data_send=True, inline_data_receive=False
+                            ws, presented_as, url, inline_data_send=inline_data, inline_data_receive=False
                         )
                     else:
                         raise ValueError(f"Events not supported")
@@ -1614,7 +1735,11 @@ pre {{
                         raise ValueError(f"Events not supported")
 
                     await self.serve_events_forwarder_one(
-                        ws, url, inline_data_send=False, inline_data_receive=inline_data_receive
+                        ws,
+                        presented_as,
+                        url,
+                        inline_data_send=inline_data,
+                        inline_data_receive=inline_data_receive,
                     )
 
             except CancelledError:
@@ -1623,14 +1748,21 @@ pre {{
                 self.logger.error(f"Exception in serve_events_forwarder_one: {traceback.format_exc()}")
                 await asyncio.sleep(1)
 
-    @asynccontextmanager
-    async def _client(self, nickname: Optional[str] = None) -> AsyncIterator[DTPSClient]:
-        async with DTPSClient.create(nickname=nickname, shutdown_event=self.shutdown_event) as client:
-            yield client
+    if TYPE_CHECKING:
+
+        def _client(self, nickname: Optional[str] = None) -> AsyncContextManager[DTPSClient]:
+            ...
+
+    else:
+
+        @asynccontextmanager
+        async def _client(self, nickname: Optional[str] = None) -> AsyncIterator[DTPSClient]:
+            async with DTPSClient.create(nickname=nickname, shutdown_event=self.shutdown_event) as client:
+                yield client
 
     async def serve_events_forward_simple(self, ws_to_write: web.WebSocketResponse, url: URL) -> None:
         """Iterates using direct data in websocket."""
-        # self.logger.debug(f"serve_events_forward_simple: {url} [no overhead forwarding]")
+        self.logger.debug(f"serve_events_forward_simple: {url} [no overhead forwarding]")
 
         async with self._client() as client:
             async with client.my_session(url) as (session, use_url):
@@ -1640,22 +1772,30 @@ pre {{
                         if msg.type == WSMsgType.CLOSE:
                             break
                         if msg.type == WSMsgType.TEXT:
-                            await ws_to_write.send_str(msg.data)
+                            # self.logger.warning(f"serve_events_forward_simple: forwarding text {msg}")
+                            await ws_to_write.send_str(msg.data)  # OK
                         elif msg.type == WSMsgType.BINARY:
-                            await ws_to_write.send_bytes(msg.data)
+                            await ws_to_write.send_bytes(msg.data)  # OK
                         else:
                             self.logger.warning(f"Unknown message type {msg.type}")
 
     @async_error_catcher
     async def serve_events_forwarder_one(
-        self, ws: web.WebSocketResponse, url: URLWS, inline_data_receive: bool, inline_data_send: bool
+        self,
+        ws: web.WebSocketResponse,
+        presented_as: str,
+        url: URLWS,
+        inline_data_receive: bool,
+        inline_data_send: bool,
     ) -> None:
+        available_for = 60.0
         assert isinstance(url, URL)
-        # logger.debug(f"serve_events_forwarder_one: {url} {inline_data=} {use_remote_inline_data=}")
+        self.logger.debug(f"serve_events_forwarder_one: {url} {inline_data_receive=} {inline_data_send=}")
 
         async with self._client() as client:
 
-            async def callback(lue):
+            @async_error_catcher
+            async def callback(lue: ListenURLEvents) -> None:
                 if isinstance(lue, InsertNotification):
                     ds = lue.data_saved
                     # urls = [join(url, _.url) for _ in ds.availability]
@@ -1668,7 +1808,9 @@ pre {{
                         availability = []
                         chunks_arriving = 1
                     else:
-                        raise NotImplementedError
+                        the_url, available_until = self._store_data(lue.raw_data, available_for, presented_as)
+                        availability = [ResourceAvailability(the_url, available_until)]
+                        chunks_arriving = 0
                         # availability = [
                         #     ResourceAvailability(url=url_string, available_until=time.time() + 60)
                         #     for url_string in urls_strings
@@ -1687,15 +1829,14 @@ pre {{
                         unique_id=ds.unique_id,
                     )
                     # logger.debug(f"Forwarding {dr} -> {dr2}")
-                    await ws.send_json(asdict(dr2))
+                    await ws.send_bytes(get_tagged_cbor(dr2))
                     if inline_data_send:
                         chunk = Chunk(digest=dr2.digest, i=0, n=1, index=0, data=lue.raw_data.content)
-                        as_cbor = get_tagged_cbor(chunk)
-                        await ws.send_bytes(as_cbor)
+                        await ws.send_bytes(get_tagged_cbor(chunk))
                     else:
-                        raise NotImplementedError
+                        pass
                 else:
-                    await ws.send_json(asdict(lue))
+                    await ws.send_bytes(get_tagged_cbor(lue))
 
             ld = await client.listen_url_events3(
                 url,

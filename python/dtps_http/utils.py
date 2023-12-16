@@ -44,7 +44,7 @@ FA = TypeVar("FA", bound=Callable[..., Awaitable[Any]])
 
 FAsync = TypeVar("FAsync", bound=Callable[..., AsyncIterator[Any]])
 
-if TYPE_CHECKING:
+if False:
 
     def async_error_catcher(_: FA, /) -> FA:
         ...

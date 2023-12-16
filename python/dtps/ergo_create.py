@@ -157,7 +157,6 @@ class ContextManagerCreateContext(DTPSContext):
         raise NotImplementedError()
 
     async def remove(self) -> None:
-        # TODO: DTSW-4799: implement remove
         topic = self._get_components_as_topic()
         server = self._get_server()
         try:
@@ -239,7 +238,6 @@ class ContextManagerCreateContext(DTPSContext):
         yield self._publisher
 
     async def call(self, data: RawData, /) -> RawData:
-        # TODO: DTSW-4795: implement call
         server = self._get_server()
         topic = self._get_components_as_topic()
         url0 = topic.as_relative_url()

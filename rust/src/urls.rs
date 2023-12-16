@@ -114,7 +114,7 @@ pub fn parse_url_ext(mut s0: &str) -> DTPSR<TypeOfConnection> {
                     (host, path)
                 }
                 Some(path_start0) => {
-                    let path = (after_scheme[path_start0..].to_string()).clone();
+                    let path = after_scheme[path_start0..].to_string().clone();
 
                     let host = after_scheme[..path_start0].to_string().clone();
 
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn test_canonical() {
-        assert_eq!(canonical(format!("a/b/c/../d/")), format!("a/b/d/"));
+        assert_eq!(canonical("a/b/c/../d/".to_string()), "a/b/d/");
     }
     // Bring the function into scope
 

@@ -55,8 +55,8 @@ from .constants import (
 from .exceptions import EventListeningNotAvailable
 from .link_headers import get_link_headers
 from .structures import (
-    channel_msgs_parse,
     ChannelInfo,
+    ChannelMsgs,
     Chunk,
     ConnectionEstablished,
     DataReady,
@@ -349,13 +349,13 @@ class DTPSClient:
     async def compute_with_hop(
         self,
         this_node_id: NodeID,
-        this_url: URLString,
+        # this_partial_url: URLString,
         connects_to: URLTopic,
         expects_answer_from: NodeID,
         forwarders: List[ForwardingStep],
     ) -> Optional[TopicReachability]:
         assert isinstance(connects_to, URL), connects_to
-        assert isinstance(this_url, str), this_url
+        # assert isinstance(this_partial_url, str), this_partial_url
         if (benchmark := await self.can_use_url(connects_to, expects_answer_from)) is None:
             return None
 
@@ -369,7 +369,10 @@ class DTPSClient:
             total |= f.performance
         total |= benchmark
         tr2 = TopicReachability(
-            url=this_url, answering=this_node_id, forwarders=forwarders + [me], benchmark=total
+            url=url_to_string(connects_to),
+            answering=this_node_id,
+            forwarders=forwarders + [me],
+            benchmark=total,
         )
         return tr2
 
@@ -1057,12 +1060,11 @@ class DTPSClient:
                             await callback(ErrorMsg(comment=str(msg.data)))
                             if raise_on_error:
                                 raise Exception(str(msg.data))
-
                         elif msg.type == aiohttp.WSMsgType.BINARY:
                             try:
                                 cm = channel_msgs_parse(msg.data)
                             except Exception as e:
-                                s = f"error in parsing {msg.data!r}: {e.__class__.__name__} {e!r}"
+                                s = f"error in parsing {msg.data!r}: {e.__class__.__name__}:\n{e}"
                                 self.logger.error(s)
                                 await callback(ErrorMsg(comment=s))
                                 if raise_on_error:
@@ -1093,7 +1095,7 @@ class DTPSClient:
                                             if isinstance(cm, Chunk):
                                                 data += cm.data
                                             else:
-                                                s = f"unexpected message {msg!r}"
+                                                s = f"unexpected message while waiting for chunks {msg!r}"
                                                 self.logger.error(s)
                                                 await callback(ErrorMsg(comment=s))
                                                 if raise_on_error:
@@ -1146,17 +1148,19 @@ class DTPSClient:
                                 elif isinstance(cm, ChannelInfo):
                                     nreceived += 1
                                     # logger.info(f"channel info {cm}")
-                                elif isinstance(cm, (WarningMsg, ErrorMsg, FinishedMsg)):
+                                elif isinstance(
+                                    cm, (WarningMsg, ErrorMsg, FinishedMsg, ConnectionEstablished)
+                                ):
                                     await callback(cm)
                                 else:
-                                    s = f"unexpected message {cm!r}"
+                                    s = f"listen_url_events_: unexpected message {cm!r}"
                                     self.logger.error(s)
                                     await callback(ErrorMsg(comment=s))
                                     if raise_on_error:
                                         raise Exception(s)
 
                         else:
-                            s = f"unexpected message type {msg.type} {msg.data!r}"
+                            s = f"listen_url_events_: unexpected message type {msg.type} with {msg.data!r}"
                             self.logger.error(s)
                             await callback(ErrorMsg(comment=s))
                             if raise_on_error:
@@ -1473,3 +1477,9 @@ class ListenDataContinuousImp(ListenDataInterface):
     async def wait_for_done(self) -> None:
         assert self.task is not None
         await self.task
+
+
+def channel_msgs_parse(d: bytes) -> "ChannelMsgs":
+    Ts = (ChannelInfo, DataReady, Chunk, FinishedMsg, ErrorMsg, WarningMsg, SilenceMsg, ConnectionEstablished)
+
+    return parse_cbor_tagged(d, *Ts)

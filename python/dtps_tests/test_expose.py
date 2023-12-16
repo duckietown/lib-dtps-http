@@ -1,9 +1,12 @@
 import asyncio
 import os
 import tempfile
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from typing import AsyncIterator, Optional
 from unittest import IsolatedAsyncioTestCase
 
-from dtps import context_cleanup
+from dtps import context_cleanup, DTPSContext
 from dtps_http import (
     app_start,
     async_error_catcher,
@@ -137,3 +140,80 @@ class TestExpose(IsolatedAsyncioTestCase):
                 self.assertEqual(received_proxy, sent)
                 await sub1.unsubscribe()
                 await sub2.unsubscribe()
+
+    @test_timeout(20)
+    @async_error_catcher
+    async def test_forwarded_websocket_offline(self):
+        await self.check_forwarded_websocket_(max_frequency=100)
+
+    @test_timeout(20)
+    @async_error_catcher
+    async def test_forwarded_websocket_inline(self):
+        await self.check_forwarded_websocket_(max_frequency=None)
+
+    async def check_forwarded_websocket_(self, max_frequency: Optional[float] = None):
+        async with create_use_pair("expose2a") as (context_a_local, context_a_remote):
+            async with create_use_pair("expose2b") as (context_b_local, context_b_remote):
+                b_node_id = await context_b_remote.get_node_id()
+                b_node_id2 = await context_b_local.get_node_id()
+                self.assertEqual(b_node_id, b_node_id2)
+
+                topic = "my/topic"
+                b_topic = await (context_b_local / topic).queue_create()
+
+                self.assertEqual(await b_topic.get_node_id(), b_node_id)
+
+                mountpoint = "mnt/b"
+                b_mounted = context_a_remote / mountpoint
+                await b_mounted.expose(context_b_remote)
+                await asyncio.sleep(1)
+
+                b_mounted_topic = b_mounted / topic
+
+                # subscribe to the topic
+                received = []
+                sent = []
+
+                async def on_received(rec: RawData):
+                    logger.info(f"direct: {rec}")
+                    received.append(rec)
+
+                sub = await b_mounted_topic.subscribe(on_received, max_frequency=max_frequency)
+                await asyncio.sleep(1)
+                # publish to the topic
+                for i in range(10):
+                    rd = RawData.json_from_native_object({"count": i})
+                    await b_topic.publish(rd)
+                    sent.append(rd)
+
+                await asyncio.sleep(1)
+
+                # check that the messages were received
+                self.assertEqual(received, sent)
+
+
+@dataclass
+class ExposedSetup:
+    local: DTPSContext
+    mounted: DTPSContext
+
+
+@asynccontextmanager
+async def get_exposed_topic(name: str) -> AsyncIterator[ExposedSetup]:
+    async with create_use_pair(f"{name}a") as (context_a_local, context_a_remote):
+        async with create_use_pair(f"{name}b") as (context_b_local, context_b_remote):
+            b_node_id = await context_b_remote.get_node_id()
+            b_node_id2 = await context_b_local.get_node_id()
+            assert b_node_id == b_node_id2
+
+            topic = "my/topic"
+            b_topic = await (context_b_local / topic).queue_create()
+
+            mountpoint = "mnt/b"
+            b_mounted = context_a_remote / mountpoint
+            await b_mounted.expose(context_b_remote)
+            await asyncio.sleep(1)
+
+            b_mounted_topic = b_mounted / topic
+
+            yield ExposedSetup(local=b_topic, mounted=b_mounted_topic)
