@@ -3,8 +3,8 @@ use std::fmt::Debug;
 use async_trait::async_trait;
 use base64::{
     self,
-    engine::general_purpose,
-    Engine as _, // keep
+    engine::general_purpose, // keep
+    Engine as _,
 };
 use futures::{
     stream::{SplitSink, SplitStream},
@@ -142,7 +142,6 @@ impl AnySocketConnection {
                 incoming_sender,
                 incoming_receiver,
                 outgoing_sender,
-                // outgoing_receiver,
                 handles,
             },
         }
@@ -350,7 +349,7 @@ pub async fn open_websocket_connection_unix(uc: &UnixCon) -> DTPSR<Box<dyn Gener
     // debug_with_info!("WS response: {:#?}", response);
     // use_stream = EitherStream::UnixStream(socket_stream);
     let res = AnySocketConnection::from_unix(None, socket_stream, response);
-    return Ok(Box::new(res));
+    Ok(Box::new(res))
 }
 
 fn generate_websocket_key() -> String {

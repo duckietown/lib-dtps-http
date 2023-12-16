@@ -5,10 +5,11 @@ pub mod tests {
     use maplit::hashmap;
     use rstest::rstest;
 
+    use crate::client_proxy::add_proxy;
+    use crate::client_tpt::{add_tpt_connection, remove_tpt_connection};
+    use crate::client_verbs::post_json;
     use crate::{
-        add_proxy, add_tpt_connection,
-        client::remove_tpt_connection,
-        debug_with_info, init_logging, post_json,
+        debug_with_info, init_logging,
         test_fixtures::TestFixture,
         test_range::tests::{instance, node1, node2, switchboard},
         ConnectionJob, ServiceMode, TopicName, TopicProperties, CONTENT_TYPE_CBOR, DTPSR,

@@ -1,28 +1,26 @@
 use futures::{SinkExt, StreamExt};
-use tempfile::tempdir;
-
 use tokio::{
-    process::Command,
     sync::broadcast::{error::RecvError, Receiver as BroadcastReceiver},
     task::JoinHandle,
 };
 
+use crate::get_events_stream_inline;
+use crate::get_history;
+use crate::get_index;
+use crate::get_metadata;
+use crate::get_rawdata_accept;
 use crate::{
-    client::get_rawdata_accept, debug_with_info, get_events_stream_inline, get_history, get_index, get_metadata,
-    info_with_info, DTPSError, ListenURLEvents, TopicName, TypeOfConnection, DTPSR, TOPIC_LIST_CLOCK,
+    debug_with_info, info_with_info, DTPSError, ListenURLEvents, TopicName, TypeOfConnection, DTPSR, TOPIC_LIST_CLOCK,
 };
 
 #[cfg(test)]
 mod tests {
-    use log::info;
     use std::fmt::Debug;
 
-    use crate::{init_logging, test_range, TypeOfConnection};
+    use crate::test_fixtures::instance_python_test_fixture;
+    use crate::test_range;
 
     use super::*;
-
-    use crate::test_fixtures::instance_python_test_fixture;
-    use test_range::tests::*;
 
     #[tokio::test]
     async fn test_python1() -> DTPSR<()> {

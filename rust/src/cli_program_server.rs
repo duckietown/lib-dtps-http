@@ -1,15 +1,13 @@
-extern crate dtps_http;
-
-use chrono::prelude::*;
 use schemars::schema_for;
 use tokio::{
     spawn,
     time::{interval, Duration},
 };
 
-use dtps_http::{
-    create_server_from_command_line, error_with_info, init_logging, show_errors, utils::time_nanos_i64,
-    ServerStateAccess, TopicName, TopicProperties, DTPSR,
+use crate::time_nanos_i64;
+use crate::{
+    create_server_from_command_line, error_with_info, init_logging, show_errors, ServerStateAccess, TopicName,
+    TopicProperties, DTPSR,
 };
 
 async fn clock_go(state: ServerStateAccess, topic_name: &str, interval_s: f32) -> DTPSR<()> {
@@ -69,10 +67,10 @@ async fn clock() -> DTPSR<()> {
     server.serve().await
 }
 
-#[tokio::main]
-async fn main() -> () {
+pub async fn cli_server() -> Result<(), Box<dyn std::error::Error>> {
+    //
     match clock().await {
-        Ok(_) => return,
+        Ok(_) => return Ok(()),
         Err(e) => {
             error_with_info!("Error in serving:\n{:?}", e);
 

@@ -1,13 +1,11 @@
 use std::{collections::HashMap, env, net::SocketAddr, path::Path, string::ToString, sync::Arc as StdArc};
 
-use chrono::Local;
 use clap::Parser;
 use futures::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
 };
 use indent::indent_all_with;
-use maplit::hashmap;
 use maud::{html, PreEscaped, DOCTYPE};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_yaml;
@@ -28,16 +26,16 @@ use tokio_stream::wrappers::{UnboundedReceiverStream, UnixListenerStream};
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use warp::{hyper::Body, reply::Response, Filter, Rejection};
 
+use crate::utils_time::{epoch, format_nanos, time_nanos_i64};
 use crate::{
-    cloudflare::open_cloudflare, constants::*, debug_with_info, divide_in_components, epoch, error_other,
-    error_with_info, format_digest_path, format_nanos, handle_events_push, handle_rejection, handle_websocket_generic2,
-    html_utils::make_html, info_with_info, internal_jobs::JobFunctionType, interpret_path, invalid_input,
-    parse_url_ext, put_common_headers, put_header_content_type, put_header_location, serve_master_get,
-    serve_master_head, serve_master_patch, serve_master_post, server_state::ConnectionJob, show_errors,
-    sniff_and_start_proxy, types::CompositeName, utils::time_nanos_i64, utils_headers, warn_with_info, ChannelInfo,
-    ChannelInfoDesc, Chunk, ComponentStatusNotification, DTPSError, DataReady, DataSaved, InsertNotification,
-    ListenURLEvents, MsgClientToServer, MsgServerToClient, ObjectQueue, RawData, ResourceAvailabilityWire, ServerState,
-    Status, StatusSummary, TopicName, TypeOfConnection, DTPSR,
+    cloudflare::open_cloudflare, constants::*, debug_with_info, divide_in_components, error_other, error_with_info,
+    format_digest_path, handle_events_push, handle_rejection, handle_websocket_generic2, html_utils::make_html,
+    info_with_info, internal_jobs::JobFunctionType, invalid_input, parse_url_ext, put_common_headers,
+    put_header_content_type, put_header_location, serve_master_get, serve_master_head, serve_master_patch,
+    serve_master_post, server_state::ConnectionJob, show_errors, sniff_and_start_proxy, types::CompositeName,
+    utils_headers, warn_with_info, ChannelInfo, ChannelInfoDesc, Chunk, ComponentStatusNotification, DTPSError,
+    DataReady, DataSaved, InsertNotification, ListenURLEvents, MsgServerToClient, ObjectQueue, RawData,
+    ResourceAvailabilityWire, ServerState, StatusSummary, TopicName, TypeOfConnection, DTPSR,
 };
 
 const AVAILABILITY_LENGTH_SEC: f64 = 60.0;

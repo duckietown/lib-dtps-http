@@ -13,17 +13,16 @@ use warp::{http::header, hyper::Body, reply::Response, ws::Message as WarpMessag
 
 use crate::{
     clocks::Clocks, debug_with_info, display_printable, divide_in_components, error_with_info, get_accept_header,
-    get_header_with_default, get_series_of_messages_for_notification_, handle_topic_post, interpret_path, make_html,
-    make_request, put_alternative_locations, receive_from_websocket, send_as_ws_cbor, send_to_server,
-    serve_static_file_path, signals_logic::Pushable, utils_headers, utils_headers::put_patchable_headers, utils_mime,
-    DTPSError, DataProps, DataStream, ErrorMsg, FinishedMsg, GetMeta, GetStream, HandlersResponse, ListenURLEvents,
-    MsgClientToServer, MsgServerToClient, MsgWebsocketPushClientToServer, MsgWebsocketPushServerToClient, ObjectQueue,
-    Patchable, PushResult, RawData, ResolveDataSingle, ResolvedData, ServerStateAccess, TopicName, TopicProperties,
+    get_header_with_default, get_series_of_messages_for_notification_, interpret_path, make_html,
+    put_alternative_locations, receive_from_websocket, send_as_ws_cbor, serve_static_file_path,
+    signals_logic::Pushable, utils_headers, utils_headers::put_patchable_headers, utils_mime, DTPSError, DataProps,
+    DataStream, ErrorMsg, FinishedMsg, GetMeta, GetStream, HandlersResponse, ListenURLEvents, MsgClientToServer,
+    MsgServerToClient, MsgWebsocketPushClientToServer, MsgWebsocketPushServerToClient, ObjectQueue, Patchable,
+    PushResult, RawData, ResolveDataSingle, ResolvedData, ServerStateAccess, TopicName, TopicProperties,
     TopicsIndexInternal, TypeOFSource, WarningMsg, CONTENT_TYPE, CONTENT_TYPE_OCTET_STREAM, CONTENT_TYPE_PATCH_CBOR,
     CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_TEXT_HTML, CONTENT_TYPE_TEXT_PLAIN, CONTENT_TYPE_YAML, DTPSR,
     JAVASCRIPT_SEND,
 };
-use tungstenite::Message as TM;
 
 pub async fn serve_master_post(
     path: warp::path::FullPath,

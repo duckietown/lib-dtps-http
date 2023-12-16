@@ -1,13 +1,10 @@
 use std::collections::BTreeMap;
 
 use anyhow::Context;
-
-use futures::StreamExt;
-
 use serde_cbor::Value::{Null as CBORNull, Text as CBORText};
 
 use crate::{
-    context, debug_with_info, dtpserror_other, DTPSError, ResolvedData,
+    context, debug_with_info, dtpserror_other, ResolvedData,
     ResolvedData::{NotAvailableYet, NotFound, Regular},
     DTPSR,
 };

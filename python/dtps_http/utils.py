@@ -16,6 +16,7 @@ from typing import (
     TypeVar,
     Union,
 )
+import cbor2
 
 from multidict import CIMultiDict, CIMultiDictProxy
 from pydantic import parse_obj_as
@@ -167,6 +168,13 @@ def check_is_unix_socket(u: str) -> None:
     if not is_socket:
         msg = f"Path socket {u} exists but it is not a socket."
         raise ValueError(msg)
+
+
+def parse_cbor_tagged(b: bytes, *Ts: Type[X]) -> X:
+    as_struct = cbor2.loads(b)
+    if not isinstance(as_struct, dict):
+        raise ValueError(f"parse_cbor_tagged: {as_struct!r} is not a dict")
+    return parse_tagged(as_struct, *Ts)
 
 
 def parse_tagged(d: Dict[str, Any], *Ts: Type[X]) -> X:

@@ -6,13 +6,10 @@ use std::{
     future::Future,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Arc,
 };
-use tokio::sync::Notify;
 
 use anyhow::Context;
 use bytes::Bytes;
-use chrono::Local;
 use futures::StreamExt;
 use indent::indent_all_with;
 use maplit::hashmap;
@@ -24,31 +21,32 @@ use tokio::{
     sync::{
         broadcast::{error::RecvError, Receiver, Receiver as BroadcastReceiver},
         mpsc,
-        mpsc::UnboundedSender,
     },
     time::sleep,
 };
 
-use crate::client::incompatible;
+use crate::client_link_benchmark::{compute_best_alternative, get_stats, incompatible, UrlResult};
+use crate::get_events_stream_inline;
+use crate::get_index;
+use crate::time_nanos_i64;
+use crate::wrap_recv;
+use crate::TypeOfResource;
 use crate::{
-    client::wrap_recv,
-    compute_best_alternative, context, debug_with_info, error_with_info, get_events_stream_inline, get_index,
-    get_metadata, get_queue_id, get_random_node_id, get_stats, info_with_info, internal_assertion,
+    context, debug_with_info, error_with_info, get_queue_id, get_random_node_id, info_with_info, internal_assertion,
     internal_jobs::{InternalJobManager, JobFunctionType},
     invalid_input, is_prefix_of, not_available, not_implemented, not_reachable,
     shared_statuses::SharedStatusNotification,
     signals_logic::{GetStream, Pushable},
     signals_logic_resolve::interpret_path,
-    sniff_type_resource,
     types::CompositeName,
-    utils::time_nanos_i64,
     warn_with_info, Clocks, ContentInfo, DTPSError, DataSaved, FilePaths, ForwardingStep, FoundMetadata,
     InsertNotification, LinkBenchmark, ListenURLEvents, NodeAppData, ObjectQueue, RawData, ServerStateAccess,
     TopicName, TopicProperties, TopicReachabilityInternal, TopicRefInternal, TopicsIndexInternal, TopicsIndexWire,
-    TypeOfConnection, TypeOfResource, UrlResult, CONTENT_TYPE_CBOR, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_JSON,
-    CONTENT_TYPE_PLAIN, CONTENT_TYPE_YAML, DTPSR, MASK_ORIGIN, TOPIC_CONNECTIONS, TOPIC_LIST_AVAILABILITY,
-    TOPIC_LIST_CLOCK, TOPIC_LIST_NAME, TOPIC_LOGS, TOPIC_PROXIED, TOPIC_STATE_NOTIFICATION, TOPIC_STATE_SUMMARY,
+    TypeOfConnection, CONTENT_TYPE_CBOR, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_JSON, CONTENT_TYPE_PLAIN,
+    CONTENT_TYPE_YAML, DTPSR, MASK_ORIGIN, TOPIC_CONNECTIONS, TOPIC_LIST_AVAILABILITY, TOPIC_LIST_CLOCK,
+    TOPIC_LIST_NAME, TOPIC_LOGS, TOPIC_PROXIED, TOPIC_STATE_NOTIFICATION, TOPIC_STATE_SUMMARY,
 };
+use crate::{get_metadata, sniff_type_resource};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 pub struct ProxyJob {
@@ -633,7 +631,6 @@ impl ServerState {
     async fn start_connection(
         &mut self,
         job_name: &CompositeName,
-
         connection_name: &CompositeName,
         connection_job: &ConnectionJob,
         ssa: ServerStateAccess,

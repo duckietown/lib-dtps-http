@@ -1,8 +1,6 @@
-use bytes::Bytes;
-use derive_more::Constructor;
 use serde::{Deserialize, Serialize};
 
-use crate::{DataReady, RawData};
+use crate::DataReady;
 
 #[cfg(test)]
 mod test {

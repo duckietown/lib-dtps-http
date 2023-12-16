@@ -214,9 +214,8 @@ class PublisherInterface(ABC):
     async def terminate(self) -> None:
         """Stops the publisher"""
 
-    # TODO: add function to get number of connections
-    # TODO: should we pass back the desired frequency? (max of all frequencies)
-    # TODO: banddwidth?
+    # TODO: DTSW-4880: add function to get number of connections
+    # TODO: DTSW-4879: should we pass back the desired frequency? (max of all frequencies) or bandwidth constraints?
     # @abstractmethod
     # async def num_connections(self) -> RawData:
     #     """Publishes data to the resource and waits for the response"""

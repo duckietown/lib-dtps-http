@@ -1,7 +1,5 @@
 #![allow(unused_mut)]
 
-use crate::test_fixtures::ConnectionFixture;
-
 #[allow(non_snake_case)]
 #[cfg(test)]
 pub mod tests {
@@ -11,22 +9,23 @@ pub mod tests {
     use log::info;
     use maplit::hashmap;
     use rstest::{fixture, rstest};
-    use schemars::{schema_for, JsonSchema, _private::NoSerialize};
+    use schemars::{schema_for, JsonSchema};
     use serde::{Deserialize, Serialize};
     use serde_json::json;
-    use tokio::{process::Command, task::JoinHandle};
+    use tokio::process::Command;
 
+    use crate::get_events_stream_inline;
+    use crate::get_metadata;
+    use crate::{add_proxy, remove_proxy};
+    use crate::{create_topic, delete_topic};
     use crate::{
-        add_proxy,
-        client::{make_request, post_cbor, post_json},
-        create_topic, debug_with_info, delete_topic, dtpserror_context, error_with_info, get_events_stream_inline,
-        get_metadata, get_rawdata, init_logging, patch_data, post_data, remove_proxy,
+        debug_with_info, dtpserror_context, error_with_info, init_logging,
         test_fixtures::{instance_python_test_fixture, instance_rust, ConnectionFixture, TestFixture},
         test_python::check_server,
-        websocket_push, ContentInfo, DTPSError, DTPSServer, ListenURLEvents, RawData, ServerStateAccess, TopicName,
-        TopicProperties, TopicRefAdd, TypeOfConnection, CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT_PLAIN,
-        DTPSR,
+        websocket_push, ContentInfo, DTPSError, ListenURLEvents, RawData, TopicName, TopicProperties, TopicRefAdd,
+        CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT_PLAIN, DTPSR,
     };
+    use crate::{get_rawdata, make_request, patch_data, post_cbor, post_data, post_json};
 
     #[fixture]
     pub async fn instance() -> TestFixture {

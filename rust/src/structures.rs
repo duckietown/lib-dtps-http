@@ -107,6 +107,7 @@ pub struct PushResult {
 pub enum MsgWebsocketPushServerToClient {
     PushResult(PushResult),
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum MsgWebsocketPushClientToServer {
     RawData(RawData),
@@ -241,4 +242,11 @@ mod test {
         let schema = schema_for!(TopicsIndexWire);
         eprintln!("{}", serde_json::to_string_pretty(&schema).unwrap());
     }
+}
+
+#[derive(Debug)]
+pub enum TypeOfResource {
+    Other,
+    DTPSTopic,
+    DTPSIndex { node_id: String },
 }

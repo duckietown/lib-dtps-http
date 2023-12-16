@@ -1,15 +1,12 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use async_trait::async_trait;
-
-use futures::StreamExt;
-
 use maplit::hashmap;
 
 use crate::{
     debug_with_info, not_implemented, urls::make_relative, ContentInfo, DTPSError, DataProps, ForwardingStep, GetMeta,
     LinkBenchmark, ServerStateAccess, SourceComposition, TopicName, TopicReachabilityInternal, TopicRefInternal,
-    TopicsIndexInternal, TypeOFSource, TypeOfConnection, TypeOfConnection::Relative, DTPSR, MASK_ORIGIN,
+    TopicsIndexInternal, TypeOFSource, TypeOfConnection::Relative, DTPSR, MASK_ORIGIN,
 };
 
 async fn get_sc_meta(
@@ -79,6 +76,7 @@ impl GetMeta for TypeOFSource {
         Ok(x)
     }
 }
+
 impl TypeOFSource {
     //noinspection RsConstantConditionIf
     async fn get_meta_index_(&self, presented_url: &str, ss_mutex: ServerStateAccess) -> DTPSR<TopicsIndexInternal> {

@@ -183,3 +183,7 @@ pub fn get_content_type<T>(resp: &http::Response<T>) -> String {
         .map(|x| x.to_str().unwrap().to_string())
         .unwrap_or(CONTENT_TYPE_OCTET_STREAM.to_string())
 }
+
+pub fn string_from_header_value(header_value: &hyper::header::HeaderValue) -> String {
+    header_value.to_str().unwrap().to_string()
+}

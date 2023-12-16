@@ -1,34 +1,20 @@
-use anyhow::Context;
-use bytes::Bytes;
-use futures::{SinkExt, StreamExt};
-use hex;
-use hyper::{self, Client};
-use hyper_tls::HttpsConnector;
-use hyperlocal::UnixClientExt;
-use json_patch::{AddOperation, Patch as JsonPatch, Patch, PatchOperation, RemoveOperation};
-use maplit::hashmap;
-use serde::{Deserialize, Serialize};
-use std::{any::Any, collections::HashSet, fmt::Debug, os::unix::fs::FileTypeExt, path::Path, time::Duration};
-use tokio::{
-    sync::broadcast::{error::RecvError, Receiver, Receiver as BroadcastReceiver},
-    task::JoinHandle,
-    time::timeout,
-};
-use tungstenite::Message as TM;
-use warp::reply::Response;
+use std::boxed::Box;
+use std::fmt::Debug;
 
-use crate::signals_logic::MASK_ORIGIN;
+use async_trait::async_trait;
+use futures::StreamExt;
+use hex;
+use hyper::{self};
+use serde::{Deserialize, Serialize};
+use tungstenite::Message as TM;
+
+use crate::client_metadata::get_metadata;
+use crate::utils_websocket::receive_from_server;
+use crate::utils_websocket::send_to_server;
+use crate::websocket_abstractions::GenericSocketConnection;
 use crate::{
-    context, debug_with_info, error_with_info, get_content_type, get_metadata, info_with_info, internal_assertion,
-    join_ext, not_available, not_implemented, not_reachable, object_queues::InsertNotification,
-    open_websocket_connection, parse_url_ext, put_header_accept, put_header_content_type, send_to_server,
-    server_state::ConnectionJob, time_nanos, types::CompositeName, warn_with_info, DTPSError, DataSaved, ErrorMsg,
-    FinishedMsg, FoundMetadata, History, LinkBenchmark, LinkHeader, ListenURLEvents, MsgClientToServer,
-    MsgServerToClient, MsgWebsocketPushClientToServer, MsgWebsocketPushServerToClient, ProxyJob, PushResult, RawData,
-    TopicName, TopicRefAdd, TopicsIndexInternal, TopicsIndexWire, TypeOfConnection, CONTENT_TYPE_DTPS_INDEX,
-    CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR,
-    HEADER_CONTENT_LOCATION, HEADER_NODE_ID, REL_CONNECTIONS, REL_EVENTS_DATA, REL_EVENTS_NODATA, REL_HISTORY,
-    REL_META, REL_PROXIED, REL_STREAM_PUSH,
+    open_websocket_connection, DTPSError, ErrorMsg, FinishedMsg, MsgWebsocketPushClientToServer,
+    MsgWebsocketPushServerToClient, PushResult, RawData, TypeOfConnection, DTPSR,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -43,17 +29,6 @@ enum MsgToPusher {
     ErrorMsg(ErrorMsg),
     FinishedMsg(FinishedMsg),
 }
-
-use std::future::Future;
-
-use crate::client::receive_from_server;
-use crate::internal_jobs::JobFunctionType;
-use crate::websocket_abstractions::GenericSocketConnection;
-use async_trait::async_trait;
-use std::boxed::Box;
-use std::pin::Pin;
-use tokio::net::UnixListener;
-use tokio_stream::wrappers::UnixListenerStream;
 
 #[async_trait]
 pub trait WebsocketPushInterface {
