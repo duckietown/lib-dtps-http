@@ -63,6 +63,8 @@ class SuccessPostResult:
 
 PostResult = Union[DataReady, TransformError]
 
+# PublishResult = Union[DataSaved, TransformError]
+
 ObjectTransformFunction = Callable[[ObjectTransformContext], Awaitable[ObjectTransformResult]]
 
 
@@ -247,7 +249,7 @@ class ObjectQueue:
             availability_ = [ResourceAvailability(url=rel_url, available_until=time.time() + 60)]
 
         data = DataReady(
-            sequence=ds.index,
+            index=ds.index,
             time_inserted=ds.time_inserted,
             digest=ds.digest,
             content_type=ds.content_type,

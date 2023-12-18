@@ -28,14 +28,15 @@ use warp::{hyper::Body, reply::Response, Filter, Rejection};
 
 use crate::utils_time::{epoch, format_nanos, time_nanos_i64};
 use crate::{
-    cloudflare::open_cloudflare, constants::*, debug_with_info, divide_in_components, error_other, error_with_info,
-    format_digest_path, handle_events_push, handle_rejection, handle_websocket_generic2, html_utils::make_html,
-    info_with_info, internal_jobs::JobFunctionType, invalid_input, parse_url_ext, put_common_headers,
-    put_header_content_type, put_header_location, serve_master_get, serve_master_head, serve_master_patch,
-    serve_master_post, server_state::ConnectionJob, show_errors, sniff_and_start_proxy, types::CompositeName,
-    utils_headers, warn_with_info, ChannelInfo, ChannelInfoDesc, Chunk, ComponentStatusNotification, DTPSError,
-    DataReady, DataSaved, InsertNotification, ListenURLEvents, MsgServerToClient, ObjectQueue, RawData,
-    ResourceAvailabilityWire, ServerState, StatusSummary, TopicName, TypeOfConnection, DTPSR,
+    cloudflare::open_cloudflare, constants::*, debug_with_info, divide_in_components, dtpserror_other, error_other,
+    error_with_info, format_digest_path, handle_events_push, handle_rejection, handle_websocket_generic2,
+    html_utils::make_html, info_with_info, internal_jobs::JobFunctionType, invalid_input, parse_url_ext,
+    put_common_headers, put_header_content_type, put_header_location, serve_master_get, serve_master_head,
+    serve_master_patch, serve_master_post, server_state::ConnectionJob, show_errors, sniff_and_start_proxy,
+    types::CompositeName, utils_headers, warn_with_info, ChannelInfo, ChannelInfoDesc, Chunk,
+    ComponentStatusNotification, DTPSError, DataReady, DataSaved, InsertNotification, ListenURLEvents,
+    MsgServerToClient, ObjectQueue, RawData, ResourceAvailabilityWire, ServerState, StatusSummary, TopicName,
+    TypeOfConnection, DTPSR,
 };
 
 const AVAILABILITY_LENGTH_SEC: f64 = 60.0;
@@ -227,7 +228,7 @@ impl DTPSServer {
                 let mut ss = self.mutex.lock().await;
                 let job_name = CompositeName::from_dash_sep("server/tcp")?;
                 ss.job_manager
-                    .add_job(&job_name, "TCP server", serve_job, false, true, 5.0, self.mutex.clone())?;
+                    .add_job(&job_name, "TCP server", serve_job, false, true, 1.0, self.mutex.clone())?;
             }
 
             {
@@ -304,9 +305,10 @@ impl DTPSServer {
                         Ok(l) => l,
 
                         Err(e) => {
-                            let msg = format!("error binding to unix socket {}: {:?}", unix_path, e);
+                            // let msg = format!();
                             error_with_info!("note that this is not supported on Docker+OS X");
-                            return Err(msg);
+                            return dtpserror_other!("error binding to unix socket {}: {:?}", unix_path, e);
+                            // return Err(msg);
                         }
                     };
 
@@ -326,7 +328,7 @@ impl DTPSServer {
                     serve_job,
                     false,
                     true,
-                    5.0,
+                    1.0,
                     self.mutex.clone(),
                 )?;
             }
@@ -357,7 +359,7 @@ impl DTPSServer {
                 clock_job,
                 true,
                 true,
-                5.0,
+                1.0,
                 self.mutex.clone(),
             )?;
         }
@@ -597,7 +599,7 @@ pub fn get_dataready(this_one: &DataSaved) -> DataReady {
     DataReady {
         origin_node: this_one.origin_node.clone(),
         unique_id: this_one.unique_id.clone(),
-        sequence: this_one.index,
+        index: this_one.index,
         time_inserted: this_one.time_inserted,
         digest: this_one.digest.clone(),
         content_type: this_one.content_type.clone(),
@@ -636,7 +638,7 @@ pub async fn get_series_of_messages_for_notification_(
     let dr2 = DataReady {
         origin_node: this_one.origin_node.clone(),
         unique_id: this_one.unique_id.clone(),
-        sequence: this_one.index,
+        index: this_one.index,
         time_inserted: this_one.time_inserted,
         digest: this_one.digest.clone(),
         content_type: this_one.content_type.clone(),

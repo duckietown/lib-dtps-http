@@ -19,9 +19,9 @@ use crate::{
     DataStream, ErrorMsg, FinishedMsg, GetMeta, GetStream, HandlersResponse, ListenURLEvents, MsgClientToServer,
     MsgServerToClient, MsgWebsocketPushClientToServer, MsgWebsocketPushServerToClient, ObjectQueue, Patchable,
     PushResult, RawData, ResolveDataSingle, ResolvedData, ServerStateAccess, TopicName, TopicProperties,
-    TopicsIndexInternal, TypeOFSource, WarningMsg, CONTENT_TYPE, CONTENT_TYPE_OCTET_STREAM, CONTENT_TYPE_PATCH_CBOR,
-    CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_TEXT_HTML, CONTENT_TYPE_TEXT_PLAIN, CONTENT_TYPE_YAML, DTPSR,
-    JAVASCRIPT_SEND,
+    TopicsIndexInternal, TypeOFSource, WarningMsg, CONTENT_TYPE, CONTENT_TYPE_DTPS_DATAREADY_CBOR,
+    CONTENT_TYPE_OCTET_STREAM, CONTENT_TYPE_PATCH_CBOR, CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_TEXT_HTML,
+    CONTENT_TYPE_TEXT_PLAIN, CONTENT_TYPE_YAML, DTPSR, JAVASCRIPT_SEND,
 };
 
 pub async fn serve_master_post(
@@ -58,15 +58,24 @@ pub async fn serve_master_post(
             .unwrap();
         return Ok(res);
     }
-    let res = ds.push(ss_mutex.clone(), &rd, &Clocks::default()).await;
+    let res = ds.push(&path_str, ss_mutex.clone(), &rd, &Clocks::default()).await;
 
     match res {
-        Ok(_) => {
+        Ok(dr) => {
             // FIXME: (post) need to return the location of the new resource
-            let res = http::Response::builder()
+
+            // convert dr to cbor
+            let cbor_bytes = serde_cbor::to_vec(&dr).unwrap();
+            // todo: add location
+
+            let mut res = http::Response::builder()
                 .status(StatusCode::OK)
-                .body(Body::from("Push ok"))
+                .body(cbor_bytes.into())
                 .unwrap();
+
+            res.headers_mut()
+                .insert(header::CONTENT_TYPE, CONTENT_TYPE_DTPS_DATAREADY_CBOR.parse().unwrap());
+
             Ok(res)
         }
         Err(e) => {
@@ -782,7 +791,7 @@ pub async fn handle_events_push_(
                 return Ok(());
             }
             Some(MsgWebsocketPushClientToServer::RawData(rd)) => {
-                let res = ds.push(ssa.clone(), &rd, &Clocks::default()).await;
+                let res = ds.push(&path, ssa.clone(), &rd, &Clocks::default()).await;
                 let pr = match res {
                     Ok(_) => MsgWebsocketPushServerToClient::PushResult(PushResult {
                         result: true,

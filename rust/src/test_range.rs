@@ -14,7 +14,6 @@ pub mod tests {
     use serde_json::json;
     use tokio::process::Command;
 
-    use crate::get_events_stream_inline;
     use crate::get_metadata;
     use crate::{add_proxy, remove_proxy};
     use crate::{create_topic, delete_topic};
@@ -25,6 +24,7 @@ pub mod tests {
         websocket_push, ContentInfo, DTPSError, ListenURLEvents, RawData, TopicName, TopicProperties, TopicRefAdd,
         CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT_PLAIN, DTPSR,
     };
+    use crate::{get_events_stream_inline, publish_cbor};
     use crate::{get_rawdata, make_request, patch_data, post_cbor, post_data, post_json};
 
     #[fixture]
@@ -694,6 +694,44 @@ pub mod tests {
         push_interface.stop().await?;
         // push_interface.send_object(&42).await?;
         instance.finish().await?;
+
+        Ok(())
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_publish_rust(#[future] instance: TestFixture) -> DTPSR<()> {
+        check_publish(instance.cf).await
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_publish_python(#[future] instance_python: ConnectionFixture) -> DTPSR<()> {
+        check_publish(instance_python).await
+    }
+
+    async fn check_publish(instance: ConnectionFixture) -> DTPSR<()> {
+        init_logging();
+
+        let topic_name = TopicName::from_dash_sep("a/b")?;
+
+        create_topic(
+            &instance.con,
+            &topic_name,
+            &TopicRefAdd {
+                app_data: Default::default(),
+                properties: TopicProperties::rw(),
+                content_info: ContentInfo::simple(CONTENT_TYPE_CBOR, None),
+            },
+        )
+        .await?;
+
+        let con_topic = instance.con.join(topic_name.as_relative_url())?;
+
+        let data = 53;
+        publish_cbor(&con_topic, &data).await?;
 
         Ok(())
     }

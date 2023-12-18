@@ -140,7 +140,7 @@ pub struct DataSaved {
 pub struct DataReady {
     pub origin_node: String,
     pub unique_id: String,
-    pub sequence: usize,
+    pub index: usize,
     pub time_inserted: i64,
     pub clocks: Clocks,
     pub content_type: String,
@@ -152,11 +152,26 @@ pub struct DataReady {
 }
 
 impl DataReady {
+    pub fn from_data_saved(ds: &DataSaved) -> Self {
+        DataReady {
+            origin_node: ds.origin_node.clone(),
+            unique_id: ds.unique_id.clone(),
+            index: ds.index,
+            time_inserted: ds.time_inserted,
+            clocks: ds.clocks.clone(),
+            content_type: ds.content_type.clone(),
+            content_length: ds.content_length,
+            digest: ds.digest.clone(),
+            availability: Vec::new(),
+            chunks_arriving: 0,
+        }
+    }
+
     pub fn as_data_saved(&self) -> DataSaved {
         DataSaved {
             origin_node: self.origin_node.clone(),
             unique_id: self.unique_id.clone(),
-            index: self.sequence,
+            index: self.index,
             time_inserted: self.time_inserted,
             clocks: self.clocks.clone(),
             content_type: self.content_type.clone(),

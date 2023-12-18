@@ -3,25 +3,30 @@ from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING, Union
 
+import aiohttp
 import cbor2
 import jsonpatch
-from aiohttp import web
+from aiohttp import ClientResponse, web
 from jsonpatch import JsonPatch
 
 from . import logger
-from .constants import CONTENT_TYPE_DTPS_INDEX_CBOR
-from .object_queue import ObjectTransformResult, PostResult, TransformError
+from .constants import CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_PATCH_CBOR
+from .object_queue import PostResult, TransformError
 from .structures import (
     ContentInfo,
+    DataReady,
+    DataSaved,
     LinkBenchmark,
     RawData,
+    ResourceAvailability,
     TopicProperties,
     TopicReachability,
     TopicRef,
     TopicsIndex,
 )
 from .types import ContentType, NodeID, SourceID, TopicNameV
-from .urls import get_relative_url
+from .urls import get_relative_url, join, parse_url_unescape, URL
+from .utils import pydantic_parse
 
 __all__ = [
     "ForwardedQueue",
@@ -55,6 +60,7 @@ ResolvedData = Union[RawData, Native, NotAvailableYet, NotFound]
 
 if TYPE_CHECKING:
     from .server import DTPSServer
+    from .client import DTPSClient
 
 
 class Source(ABC):
@@ -278,18 +284,100 @@ class ForwardedQueue(Source):
                     data = RawData(content_type=content_type, content=data)
                     return data
 
-    async def patch(
-        self, presented_as: str, server: "DTPSServer", patch: JsonPatch
-    ) -> "ObjectTransformResult":
-        raise NotImplementedError(f"patch() for {self}")  # TODO: DTSW-4787: patch forwarded queue
+    async def patch(self, presented_as: str, server: "DTPSServer", patch: JsonPatch) -> "PostResult":
+        url_post = server._forwarded[self.topic_name].forward_url_data
+        async with server._client() as dtpsclient:
+            session2: aiohttp.ClientSession
+            data = cbor2.dumps(patch.patch)
+            content_type = CONTENT_TYPE_PATCH_CBOR
+            async with dtpsclient.my_session(url_post) as (session2, use_url2):
+                headers = {"content-type": content_type}
+                async with session2.patch(use_url2, data=data, headers=headers) as resp_data:
+                    if not resp_data.ok:
+                        return TransformError(resp_data.status, resp_data.reason or "")  # TODO: read error
+                    else:
+                        return await load_datasaved_resp(
+                            server, url_post, dtpsclient, resp_data, presented_as
+                        )
+
+                        #
+                        # data = await resp_data.read()
+                        # content_type = ContentType(resp_data.content_type)
+                        # data = RawData(content_type=content_type, content=data)
+                        #
+                        # s: Any = data.get_as_native_object()
+                        # # FIXME: we need to download the data and re-expose it
+                        # ds = pydantic_parse(DataSaved, s)
+                        # locations = resp_data.headers.getall('location')
+                        #
+                        # dr = DataReady.from_data_saved(ds)
+                        # for location in locations:
+                        #     url = join(use_url2, location)
+                        #     rd = await dtpsclient.get(url, accept=ds.content_type)
+                        #     available_for = 60.0
+                        #     urlref, avail = server._store_data(rd, available_for, presented_as)
+                        #
+                        #     dr.availability.append(
+                        #         ResourceAvailability(url=urlref, available_until=avail)
+                        #     )
+                        #
+                        # return dr
 
     async def publish(self, presented_as: str, server: "DTPSServer", rd: RawData) -> "PostResult":
-        raise NotImplementedError(f"publish() for {self}")  # TODO: DTSW-4780: post forwarded queue
+        url_post = server._forwarded[self.topic_name].forward_url_data
+        async with server._client() as dtpsclient:
+            session2: aiohttp.ClientSession
+            async with dtpsclient.my_session(url_post) as (session2, use_url2):
+                headers = {"content-type": rd.content_type}
+                async with session2.post(use_url2, data=rd.content, headers=headers) as resp_data:
+                    if not resp_data.ok:
+                        return TransformError(resp_data.status, resp_data.reason or "")  # TODO: read error
+                    else:
+                        return await load_datasaved_resp(
+                            server, url_post, dtpsclient, resp_data, presented_as
+                        )
 
     async def call(
         self, presented_as: str, server: "DTPSServer", rd: RawData
     ) -> Union[RawData, TransformError]:
-        raise NotImplementedError(f"call() for {self}")  # TODO:  call forwarded queue
+        url_post = server._forwarded[self.topic_name].forward_url_data
+        async with server._client() as dtpsclient:
+            session2: aiohttp.ClientSession
+            async with dtpsclient.my_session(url_post) as (session2, use_url2):
+                headers = {"content-type": rd.content_type}
+                async with session2.post(use_url2, data=rd.content, headers=headers) as resp_data:
+                    if not resp_data.ok:
+                        return TransformError(resp_data.status, resp_data.reason or "")  # TODO: read error
+                    else:
+                        dr = await load_datasaved_resp(server, url_post, dtpsclient, resp_data, presented_as)
+
+                        return await dtpsclient.get(
+                            parse_url_unescape(dr.availability[0].url), accept=dr.content_type
+                        )
+
+
+async def load_datasaved_resp(
+    server: "DTPSServer", base_url: URL, client: "DTPSClient", resp_data: ClientResponse, presented_as: str
+) -> DataReady:
+    data = await resp_data.read()
+    content_type = ContentType(resp_data.content_type)
+    data = RawData(content_type=content_type, content=data)
+
+    s: Any = data.get_as_native_object()
+    # FIXME: we need to download the data and re-expose it
+    ds = pydantic_parse(DataSaved, s)
+    locations = resp_data.headers.getall("location")
+
+    dr = DataReady.from_data_saved(ds)
+    for location in locations:
+        url = join(base_url, location)
+        rd = await client.get(url, accept=ds.content_type)
+        available_for = 60.0
+        urlref, avail = server._store_data(rd, available_for, presented_as)
+
+        dr.availability.append(ResourceAvailability(url=urlref, available_until=avail))
+
+    return dr
 
 
 @dataclass
@@ -361,9 +449,7 @@ class SourceComposition(Source):
         as_cbor = cbor2.dumps(asdict(data.to_wire()))
         return RawData(content_type=CONTENT_TYPE_DTPS_INDEX_CBOR, content=as_cbor)
 
-    async def patch(
-        self, presented_as: str, server: "DTPSServer", patch: JsonPatch
-    ) -> "ObjectTransformResult":
+    async def patch(self, presented_as: str, server: "DTPSServer", patch: JsonPatch) -> "PostResult":
         return TransformError(400, "Cannot patch SourceComposition")
 
     async def publish(self, presented_as: str, server: "DTPSServer", rd: RawData) -> "PostResult":
@@ -456,9 +542,7 @@ class MetaInfo(Source):
     async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData":
         raise NotImplementedError("MetaInfo.get_resolved_data()")  # TODO: DTSW-4789
 
-    async def patch(
-        self, presented_as: str, server: "DTPSServer", patch: JsonPatch
-    ) -> "ObjectTransformResult":
+    async def patch(self, presented_as: str, server: "DTPSServer", patch: JsonPatch) -> "PostResult":
         return TransformError(400, "Cannot PATCH MetaInfo")
 
     async def publish(self, presented_as: str, server: "DTPSServer", rd: RawData) -> "PostResult":

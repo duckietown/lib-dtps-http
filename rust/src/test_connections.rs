@@ -18,7 +18,7 @@ pub mod tests {
     #[rstest]
     #[awt]
     #[tokio::test]
-    async fn check_connection_local_to_local(#[future] instance: TestFixture) -> DTPSR<()> {
+    async fn check_connection_local_to_local_reg(#[future] instance: TestFixture) -> DTPSR<()> {
         init_logging();
         let topic_name1 = TopicName::from_dash_sep("topic1")?;
         let topic_name2 = TopicName::from_dash_sep("topic2")?;
@@ -54,25 +54,26 @@ pub mod tests {
         {
             let mut ss = instance.ssa.lock().await;
             ss.add_topic_to_topic_connection(&connection_name, &connection_job, instance.ssa.clone())
-                .await?
+                .await?;
         }
-        .wait()
-        .await?;
+        // .wait()
+        // .await?;
 
         {
             let mut ss = instance.ssa.lock().await;
-            ss.remove_topic_to_topic_connection(&connection_name).await?
+            ss.remove_topic_to_topic_connection(&connection_name).await?;
         }
-        .wait()
-        .await?;
+        // .wait()
+        // .await?;
 
         {
             let mut ss = instance.ssa.lock().await;
             ss.add_topic_to_topic_connection(&connection_name, &connection_job, instance.ssa.clone())
-                .await?
+                .await?;
         }
-        .wait()
-        .await?;
+        // .wait()
+        // .await?;
+        tokio::time::sleep(Duration::from_millis(2000)).await;
 
         let n = 5;
         for i in 0..n {
@@ -212,6 +213,7 @@ pub mod tests {
             service_mode: ServiceMode::BestEffort,
         };
         add_tpt_connection(&switchboard.cf.con, &connection_name, &cn).await?;
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
 
         let topic1_url = node1.cf.con.join(topic1.as_relative_url())?;
         let n: usize = 5;

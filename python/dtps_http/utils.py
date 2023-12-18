@@ -1,3 +1,4 @@
+import asyncio
 import functools
 import os
 import stat
@@ -10,14 +11,13 @@ from typing import (
     Callable,
     Dict,
     Optional,
-    Tuple,
     Type,
     TYPE_CHECKING,
     TypeVar,
     Union,
 )
-import cbor2
 
+import cbor2
 from multidict import CIMultiDict, CIMultiDictProxy
 from pydantic import parse_obj_as
 from typing_extensions import ParamSpec
@@ -34,6 +34,7 @@ __all__ = [
     "parse_tagged",
     "pydantic_parse",
     "should_mask_origin",
+    "wait_for_unix_socket",
 ]
 
 PS = ParamSpec("PS")
@@ -44,7 +45,7 @@ FA = TypeVar("FA", bound=Callable[..., Awaitable[Any]])
 
 FAsync = TypeVar("FAsync", bound=Callable[..., AsyncIterator[Any]])
 
-if False:
+if TYPE_CHECKING:
 
     def async_error_catcher(_: FA, /) -> FA:
         ...
@@ -73,7 +74,7 @@ else:
 
     def async_error_catcher_iterator(func: Callable[PS, AsyncIterator[X]]) -> Callable[PS, AsyncIterator[X]]:
         @functools.wraps(func)
-        async def wrapper(*args: PS.args, **kwargs: PS.kwargs) -> X:
+        async def wrapper(*args: PS.args, **kwargs: PS.kwargs) -> AsyncIterator[X]:
             try:
                 async for _ in func(*args, **kwargs):
                     yield _
@@ -149,6 +150,17 @@ def is_truthy(s: str) -> Optional[bool]:
         return None  # The value is neither truthy nor falsy.
 
 
+async def wait_for_unix_socket(u: str) -> None:
+    while True:
+        exists = os.path.exists(u)
+        if exists:
+            check_is_unix_socket(u)
+            return
+        else:
+            await asyncio.sleep(0.1)
+            continue
+
+
 def check_is_unix_socket(u: str) -> None:
     exists = os.path.exists(u)
     if not exists:
@@ -170,7 +182,7 @@ def check_is_unix_socket(u: str) -> None:
         raise ValueError(msg)
 
 
-def parse_cbor_tagged(b: bytes, *Ts: Type[X]) -> X:
+def parse_cbor_tagged(b: bytes, /, *Ts: Type[X]) -> X:
     as_struct = cbor2.loads(b)
     if not isinstance(as_struct, dict):
         raise ValueError(f"parse_cbor_tagged: {as_struct!r} is not a dict")
@@ -180,7 +192,8 @@ def parse_cbor_tagged(b: bytes, *Ts: Type[X]) -> X:
 def parse_tagged(d: Dict[str, Any], *Ts: Type[X]) -> X:
     if not isinstance(d, dict):
         raise ValueError(f"parse_tagged: {d!r} is not a dict")
-
+    if not Ts:
+        raise ValueError(f"parse_tagged: no types given")
     for T in Ts:
         kn = T.__name__
         if kn in d:

@@ -8,9 +8,9 @@ use serde_cbor::Value as CBORValue;
 use tokio::{sync::broadcast::Receiver as BroadcastReceiver, task::JoinHandle};
 
 use crate::{
-    dtpserror_context, get_inside, utils::is_truthy, ChannelInfo, Clocks, InsertNotification, ListenURLEvents,
-    OtherProxyInfo, RawData, ResolvedData, ServerStateAccess, TopicName, TopicProperties, TopicsIndexInternal, DTPSR,
-    ENV_MASK_ORIGIN,
+    dtpserror_context, get_inside, utils::is_truthy, ChannelInfo, Clocks, DataReady, DataSaved, InsertNotification,
+    ListenURLEvents, OtherProxyInfo, RawData, ResolvedData, ServerStateAccess, TopicName, TopicProperties,
+    TopicsIndexInternal, DTPSR, ENV_MASK_ORIGIN,
 };
 
 #[derive(Debug, Clone)]
@@ -39,12 +39,23 @@ pub enum TypeOFSource {
 
 #[async_trait]
 pub trait Patchable {
-    async fn patch(&self, presented_as: &str, ss_mutex: ServerStateAccess, patch: &Patch) -> DTPSR<()>;
+    async fn patch(&self, presented_as: &str, ss_mutex: ServerStateAccess, patch: &Patch) -> DTPSR<DataSaved>;
 }
 
 #[async_trait]
 pub trait Pushable {
-    async fn push(&self, ss_mutex: ServerStateAccess, data: &RawData, clocks: &Clocks) -> DTPSR<()>;
+    async fn push(
+        &self,
+        presented_as: &str,
+        ss_mutex: ServerStateAccess,
+        data: &RawData,
+        clocks: &Clocks,
+    ) -> DTPSR<DataSaved>;
+}
+
+#[async_trait]
+pub trait Callable {
+    async fn call(&self, presented_as: &str, ss_mutex: ServerStateAccess, data: &RawData) -> DTPSR<ResolvedData>;
 }
 
 #[async_trait]

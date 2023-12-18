@@ -3,7 +3,8 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha256::digest;
 
 use crate::{
-    identify_presentation, ContentPresentation, DTPSError, RawData, CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, DTPSR,
+    identify_presentation, invalid_input, ContentPresentation, DTPSError, RawData, CONTENT_TYPE_CBOR,
+    CONTENT_TYPE_JSON, DTPSR,
 };
 
 impl RawData {
@@ -81,8 +82,10 @@ impl RawData {
                 let v: T = serde_yaml::from_slice::<T>(&self.content)?;
                 Ok(v)
             }
-            ContentPresentation::PlainText => DTPSError::other("cannot interpret plain text"),
-            ContentPresentation::Other => DTPSError::other("cannot interpret unknown content type"),
+            ContentPresentation::PlainText => invalid_input!("cannot interpret plain text"),
+            ContentPresentation::Other => {
+                invalid_input!("cannot interpret unknown content type, {}", self.content_type)
+            }
         }
     }
 

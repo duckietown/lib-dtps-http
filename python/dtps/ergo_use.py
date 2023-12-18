@@ -1,10 +1,12 @@
 import asyncio
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Awaitable, Callable, cast, List, Optional, Tuple
+from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Tuple
 
+import cbor2
 from aiohttp import ClientResponseError
 
 from dtps_http import (
+    CONTENT_TYPE_PATCH_CBOR,
     ContentInfo,
     DTPSClient,
     join,
@@ -140,6 +142,11 @@ class ContextManagerUseContext(DTPSContext):
             else:
                 raise
 
+    async def patch(self, patch_data: List[Dict[str, Any]], /) -> None:
+        url = await self._get_best_url()
+        data = cbor2.dumps(patch_data)
+        res = await self.master.client.patch(url, CONTENT_TYPE_PATCH_CBOR, data)
+
     def _get_components_as_topic(self) -> TopicNameV:
         return TopicNameV.from_components(self.components)
 
@@ -244,4 +251,15 @@ class ContextManagerUseContext(DTPSContext):
 
     async def connect_to(self, c: "DTPSContext", /) -> "ConnectionInterface":
         # TODO: DTSW-4805: [use] implement connect_to
+
+        if not isinstance(c, ContextManagerUseContext):
+            raise TypeError(f"Expected ContextManagerUseContext, got {type(c)}")
+
+        topic1 = self._get_components_as_topic()
+        topic2 = c._get_components_as_topic()
+
+        url = self.master.best_url
+
+        await self.master.client.connect(url, topic1, topic2)
+
         raise NotImplementedError()

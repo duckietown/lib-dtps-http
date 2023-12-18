@@ -9,7 +9,7 @@ use warp::reply::Response;
 use crate::client_link_benchmark::check_unix_socket;
 use crate::connections::TypeOfConnection;
 use crate::utils_headers::{get_content_type, put_header_accept, put_header_content_type};
-use crate::{context, internal_assertion, not_available, not_implemented};
+use crate::{context, internal_assertion, not_available, not_implemented, DataSaved};
 use crate::{DTPSError, RawData, CONTENT_TYPE_PATCH_JSON, DTPSR};
 
 pub async fn get_rawdata_status(con: &TypeOfConnection) -> DTPSR<(http::StatusCode, RawData)> {
@@ -47,7 +47,7 @@ pub async fn interpret_resp(con: &TypeOfConnection, resp: Response) -> DTPSR<Raw
     }
 }
 
-pub async fn post_json<T>(con: &TypeOfConnection, value: &T) -> DTPSR<RawData>
+pub async fn post_json<T>(con: &TypeOfConnection, value: &T) -> DTPSR<PostResponse>
 where
     T: Serialize,
 {
@@ -55,7 +55,7 @@ where
     post_data(con, &rd).await
 }
 
-pub async fn post_cbor<T>(con: &TypeOfConnection, value: &T) -> DTPSR<RawData>
+pub async fn post_cbor<T>(con: &TypeOfConnection, value: &T) -> DTPSR<PostResponse>
 where
     T: Serialize,
 {
@@ -63,7 +63,13 @@ where
     post_data(con, &rd).await
 }
 
-pub async fn post_data(con: &TypeOfConnection, rd: &RawData) -> DTPSR<RawData> {
+#[derive(Debug, Clone)]
+pub struct PostResponse {
+    pub rd: RawData,
+    pub locations: Vec<TypeOfConnection>,
+}
+
+pub async fn post_data(con: &TypeOfConnection, rd: &RawData) -> DTPSR<PostResponse> {
     let resp = context!(
         make_request(con, hyper::Method::POST, &rd.content, Some(&rd.content_type), None).await,
         "Cannot make request to {}",
@@ -72,6 +78,14 @@ pub async fn post_data(con: &TypeOfConnection, rd: &RawData) -> DTPSR<RawData> {
 
     let (is_success, as_string) = (resp.status().is_success(), resp.status().to_string());
     let content_type = get_content_type(&resp);
+    // iterate over all the locations
+    let mut locations = vec![];
+    for x in resp.headers().get_all("location") {
+        let s = x.to_str().unwrap();
+        let joined = context!(con.join(s), "Cannot parse url: {s:?}")?;
+        locations.push(joined);
+    }
+
     let body_bytes = context!(hyper::body::to_bytes(resp.into_body()).await, "Cannot get body bytes")?;
     if !is_success {
         // pragma: no cover
@@ -84,7 +98,13 @@ pub async fn post_data(con: &TypeOfConnection, rd: &RawData) -> DTPSR<RawData> {
         content_type,
     };
 
-    Ok(x0)
+    //
+    // let locations = resp.headers().get_all("location").iter().map(|x| {
+    //     let s = x.to_str().unwrap();
+    //     context!(con.join(s), "Cannot parse url: {s:?}")?
+    // }).collect();
+
+    Ok(PostResponse { rd: x0, locations })
 }
 
 pub async fn make_request(

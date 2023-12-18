@@ -32,7 +32,8 @@ use crate::time_nanos_i64;
 use crate::wrap_recv;
 use crate::TypeOfResource;
 use crate::{
-    context, debug_with_info, error_with_info, get_queue_id, get_random_node_id, info_with_info, internal_assertion,
+    context, debug_with_info, dtpserror_context, error_with_info, get_queue_id, get_random_node_id, info_with_info,
+    internal_assertion,
     internal_jobs::{InternalJobManager, JobFunctionType},
     invalid_input, is_prefix_of, not_available, not_implemented, not_reachable,
     shared_statuses::SharedStatusNotification,
@@ -563,10 +564,7 @@ impl ServerState {
         Ok(())
     }
 
-    pub async fn remove_topic_to_topic_connection(
-        &mut self,
-        connection_name: &CompositeName,
-    ) -> DTPSR<SharedStatusNotification> {
+    pub async fn remove_topic_to_topic_connection(&mut self, connection_name: &CompositeName) -> DTPSR<()> {
         let x = self.remove_topic_to_topic_connection_(connection_name).await?;
 
         let connections_name = TopicName::from_dash_sep(TOPIC_CONNECTIONS)?;
@@ -578,7 +576,7 @@ impl ServerState {
         })
         .await?;
 
-        Ok(x)
+        Ok(())
     }
 
     pub async fn remove_topic_to_topic_connection_(
@@ -595,7 +593,7 @@ impl ServerState {
         connection_name: &CompositeName,
         connection_job: &ConnectionJob,
         ssa: ServerStateAccess,
-    ) -> DTPSR<SharedStatusNotification> {
+    ) -> DTPSR<()> {
         let x = self
             .add_topic_to_topic_connection_(connection_name, connection_job, ssa)
             .await?;
@@ -609,7 +607,7 @@ impl ServerState {
         })
         .await?;
 
-        Ok(x)
+        Ok(())
     }
 
     pub async fn add_topic_to_topic_connection_(
@@ -617,12 +615,13 @@ impl ServerState {
         connection_name: &CompositeName,
         connection_job: &ConnectionJob,
         ssa: ServerStateAccess,
-    ) -> DTPSR<SharedStatusNotification> {
+    ) -> DTPSR<()> {
         let prefix = CompositeName::from_relative_url("connections")?;
         let job_name = prefix + connection_name.clone();
 
         self.start_connection(&job_name, connection_name, connection_job, ssa)
-            .await
+            .await?;
+        Ok(())
     }
 
     async fn start_connection(
@@ -631,9 +630,9 @@ impl ServerState {
         connection_name: &CompositeName,
         connection_job: &ConnectionJob,
         ssa: ServerStateAccess,
-    ) -> DTPSR<SharedStatusNotification> {
-        let event = SharedStatusNotification::new(job_name.as_dash_sep());
-        let event_clone = event.clone();
+    ) -> DTPSR<()> {
+        // let event = SharedStatusNotification::new(job_name.as_dash_sep());
+        // let event_clone = event.clone();
         let connection_name = connection_name.clone();
         let connection_job = connection_job.clone();
 
@@ -642,23 +641,26 @@ impl ServerState {
             let connection_name = connection_name.clone();
             let connection_job = connection_job.clone();
             let ssa = ssa.clone();
-            let event_clone = event_clone.clone();
+            // let event_clone = event_clone.clone();
+
             Box::pin(async move {
-                let res = run_connection_job(connection_name, connection_job, ssa, event_clone).await;
-                match res {
-                    Ok(_) => {
-                        debug_with_info!("Connection job finished successfully");
-                        Ok(())
-                    }
-                    Err(e) => Err(format!("Connection job finished with error: {:?}", e)),
-                }
+                let res = run_connection_job(connection_name, connection_job, ssa).await;
+                dtpserror_context!(res, "Connection job finished with error",)?;
+                Ok(())
+                // match res {
+                //     Ok(_) => {
+                //         debug_with_info!("Connection job finished successfully");
+                //         Ok(())
+                //     }
+                //     Err(e) => Err(format!("Connection job finished with error: {:#?}", e)),
+                // }
             })
         });
 
         self.job_manager
-            .add_job(job_name, "Connection job", connect_job, true, true, 5.0, ssa2)?;
+            .add_job(job_name, "Connection job", connect_job, true, true, 0.0, ssa2)?;
 
-        Ok(event)
+        Ok(())
     }
 
     pub fn new_proxy_topic(
@@ -1526,7 +1528,7 @@ async fn run_connection_job(
     connection_name: CompositeName,
     connection_job: ConnectionJob,
     ssa: ServerStateAccess,
-    tx: SharedStatusNotification,
+    // tx: SharedStatusNotification,
 ) -> DTPSR<()> {
     // TODO: check already exists or not
     let (source, target) = {
@@ -1551,13 +1553,13 @@ async fn run_connection_job(
                 connection_name.as_dash_sep()
             );
             error_with_info!("{}", s);
-            tx.notify(false, &s).await?;
+            // tx.notify(false, &s).await?;
             return not_available!("{}", s);
         }
         Some(x) => x,
     };
 
-    tx.notify(true, "found source and target").await?;
+    // tx.notify(true, "found source and target").await?;
     while let Some(x) = wrap_recv(&mut stream1).await {
         debug_with_info!(
             "Connection job: {}: Got data {:?} from source {source:?} with {target:?}",
@@ -1567,9 +1569,14 @@ async fn run_connection_job(
 
         match x {
             ListenURLEvents::InsertNotification(inot) => {
-                target
-                    .push(ssa.clone(), &inot.raw_data, &inot.data_saved.clocks)
-                    .await?;
+                let presented_as = "n/a";
+                context!(
+                    target
+                        .push(presented_as, ssa.clone(), &inot.raw_data, &inot.data_saved.clocks)
+                        .await,
+                    "Connection job: {}: Error pushing data to target\n{target:?}\nfrom source\n{source:?}",
+                    connection_name.as_dash_sep(),
+                )?;
             }
             ListenURLEvents::WarningMsg(_)
             | ListenURLEvents::ErrorMsg(_)

@@ -105,10 +105,10 @@ class TopicNameV:
 
         return self.components, other.components[len(self.components) :]
 
-    def __add__(self, other: Self) -> Self:
+    def __add__(self, other: Self) -> "TopicNameV":
         return TopicNameV(self.components + other.components)
 
-    def nontrivial_prefixes(self) -> Sequence[Self]:
+    def nontrivial_prefixes(self) -> "Sequence[TopicNameV]":
         return [TopicNameV(self.components[:i]) for i in range(1, len(self.components))]
 
     def __lt__(self, other):

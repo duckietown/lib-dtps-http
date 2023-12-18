@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import (
+    Any,
     AsyncContextManager,
     Awaitable,
     Callable,
@@ -163,6 +164,15 @@ class DTPSContext(ABC):
     @abstractmethod
     async def call(self, data: RawData, /) -> RawData:
         """RPC call (push with response)"""
+
+    # patch
+    @abstractmethod
+    async def patch(self, patch_data: List[Dict[str, Any]], /) -> None:
+        """
+        Applies a patch to the resource.
+        The patch is a list of operations, as defined in RFC 6902.
+
+        """
 
     # proxy
 

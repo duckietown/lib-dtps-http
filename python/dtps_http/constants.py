@@ -1,6 +1,7 @@
 from .types import ContentType, TopicNameV
 
 __all__ = [
+    "CONTENT_TYPE_DTPS_DATAREADY_CBOR",
     "CONTENT_TYPE_DTPS_INDEX",
     "CONTENT_TYPE_DTPS_INDEX_CBOR",
     "CONTENT_TYPE_PATCH_CBOR",
@@ -33,6 +34,7 @@ __all__ = [
     "REL_URL_META",
     "TOPIC_AVAILABILITY",
     "TOPIC_CLOCK",
+    "TOPIC_CONNECTIONS",
     "TOPIC_LIST",
     "TOPIC_LOGS",
     "TOPIC_PROXIED",
@@ -56,11 +58,13 @@ TOPIC_CLOCK = TopicNameV.from_dash_sep("dtps/clock")
 TOPIC_LOGS = TopicNameV.from_dash_sep("dtps/logs")
 TOPIC_AVAILABILITY = TopicNameV.from_dash_sep("dtps/availability")
 TOPIC_STATE_SUMMARY = TopicNameV.from_dash_sep("dtps/state")
+TOPIC_CONNECTIONS = TopicNameV.from_dash_sep("dtps/connections")
 TOPIC_STATE_NOTIFICATION = TopicNameV.from_dash_sep("dtps/states-notification")
 TOPIC_PROXIED = TopicNameV.from_dash_sep("dtps/proxied")
 
 CONTENT_TYPE_DTPS_INDEX = ContentType("application/vnd.dt.dtps-index")
 CONTENT_TYPE_DTPS_INDEX_CBOR = ContentType("application/vnd.dt.dtps-index+cbor")
+CONTENT_TYPE_DTPS_DATAREADY_CBOR = ContentType("application/vnd.dt.dtps-dataready+cbor")
 CONTENT_TYPE_TOPIC_HISTORY_CBOR = ContentType("application/vnd.dt.dtps-history+cbor")
 CONTENT_TYPE_PATCH_JSON = ContentType("application/json-patch+json")
 CONTENT_TYPE_PATCH_YAML = ContentType("application/json-patch+yaml")

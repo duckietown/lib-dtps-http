@@ -43,6 +43,7 @@ from pydantic.dataclasses import dataclass
 from . import __version__, logger as logger0
 from .client import DTPSClient, FoundMetadata, unescape_json_pointer
 from .constants import (
+    CONTENT_TYPE_DTPS_DATAREADY_CBOR,
     CONTENT_TYPE_DTPS_INDEX_CBOR,
     CONTENT_TYPE_PATCH_CBOR,
     CONTENT_TYPE_PATCH_JSON,
@@ -75,12 +76,22 @@ from .constants import (
     TOPIC_STATE_SUMMARY,
 )
 from .link_headers import put_link_header
-from .object_queue import ObjectQueue, ObjectTransformFunction, PostResult, transform_identity, TransformError
+from .object_queue import (
+    ObjectQueue,
+    ObjectTransformFunction,
+    PostResult,
+    transform_identity,
+    TransformError,
+)
 from .structures import (
+    ChannelMsgs,
     Chunk,
+    ConnectionEstablished,
     ContentInfo,
     DataReady,
     Digest,
+    ErrorMsg,
+    FinishedMsg,
     get_digest,
     InsertNotification,
     is_image,
@@ -92,12 +103,14 @@ from .structures import (
     RawData,
     Registration,
     ResourceAvailability,
+    SilenceMsg,
     TopicProperties,
     TopicReachability,
     TopicRef,
     TopicRefAdd,
     TopicsIndex,
     TopicsIndexWire,
+    WarningMsg,
 )
 from .types import ContentType, NodeID, SourceID, TopicNameV, URLString
 from .types_of_source import (
@@ -912,7 +925,7 @@ class DTPSServer:
         for i in oq.stored:
             ds = oq.saved[i]
             a = oq.get_data_ready(ds, presented_as, inline_data=False)
-            history[a.sequence] = asdict(a)
+            history[a.index] = asdict(a)
 
         cbor = cbor2.dumps(history)
         rd = RawData(content=cbor, content_type=CONTENT_TYPE_TOPIC_HISTORY_CBOR)
@@ -1362,14 +1375,18 @@ pre {{
             if isinstance(pr, TransformError):
                 return web.Response(status=pr.http_code, text=pr.message, headers=headers)
             elif isinstance(pr, DataReady):
+                data = get_simple_cbor(pr.as_data_saved())
                 for r in pr.availability:
                     headers.add("Location", r.url)
 
                 return web.Response(
-                    status=201, headers=headers  # content_type=otr.content_type, body=otr.content
+                    status=201,
+                    content_type=CONTENT_TYPE_DTPS_DATAREADY_CBOR,
+                    body=data,
+                    headers=headers,  # content_type=otr.content_type, body=otr.content
                 )
             else:
-                raise AssertionError(f"Cannot handle {pr!r}")
+                raise AssertionError(f"Cannot handle {pr!r} for {source}")
 
     @contextmanager
     def _log_request(self, request: web.Request) -> Iterator[None]:
@@ -1422,11 +1439,15 @@ pre {{
             if isinstance(otr, TransformError):
                 return web.Response(status=otr.http_code, text=otr.message, headers=headers)
             elif isinstance(otr, DataReady):
+                data = get_simple_cbor(otr.as_data_saved())
                 for r in otr.availability:
                     headers.add("Location", r.url)
 
                 return web.Response(
-                    status=201, headers=headers  # content_type=otr.content_type, body=otr.content
+                    status=201,
+                    content_type=CONTENT_TYPE_DTPS_DATAREADY_CBOR,
+                    body=data,
+                    headers=headers,  # content_type=otr.content_type, body=otr.content
                 )
             else:
                 raise AssertionError(f"Cannot handle {otr!r}")
@@ -1565,7 +1586,7 @@ pre {{
 
             await ws.prepare(request)
 
-            self.logger.info(f"serve_events_forwarder: {request.url} topic_name={topic_name_s} fd={fd}")
+            # self.logger.info(f"serve_events_forwarder: {request.url} topic_name={topic_name_s} fd={fd}")
             await self.serve_events_forwarder(ws, presented_as, fd, send_data)
             return ws
 
@@ -1796,28 +1817,23 @@ pre {{
 
             @async_error_catcher
             async def callback(lue: ListenURLEvents) -> None:
+                async def send(m: ChannelMsgs):
+                    await ws.send_bytes(get_tagged_cbor(m))
+
                 if isinstance(lue, InsertNotification):
                     ds = lue.data_saved
-                    # urls = [join(url, _.url) for _ in ds.availability]
-                    # self.digest_to_urls[dr.digest] = urls
-                    # digesturl = URLString(f"../data/{dr.digest}/")
-                    # urls_strings: List[URLString]
-                    # urls_strings = [url_to_string(_) for _ in urls] + [digesturl]
-                    # TODO: DTSW-4785: this doesn't work either, we need to save the data
                     if inline_data_send:
                         availability = []
                         chunks_arriving = 1
                     else:
                         the_url, available_until = self._store_data(lue.raw_data, available_for, presented_as)
+                        self.logger.debug(
+                            f"serve_events_forwarder_one: sending ref {the_url} {available_until}"
+                        )
                         availability = [ResourceAvailability(the_url, available_until)]
                         chunks_arriving = 0
-                        # availability = [
-                        #     ResourceAvailability(url=url_string, available_until=time.time() + 60)
-                        #     for url_string in urls_strings
-                        # ]
-                        # chunks_arriving = 0
                     dr2 = DataReady(
-                        sequence=ds.index,
+                        index=ds.index,
                         time_inserted=ds.time_inserted,
                         digest=ds.digest,
                         content_type=ds.content_type,
@@ -1829,14 +1845,29 @@ pre {{
                         unique_id=ds.unique_id,
                     )
                     # logger.debug(f"Forwarding {dr} -> {dr2}")
-                    await ws.send_bytes(get_tagged_cbor(dr2))
+                    await send(dr2)
                     if inline_data_send:
+                        # TODO: divide chunks
                         chunk = Chunk(digest=dr2.digest, i=0, n=1, index=0, data=lue.raw_data.content)
-                        await ws.send_bytes(get_tagged_cbor(chunk))
+                        await send(chunk)
                     else:
                         pass
+                elif isinstance(lue, ConnectionEstablished):
+                    await send(SilenceMsg(0.0, f"Connection established to {url}"))
+
+                elif isinstance(
+                    lue,
+                    (
+                        WarningMsg,
+                        ErrorMsg,
+                        FinishedMsg,
+                        SilenceMsg,
+                    ),
+                ):
+                    await send(lue)
                 else:
-                    await ws.send_bytes(get_tagged_cbor(lue))
+                    self.logger.warning(f"Unknown message type {lue}")
+                    raise NotImplementedError(f"Cannot handle {lue!r}")
 
             ld = await client.listen_url_events3(
                 url,
@@ -1890,6 +1921,10 @@ async def update_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, i
         except CancelledError:
             s.logger.info(f"Clock {topic_name.as_relative_url()} cancelled")
             break
+
+
+def get_simple_cbor(ob: Any) -> bytes:
+    return cbor2.dumps(asdict(ob))
 
 
 def get_tagged_cbor(ob: Any) -> bytes:

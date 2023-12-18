@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, MutexGuard, Notify};
 
-use crate::{DTPSError, DTPSR};
+use crate::{internal_assertion, DTPSError, DTPSR};
 
 #[derive(Debug, Clone)]
 pub struct SharedStatusNotification {
@@ -23,6 +23,7 @@ impl SharedStatusNotification {
     pub async fn wait(&self) -> DTPSR<()> {
         self.notifier.notified().await;
         let l = self.shared_state.lock().await;
+
         return if l.is_some() {
             let (status, msg) = &l.as_ref().unwrap();
             if *status {
@@ -40,8 +41,23 @@ impl SharedStatusNotification {
         {
             let mut l = self.shared_state.lock().await;
             if l.is_some() {
-                return DTPSError::internal_assertion("Status already set");
+                let desc = self.desc.clone();
+                let (s, m) = l.as_ref().unwrap();
+                return internal_assertion!(
+                    "For {desc}, status already set  ({s}: {m}) while setting {status} ({msg})"
+                );
             }
+            // match l {
+            //     Some((s, m)) => {
+            //         let desc = self.desc.clone();
+            //         return internal_assertion!(
+            //         "For {desc}, status already set  ({s}: {m}) while setting {status} ({msg})"
+            //
+            //     )
+            //     }
+            //     None => {}
+            // }
+
             *l = Some((status, msg));
         }
         self.notifier.notify_waiters();

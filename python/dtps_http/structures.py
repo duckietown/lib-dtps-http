@@ -180,8 +180,8 @@ Digest = NewType("Digest", str)
 
 
 def get_digest(s: bytes) -> Digest:
-    s = hashlib.sha256(s).hexdigest()
-    return cast(Digest, f"sha256:{s}")
+    d = hashlib.sha256(s).hexdigest()
+    return cast(Digest, f"sha256:{d}")
 
 
 @dataclass
@@ -216,7 +216,8 @@ class RawData:
 
         if not is_structure(self.content_type):
             msg = (
-                f"Cannot convert non-structure content to native object (content_type={self.content_type!r})"
+                f"Cannot convert non-structure content to native object (content_type={self.content_type!r})\n"
+                f"data = {self.content}"
             )
             raise ValueError(msg)
 
@@ -292,6 +293,66 @@ class DataSaved:
     content_type: ContentType
     content_length: int
     clocks: "Clocks"
+
+
+@dataclass
+class ResourceAvailability:
+    url: URLString
+    available_until: float  # timestamp
+
+
+@dataclass
+class DataReady:
+    origin_node: NodeID
+    unique_id: SourceID
+    index: int
+    time_inserted: int
+    digest: str
+    content_type: ContentType
+    content_length: int
+    clocks: Clocks
+
+    availability: List[ResourceAvailability]
+    chunks_arriving: int
+
+    @classmethod
+    def from_json_string(cls, s: str) -> "DataReady":
+        struct = json.loads(s)
+        return pydantic_parse(cls, struct)
+
+    @classmethod
+    def from_cbor(cls, s: bytes) -> "DataReady":
+        struct = cbor2.loads(s)
+        if not isinstance(struct, dict):
+            raise ValueError(f"Expected a dictionary here: {s}\n{struct}")
+        return pydantic_parse(cls, struct)
+
+    def as_data_saved(self) -> DataSaved:
+        return DataSaved(
+            origin_node=self.origin_node,
+            unique_id=self.unique_id,
+            index=self.index,
+            time_inserted=self.time_inserted,
+            digest=self.digest,
+            content_type=self.content_type,
+            content_length=self.content_length,
+            clocks=self.clocks,
+        )
+
+    @classmethod
+    def from_data_saved(cls, ds: DataSaved) -> "DataReady":
+        return DataReady(
+            origin_node=ds.origin_node,
+            unique_id=ds.unique_id,
+            index=ds.index,
+            time_inserted=ds.time_inserted,
+            digest=ds.digest,
+            content_type=ds.content_type,
+            content_length=ds.content_length,
+            clocks=ds.clocks,
+            availability=[],
+            chunks_arriving=0,
+        )
 
 
 @dataclass
@@ -411,12 +472,6 @@ class TopicsIndexWire:
 
 
 @dataclass
-class ResourceAvailability:
-    url: URLString
-    available_until: float  # timestamp
-
-
-@dataclass
 class ChannelInfoDesc:
     sequence: int
     time_inserted: int
@@ -447,44 +502,6 @@ class Chunk:
     def from_cbor(cls, s: bytes) -> "Chunk":
         struct = cbor2.loads(s)
         return pydantic_parse(cls, struct)
-
-
-@dataclass
-class DataReady:
-    origin_node: NodeID
-    unique_id: SourceID
-    sequence: int
-    time_inserted: int
-    digest: str
-    content_type: ContentType
-    content_length: int
-    clocks: Clocks
-    availability: List[ResourceAvailability]
-    chunks_arriving: int
-
-    @classmethod
-    def from_json_string(cls, s: str) -> "DataReady":
-        struct = json.loads(s)
-        return pydantic_parse(cls, struct)
-
-    @classmethod
-    def from_cbor(cls, s: bytes) -> "DataReady":
-        struct = cbor2.loads(s)
-        if not isinstance(struct, dict):
-            raise ValueError(f"Expected a dictionary here: {s}\n{struct}")
-        return pydantic_parse(cls, struct)
-
-    def as_data_saved(self) -> DataSaved:
-        return DataSaved(
-            origin_node=self.origin_node,
-            unique_id=self.unique_id,
-            index=self.sequence,
-            time_inserted=self.time_inserted,
-            digest=self.digest,
-            content_type=self.content_type,
-            content_length=self.content_length,
-            clocks=self.clocks,
-        )
 
 
 @dataclass

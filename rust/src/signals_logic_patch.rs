@@ -1,4 +1,3 @@
-use anyhow::Context;
 use async_trait::async_trait;
 use futures::StreamExt;
 use json_patch::{patch, Patch, PatchOperation};
@@ -7,13 +6,14 @@ use log::info;
 use crate::utils_patch::unescape_json_patch;
 use crate::{
     debug_with_info, dtpserror_context, error_with_info, internal_assertion, invalid_input, not_implemented,
-    parse_url_ext, ConnectionJob, ConnectionJobWire, DTPSError, Patchable, ProxyJob, RawData, ServerStateAccess,
-    SourceComposition, TopicName, TopicRefAdd, Transforms, TypeOFSource, DTPSR, TOPIC_CONNECTIONS, TOPIC_PROXIED,
+    parse_url_ext, ConnectionJob, ConnectionJobWire, DTPSError, DataReady, DataSaved, Patchable, ProxyJob, RawData,
+    ServerStateAccess, SourceComposition, TopicName, TopicRefAdd, Transforms, TypeOFSource, DTPSR, TOPIC_CONNECTIONS,
+    TOPIC_PROXIED,
 };
 
 #[async_trait]
 impl Patchable for TypeOFSource {
-    async fn patch(&self, presented_as: &str, ssa: ServerStateAccess, patch: &Patch) -> DTPSR<()> {
+    async fn patch(&self, presented_as: &str, ssa: ServerStateAccess, patch: &Patch) -> DTPSR<DataSaved> {
         debug_with_info!("patching {self:#?} with {patch:#?}");
         match self {
             TypeOFSource::ForwardedQueue(_) => {
@@ -111,7 +111,7 @@ pub fn add_prefix_to_patch(patch: &Patch, prefix: &str) -> Patch {
     Patch(ops)
 }
 
-async fn patch_composition(ss_mutex: ServerStateAccess, patch: &Patch, sc: &SourceComposition) -> DTPSR<()> {
+async fn patch_composition(ss_mutex: ServerStateAccess, patch: &Patch, sc: &SourceComposition) -> DTPSR<DataSaved> {
     let mut ss = ss_mutex.lock().await;
 
     for x in &patch.0 {
@@ -151,7 +151,9 @@ async fn patch_composition(ss_mutex: ServerStateAccess, patch: &Patch, sc: &Sour
         }
     }
 
-    Ok(())
+    let insert_notification = ss.get_last_insert_assert_exists(&sc.topic_name)?;
+    // let dr = DataReady::from_data_saved(&insert_notification.data_saved);
+    Ok(insert_notification.data_saved)
 }
 
 pub fn topic_name_from_json_pointer(path: &str) -> DTPSR<TopicName> {
@@ -172,7 +174,7 @@ async fn patch_transformed(
     patch: &Patch,
     ts: &TypeOFSource,
     transform: &Transforms,
-) -> DTPSR<()> {
+) -> DTPSR<DataSaved> {
     debug_with_info!("patch_transformed:\n{ts:#?}\n---\n{transform:?}\n---\n{patch:?}");
     match transform {
         Transforms::GetInside(path) => {
@@ -188,7 +190,7 @@ async fn patch_transformed(
     }
 }
 
-async fn patch_our_queue(ssa: ServerStateAccess, patch: &Patch, topic_name: &TopicName) -> DTPSR<()> {
+async fn patch_our_queue(ssa: ServerStateAccess, patch: &Patch, topic_name: &TopicName) -> DTPSR<DataSaved> {
     let mut ss = ssa.lock().await;
 
     let (data_saved, raw_data) = {
@@ -214,7 +216,8 @@ async fn patch_our_queue(ssa: ServerStateAccess, patch: &Patch, topic_name: &Top
     }
     if x == x0 {
         debug_with_info!("The patch didn't change anything:\n {patch:?}");
-        return Ok(());
+        // let dr = DataReady::from_data_saved(&data_saved);
+        return Ok(data_saved);
     }
 
     let new_content: RawData = RawData::encode_from_json(&x, &data_saved.content_type)?;
@@ -236,10 +239,10 @@ async fn patch_our_queue(ssa: ServerStateAccess, patch: &Patch, topic_name: &Top
         );
     }
 
-    Ok(())
+    Ok(ds)
 }
 
-async fn patch_proxied(ss_mutex: ServerStateAccess, topic_name: &TopicName, p: &Patch) -> DTPSR<()> {
+async fn patch_proxied(ss_mutex: ServerStateAccess, topic_name: &TopicName, p: &Patch) -> DTPSR<DataSaved> {
     let mut ss = ss_mutex.lock().await;
 
     let s = ss.get_last_insert_assert_exists(topic_name)?;
@@ -250,7 +253,9 @@ async fn patch_proxied(ss_mutex: ServerStateAccess, topic_name: &TopicName, p: &
     patch(&mut x, p)?;
     if x == x0 {
         debug_with_info!("The patch didn't change anything:\n {p:?}");
-        return Ok(());
+
+        // let s = DataReady::from_data_saved(&s.data_saved);
+        return Ok(s.data_saved);
     }
     // debug_with_info!("patching:\n---\n{x0:?}\n---\n{x:?}");
 
@@ -301,10 +306,11 @@ async fn patch_proxied(ss_mutex: ServerStateAccess, topic_name: &TopicName, p: &
         return internal_assertion!("there were some modifications inside: {ds:?} != {:?}", s.data_saved);
     }
 
-    Ok(())
+    // let dr = DataReady::from_data_saved(&ds);
+    Ok(ds)
 }
 
-async fn patch_connection(ssa: ServerStateAccess, topic_name: &TopicName, p: &Patch) -> DTPSR<()> {
+async fn patch_connection(ssa: ServerStateAccess, topic_name: &TopicName, p: &Patch) -> DTPSR<DataSaved> {
     let mut ss = ssa.lock().await;
     let s = ss.get_last_insert_assert_exists(topic_name)?;
     let x0: serde_json::Value = s.raw_data.get_as_json()?;
@@ -313,25 +319,26 @@ async fn patch_connection(ssa: ServerStateAccess, topic_name: &TopicName, p: &Pa
     patch(&mut x, p)?;
     if x == x0 {
         debug_with_info!("The patch didn't change anything:\n {p:?}");
-        return Ok(());
+        // let s = DataReady::from_data_saved(&s.data_saved);
+        return Ok(s.data_saved);
     }
     if p.0.len() != 1 {
         return not_implemented!("PATCH operation only allowed of length 1 with {p:?}");
     }
     let po = &p.0[0];
 
-    let notification = match po {
+    match po {
         PatchOperation::Add(ao) => {
             let pj: ConnectionJobWire = serde_json::from_value(ao.value.clone())?;
             let pj = ConnectionJob::from_wire(&pj)?;
             let key = unescape_json_patch(&ao.path)[1..].to_string();
             let name = TopicName::from_dash_sep(key)?;
-            ss.add_topic_to_topic_connection_(&name, &pj, ssa.clone()).await?
+            ss.add_topic_to_topic_connection_(&name, &pj, ssa.clone()).await?;
         }
         PatchOperation::Remove(ao) => {
             let key = unescape_json_patch(&ao.path)[1..].to_string();
             let name = TopicName::from_dash_sep(key)?;
-            ss.remove_topic_to_topic_connection_(&name).await?
+            ss.remove_topic_to_topic_connection_(&name).await?;
         }
         PatchOperation::Replace(_) | PatchOperation::Move(_) | PatchOperation::Copy(_) | PatchOperation::Test(_) => {
             return not_implemented!("PATCH operation invalid with {p:?}");
@@ -359,6 +366,10 @@ async fn patch_connection(ssa: ServerStateAccess, topic_name: &TopicName, p: &Pa
     }
 
     drop(ss);
-    notification.wait().await?;
-    Ok(())
+    // notification.wait().await?;
+
+    // let dr = DataReady::from_data_saved(&ds);
+
+    // log::info!("patch_connection: returning {:#?}", dr);
+    Ok(ds)
 }

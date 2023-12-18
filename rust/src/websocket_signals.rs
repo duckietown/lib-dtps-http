@@ -17,7 +17,7 @@ mod test {
         init_logging();
         let msg = MsgServerToClient::DataReady(DataReady {
             origin_node: "".to_string(),
-            sequence: 456,
+            index: 456,
             time_inserted: 0,
             digest: "".to_string(),
             content_type: "".to_string(),

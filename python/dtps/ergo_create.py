@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Awaitable, Callable, cast, List, Optional, Sequence, Tuple, Union
+from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Sequence, Tuple, Union
 
 from dtps_http import (
     app_start,
@@ -236,6 +236,9 @@ class ContextManagerCreateContext(DTPSContext):
     @asynccontextmanager
     async def publisher_context(self) -> AsyncIterator["PublisherInterface"]:
         yield self._publisher
+
+    async def patch(self, patch_data: List[Dict[str, Any]], /) -> None:
+        raise NotImplementedError
 
     async def call(self, data: RawData, /) -> RawData:
         server = self._get_server()

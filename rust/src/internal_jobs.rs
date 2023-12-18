@@ -4,10 +4,10 @@ use tokio::task::JoinHandle;
 
 use crate::{
     debug_with_info, dtpserror_other, error_with_info, server_state::Status, shared_statuses::SharedStatusNotification,
-    types::CompositeName, ServerStateAccess, DTPSR,
+    types::CompositeName, DTPSError, ServerStateAccess, DTPSR,
 };
 
-pub type JobFunctionType = Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send>;
+pub type JobFunctionType = Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), DTPSError>> + Send>> + Send>;
 
 #[derive(Debug)]
 pub struct InternalJob {
@@ -42,7 +42,9 @@ impl InternalJobManager {
                         event2.notify(true, "Job finished").await.unwrap();
                     }
                     Err(e) => {
-                        error_with_info!("job {job_name:?} [{desc}]  finished with error: {e:?}");
+                        if !e.is_cancelled() {
+                            error_with_info!("job {job_name:?} [{desc}] finished with error: {e:?}");
+                        }
                         event2.notify(true, "Job finished").await.unwrap();
                     }
                 }
@@ -108,8 +110,9 @@ impl InternalJobManager {
         let prefix = format!("job {name:?}[{desc}]:", name = name.as_dash_sep(), desc = desc);
         debug_with_info!("{prefix} handler started");
         let mut handle = job_function();
-
+        let mut iteration = -1;
         loop {
+            iteration += 1;
             {
                 let mut ss = ssa.lock().await;
 
@@ -118,7 +121,12 @@ impl InternalJobManager {
                 }
             }
             let r = handle.await;
-            debug_with_info!("{prefix} finished OK = {}", r.is_ok());
+            // debug_with_info!("{prefix} finished OK = {}", r.is_ok());
+            if r.is_ok() {
+                debug_with_info!("Iteration {iteration} of {prefix} finished OK");
+            } else {
+                error_with_info!("Iteration {iteration} of {prefix} finished with error: {:?}", r);
+            }
             match r {
                 Ok(_) => {
                     let mut ss = ssa.lock().await;
@@ -132,7 +140,8 @@ impl InternalJobManager {
                 }
                 Err(e) => {
                     let mut ss = ssa.lock().await;
-                    if let Err(e2) = ss.send_status_notification(&name, Status::FATAL, Some(e)) {
+                    if let Err(e2) = ss.send_status_notification(&name, Status::FATAL, Some(e.to_string())) {
+                        // XXX
                         error_with_info!("{prefix} Error sending status notification: {:?}", e2);
                     }
 

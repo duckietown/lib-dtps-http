@@ -100,7 +100,7 @@ pub mod built_info {
 mod internal_jobs;
 mod signals_logic_meta;
 mod signals_logic_props;
-mod signals_logic_push;
+mod signals_logic_publish;
 mod signals_logic_resolve;
 #[cfg(test)]
 mod test_python;
@@ -127,8 +127,12 @@ mod cli_program_subscribe;
 mod client_history;
 mod client_index;
 mod client_link_benchmark;
+mod client_publish;
 mod client_verbs;
 mod client_websocket_read;
+mod signals_logic_call;
 mod utils_queues;
 mod utils_time;
 mod utils_websocket;
+
+use client_publish::*;

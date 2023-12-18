@@ -4,13 +4,19 @@ use json_patch::{Patch, PatchOperation, ReplaceOperation};
 
 use crate::client_verbs::post_data;
 use crate::{
-    clocks::Clocks, dtpserror_other, invalid_input, not_implemented, signals_logic::Pushable, Patchable, RawData,
-    ServerStateAccess, Transforms, TypeOFSource, DTPSR,
+    clocks::Clocks, context, dtpserror_other, invalid_input, not_implemented, publish, signals_logic::Pushable,
+    DataReady, DataSaved, Patchable, RawData, ServerStateAccess, Transforms, TypeOFSource, DTPSR,
 };
 
 #[async_trait]
 impl Pushable for TypeOFSource {
-    async fn push(&self, ssa: ServerStateAccess, data: &RawData, clocks: &Clocks) -> DTPSR<()> {
+    async fn push(
+        &self,
+        presented_as: &str,
+        ssa: ServerStateAccess,
+        data: &RawData,
+        clocks: &Clocks,
+    ) -> DTPSR<DataSaved> {
         match self {
             TypeOFSource::ForwardedQueue(fq) => {
                 // let ss = ssa.lock().await;
@@ -32,15 +38,30 @@ impl Pushable for TypeOFSource {
                 };
                 // let use_url = &ss.proxied_topics.get(&q.my_topic_name).unwrap().data_url;
 
-                let rd = post_data(&con, data).await?;
-                Ok(())
+                let pr = publish(&con, data).await?;
+                Ok(pr)
+                // let dr = DataReady::from_data_saved;
+                //
+                // let x =
+                //     context!(
+                //
+                //     rd.interpret_owned::<DataReady>(),
+                //     "pushing to {fq:#?} using {con} got {rd:#?}")
+                //
+                //         ?;
+                // // FIXME: need to translate the availability
+                // Ok(x)
             }
             TypeOFSource::OurQueue(topic_name, ..) => {
                 let mut ss = ssa.lock().await;
                 let clocks = Some(clocks.clone());
                 // handle_topic_post(&topic_name, ss_mutex, &rd).await
-                ss.publish_raw_data(topic_name, data, clocks)?;
-                Ok(())
+                let ds = ss.publish_raw_data(topic_name, data, clocks)?;
+
+                // let dr: DataReady = DataReady::from_data_saved(&ds);
+
+
+                Ok(ds)
             }
 
             TypeOFSource::OtherProxied(..) => {

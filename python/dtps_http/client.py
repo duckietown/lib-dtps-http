@@ -311,7 +311,7 @@ class DTPSClient:
                 await self.prefer_alternative(url, resp)
                 location = resp.headers.get("Location")
                 if not location:
-                    raise ValueError(f"no location header in {resp}")
+                    raise ValueError(f"no location header in response to call for {url} {resp}")
 
                 url_redirect = join(url, location)
             return await self.get(url_redirect, accept=None)
@@ -326,7 +326,7 @@ class DTPSClient:
 
         if not alternatives0:
             return None
-        alternatives = [current]
+        alternatives: list[URL] = [current]
         for a in alternatives0:
             try:
                 x = parse_url_unescape(a)
@@ -1062,7 +1062,7 @@ class DTPSClient:
                                 raise Exception(str(msg.data))
                         elif msg.type == aiohttp.WSMsgType.BINARY:
                             try:
-                                cm = channel_msgs_parse(msg.data)
+                                cm: ChannelMsgs = channel_msgs_parse(msg.data)
                             except Exception as e:
                                 s = f"error in parsing {msg.data!r}: {e.__class__.__name__}:\n{e}"
                                 self.logger.error(s)
@@ -1130,7 +1130,7 @@ class DTPSClient:
 
                                         try:
                                             # TODO: re-use the same session for gets
-                                            logger.debug(f"downloading {url_websockets} from {cm}")
+                                            # logger.debug(f"downloading {url_websockets} from {cm}")
                                             data = await self._download_from_urls(url_websockets, cm)
                                         except Exception as e:
                                             msg = f"error in downloading {cm}: {e.__class__.__name__} {e!r}"
@@ -1147,10 +1147,12 @@ class DTPSClient:
 
                                 elif isinstance(cm, ChannelInfo):
                                     nreceived += 1
+                                    m = ConnectionEstablished(comment=f"received {nreceived}")
+                                    await callback(m)
                                     # logger.info(f"channel info {cm}")
-                                elif isinstance(
-                                    cm, (WarningMsg, ErrorMsg, FinishedMsg, ConnectionEstablished)
-                                ):
+                                elif isinstance(cm, (WarningMsg, ErrorMsg, FinishedMsg)):
+                                    await callback(cm)
+                                elif isinstance(cm, SilenceMsg):
                                     await callback(cm)
                                 else:
                                     s = f"listen_url_events_: unexpected message {cm!r}"
@@ -1480,6 +1482,14 @@ class ListenDataContinuousImp(ListenDataInterface):
 
 
 def channel_msgs_parse(d: bytes) -> "ChannelMsgs":
-    Ts = (ChannelInfo, DataReady, Chunk, FinishedMsg, ErrorMsg, WarningMsg, SilenceMsg, ConnectionEstablished)
+    Ts = (
+        ChannelInfo,
+        DataReady,
+        Chunk,
+        FinishedMsg,
+        ErrorMsg,
+        WarningMsg,
+        SilenceMsg,
+    )
 
     return parse_cbor_tagged(d, *Ts)
