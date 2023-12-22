@@ -93,7 +93,6 @@ from .utils import (
     check_is_unix_socket,
     method_lru_cache,
     parse_cbor_tagged,
-    parse_tagged,
 )
 
 __all__ = [
@@ -183,7 +182,14 @@ class ListenDataImpl(ListenDataInterface):
         try:
             await self.task
         except CancelledError:
-            pass
+            if self.task.done():
+                return
+            else:
+                raise
+            # note: cancelling() only for >= 3.11
+            # if asyncio.current_task().cancelling() > 0:
+            #     # propagate the exception up normally
+            #     raise
 
 
 class ConditionSatistied(Exception):
@@ -1103,7 +1109,10 @@ class DTPSClient:
                                                 continue
 
                                         if len(data) != dr.content_length:
-                                            s = f"unexpected data length {len(data)} != {dr.content_length}\n{dr}"
+                                            s = (
+                                                f"unexpected data length {len(data)} != "
+                                                f"{dr.content_length}\n{dr}"
+                                            )
                                             self.logger.error(s)
                                             await callback(ErrorMsg(comment=s))
                                             if raise_on_error:

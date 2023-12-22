@@ -125,7 +125,10 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
         try:
             await task
         except asyncio.CancelledError:
-            pass
+            if task.done():
+                pass
+            else:
+                raise
 
     @test_timeout(10)
     async def test_patch1_json_json(self):
@@ -184,7 +187,10 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
         try:
             await task
         except asyncio.CancelledError:
-            pass
+            if task.done():
+                pass
+            else:
+                raise
 
 
 async def doit(topic_mime: Literal["json", "cbor", "yaml"], patch_mime: Literal["json", "cbor", "yaml"]):

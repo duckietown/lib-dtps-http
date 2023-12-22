@@ -60,8 +60,6 @@ else:
         async def wrapper(*args: PS.args, **kwargs: PS.kwargs) -> X:
             try:
                 return await func(*args, **kwargs)
-            # except web.HTTPError:
-            #     raise
             except CancelledError:
                 raise
             except BaseException:
@@ -80,8 +78,6 @@ else:
                     yield _
             except CancelledError:
                 raise
-            # except web.HTTPError:
-            #     raise
             except BaseException:
                 logger.error(f"Exception in async in {func.__name__}:\n{traceback.format_exc()}")
                 raise

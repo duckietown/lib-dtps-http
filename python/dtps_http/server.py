@@ -1920,7 +1920,7 @@ async def update_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, i
             await asyncio.sleep(interval)
         except CancelledError:
             s.logger.info(f"Clock {topic_name.as_relative_url()} cancelled")
-            break
+            raise  #
 
 
 def get_simple_cbor(ob: Any) -> bytes:
