@@ -121,13 +121,11 @@ impl InternalJobManager {
             }
             let r = handle.await;
             // debug_with_info!("{prefix} finished OK = {}", r.is_ok());
-            if r.is_ok() {
-                debug_with_info!("Iteration {iteration} of {prefix} finished OK");
-            } else {
-                error_with_info!("Iteration {iteration} of {prefix} finished with error:\n{:?}", r);
-            }
+
             match r {
                 Ok(_) => {
+                    // debug_with_info!("Iteration {iteration} of {prefix} finished OK");
+
                     let mut ss = ssa.lock().await;
                     if let Err(e) = ss.send_status_notification(&name, Status::EXITED, None) {
                         error_with_info!("{prefix} Error sending status notification:\n{:?}", e);
@@ -138,6 +136,9 @@ impl InternalJobManager {
                     }
                 }
                 Err(e) => {
+                    let s = e.to_string();
+                    error_with_info!("Iteration {iteration} of {prefix} finished with error:\n{s}");
+
                     let mut ss = ssa.lock().await;
                     if let Err(e2) = ss.send_status_notification(&name, Status::FATAL, Some(e.to_string())) {
                         // XXX

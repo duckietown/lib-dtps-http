@@ -32,8 +32,8 @@ use crate::time_nanos_i64;
 use crate::wrap_recv;
 use crate::TypeOfResource;
 use crate::{
-    context, debug_with_info, dtpserror_context, error_with_info, get_queue_id, get_random_node_id, info_with_info,
-    internal_assertion,
+    context, debug_with_info, dtpserror_context, dtpserror_other, error_with_info, get_queue_id, get_random_node_id,
+    info_with_info, internal_assertion,
     internal_jobs::{InternalJobManager, JobFunctionType},
     invalid_input, is_prefix_of, not_available, not_implemented, not_reachable,
     shared_statuses::SharedStatusNotification,
@@ -170,7 +170,9 @@ pub struct ForwardInfoEstablished {
 pub struct ForwardInfo {
     pub urls: Vec<TypeOfConnection>,
 
-    pub handle: Option<tokio::task::JoinHandle<()>>,
+    // pub handle: Option<tokio::task::JoinHandle<()>>,
+    pub job_name: TopicName,
+
     pub established: Option<ForwardInfoEstablished>,
     pub mounted_at: TopicName,
 }
@@ -528,23 +530,43 @@ impl ServerState {
         if self.proxied.contains_key(topic_name) {
             return Err(DTPSError::TopicAlreadyExists(topic_name.to_dash_sep()));
         }
-        let future = observe_node_proxy(topic_name.clone(), cons.clone(), expect_node_id, ssa.clone());
+        let ssa2 = ssa.clone();
+        let topic_name2 = topic_name.clone();
 
-        let handle = tokio::spawn(show_errors(
-            Some(ssa),
-            format!(
-                "observe_node_proxy: {topic_name}",
-                topic_name = topic_name.as_dash_sep()
-            ),
-            future,
-        ));
+        let topic_name = topic_name.clone();
+        let cons2 = cons.clone();
+        let connect_job: JobFunctionType = Box::new(move || {
+            let topic_name = topic_name.clone();
+            let cons = cons2.clone();
+            let ssa = ssa.clone();
+            let expect_node_id = expect_node_id.clone();
+
+            Box::pin(
+                async move { observe_node_proxy(topic_name.clone(), cons.clone(), expect_node_id, ssa.clone()).await },
+            )
+        });
+
+        self.job_manager
+            .add_job(&topic_name2, "proxy listening job", connect_job, true, true, 1.0, ssa2)?;
+        //
+        // let future = observe_node_proxy(topic_name.clone(), cons.clone(), expect_node_id, ssa.clone());
+        //
+        // let handle = tokio::spawn(show_errors(
+        //     Some(ssa),
+        //     format!(
+        //         "observe_node_proxy: {topic_name}",
+        //         topic_name = topic_name.as_dash_sep()
+        //     ),
+        //     future,
+        // ));
         let fi = ForwardInfo {
             urls: cons.clone(),
-            handle: Some(handle),
+            job_name: topic_name2.clone(),
+            // handle: Some(handle),
             established: None,
-            mounted_at: topic_name.clone(),
+            mounted_at: topic_name2.clone(),
         };
-        self.proxied.insert(topic_name.clone(), fi);
+        self.proxied.insert(topic_name2.clone(), fi);
 
         Ok(())
     }
@@ -1417,14 +1439,11 @@ pub async fn observe_node_proxy(
 
     {
         let mut ss = ss_mutex.lock().await;
-        add_from_response(
-            &mut ss,
-            // who_answers.clone(),
-            &mounted_at,
-            &index_internal_at_t0,
-            link1.clone(),
-            // url.to_string(),
-        )?;
+        add_from_response(&mut ss, &mounted_at, &index_internal_at_t0, link1.clone())?;
+    }
+
+    if md.content_type != CONTENT_TYPE_DTPS_INDEX_CBOR {
+        return Ok(());
     }
 
     let inline_url = md.events_data_inline_url.unwrap().clone();
@@ -1439,20 +1458,25 @@ pub async fn observe_node_proxy(
             | ListenURLEvents::SilenceMsg(_) => return Ok(()),
         };
 
-        let x00: Result<TopicsIndexWire, _> = serde_cbor::from_slice(&notification.raw_data.content);
-        let x0 = x00.map_err(|e| DTPSError::Other(format!("Error deserializing TopicsIndexWire: {:#?}", e)))?;
+        if notification.raw_data.content_type != CONTENT_TYPE_DTPS_INDEX_CBOR {
+            return dtpserror_other!(
+                "This function expects to work on an index endpoint with mime type {}.\n{:#?}",
+                CONTENT_TYPE_DTPS_INDEX_CBOR,
+                notification
+            );
+        }
+        let x0 = context!(
+            serde_cbor::from_slice::<TopicsIndexWire>(&notification.raw_data.content),
+            "Error deserializing TopicsIndexWire\n url: {}\n{:#?}",
+            inline_url,
+            notification
+        )?;
+
         let ti = TopicsIndexInternal::from_wire(&x0, &url);
 
         {
             let mut ss = ss_mutex.lock().await;
-            add_from_response(
-                &mut ss,
-                // who_answers.clone(),
-                &mounted_at,
-                &ti,
-                link1.clone(),
-                // url.to_string(),
-            )?;
+            add_from_response(&mut ss, &mounted_at, &ti, link1.clone())?;
         }
         Ok(())
     })
@@ -1492,8 +1516,10 @@ pub fn add_from_response(
     link_benchmark1: LinkBenchmark,
 ) -> DTPSR<()> {
     // debug_with_info!("topics_index: tii: \n{:#?}", tii);
+    let ntopics = tii.topics.len();
     for (its_topic_name, tr) in tii.topics.iter() {
-        if its_topic_name.is_root() {
+        // There is a case where we proxy a queue not an index
+        if its_topic_name.is_root() && ntopics > 1 {
             // ok
             continue; // TODO
         }

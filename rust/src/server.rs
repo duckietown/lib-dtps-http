@@ -375,7 +375,7 @@ impl DTPSServer {
             // let mut i = 0;
             for (k, v) in self.initial_proxy.clone() {
                 let mounted_at = TopicName::from_relative_url(&k)?;
-                self.add_proxied(&mounted_at, v.clone()).await?;
+                self.add_generic_proxied(&mounted_at, v.clone()).await?;
 
                 // i += 1;
             }
@@ -454,7 +454,11 @@ impl DTPSServer {
         ss.node_id.clone()
     }
 
-    pub async fn add_proxied(&mut self, mounted_at: &TopicName, url: TypeOfConnection) -> DTPSR<JoinHandle<()>> {
+    pub async fn add_generic_proxied(
+        &mut self,
+        mounted_at: &TopicName,
+        url: TypeOfConnection,
+    ) -> DTPSR<JoinHandle<()>> {
         let ssa = self.get_lock();
 
         let future = sniff_and_start_proxy(mounted_at.clone(), url, ssa.clone());

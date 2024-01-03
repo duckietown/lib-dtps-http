@@ -53,9 +53,9 @@ impl ObjectQueue {
     }
 
     pub fn you_are_being_deleted(&self) {
-
         // is it all done with the drop?
     }
+
     pub fn push(
         &mut self,
         data0: &RawData,

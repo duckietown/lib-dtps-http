@@ -265,7 +265,10 @@ pub mod tests {
 
         let mounted_at = TopicName::from_dash_sep("mounted/here")?;
 
-        instance2.server.add_proxied(&mounted_at, con_original.clone()).await?;
+        instance2
+            .server
+            .add_generic_proxied(&mounted_at, con_original.clone())
+            .await?;
 
         let con_proxied = instance2.cf.con.join(mounted_at.as_relative_url())?;
 
@@ -373,7 +376,7 @@ pub mod tests {
         let mounted_at = TopicName::from_dash_sep("mounted")?;
         instance2
             .server
-            .add_proxied(&mounted_at, instance.cf.con.clone())
+            .add_generic_proxied(&mounted_at, instance.cf.con.clone())
             .await?;
         let url = instance2.cf.con.to_string();
         let url = format!("{url}{path}");
