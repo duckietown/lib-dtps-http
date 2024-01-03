@@ -35,16 +35,19 @@ from aiohttp import (
     UnixConnector,
     WSCloseCode,
 )
+from multidict import CIMultiDictProxy
 from tcp_latency import measure_latency
 
 from . import logger, logger as logger0
 from .constants import (
+    CONTENT_TYPE_PATCH_CBOR,
     CONTENT_TYPE_PATCH_JSON,
     HEADER_CONTENT_LOCATION,
     HEADER_DATA_ORIGIN_NODE_ID,
     HEADER_NODE_ID,
     MIME_JSON,
     MIME_OCTET,
+    REL_CONNECTIONS,
     REL_EVENTS_DATA,
     REL_EVENTS_NODATA,
     REL_HISTORY,
@@ -59,6 +62,7 @@ from .structures import (
     ChannelMsgs,
     Chunk,
     ConnectionEstablished,
+    ConnectionJob,
     DataReady,
     ErrorMsg,
     FinishedMsg,
@@ -93,6 +97,7 @@ from .utils import (
     check_is_unix_socket,
     method_lru_cache,
     parse_cbor_tagged,
+    pretty,
 )
 
 __all__ = [
@@ -135,6 +140,10 @@ class FoundMetadata:
 
     # url for stream push
     stream_push_url: Optional[URLWS]
+
+    connections_url: Optional[URL]
+
+    raw_headers: CIMultiDictProxy[str]
 
 
 class ShutdownAsked(Exception):
@@ -731,10 +740,7 @@ class DTPSClient:
         use_url = None
         try:
             async with self.my_session(url, conn_timeout=2) as (session, use_url):
-                # logger.info(f"get_metadata {url0=!r} {use_url=!r}")
                 async with session.head(use_url) as resp:
-                    # logger.info(f"headers {url0}: {resp.headers}")
-
                     await my_raise_for_status(resp, url0)
 
                     if HEADER_CONTENT_LOCATION in resp.headers:
@@ -743,32 +749,44 @@ class DTPSClient:
                         alternatives0 = []
 
                     links = get_link_headers(resp.headers)
+
                     if REL_EVENTS_DATA in links:
                         events_url_data = cast(URLWSInline, join(url, links[REL_EVENTS_DATA].url))
                     else:
                         events_url_data = None
+
                     if REL_EVENTS_NODATA in links:
                         events_url = cast(URLWSOffline, join(url, links[REL_EVENTS_NODATA].url))
                     else:
                         events_url = None
+
                     if REL_STREAM_PUSH in links:
                         stream_push_url = cast(URLWS, join(url, links[REL_STREAM_PUSH].url))
                     else:
                         stream_push_url = None
 
+                    if REL_META in links:
+                        meta_url = join(url, links[REL_META].url)
+                    else:
+                        meta_url = None
+
+                    if REL_CONNECTIONS in links:
+                        connections_url = join(url, links[REL_CONNECTIONS].url)
+
+                    else:
+                        connections_url = None
+
+                    if REL_HISTORY in links:
+                        history_url = join(url, links[REL_HISTORY].url)
+                    else:
+                        history_url = None
+
+                    #
+
                     if HEADER_NODE_ID not in resp.headers:
                         answering = None
                     else:
                         answering = NodeID(resp.headers[HEADER_NODE_ID])
-
-                    if REL_HISTORY not in resp.headers:
-                        history_url = None
-                    else:
-                        history_url = join(url, resp.headers[REL_HISTORY])
-                    if REL_META not in resp.headers:
-                        meta_url = None
-                    else:
-                        meta_url = join(url, resp.headers[REL_META])
 
                     if HEADER_DATA_ORIGIN_NODE_ID not in resp.headers:
                         origin_node = None
@@ -792,6 +810,8 @@ class DTPSClient:
             meta_url=meta_url,
             stream_push_url=stream_push_url,
             history_url=history_url,
+            connections_url=connections_url,
+            raw_headers=resp.headers,
         )
 
     async def choose_best(self, reachability: List[TopicReachability]) -> URL:
@@ -825,6 +845,50 @@ class DTPSClient:
         url = cast(URLTopic, await self.choose_best(topic.reachability))
 
         return await self.listen_url(url, cb, inline_data=inline_data, raise_on_error=raise_on_error)
+
+    async def connect(
+        self,
+        url_index: URLIndexer,
+        connection_name: TopicNameV,
+        connection_job: ConnectionJob,
+    ) -> None:
+        url_index = self._look_cache(url_index)
+        metadata = await self.get_metadata(url_index)
+        if metadata.connections_url is None:
+            msg = f"Connection functionality not available: {pretty (metadata)}"
+            raise ValueError(msg)
+
+        path = "/" + escape_json_pointer(connection_name.as_dash_sep())
+        wire = connection_job.to_wire()
+        op = {"op": "add", "path": path, "value": asdict(wire)}
+        ops = [op]
+        data = cbor2.dumps(ops)
+        await self.patch(
+            metadata.connections_url,
+            CONTENT_TYPE_PATCH_CBOR,
+            data,
+        )
+
+    async def disconnect(
+        self,
+        url_index: URLIndexer,
+        connection_name: TopicNameV,
+    ) -> None:
+        url_index = self._look_cache(url_index)
+        metadata = await self.get_metadata(url_index)
+        if metadata.connections_url is None:
+            msg = f"Connection functionality not available: {pretty (metadata)}"
+            raise ValueError(msg)
+
+        path = "/" + escape_json_pointer(connection_name.as_dash_sep())
+        op = {"op": "remove", "path": path}
+        ops = [op]
+        data = cbor2.dumps(ops)
+        await self.patch(
+            metadata.connections_url,
+            CONTENT_TYPE_PATCH_CBOR,
+            data,
+        )
 
     async def listen_url(
         self,
@@ -1502,3 +1566,70 @@ def channel_msgs_parse(d: bytes) -> "ChannelMsgs":
     )
 
     return parse_cbor_tagged(d, *Ts)
+
+
+#
+# pub async fn add_tpt_connection(
+#     conbase: &TypeOfConnection,
+#     connection_name: &CompositeName,
+#     connection_job: &ConnectionJob,
+# ) -> DTPSR<()> {
+#     let md = crate::get_metadata(conbase).await?;
+#     let url = match md.connections_url {
+#         None => {
+#             return not_available!(
+#                 "cannot remove connection: no connections_url in metadata for {}",
+#                 conbase.to_string()
+#             );
+#         }
+#         Some(url) => url,
+#     };
+#
+#     let patch = create_add_tpt_connection_patch(connection_name, connection_job)?;
+#
+#     client_verbs::patch_data(&url, &patch).await
+# }
+#
+# fn create_add_tpt_connection_patch(
+#     connection_name: &CompositeName,
+#     connection_job: &ConnectionJob,
+# ) -> Result<Patch, DTPSError> {
+#     let mut path: String = String::new();
+#     path.push('/');
+#     path.push_str(utils_patch::escape_json_patch(connection_name.as_dash_sep()).as_str());
+#
+#     let wire = connection_job.to_wire();
+#     let value = serde_json::to_value(wire)?;
+#
+#     let add_operation = AddOperation { path, value };
+#     let operation1 = PatchOperation::Add(add_operation);
+#     let patch = json_patch::Patch(vec![operation1]);
+#     Ok(patch)
+# }
+#
+# pub async fn remove_tpt_connection(conbase: &TypeOfConnection, connection_name: &CompositeName) -> DTPSR<()> {
+#     let md = crate::get_metadata(conbase).await?;
+#     let url = match md.connections_url {
+#         None => {
+#             return not_available!(
+#                 "cannot remove connection: no connections_url in metadata for {}",
+#                 conbase.to_string()
+#             );
+#         }
+#         Some(url) => url,
+#     };
+#
+#     let patch = create_remove_tpt_connection_patch(connection_name);
+#
+#     client_verbs::patch_data(&url, &patch).await
+# }
+#
+# fn create_remove_tpt_connection_patch(connection_name: &CompositeName) -> Patch {
+#     let mut path: String = String::new();
+#     path.push('/');
+#     path.push_str(utils_patch::escape_json_patch(connection_name.as_dash_sep()).as_str());
+#
+#     let remove_operation = RemoveOperation { path };
+#     let operation1 = PatchOperation::Remove(remove_operation);
+#     json_patch::Patch(vec![operation1])
+# }

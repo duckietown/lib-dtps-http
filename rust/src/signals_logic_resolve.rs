@@ -112,7 +112,15 @@ pub async fn interpret_path(
     }
 
     let all_sources = iterate_type_of_sources(ss, true);
-    resolve(&ss.node_id, &path_components, ends_with_dash, &all_sources)
+    let the_mountpoints = ss.proxied.keys().cloned().collect::<Vec<_>>();
+
+    resolve(
+        &ss.node_id,
+        &path_components,
+        ends_with_dash,
+        &all_sources,
+        &the_mountpoints,
+    )
 }
 
 fn resolve(
@@ -120,6 +128,7 @@ fn resolve(
     path_components: &Vec<String>,
     ends_with_dash: bool,
     all_sources: &[(TopicName, TypeOFSource)],
+    other_mountpoints: &[TopicName],
 ) -> DTPSR<TypeOFSource> {
     let mut subtopics: Vec<(TopicName, Vec<String>, Vec<String>, TypeOFSource)> = vec![];
     // let mut subtopics_vec = vec![];
@@ -158,14 +167,35 @@ fn resolve(
 
     // debug_with_info!("subtopics: {subtopics:?}");
     if subtopics.is_empty() {
+        // check if it is a subtopic of a mountpoint
+        for mountpoint in other_mountpoints {
+            let mountpoint_components = mountpoint.as_components();
+            match is_prefix_of(path_components, mountpoint_components) {
+                None => continue,
+                Some(rest) => {
+                    let s = format!(
+                        "This path {} corresponds to a mountpoint but the connection is not established yet.",
+                        path_components.join("/")
+                    );
+                    return Err(DTPSError::TopicNotFound(s));
+                }
+            };
+        }
+
         let subtopics_strings: Vec<String> = all_sources
             .iter()
             .map(|(x, _)| format!("- \"{}\"\n", x.to_dash_sep()))
             .collect();
+        let other_mountpoints_strings: Vec<String> = other_mountpoints
+            .iter()
+            .map(|x| format!("- \"{}\"\n", x.to_dash_sep()))
+            .collect();
+
         let s = format!(
-            "Cannot find a matching topic for {:?}.\nMy Topics:\n{:}",
+            "Cannot find a matching topic for {:?}.\nMy Topics:\n{:}\nOther Mountpoints:\n{:}",
             path_components.join("/"),
-            subtopics_strings.join("")
+            subtopics_strings.join(""),
+            other_mountpoints_strings.join("")
         );
         error_with_info!("{}", s);
         return Err(DTPSError::TopicNotFound(s));
@@ -210,9 +240,15 @@ pub fn iterate_type_of_sources(s: &ServerState, add_aliases: bool) -> Vec<(Topic
 
     if add_aliases {
         let sources_no_aliases = iterate_type_of_sources(s, false);
-
+        let the_mountpoints = s.proxied.keys().cloned().collect::<Vec<_>>();
         for (topic_name, new_topic) in s.aliases.iter() {
-            let resolved = resolve(&s.node_id, new_topic.as_components(), false, &sources_no_aliases);
+            let resolved = resolve(
+                &s.node_id,
+                new_topic.as_components(),
+                false,
+                &sources_no_aliases,
+                &the_mountpoints,
+            );
             let r = match resolved {
                 Ok(rr) => rr,
                 Err(e) => {

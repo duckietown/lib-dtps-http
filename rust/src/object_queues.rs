@@ -60,7 +60,7 @@ impl ObjectQueue {
         &mut self,
         data0: &RawData,
         previous_clocks: Option<Clocks>,
-    ) -> DTPSR<(RawData, DataSaved, Vec<String>)> {
+    ) -> DTPSR<(RawData, DataSaved, Vec<(String, usize)>)> {
         let expect = self.tr.content_info.storage.content_type.clone();
         let obtained = data0.content_type.clone();
         let same = expect == obtained;
@@ -104,7 +104,7 @@ impl ObjectQueue {
             while self.stored.len() > max_history {
                 let index = self.stored.remove(0);
                 let ds = self.saved.remove(&index).unwrap();
-                dropped.push(ds.digest);
+                dropped.push((ds.digest, ds.index));
             }
         }
 

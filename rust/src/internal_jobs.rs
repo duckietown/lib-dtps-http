@@ -75,7 +75,6 @@ impl InternalJobManager {
         let name2 = name.clone();
         let handle = tokio::spawn(async move {
             let name2 = name2.clone();
-
             debug_with_info!("job {:?}[{desc2}] starting", name2.as_dash_sep());
             Self::run_job(
                 name2.clone(),
@@ -117,7 +116,7 @@ impl InternalJobManager {
                 let mut ss = ssa.lock().await;
 
                 if let Err(e) = ss.send_status_notification(&name, Status::RUNNING, None) {
-                    error_with_info!("Error sending status notification: {:?}", e);
+                    error_with_info!("Error sending status notification:\n{:?}", e);
                 }
             }
             let r = handle.await;
@@ -125,13 +124,13 @@ impl InternalJobManager {
             if r.is_ok() {
                 debug_with_info!("Iteration {iteration} of {prefix} finished OK");
             } else {
-                error_with_info!("Iteration {iteration} of {prefix} finished with error: {:?}", r);
+                error_with_info!("Iteration {iteration} of {prefix} finished with error:\n{:?}", r);
             }
             match r {
                 Ok(_) => {
                     let mut ss = ssa.lock().await;
                     if let Err(e) = ss.send_status_notification(&name, Status::EXITED, None) {
-                        error_with_info!("{prefix} Error sending status notification: {:?}", e);
+                        error_with_info!("{prefix} Error sending status notification:\n{:?}", e);
                     }
 
                     if !restart_on_success {
@@ -142,7 +141,7 @@ impl InternalJobManager {
                     let mut ss = ssa.lock().await;
                     if let Err(e2) = ss.send_status_notification(&name, Status::FATAL, Some(e.to_string())) {
                         // XXX
-                        error_with_info!("{prefix} Error sending status notification: {:?}", e2);
+                        error_with_info!("{prefix} Error sending status notification:\n{:?}", e2);
                     }
 
                     if !restart_on_error {

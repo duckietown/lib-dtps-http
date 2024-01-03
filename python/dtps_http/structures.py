@@ -1,7 +1,7 @@
 import hashlib
 import json
 from dataclasses import asdict
-from typing import Any, cast, Dict, List, NewType, Optional, Sequence, Union
+from typing import Any, cast, Dict, List, Literal, NewType, Optional, Sequence, Union
 
 import cbor2
 from multidict import CIMultiDict
@@ -216,7 +216,8 @@ class RawData:
 
         if not is_structure(self.content_type):
             msg = (
-                f"Cannot convert non-structure content to native object (content_type={self.content_type!r})\n"
+                f"Cannot convert non-structure content to native object (content_type="
+                f"{self.content_type!r})\n"
                 f"data = {self.content}"
             )
             raise ValueError(msg)
@@ -599,3 +600,24 @@ class PushResult:
 
 MsgWebsocketPushServerToClient = PushResult
 MsgWebsocketPushClientToServer = RawData
+
+ServiceMode = Literal["BestEffort", "AllMessages", "AllMessagesSinceStart"]
+
+
+@dataclass
+class ConnectionJob:
+    source: TopicNameV
+    target: TopicNameV
+    service_mode: ServiceMode
+
+    def to_wire(self):
+        return ConnectionJobWire(
+            source=self.source.as_dash_sep(), target=self.target.as_dash_sep(), service_mode=self.service_mode
+        )
+
+
+@dataclass
+class ConnectionJobWire:
+    source: TopicNameS
+    target: TopicNameS
+    service_mode: ServiceMode

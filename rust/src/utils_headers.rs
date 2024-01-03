@@ -133,10 +133,11 @@ pub fn put_meta_headers(h: &mut HeaderMap<HeaderValue>, tp: &TopicProperties) {
 
 pub fn put_patchable_headers(h: &mut HeaderMap<HeaderValue>) -> DTPSR<()> {
     let url = TopicName::from_dash_sep(TOPIC_PROXIED)?.to_relative_url();
-
     put_link_header(h, &url, REL_PROXIED, Some(CONTENT_TYPE_JSON));
+
     let url = TopicName::from_dash_sep(TOPIC_CONNECTIONS)?.to_relative_url();
     put_link_header(h, &url, REL_CONNECTIONS, Some(CONTENT_TYPE_JSON));
+
     Ok(())
 }
 

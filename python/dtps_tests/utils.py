@@ -54,12 +54,10 @@ async def create_rust_server(testname: str) -> AsyncIterator[DTPSContext]:
         url_node_s = url_to_string(url_node)
         parse_url_unescape(url_node_s)
 
-        cmd = f"cargo run --bin dtps-http-rs-server -- --unix-path {socket_node}"
-        p = await asyncio.create_subprocess_shell(
-            cmd,
-        )
+        cmd = f"cargo", "run", "--bin", "dtps-http-rs-server", "--", "--unix-path", socket_node
+        p = await asyncio.create_subprocess_exec(*cmd)
         try:
-            await asyncio.wait_for(wait_for_unix_socket(socket_node), timeout=5)
+            await asyncio.wait_for(wait_for_unix_socket(socket_node), timeout=60)
 
             c1 = f"{testname}rust"
             environment = {
@@ -69,7 +67,7 @@ async def create_rust_server(testname: str) -> AsyncIterator[DTPSContext]:
             async with context_cleanup(c1, environment) as context_rust:
                 yield context_rust
 
-        except Exception as e:
-            logger.error(f"create_rust_server: {e}")
-            p.terminate()
-            raise
+        finally:
+            # logger.error(f"create_rust_server: {e}")
+            # p.terminate()
+            p.kill()

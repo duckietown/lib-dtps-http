@@ -36,6 +36,7 @@ jsonpatch = "^1.33"
 # other dependencies: aiohttp-devtools pre-commit mkdocs mkdocs-material mkdocstrings[python]
 # pip install "mkdocstrings[python]"  mkdocs-material
 timeout-decorator = "^0.5.0"
+prettyprinter = "^0.18.0"
 
 [tool.poetry.scripts]
 

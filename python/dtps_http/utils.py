@@ -4,6 +4,12 @@ import os
 import stat
 import traceback
 from asyncio import CancelledError
+from io import StringIO
+
+import prettyprinter as pp
+
+pp.install_extras()
+
 from typing import (
     Any,
     AsyncIterator,
@@ -32,6 +38,7 @@ __all__ = [
     "method_lru_cache",
     "multidict_update",
     "parse_tagged",
+    "pretty",
     "pydantic_parse",
     "should_mask_origin",
     "wait_for_unix_socket",
@@ -203,3 +210,10 @@ def parse_tagged(d: Dict[str, Any], *Ts: Type[X]) -> X:
 
 def pydantic_parse(T: Type[X], d: Any) -> X:
     return parse_obj_as(T, d)
+
+
+def pretty(d: object, /) -> str:
+    io = StringIO()
+    pp.pprint(d, stream=io)
+    data = io.getvalue().strip()
+    return data

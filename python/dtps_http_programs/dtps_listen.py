@@ -12,6 +12,7 @@ from dtps_http import (
     FinishedMsg,
     NodeID,
     parse_url_unescape,
+    pretty,
     StopContinuousLoop,
     URL,
 )
@@ -43,10 +44,7 @@ async def dtps_listen_main_f(
         ld: ListenDataInterface
 
         async def callback(d: ListenURLEvents):
-            io = StringIO()
-            pprint(d, stream=io)
-            data = io.getvalue().strip()
-            logger.info(data)
+            logger.info(pretty(d))
             if isinstance(d, FinishedMsg):
                 logger.info("Finished")
 

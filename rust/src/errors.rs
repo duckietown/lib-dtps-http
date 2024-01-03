@@ -24,6 +24,8 @@ pub enum DTPSError {
 
     #[error("DTPSError: Topic not found:\n{}", indent_inside(.0))]
     TopicNotFound(String),
+    #[error("DTPSError: Mount pint not ready:\n{}", indent_inside(.0))]
+    MountpointNotReady(String),
     #[error("DTPSError: Topic already exists:\n{}", indent_inside(.0))]
     TopicAlreadyExists(String),
     #[error("DTPSError: Resource not found:\n{}", indent_inside(.0))]
@@ -174,6 +176,7 @@ impl DTPSError {
         match self {
             DTPSError::TopicNotFound(..) | DTPSError::ResourceNotFound(..) => StatusCode::NOT_FOUND,
             DTPSError::InvalidInput(..) => StatusCode::BAD_REQUEST,
+            DTPSError::MountpointNotReady(..) => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

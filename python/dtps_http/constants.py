@@ -25,6 +25,7 @@ __all__ = [
     "MIME_OCTET",
     "MIME_TEXT",
     "MIME_YAML",
+    "REL_CONNECTIONS",
     "REL_EVENTS_DATA",
     "REL_EVENTS_NODATA",
     "REL_HISTORY",
@@ -78,6 +79,7 @@ REL_EVENTS_DATA = "dtps-events-inline-data"
 REL_STREAM_PUSH = "dtps-events-push"
 REL_META = "dtps-meta"
 REL_HISTORY = "dtps-history"
+REL_CONNECTIONS = "dtps-connections"
 
 EVENTS_SUFFIX = ":events"
 REL_STREAM_PUSH_SUFFIX = ":push"

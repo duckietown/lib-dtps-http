@@ -23,6 +23,7 @@ from dtps_http import (
     URLIndexer,
 )
 from dtps_http.client import ListenDataInterface
+from dtps_http.structures import ConnectionJob
 from . import logger
 from .config import ContextInfo, ContextManager
 from .ergo_ui import (
@@ -202,7 +203,6 @@ class ContextManagerUseContext(DTPSContext):
             await publisher.terminate()
 
     async def call(self, data: RawData) -> RawData:
-        # TODO: DTSW-4804: [use] implement connect_to
         client = self.master.client
         url = await self._get_best_url()
         return await client.call(url, data)
@@ -260,6 +260,22 @@ class ContextManagerUseContext(DTPSContext):
 
         url = self.master.best_url
 
-        await self.master.client.connect(url, topic1, topic2)
+        connection_job = ConnectionJob(source=topic1, target=topic2, service_mode="AllMessages")
+        name = topic1 + topic2
+        await self.master.client.connect(url, name, connection_job)
+
+        return ConnectionInterfaceImpl(self.master, url, name)
+
+
+class ConnectionInterfaceImpl(ConnectionInterface):
+    def __init__(self, master: ContextManagerUse, url: URL, connection_name: TopicNameV):
+        self.master = master
+        self.url = url
+
+        self.connection_name = connection_name
+
+    async def disconnect(self) -> None:
+        await self.master.client.disconnect(self.url, self.connection_name)
 
         raise NotImplementedError()
+        pass

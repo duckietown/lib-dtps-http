@@ -200,7 +200,7 @@ pub struct LocalDirInfo {
 #[derive(Debug, Clone)]
 pub struct SavedBlob {
     pub content: Vec<u8>,
-    pub who_needs_it: HashSet<String>,
+    pub who_needs_it: HashSet<(String, usize)>,
     // will not be removed until who_needs_it is empty and the deadline has passed
     pub deadline: i64,
 }
@@ -222,8 +222,9 @@ pub struct ServerState {
     /// Filesystem match
     pub local_dirs: HashMap<TopicName, LocalDirInfo>,
 
-    /// The proxied other resources
+    /// The other proxied resources (like other websites)
     pub proxied_other: HashMap<TopicName, OtherProxyInfo>,
+
     pub blobs: HashMap<String, SavedBlob>,
     pub blobs_forgotten: HashMap<String, i64>,
 
@@ -658,7 +659,7 @@ impl ServerState {
         });
 
         self.job_manager
-            .add_job(job_name, "Connection job", connect_job, true, true, 0.0, ssa2)?;
+            .add_job(job_name, "Connection job", connect_job, true, true, 1.0, ssa2)?;
 
         Ok(())
     }
@@ -773,14 +774,14 @@ impl ServerState {
             let mut todrop = Vec::new();
             let oq = self.oqs.get_mut(topic_name).unwrap();
             for data_saved in oq.saved.values() {
-                todrop.push(data_saved.digest.clone());
+                todrop.push((data_saved.digest.clone(), data_saved.index));
             }
             oq.you_are_being_deleted();
             todrop
         };
 
-        for digest in dropped_digests {
-            self.release_blob(&digest, topic_name.as_dash_sep());
+        for (digest, index) in dropped_digests {
+            self.release_blob(&digest, topic_name.as_dash_sep(), index);
         }
 
         self.oqs.remove(topic_name);
@@ -835,9 +836,9 @@ impl ServerState {
         if ds.digest != data.digest() {
             panic!("Internal inconsistency: digest mismatch");
         }
-        self.save_blob(&new_digest, &data.content, topic_name.as_dash_sep(), &comment);
-        for digest in dropped_digests {
-            self.release_blob(&digest, topic_name.as_dash_sep());
+        self.save_blob(&new_digest, &data.content, topic_name.as_dash_sep(), ds.index, &comment);
+        for (digest, i) in dropped_digests {
+            self.release_blob(&digest, topic_name.as_dash_sep(), i);
         }
         self.cleanup_blobs();
         Ok(ds)
@@ -873,15 +874,25 @@ impl ServerState {
             self.blobs_forgotten.insert(digest, now);
         }
     }
-    pub fn release_blob(&mut self, digest: &str, who: &str) {
+    pub fn release_blob(&mut self, digest: &str, who: &str, i: usize) {
         // log::debug!("Del blob {digest} for {who:?}");
 
         match self.blobs.get_mut(digest) {
             None => {
-                warn_with_info!("Blob {digest} not found");
+                if self.blobs_forgotten.contains_key(digest) {
+                    warn_with_info!("Blob {digest} to forget already forgotten (who = {who}).");
+                } else {
+                    error_with_info!("Blob {digest} to forget is completely unknown.");
+                }
             }
             Some(sb) => {
-                sb.who_needs_it.remove(who);
+                let who_i = (who.to_string(), i);
+                if sb.who_needs_it.contains(&who_i) {
+                    sb.who_needs_it.remove(&who_i);
+                } else {
+                    warn_with_info!("Blob {digest} to forget was not needed by {who}");
+                }
+
                 if sb.who_needs_it.is_empty() {
                     let now = time_nanos_i64();
                     let deadline_passed = now > sb.deadline;
@@ -894,10 +905,10 @@ impl ServerState {
         }
     }
 
-    pub fn save_blob(&mut self, digest: &str, content: &[u8], who: &str, comment: &str) {
+    pub fn save_blob(&mut self, digest: &str, content: &[u8], who: &str, i: usize, comment: &str) {
         let _ = comment;
         // log::debug!("Add blob {digest} for {who:?}: {comment}");
-
+        let who_i = (who.to_string(), i);
         match self.blobs.get_mut(digest) {
             None => {
                 let mut sb = SavedBlob {
@@ -905,11 +916,12 @@ impl ServerState {
                     who_needs_it: HashSet::new(),
                     deadline: 0,
                 };
-                sb.who_needs_it.insert(who.to_string());
+
+                sb.who_needs_it.insert(who_i);
                 self.blobs.insert(digest.to_string(), sb);
             }
             Some(sb) => {
-                sb.who_needs_it.insert(who.to_string());
+                sb.who_needs_it.insert(who_i);
             }
         }
     }
@@ -1243,7 +1255,7 @@ async fn get_proxy_info(url: &TypeOfConnection) -> DTPSR<(FoundMetadata, TopicsI
 
     let meta_url = match &md.meta_url {
         None => {
-            return not_reachable!("Cannot find index url for proxy at {url}:\n{md:?}");
+            return not_reachable!("Cannot find meta_url for proxy at {url}:\n{md:?}");
         }
         Some(u) => u.clone(),
     };
@@ -1427,7 +1439,8 @@ pub async fn observe_node_proxy(
             | ListenURLEvents::SilenceMsg(_) => return Ok(()),
         };
 
-        let x0: TopicsIndexWire = serde_cbor::from_slice(&notification.raw_data.content).unwrap();
+        let x00: Result<TopicsIndexWire, _> = serde_cbor::from_slice(&notification.raw_data.content);
+        let x0 = x00.map_err(|e| DTPSError::Other(format!("Error deserializing TopicsIndexWire: {:#?}", e)))?;
         let ti = TopicsIndexInternal::from_wire(&x0, &url);
 
         {
@@ -1534,8 +1547,14 @@ async fn run_connection_job(
     let (source, target) = {
         let ss = ssa.lock().await;
 
-        let source = interpret_path(connection_job.source.as_relative_url(), &hashmap! {}, &None, &ss).await?;
-        let target = interpret_path(connection_job.target.as_relative_url(), &hashmap! {}, &None, &ss).await?;
+        let source = context!(
+            interpret_path(connection_job.source.as_relative_url(), &hashmap! {}, &None, &ss).await,
+            "Cannot obtain source for connection_job\n {connection_job:?}"
+        )?;
+        let target = context!(
+            interpret_path(connection_job.target.as_relative_url(), &hashmap! {}, &None, &ss).await,
+            "Cannot obtain target for connection_job\n {connection_job:?}"
+        )?;
         (source, target)
     };
     debug_with_info!(
