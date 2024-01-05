@@ -16,7 +16,7 @@ pub async fn add_proxy(
         None => {
             return not_available!(
                 "cannot add proxy: no proxied url in metadata for {}",
-                conbase.to_string()
+                conbase.to_url_repr()
             );
         }
         Some(url) => url,
@@ -33,7 +33,7 @@ fn create_add_proxy_patch(
     urls: &[TypeOfConnection],
     mask_origin: bool,
 ) -> Result<Patch, DTPSError> {
-    let urls = urls.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let urls = urls.iter().map(|x| x.to_url_repr()).collect::<Vec<_>>();
     let pj = ProxyJob {
         node_id,
         urls,
@@ -57,7 +57,7 @@ pub async fn remove_proxy(conbase: &TypeOfConnection, mountpoint: &TopicName) ->
         None => {
             return not_available!(
                 "cannot remove proxy: no proxied url in metadata for {}",
-                conbase.to_string()
+                conbase.to_url_repr()
             );
         }
         Some(url) => url,

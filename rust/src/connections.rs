@@ -52,9 +52,9 @@ pub fn normalize_path(path1: &str) -> String {
     let path = PathBuf::from(path1);
     let mut p = path.canonicalize().unwrap_or(path).to_str().unwrap().to_string();
     if p.len() > 1 {
-        p = p.trim_end_matches("/").to_string();
+        p = p.trim_end_matches('/').to_string();
     }
-    return p;
+    p
 }
 
 impl FilePaths {
@@ -105,7 +105,10 @@ impl TypeOfConnection {
     pub fn unix_socket(path: &str) -> Self {
         Self::UNIX(UnixCon::from_path(path))
     }
-    pub fn to_string(&self) -> String {
+    // pub fn to_url_repr(&self) -> String {
+    //     self.to_string()
+    // }
+    pub fn to_url_repr(&self) -> String {
         match self {
             TypeOfConnection::TCP(url) => url.to_string(),
             TypeOfConnection::Relative(s, q) => match q {
@@ -134,7 +137,7 @@ impl TypeOfConnection {
         }
     }
 }
-
+//
 impl Display for TypeOfConnection {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {

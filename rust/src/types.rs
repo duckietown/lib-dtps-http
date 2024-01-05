@@ -135,7 +135,7 @@ impl CompositeName {
 
 impl AsRef<CompositeName> for CompositeName {
     fn as_ref(&self) -> &CompositeName {
-        &self
+        self
     }
 }
 

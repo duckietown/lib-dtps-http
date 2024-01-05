@@ -1,10 +1,10 @@
-use crate::connections::TypeOfConnection;
-use crate::structures_topicref::{TopicsIndexInternal, TopicsIndexWire};
-use crate::{client_verbs, DTPSError, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR};
+use crate::TypeOfConnection;
 use crate::{error_with_info, not_available};
+use crate::{get_rawdata, DTPSError, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR};
+use crate::{TopicsIndexInternal, TopicsIndexWire};
 
 pub async fn get_index(con: &TypeOfConnection) -> DTPSR<TopicsIndexInternal> {
-    let rd = client_verbs::get_rawdata(con).await?;
+    let rd = get_rawdata(con).await?;
 
     // let h = resp.headers();
     // debug_with_info!("headers: {h:?}");

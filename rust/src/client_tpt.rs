@@ -16,7 +16,7 @@ pub async fn add_tpt_connection(
         None => {
             return not_available!(
                 "cannot remove connection: no connections_url in metadata for {}",
-                conbase.to_string()
+                conbase.to_url_repr()
             );
         }
         Some(url) => url,
@@ -40,7 +40,7 @@ fn create_add_tpt_connection_patch(
 
     let add_operation = AddOperation { path, value };
     let operation1 = PatchOperation::Add(add_operation);
-    let patch = json_patch::Patch(vec![operation1]);
+    let patch = Patch(vec![operation1]);
     Ok(patch)
 }
 
@@ -50,7 +50,7 @@ pub async fn remove_tpt_connection(conbase: &TypeOfConnection, connection_name: 
         None => {
             return not_available!(
                 "cannot remove connection: no connections_url in metadata for {}",
-                conbase.to_string()
+                conbase.to_url_repr()
             );
         }
         Some(url) => url,
@@ -68,5 +68,5 @@ fn create_remove_tpt_connection_patch(connection_name: &CompositeName) -> Patch 
 
     let remove_operation = RemoveOperation { path };
     let operation1 = PatchOperation::Remove(remove_operation);
-    json_patch::Patch(vec![operation1])
+    Patch(vec![operation1])
 }

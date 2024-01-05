@@ -193,7 +193,7 @@ impl TypeOFSource {
                         benchmark: LinkBenchmark::identity(), //ok
                     });
 
-                    topics.insert(TopicName::from_components(&vec![filename]), tr);
+                    topics.insert(TopicName::from_components(&[filename]), tr);
                 }
 
                 Ok(TopicsIndexInternal {

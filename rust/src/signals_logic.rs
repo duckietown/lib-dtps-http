@@ -1,6 +1,5 @@
 use std::{collections::HashMap, env, fmt::Debug};
 
-use anyhow::Context;
 use async_trait::async_trait;
 use json_patch::Patch;
 use lazy_static::lazy_static;
@@ -8,7 +7,7 @@ use serde_cbor::Value as CBORValue;
 use tokio::{sync::broadcast::Receiver as BroadcastReceiver, task::JoinHandle};
 
 use crate::{
-    dtpserror_context, get_inside, utils::is_truthy, ChannelInfo, Clocks, DataReady, DataSaved, InsertNotification,
+    dtpserror_context, get_inside, utils::is_truthy, ChannelInfo, Clocks, DataSaved, InsertNotification,
     ListenURLEvents, OtherProxyInfo, RawData, ResolvedData, ServerStateAccess, TopicName, TopicProperties,
     TopicsIndexInternal, DTPSR, ENV_MASK_ORIGIN,
 };

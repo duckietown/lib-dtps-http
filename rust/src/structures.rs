@@ -16,7 +16,7 @@ pub struct RawData {
 
 impl AsRef<RawData> for RawData {
     fn as_ref(&self) -> &RawData {
-        &self
+        self
     }
 }
 
@@ -223,7 +223,7 @@ impl FoundMetadata {
     pub fn get_answering(&self) -> DTPSR<String> {
         match &self.answering {
             None => {
-                let base = self.base_url.to_string();
+                let base = self.base_url.to_url_repr();
                 let msg = format!("Metadata says this is not a DTPS node:\nconbase: {base}");
                 Err(anyhow::anyhow!(msg).into())
             }

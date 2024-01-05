@@ -3,8 +3,8 @@ use std::fmt::Debug;
 use async_trait::async_trait;
 use base64::{
     self,
-    engine::general_purpose, // keep
-    Engine as _,
+    engine::general_purpose,
+    Engine as _, // keep
 };
 use futures::{
     stream::{SplitSink, SplitStream},
@@ -40,7 +40,7 @@ pub trait GenericSocketConnection: Send + Sync {
 }
 
 pub async fn open_websocket_connection(con: &TypeOfConnection) -> DTPSR<Box<dyn GenericSocketConnection>> {
-    info_with_info!("open_websocket_connection: {:#?}", con.to_string());
+    info_with_info!("open_websocket_connection: {:#?}", con.to_url_repr());
     match con {
         TCP(url) => open_websocket_connection_tcp(url).await,
         TypeOfConnection::File(_, _) => {

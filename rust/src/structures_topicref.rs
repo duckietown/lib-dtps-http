@@ -247,7 +247,7 @@ impl TopicReachabilityInternal {
         };
 
         TopicReachabilityWire {
-            url: con.to_string(),
+            url: con.to_url_repr(),
             answering: self.answering.clone(),
             forwarders: self.forwarders.clone(),
             benchmark: self.benchmark.clone(),

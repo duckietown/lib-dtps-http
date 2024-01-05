@@ -107,7 +107,7 @@ pub struct ConnectionJob {
     pub service_mode: ServiceMode,
 }
 
-type Connections = HashMap<CompositeName, ConnectionJob>;
+// type Connections = HashMap<CompositeName, ConnectionJob>;
 type ConnectionsWire = HashMap<String, ConnectionJobWire>;
 
 impl ConnectionJob {
@@ -303,7 +303,7 @@ impl StatusSummary {
 
 impl ServerState {
     pub fn new(node_app_data: Option<HashMap<String, NodeAppData>>) -> DTPSR<Self> {
-        let node_app_data = node_app_data.unwrap_or_else(|| HashMap::new());
+        let node_app_data = node_app_data.unwrap_or_default();
         let node_id = format!("rust-{}", get_random_node_id());
 
         let mut oqs: HashMap<TopicName, ObjectQueue> = HashMap::new();
@@ -548,17 +548,7 @@ impl ServerState {
 
         self.job_manager
             .add_job(&topic_name2, "proxy listening job", connect_job, true, true, 1.0, ssa2)?;
-        //
-        // let future = observe_node_proxy(topic_name.clone(), cons.clone(), expect_node_id, ssa.clone());
-        //
-        // let handle = tokio::spawn(show_errors(
-        //     Some(ssa),
-        //     format!(
-        //         "observe_node_proxy: {topic_name}",
-        //         topic_name = topic_name.as_dash_sep()
-        //     ),
-        //     future,
-        // ));
+
         let fi = ForwardInfo {
             urls: cons.clone(),
             job_name: topic_name2.clone(),
@@ -588,7 +578,7 @@ impl ServerState {
     }
 
     pub async fn remove_topic_to_topic_connection(&mut self, connection_name: &CompositeName) -> DTPSR<()> {
-        let x = self.remove_topic_to_topic_connection_(connection_name).await?;
+        self.remove_topic_to_topic_connection_(connection_name).await?;
 
         let connections_name = TopicName::from_dash_sep(TOPIC_CONNECTIONS)?;
 
@@ -617,8 +607,7 @@ impl ServerState {
         connection_job: &ConnectionJob,
         ssa: ServerStateAccess,
     ) -> DTPSR<()> {
-        let x = self
-            .add_topic_to_topic_connection_(connection_name, connection_job, ssa)
+        self.add_topic_to_topic_connection_(connection_name, connection_job, ssa)
             .await?;
 
         let connections_name = TopicName::from_dash_sep(TOPIC_CONNECTIONS)?;
@@ -670,13 +659,6 @@ impl ServerState {
                 let res = run_connection_job(connection_name, connection_job, ssa).await;
                 dtpserror_context!(res, "Connection job finished with error",)?;
                 Ok(())
-                // match res {
-                //     Ok(_) => {
-                //         debug_with_info!("Connection job finished successfully");
-                //         Ok(())
-                //     }
-                //     Err(e) => Err(format!("Connection job finished with error: {:#?}", e)),
-                // }
             })
         });
 
@@ -1079,7 +1061,7 @@ impl ServerState {
 
             forwarders.push(ForwardingStep {
                 forwarding_node: self.node_id.clone(),
-                forwarding_node_connects_to: oq.data_url.to_string(),
+                forwarding_node_connects_to: oq.data_url.to_url_repr(),
 
                 performance: oq.link_benchmark_last.clone(),
             });
@@ -1103,7 +1085,7 @@ impl ServerState {
         for (topic_name, pinfo) in self.proxied_other.iter() {
             let forwarders = vec![ForwardingStep {
                 forwarding_node: self.node_id.clone(),
-                forwarding_node_connects_to: pinfo.con.to_string(),
+                forwarding_node_connects_to: pinfo.con.to_url_repr(),
 
                 performance: LinkBenchmark::identity(), // TODO:
             }];
@@ -1118,8 +1100,8 @@ impl ServerState {
             };
 
             let mut tr = TopicRefInternal {
-                unique_id: pinfo.con.to_string(),
-                origin_node: pinfo.con.to_string(),
+                unique_id: pinfo.con.to_url_repr(),   // XXX
+                origin_node: pinfo.con.to_url_repr(), // XXX
                 app_data: Default::default(),
                 reachability: vec![],
                 created: 0,
@@ -1536,7 +1518,7 @@ pub fn add_from_response(
                 its_topic_name, mounted_at, tr
             ));
         }
-        let reachability_we_used = tr.reachability.get(0).unwrap();
+        let reachability_we_used = tr.reachability.first().unwrap();
 
         s.new_proxy_topic(
             mounted_at,

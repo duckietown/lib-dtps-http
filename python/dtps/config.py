@@ -94,7 +94,7 @@ async def create_context(base_name: str, environment: Optional[Mapping[str, str]
         raise KeyError(msg)
 
     context_info = contexts.contexts[base_name]
-    logger.info(f'Creating context "{base_name}" with {context_info} for environment {environment}')
+    logger.debug(f'Creating context "{base_name}" with {context_info} for environment {environment}')
     return await ContextManager.create(base_name, context_info)
 
 

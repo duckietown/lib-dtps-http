@@ -41,9 +41,9 @@ pub async fn cli_listen() -> Result<(), Box<dyn error::Error>> {
     let bc = parse_url_ext(args.url.as_str())?;
     let md = get_metadata(&bc).await?;
     md.get_answering()?;
-    let inline_url = md.events_data_inline_url.ok_or_else(|| "No inline URL found")?;
+    let inline_url = md.events_data_inline_url.ok_or("No inline URL found")?;
 
-    let (handle, mut stream) = get_events_stream_inline(&inline_url).await;
+    let (_handle, mut stream) = get_events_stream_inline(&inline_url).await;
 
     while let Some(msg) = wrap_recv(&mut stream).await {
         debug_with_info!("msg: {:#?}", msg);

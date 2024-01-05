@@ -9,7 +9,7 @@ use warp::reply::Response;
 use crate::client_link_benchmark::check_unix_socket;
 use crate::connections::TypeOfConnection;
 use crate::utils_headers::{get_content_type, put_header_accept, put_header_content_type};
-use crate::{context, internal_assertion, not_available, not_implemented, DataSaved};
+use crate::{context, internal_assertion, not_available, not_implemented};
 use crate::{DTPSError, RawData, CONTENT_TYPE_PATCH_JSON, DTPSR};
 
 pub async fn get_rawdata_status(con: &TypeOfConnection) -> DTPSR<(http::StatusCode, RawData)> {
@@ -38,7 +38,7 @@ pub async fn interpret_resp(con: &TypeOfConnection, resp: Response) -> DTPSR<Raw
         let content = hyper::body::to_bytes(resp.into_body()).await?;
         Ok(RawData { content, content_type })
     } else {
-        let url = con.to_string();
+        let url = con.to_url_repr();
         let code = resp.status().as_u16();
         let as_s = resp.status().as_str().to_string();
         let content = hyper::body::to_bytes(resp.into_body()).await?;
@@ -73,7 +73,7 @@ pub async fn post_data(con: &TypeOfConnection, rd: &RawData) -> DTPSR<PostRespon
     let resp = context!(
         make_request(con, hyper::Method::POST, &rd.content, Some(&rd.content_type), None).await,
         "Cannot make request to {}",
-        con.to_string(),
+        con.to_url_repr(),
     )?;
 
     let (is_success, as_string) = (resp.status().is_success(), resp.status().to_string());
@@ -86,23 +86,14 @@ pub async fn post_data(con: &TypeOfConnection, rd: &RawData) -> DTPSR<PostRespon
         locations.push(joined);
     }
 
-    let body_bytes = context!(hyper::body::to_bytes(resp.into_body()).await, "Cannot get body bytes")?;
+    let content = context!(hyper::body::to_bytes(resp.into_body()).await, "Cannot get body bytes")?;
     if !is_success {
         // pragma: no cover
-        let body_text = String::from_utf8_lossy(&body_bytes);
+        let body_text = String::from_utf8_lossy(&content);
         return not_available!("Request is not a success: for {con}\n{as_string:?}\n{body_text}");
     }
-    // let x0: DataSaved = context!(serde_cbor::from_slice(&body_bytes), "Cannot interpret as CBOR: {body_bytes:?}")?;
-    let x0: RawData = RawData {
-        content: body_bytes,
-        content_type,
-    };
 
-    //
-    // let locations = resp.headers().get_all("location").iter().map(|x| {
-    //     let s = x.to_str().unwrap();
-    //     context!(con.join(s), "Cannot parse url: {s:?}")?
-    // }).collect();
+    let x0: RawData = RawData { content, content_type };
 
     Ok(PostResponse { rd: x0, locations })
 }
@@ -214,7 +205,7 @@ pub async fn patch_data(conbase: &TypeOfConnection, patch: &JsonPatch) -> DTPSR<
         Err(DTPSError::FailedRequest(
             msg,
             status.as_u16(),
-            conbase.to_string(),
+            conbase.to_url_repr(),
             desc.to_string(),
         ))
     } else {

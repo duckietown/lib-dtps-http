@@ -279,7 +279,7 @@ class DTPSClient:
 
                 #  logger.debug(f"ask topics {resp.headers}")
                 if (preferred := await self.prefer_alternative(url, resp)) is not None:
-                    self.logger.info(f"Using preferred alternative to {url} -> {repr(preferred)}")
+                    self.logger.debug(f"Using preferred alternative to {url} -> {repr(preferred)}")
                     return await self.ask_index(preferred)
                 assert resp.status == 200, resp.status
                 res_bytes: bytes = await resp.read()

@@ -320,7 +320,7 @@ class DTPSServer:
 
         # mount a static directory for the web interface
         static_dir = get_static_dir()
-        self.logger.info(f"Using static dir: {static_dir}")
+        self.logger.debug(f"Using static dir: {static_dir}")
         self.app.add_routes([web.static("/static", static_dir)])
         self.app.add_routes(routes)
 
@@ -598,9 +598,9 @@ class DTPSServer:
 
         while True:
             if name in self._mount_points:
-                self.logger.info(f"Found {name} in mountpoints")
+                self.logger.debug(f"Found {name} in mountpoints")
                 if self._mount_points[name].established is not None:
-                    self.logger.info(f"Found {name} in mountpoints and established is not None")
+                    self.logger.debug(f"Found {name} in mountpoints and established is not None")
                     break
 
             await asyncio.sleep(0.1)
@@ -728,7 +728,7 @@ class DTPSServer:
             )
 
     async def aclose(self) -> None:
-        self.logger.info("aclose: shutting down")
+        # self.logger.info("aclose: shutting down")
         self.shutdown_event.set()
         for t in self.tasks:
             t.cancel()
@@ -748,10 +748,10 @@ class DTPSServer:
                 await asyncio.sleep(1.0)
             else:
                 if n == 0:
-                    self.logger.info(f"Registered as {r.topic.as_dash_sep()} on {r.switchboard_url}")
+                    self.logger.debug(f"Registered as {r.topic.as_dash_sep()} on {r.switchboard_url}")
                 else:
                     if changes:
-                        self.logger.info(f"Re-registered as {r.topic.as_dash_sep()} on {r.switchboard_url}")
+                        self.logger.debug(f"Re-registered as {r.topic.as_dash_sep()} on {r.switchboard_url}")
 
                 n += 1
                 # TODO: DTSW-4782: just open a websocket connection and see when it closes

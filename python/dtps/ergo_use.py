@@ -138,7 +138,7 @@ class ContextManagerUseContext(DTPSContext):
             return True
         except ClientResponseError as e:
             if e.status == 404:
-                logger.info(f"exists: {url} -> 404 -> {e}")
+                # logger.debug(f"exists: {url} -> 404 -> {e}")
                 return False
             else:
                 raise

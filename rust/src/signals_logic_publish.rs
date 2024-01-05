@@ -2,17 +2,16 @@ use anyhow::Context;
 use async_trait::async_trait;
 use json_patch::{Patch, PatchOperation, ReplaceOperation};
 
-use crate::client_verbs::post_data;
 use crate::{
-    clocks::Clocks, context, dtpserror_other, invalid_input, not_implemented, publish, signals_logic::Pushable,
-    DataReady, DataSaved, Patchable, RawData, ServerStateAccess, Transforms, TypeOFSource, DTPSR,
+    clocks::Clocks, dtpserror_other, invalid_input, not_implemented, publish, signals_logic::Pushable, DataSaved,
+    Patchable, RawData, ServerStateAccess, Transforms, TypeOFSource, DTPSR,
 };
 
 #[async_trait]
 impl Pushable for TypeOFSource {
     async fn push(
         &self,
-        presented_as: &str,
+        _presented_as: &str,
         ssa: ServerStateAccess,
         data: &RawData,
         clocks: &Clocks,

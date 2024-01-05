@@ -160,7 +160,7 @@ fn resolve(
 
             Some(rest) => rest,
         };
-        if !ends_with_dash {}
+        // if !ends_with_dash {}
         // debug_with_info!("pushing: {k:?}");
         subtopics.push((k.clone(), matched, rest, source.clone()));
     }
@@ -172,7 +172,7 @@ fn resolve(
             let mountpoint_components = mountpoint.as_components();
             match is_prefix_of(path_components, mountpoint_components) {
                 None => continue,
-                Some(rest) => {
+                Some(_rest) => {
                     let s = format!(
                         "This path {} corresponds to a mountpoint but the connection is not established yet.",
                         path_components.join("/")

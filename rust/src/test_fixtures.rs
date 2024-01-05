@@ -72,11 +72,9 @@ pub async fn instance_python_test_fixture() -> DTPSR<ConnectionFixture> {
             info!("found socket {path} after {elapsed} ms");
             check_unix_socket(path).await?;
             break;
-        } else {
-            if elapsed > max_wait_ms {
-                let s = format!("socket not found after {elapsed} ms: {path}");
-                return Err(DTPSError::from("socket not found"));
-            }
+        } else if elapsed > max_wait_ms {
+            let s = format!("socket not found after {elapsed} ms: {path}");
+            return Err(DTPSError::from(s));
         }
     }
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;

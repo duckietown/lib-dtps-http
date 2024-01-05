@@ -6,7 +6,7 @@ use log::info;
 use crate::utils_patch::unescape_json_patch;
 use crate::{
     debug_with_info, dtpserror_context, error_with_info, internal_assertion, invalid_input, not_implemented,
-    parse_url_ext, ConnectionJob, ConnectionJobWire, DTPSError, DataReady, DataSaved, Patchable, ProxyJob, RawData,
+    parse_url_ext, ConnectionJob, ConnectionJobWire, DTPSError, DataSaved, Patchable, ProxyJob, RawData,
     ServerStateAccess, SourceComposition, TopicName, TopicRefAdd, Transforms, TypeOFSource, DTPSR, TOPIC_CONNECTIONS,
     TOPIC_PROXIED,
 };

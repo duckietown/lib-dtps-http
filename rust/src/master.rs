@@ -2,7 +2,6 @@ use std::{collections::HashMap, string::ToString};
 
 use bytes::Bytes;
 use futures::{stream::SplitSink, SinkExt, StreamExt};
-use http::HeaderValue;
 use maud::{html, PreEscaped};
 use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -12,7 +11,6 @@ use tungstenite::{
 };
 use warp::{http::header, hyper::Body, reply::Response, ws::Message as WarpMessage};
 
-use crate::logs::get_id_string;
 use crate::{
     clocks::Clocks, debug_with_info, display_printable, divide_in_components, error_with_info, get_accept_header,
     get_header_with_default, get_series_of_messages_for_notification_, interpret_path, make_html,
@@ -23,7 +21,7 @@ use crate::{
     PushResult, RawData, ResolveDataSingle, ResolvedData, ServerStateAccess, TopicName, TopicProperties,
     TopicsIndexInternal, TypeOFSource, WarningMsg, CONTENT_TYPE, CONTENT_TYPE_DTPS_DATAREADY_CBOR,
     CONTENT_TYPE_OCTET_STREAM, CONTENT_TYPE_PATCH_CBOR, CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_TEXT_HTML,
-    CONTENT_TYPE_TEXT_PLAIN, CONTENT_TYPE_YAML, DTPSR, HEADER_NODE_ID, JAVASCRIPT_SEND, REL_EVENTS_DATA,
+    CONTENT_TYPE_TEXT_PLAIN, CONTENT_TYPE_YAML, DTPSR, JAVASCRIPT_SEND,
 };
 
 pub async fn serve_master_post(

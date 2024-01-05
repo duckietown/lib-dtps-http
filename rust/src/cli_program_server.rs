@@ -70,7 +70,7 @@ async fn clock() -> DTPSR<()> {
 pub async fn cli_server() -> Result<(), Box<dyn std::error::Error>> {
     //
     match clock().await {
-        Ok(_) => return Ok(()),
+        Ok(_) => Ok(()),
         Err(e) => {
             error_with_info!("Error in serving:\n{:?}", e);
 

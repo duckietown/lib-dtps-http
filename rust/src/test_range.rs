@@ -378,7 +378,7 @@ pub mod tests {
             .server
             .add_generic_proxied(&mounted_at, instance.cf.con.clone())
             .await?;
-        let url = instance2.cf.con.to_string();
+        let url = instance2.cf.con.to_url_repr();
         let url = format!("{url}{path}");
         let cmd = [
             "dtps-http-py-listen",

@@ -3,15 +3,14 @@ use std::fmt::Debug;
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use hex;
 use hyper::{self};
 use serde::{Deserialize, Serialize};
 use tungstenite::Message as TM;
 
-use crate::client_metadata::get_metadata;
-use crate::utils_websocket::receive_from_server;
-use crate::utils_websocket::send_to_server;
-use crate::websocket_abstractions::GenericSocketConnection;
+use crate::get_metadata;
+use crate::receive_from_server;
+use crate::send_to_server;
+use crate::GenericSocketConnection;
 use crate::{
     open_websocket_connection, DTPSError, ErrorMsg, FinishedMsg, MsgWebsocketPushClientToServer,
     MsgWebsocketPushServerToClient, PushResult, RawData, TypeOfConnection, DTPSR,
@@ -37,7 +36,7 @@ pub trait WebsocketPushInterface {
 }
 
 struct WebsocketPush {
-    con: TypeOfConnection,
+    // con: TypeOfConnection,
     wsc: Box<dyn GenericSocketConnection>,
     rx: tokio::sync::broadcast::Receiver<TM>,
     tx: futures::channel::mpsc::UnboundedSender<TM>,
@@ -48,7 +47,7 @@ impl WebsocketPush {
         let wsc = open_websocket_connection(&con).await?;
         let tx = wsc.send_outgoing().await;
         let rx = wsc.get_incoming().await;
-        Ok(Self { con, wsc, tx, rx })
+        Ok(Self { wsc, tx, rx })
     }
 }
 
@@ -93,61 +92,5 @@ pub async fn websocket_push(con: TypeOfConnection) -> DTPSR<Box<dyn WebsocketPus
         Some(u) => u,
     };
 
-    return Ok(Box::new(WebsocketPush::new(con).await?));
+    Ok(Box::new(WebsocketPush::new(con).await?))
 }
-
-//
-// pub async fn push_events_(
-//     con: TypeOfConnection,
-//     mut rx1: tokio::sync::mpsc::Receiver<MsgFromPusher>,
-//     mut tx2: tokio::sync::mpsc::Sender<MsgToPusher>,
-//
-// ) -> DTPSR<()> {
-//
-//     let mut wsc_sender = wsc.send_outgoing().await;
-//     let mut receiver = wsc.get_incoming().await;
-//
-//     loop {
-//
-//         let m = rx.recv().await;
-//         let mfp = match m {
-//             None => {
-//                 break;
-//             }
-//             Some(rd) => rd,
-//         };
-//         match mfp {
-//
-//
-//         }
-//         let tosend = MsgClientToServer::RawData(rd);
-//         let ascbor = serde_cbor::to_vec(&tosend)?;
-//         let msg = TM::binary(ascbor);
-//
-//         let wsc_sender.send(msg).await?;
-//
-//
-//         let received = receiver.recv().await?;
-//         match received {
-//             Message::Text(data) => {
-//                 if data == "ok" {
-//                     tx.send(true).unwrap();
-//                 } else {
-//                     tx.send(false).unwrap();
-//                 }
-//             }
-//             Message::Binary(_) |
-//             Message::Ping(_) |
-//             Message::Pong(_) |
-//             Message::Frame(_) => {}
-//
-//             Message::Close(_) => {
-//                 tx
-//                 break;
-//             }
-//         }
-//
-//
-//     }
-//     Ok(())
-// }

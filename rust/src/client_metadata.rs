@@ -114,7 +114,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
         return Err(DTPSError::FailedRequest(
             msg,
             status.as_u16(),
-            conbase.to_string(),
+            conbase.to_url_repr(),
             desc.to_string(),
         ));
     }

@@ -364,13 +364,13 @@ async def load_datasaved_resp(
     data = RawData(content_type=content_type, content=data)
 
     s: Any = data.get_as_native_object()
-    # FIXME: we need to download the data and re-expose it
     ds = pydantic_parse(DataSaved, s)
     locations = resp_data.headers.getall("location")
 
     dr = DataReady.from_data_saved(ds)
     for location in locations:
         url = join(base_url, location)
+
         rd = await client.get(url, accept=ds.content_type)
         available_for = 60.0
         urlref, avail = server._store_data(rd, available_for, presented_as)
@@ -450,7 +450,7 @@ class SourceComposition(Source):
         return RawData(content_type=CONTENT_TYPE_DTPS_INDEX_CBOR, content=as_cbor)
 
     async def patch(self, presented_as: str, server: "DTPSServer", patch: JsonPatch) -> "PostResult":
-        return TransformError(400, "Cannot patch SourceComposition")
+        return TransformError(400, "Cannot patch SourceComposition")  # TODO: this can be done in principle
 
     async def publish(self, presented_as: str, server: "DTPSServer", rd: RawData) -> "PostResult":
         return TransformError(400, "Cannot post to SourceComposition")

@@ -348,16 +348,16 @@ async fn put_together(
                 }
                 vec![]
             }
-            SingleUpdates::FinishedMsg(comp, m) => {
+            SingleUpdates::FinishedMsg(..) => {
                 vec![]
             }
-            SingleUpdates::ErrorMsg(comp, m) => {
+            SingleUpdates::ErrorMsg(_comp, m) => {
                 vec![ListenURLEvents::ErrorMsg(m)] // TODO: add component
             }
-            SingleUpdates::WarningMsg(comp, m) => {
+            SingleUpdates::WarningMsg(_comp, m) => {
                 vec![ListenURLEvents::WarningMsg(m)] // TODO: add component
             }
-            SingleUpdates::SilenceMsg(comp, m) => {
+            SingleUpdates::SilenceMsg(_comp, m) => {
                 // TODO only if didn't send in a while
                 vec![ListenURLEvents::SilenceMsg(m)] // TODO: add component
             }

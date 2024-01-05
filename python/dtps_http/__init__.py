@@ -1,7 +1,5 @@
 __version__ = "0.0.0"
 
-import asyncio
-
 import coloredlogs  # type: ignore
 
 coloredlogs.install(level="DEBUG")  # type: ignore
@@ -21,7 +19,6 @@ from .types import *
 from .urls import *
 from .utils import *
 from .object_queue import *
-
 
 getLogger("asyncio").setLevel(INFO)
 getLogger("aiopubsub").setLevel(INFO)

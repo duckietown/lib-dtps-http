@@ -18,7 +18,6 @@ mod tests {
     use std::fmt::Debug;
 
     use crate::test_fixtures::instance_python_test_fixture;
-    use crate::test_range;
 
     use super::*;
 
