@@ -268,7 +268,7 @@ class ContextManagerUseContext(DTPSContext):
 
 
 class ConnectionInterfaceImpl(ConnectionInterface):
-    def __init__(self, master: ContextManagerUse, url: URL, connection_name: TopicNameV):
+    def __init__(self, master: ContextManagerUse, url: URLIndexer, connection_name: TopicNameV):
         self.master = master
         self.url = url
 

@@ -214,6 +214,6 @@ def pydantic_parse(T: Type[X], d: Any) -> X:
 
 def pretty(d: object, /) -> str:
     io = StringIO()
-    pp.pprint(d, stream=io)
+    pp.pprint(d, stream=io)  # type: ignore
     data = io.getvalue().strip()
     return data
