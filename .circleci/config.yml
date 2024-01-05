@@ -1,41 +1,38 @@
 version: 2.1
 jobs:
-  "python38":
+  "python38": &template
     docker:
     - image: cimg/python:3.8
     steps:
     - checkout
+    - run:
+        name: Install Rust
+        command: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo 'source $HOME/.cargo/env' >> $BASH_ENV
+          source $BASH_ENV
+    - run:
+        name: Check Rust version
+        command: rustc --version
     - run: python3 -m pip install nose2
     - run: python3 -m pip install .
     - run: rm -rf python/dtps_http && find .
     - run: python3 -m nose2 python
   "python39":
+    <<: *template
     docker:
     - image: cimg/python:3.9
-    steps:
-    - checkout
-    - run: python3 -m pip install nose2
-    - run: python3 -m pip install .
-    - run: rm -rf python/dtps_http && find .
-    - run: python3 -m nose2 python
+
   "python310":
+    <<: *template
     docker:
     - image: cimg/python:3.10
-    steps:
-    - checkout
-    - run: python3 -m pip install nose2
-    - run: python3 -m pip install  .
-    - run: rm -rf python/dtps_http && find .
-    - run: python3 -m nose2 python
+
   "python311":
+    <<: *template
     docker:
     - image: cimg/python:3.11
-    steps:
-    - checkout
-    - run: python3 -m pip install nose2
-    - run: python3 -m pip install .
-    - run: rm -rf python/dtps_http && find .
-    - run: python3 -m nose2 python
+      
   # "python-312":
   #   docker:
   #   - image: cimg/python:3.12
@@ -48,28 +45,27 @@ jobs:
   # ERROR: Could not build wheels for aiohttp, which is required to install pyproject.toml-based projects
   rust:
     docker:
-      - image: rust:1.73.0
+    - image: rust:1.73.0
     environment:
       RUST_BACKTRACE: full
-      DTPS_HTTP_MASK_ORIGIN: "true" 
+      DTPS_HTTP_MASK_ORIGIN: "true"
     steps:
-      - checkout
-      - run: apt-get update && apt-get install -y python3-pip python3-venv
-      - run: python3 -m venv .
-      - run: ./bin/pip install  .
-      - run: rm -rf python/dtps_http && find .
-      - run:
-          name: Run Tests
-          command: "PATH=$PATH:./bin cargo test test_python1"
-      - run:
-          name: Run Tests
-          command: "PATH=$PATH:./bin cargo test"
+    - checkout
+    - run: apt-get update && apt-get install -y python3-pip python3-venv
+    - run: python3 -m venv .
+    - run: ./bin/pip install  .
+    - run: rm -rf python/dtps_http && find .
+    - run:
+        name: Run Tests
+        command: "PATH=$PATH:./bin cargo test test_python1"
+    - run:
+        name: Run Tests
+        command: "PATH=$PATH:./bin cargo test"
 workflows:
   test:
     jobs:
-      - "python38"
-      - "python39"
-      - "python310"
-      - "python311"
-      - rust
-
+    - "python38"
+    - "python39"
+    - "python310"
+    - "python311"
+    - rust
