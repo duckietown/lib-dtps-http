@@ -14,6 +14,9 @@ jobs:
     - run:
         name: Check Rust version
         command: rustc --version
+    - run:
+        name: Build rust server
+        command: cargo build
     - run: python3 -m pip install nose2
     - run: python3 -m pip install .
     - run: rm -rf python/dtps_http && find .
@@ -32,7 +35,7 @@ jobs:
     <<: *template
     docker:
     - image: cimg/python:3.11
-      
+
   # "python-312":
   #   docker:
   #   - image: cimg/python:3.12
