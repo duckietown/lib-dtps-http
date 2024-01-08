@@ -15,7 +15,7 @@ pub async fn add_proxy(
     let url = match md.proxied_url {
         None => {
             return not_available!(
-                "cannot add proxy: no proxied url in metadata for {}",
+                "cannot add proxy: no proxied url in metadata for url.\n{}\n{md:#?}",
                 conbase.to_url_repr()
             );
         }
@@ -24,7 +24,7 @@ pub async fn add_proxy(
 
     let patch = create_add_proxy_patch(mountpoint, node_id, urls, mask_origin)?;
 
-    client_verbs::patch_data(&url, &patch).await
+    client_verbs::patch_data(&url, &patch).await.map(|_| ())
 }
 
 fn create_add_proxy_patch(
@@ -65,7 +65,7 @@ pub async fn remove_proxy(conbase: &TypeOfConnection, mountpoint: &TopicName) ->
 
     let patch = create_remove_proxy_patch(mountpoint);
 
-    client_verbs::patch_data(&url, &patch).await
+    client_verbs::patch_data(&url, &patch).await.map(|_| ())
 }
 
 fn create_remove_proxy_patch(mountpoint: &TopicName) -> Patch {

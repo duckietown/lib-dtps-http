@@ -80,6 +80,8 @@ REL_STREAM_PUSH = "dtps-events-push"
 REL_META = "dtps-meta"
 REL_HISTORY = "dtps-history"
 REL_CONNECTIONS = "dtps-connections"
+REL_PROXIED = "dtps-proxied"
+
 
 EVENTS_SUFFIX = ":events"
 REL_STREAM_PUSH_SUFFIX = ":push"

@@ -3,12 +3,13 @@ use futures::StreamExt;
 use json_patch::{patch, Patch, PatchOperation};
 use log::info;
 
+use crate::client_publish::publish;
 use crate::utils_patch::unescape_json_patch;
 use crate::{
-    debug_with_info, dtpserror_context, error_with_info, internal_assertion, invalid_input, not_implemented,
-    parse_url_ext, ConnectionJob, ConnectionJobWire, DTPSError, DataSaved, Patchable, ProxyJob, RawData,
-    ServerStateAccess, SourceComposition, TopicName, TopicRefAdd, Transforms, TypeOFSource, DTPSR, TOPIC_CONNECTIONS,
-    TOPIC_PROXIED,
+    debug_with_info, dtpserror_context, dtpserror_other, error_with_info, internal_assertion, invalid_input,
+    not_implemented, parse_url_ext, patch_data, ConnectionJob, ConnectionJobWire, DTPSError, DataSaved, Patchable,
+    ProxyJob, RawData, ServerStateAccess, SourceComposition, TopicName, TopicRefAdd, Transforms, TypeOFSource, DTPSR,
+    TOPIC_CONNECTIONS, TOPIC_PROXIED,
 };
 
 #[async_trait]
@@ -16,8 +17,27 @@ impl Patchable for TypeOFSource {
     async fn patch(&self, presented_as: &str, ssa: ServerStateAccess, patch: &Patch) -> DTPSR<DataSaved> {
         debug_with_info!("patching {self:#?} with {patch:#?}");
         match self {
-            TypeOFSource::ForwardedQueue(_) => {
-                not_implemented!("patch for {self:#?} with {self:?}")
+            TypeOFSource::ForwardedQueue(fq) => {
+                let con = {
+                    let ss = ssa.lock().await;
+                    let sub = ss.proxied.get(&fq.subscription).unwrap();
+                    match &sub.established {
+                        None => {
+                            // let msg =
+                            return dtpserror_other!("Subscription not established");
+                            // let res = http::Response::builder()
+                            //     .status(StatusCode::NOT_FOUND) //ok
+                            //     .body(Body::from(msg.to_string()))
+                            //     .unwrap();
+                            // return Ok(res);
+                        }
+                        Some(est) => est.using.join(fq.his_topic_name.as_relative_url())?,
+                    }
+                };
+                // let use_url = &ss.proxied_topics.get(&q.my_topic_name).unwrap().data_url;
+
+                let pr = patch_data(&con, patch).await?;
+                Ok(pr.interpret()?)
             }
             TypeOFSource::OurQueue(topic_name, ..) => {
                 dtpserror_context!(

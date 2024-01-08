@@ -183,6 +183,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
         proxied_url,
         connections_url,
         stream_push_url,
+        headers: headers.clone(),
     };
 
     Ok(md)

@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
 use derive_more::Constructor;
+use http::HeaderMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_cbor::Value as CBORValue;
@@ -217,6 +218,8 @@ pub struct FoundMetadata {
     /// nanoseconds
     pub latency_ns: u128,
     pub content_type: String,
+
+    pub headers: HeaderMap,
 }
 
 impl FoundMetadata {

@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
 use anyhow::Context;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_cbor::Value::{Null as CBORNull, Text as CBORText};
 
 use crate::{
@@ -122,4 +124,12 @@ pub fn get_inside(context: Vec<String>, data: &serde_cbor::Value, path: &Vec<Str
         }
     };
     get_inside(new_context, inside, &path)
+}
+
+pub fn as_cbor_value<T>(t: &T) -> DTPSR<serde_cbor::Value>
+where
+    T: Serialize,
+{
+    let s = serde_cbor::to_vec(&t)?;
+    Ok(serde_cbor::from_slice(&s)?)
 }

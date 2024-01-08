@@ -24,7 +24,7 @@ pub async fn add_tpt_connection(
 
     let patch = create_add_tpt_connection_patch(connection_name, connection_job)?;
 
-    client_verbs::patch_data(&url, &patch).await
+    client_verbs::patch_data(&url, &patch).await.map(|_| ())
 }
 
 fn create_add_tpt_connection_patch(
@@ -58,7 +58,7 @@ pub async fn remove_tpt_connection(conbase: &TypeOfConnection, connection_name: 
 
     let patch = create_remove_tpt_connection_patch(connection_name);
 
-    client_verbs::patch_data(&url, &patch).await
+    client_verbs::patch_data(&url, &patch).await.map(|_| ())
 }
 
 fn create_remove_tpt_connection_patch(connection_name: &CompositeName) -> Patch {

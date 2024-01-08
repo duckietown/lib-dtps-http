@@ -63,6 +63,7 @@ from .constants import (
     REL_EVENTS_NODATA,
     REL_HISTORY,
     REL_META,
+    REL_PROXIED,
     REL_STREAM_PUSH,
     REL_STREAM_PUSH_SUFFIX,
     REL_URL_HISTORY,
@@ -845,6 +846,8 @@ class DTPSServer:
         put_meta_headers(headers, properties)
         json_data = asdict(index_wire)
 
+        put_link_header(headers, TOPIC_PROXIED.as_relative_url(), REL_PROXIED, CONTENT_TYPE_DTPS_INDEX_CBOR)
+
         headers.add(HEADER_DATA_ORIGIN_NODE_ID, self.node_id)
 
         # get all the accept headers
@@ -1058,9 +1061,6 @@ class DTPSServer:
         add_nocache_headers(headers)
 
         topic_name_s = request.match_info["topic"]
-
-        if topic_name_s == "":
-            return await self.serve_index(request)
 
         try:
             source = self.resolve(topic_name_s)

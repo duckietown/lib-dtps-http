@@ -213,10 +213,13 @@ pub async fn serve_master_patch(
 
     let x = ds.patch(&path_str, ss_mutex.clone(), &result).await;
     match x {
-        Ok(_) => {
+        Ok(ds) => {
+            let body_cbor = serde_cbor::to_vec(&ds).unwrap();
+
             let res = http::Response::builder()
                 .status(StatusCode::OK)
-                .body(Body::from("Patch ok1"))
+                .header(header::CONTENT_TYPE, CONTENT_TYPE_DTPS_DATAREADY_CBOR)
+                .body(Body::from(body_cbor))
                 .unwrap();
             Ok(res)
         }

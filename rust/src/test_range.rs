@@ -14,8 +14,9 @@ pub mod tests {
     use serde_json::json;
     use tokio::process::Command;
 
-    use crate::get_metadata;
+    use crate::utils_cbor::as_cbor_value;
     use crate::{add_proxy, remove_proxy};
+    use crate::{client_verbs, get_metadata, DTPSLowLevel};
     use crate::{create_topic, delete_topic};
     use crate::{
         debug_with_info, dtpserror_context, error_with_info, init_logging,
@@ -34,6 +35,11 @@ pub mod tests {
 
     #[fixture]
     pub async fn instance_python() -> ConnectionFixture {
+        instance_python_test_fixture().await.unwrap()
+    }
+
+    #[fixture]
+    pub async fn instance_python2() -> ConnectionFixture {
         instance_python_test_fixture().await.unwrap()
     }
 
@@ -414,18 +420,18 @@ pub mod tests {
     #[rstest]
     #[awt]
     #[tokio::test]
-    async fn check_patch_rust(#[future] instance: TestFixture) -> DTPSR<()> {
-        check_patch(instance.cf).await
+    async fn check_patch_base_rust(#[future] instance: TestFixture) -> DTPSR<()> {
+        check_patch_base(instance.cf).await
     }
 
     #[rstest]
     #[awt]
     #[tokio::test]
-    async fn check_patch_python(#[future] instance_python: ConnectionFixture) -> DTPSR<()> {
-        check_patch(instance_python).await
+    async fn check_patch_base_python(#[future] instance_python: ConnectionFixture) -> DTPSR<()> {
+        check_patch_base(instance_python).await
     }
 
-    async fn check_patch(cf: ConnectionFixture) -> DTPSR<()> {
+    async fn check_patch_base(cf: ConnectionFixture) -> DTPSR<()> {
         init_logging();
 
         let topic_name = TopicName::from_dash_sep("a/b")?;
@@ -735,6 +741,83 @@ pub mod tests {
 
         let data = 53;
         publish_cbor(&con_topic, &data).await?;
+
+        Ok(())
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_proxied_patch_rust(#[future] instance: TestFixture, #[future] instance2: TestFixture) -> DTPSR<()> {
+        crate::test_range::tests::check_proxied_patch(instance.cf, instance2.cf).await
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_proxied_patch_python(
+        #[future] instance_python: ConnectionFixture,
+        #[future] instance_python2: ConnectionFixture,
+    ) -> DTPSR<()> {
+        let x = crate::test_range::tests::check_proxied_patch(instance_python, instance_python2).await;
+        match &x {
+            Ok(_) => {}
+            Err(e) => {
+                error_with_info!("check_proxied_patch failed:\n{}", e.to_string());
+            }
+        }
+        x
+    }
+
+    async fn check_proxied_patch(switchboad: ConnectionFixture, node: ConnectionFixture) -> DTPSR<()> {
+        init_logging();
+
+        let topic = TopicName::from_dash_sep("topic")?;
+        DTPSLowLevel::create_topic(
+            &node.con,
+            &topic,
+            &TopicRefAdd {
+                app_data: Default::default(),
+                properties: TopicProperties::rw(),
+                content_info: ContentInfo::simple(CONTENT_TYPE_CBOR, None),
+            },
+        )
+        .await?;
+        let initial = hashmap! {"value" => "initial"};
+        DTPSLowLevel::publish_cbor(&node.con.join(topic.as_relative_url())?, &initial).await?;
+
+        let mountpoint = TopicName::from_dash_sep("mounted")?;
+
+        let urls = [node.con];
+        DTPSLowLevel::add_proxy(&switchboad.con, &mountpoint, None, &urls, false).await?;
+
+        let proxied_topic = switchboad
+            .con
+            .join(mountpoint.as_relative_url())?
+            .join(topic.as_relative_url())?;
+
+        // wait 1 second
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+
+        log::info!("proxied_topic: {}", proxied_topic.to_url_repr());
+
+        let patch = Patch(vec![PatchOperation::Add(AddOperation {
+            path: "/added".to_string(),
+            value: serde_json::Value::String("new".to_string()),
+        })]);
+
+        client_verbs::patch_data(&proxied_topic, &patch).await?;
+        let h_expected = hashmap! {"value" => "initial", "added" => "new"};
+        let h_expected_value = as_cbor_value(&h_expected)?;
+        // let h = DTPSLowLevel::get_rawdata(&proxied_topic).await?.get_as_cbor()?;
+        let rd = get_rawdata(&proxied_topic).await?;
+
+        let h = rd.get_as_cbor()?;
+        assert_eq!(h, h_expected_value);
+        //
+        // DTPSLowLevel::patch_data(&proxied_topic, &patch).await?;
+        //  let data = 53;
+        //  publish_cbor(&con_topic, &data).await?;
 
         Ok(())
     }

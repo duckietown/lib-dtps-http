@@ -36,5 +36,5 @@ pub async fn delete_topic(conbase: &TypeOfConnection, topic_name: &TopicName) ->
     let operation1 = PatchOperation::Remove(remove_operation);
     let patch = Patch(vec![operation1]);
 
-    client_verbs::patch_data(conbase, &patch).await
+    client_verbs::patch_data(conbase, &patch).await.map(|_| ())
 }

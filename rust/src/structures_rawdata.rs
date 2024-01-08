@@ -61,7 +61,13 @@ impl RawData {
                 Ok(v)
             }
             ContentPresentation::PlainText => DTPSError::other("cannot interpret plain text"),
-            ContentPresentation::Other => DTPSError::other("cannot interpret unknown content type"),
+            ContentPresentation::Other => {
+                let s = format!(
+                    "cannot interpret unknown content type {:?} {:?}",
+                    self.content_type, self.content
+                );
+                DTPSError::other(s)
+            }
         }
     }
 

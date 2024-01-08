@@ -187,7 +187,7 @@ pub async fn make_request(
     Ok(resp)
 }
 
-pub async fn patch_data(conbase: &TypeOfConnection, patch: &JsonPatch) -> DTPSR<()> {
+pub async fn patch_data(conbase: &TypeOfConnection, patch: &JsonPatch) -> DTPSR<RawData> {
     let json_data = serde_json::to_vec(patch)?;
     // debug_with_info!("patch_data out: {:#?}", String::from_utf8(json_data.clone()));
     let resp = make_request(
@@ -209,6 +209,6 @@ pub async fn patch_data(conbase: &TypeOfConnection, patch: &JsonPatch) -> DTPSR<
             desc.to_string(),
         ))
     } else {
-        Ok(())
+        interpret_resp(conbase, resp).await
     }
 }

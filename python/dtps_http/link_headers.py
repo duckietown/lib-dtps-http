@@ -55,7 +55,7 @@ def get_link_headers(h: Union[CIMultiDict[str], CIMultiDictProxy[str]]) -> Dict[
 
 
 def put_link_header(h: CIMultiDict[str], url: str, rel: str, content_type: Optional[str]):
-    l = LinkHeader(url=url, rel=rel, attributes={"rel": rel})
+    l = LinkHeader(url=url, rel=rel)
     if content_type is not None:
         l.attributes["type"] = content_type
 

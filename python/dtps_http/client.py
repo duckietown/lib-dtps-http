@@ -52,6 +52,7 @@ from .constants import (
     REL_EVENTS_NODATA,
     REL_HISTORY,
     REL_META,
+    REL_PROXIED,
     REL_STREAM_PUSH,
     TOPIC_PROXIED,
 )
@@ -142,6 +143,8 @@ class FoundMetadata:
     stream_push_url: Optional[URLWS]
 
     connections_url: Optional[URL]
+
+    proxied_url: Optional[URL]
 
     raw_headers: CIMultiDictProxy[str]
 
@@ -609,6 +612,7 @@ class DTPSClient:
                 yield session, use_url
 
     async def get_proxied(self, url0: URLIndexer) -> Dict[TopicNameV, ProxyJob]:
+        # FIXME: need to use REL_PROXIED
         url = join(url0, TOPIC_PROXIED.as_relative_url())
         rd = await self.get(url, accept=MIME_JSON)
 
@@ -645,6 +649,7 @@ class DTPSClient:
             proxy_job = ProxyJob(node_id, urls, mask_origin)
             patch.append({"op": "add", "path": path, "value": asdict(proxy_job)})
         as_json = json.dumps(patch).encode("utf-8")
+        # FIXME: need to use REL_PROXIED
         url = join(url0, TOPIC_PROXIED.as_relative_url())
         res = await self.patch(url, CONTENT_TYPE_PATCH_JSON, as_json)
         return True
@@ -652,6 +657,7 @@ class DTPSClient:
     async def remove_proxy(self, url0: URLIndexer, topic_name: TopicNameV) -> None:
         patch = [{"op": "remove", "path": "/" + escape_json_pointer(topic_name.as_dash_sep())}]
         as_json = json.dumps(patch).encode("utf-8")
+        # FIXME: need to use REL_PROXIED
         url = join(url0, TOPIC_PROXIED.as_relative_url())
         res = await self.patch(url, CONTENT_TYPE_PATCH_JSON, as_json)
 
@@ -772,16 +778,18 @@ class DTPSClient:
 
                     if REL_CONNECTIONS in links:
                         connections_url = join(url, links[REL_CONNECTIONS].url)
-
                     else:
                         connections_url = None
+
+                    if REL_PROXIED in links:
+                        proxied_url = join(url, links[REL_PROXIED].url)
+                    else:
+                        proxied_url = None
 
                     if REL_HISTORY in links:
                         history_url = join(url, links[REL_HISTORY].url)
                     else:
                         history_url = None
-
-                    #
 
                     if HEADER_NODE_ID not in resp.headers:
                         answering = None
@@ -812,6 +820,7 @@ class DTPSClient:
             history_url=history_url,
             connections_url=connections_url,
             raw_headers=resp.headers,
+            proxied_url=proxied_url,
         )
 
     async def choose_best(self, reachability: List[TopicReachability]) -> URL:
