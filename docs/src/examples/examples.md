@@ -1,4 +1,4 @@
-# Python Examples
+# Python Examples (low level api)
 
 This directory contains examples of how to use the Python library.
 

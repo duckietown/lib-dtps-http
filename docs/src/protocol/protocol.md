@@ -38,5 +38,3 @@
 The user should use the header:
 
     Range: items=X-Y
-
-The 

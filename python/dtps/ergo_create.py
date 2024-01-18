@@ -293,8 +293,8 @@ class ContextManagerCreateContext(DTPSContext):
         return self
 
     async def connect_to(self, c: "DTPSContext", /) -> "ConnectionInterface":
-        # TODO: DTSW-4797: ContextManagerCreateContext: implement connect()
-        raise NotImplementedError()
+        msg = 'Cannot use this method for "create" contexts because Python does not support the functionality'
+        raise NotImplementedError(msg)
 
     def __repr__(self) -> str:
         return f"ContextManagerCreateContext({self.components!r}, {self.master!r})"

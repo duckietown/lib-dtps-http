@@ -3,7 +3,6 @@ use futures::StreamExt;
 use json_patch::{patch, Patch, PatchOperation};
 use log::info;
 
-use crate::client_publish::publish;
 use crate::utils_patch::unescape_json_patch;
 use crate::{
     debug_with_info, dtpserror_context, dtpserror_other, error_with_info, internal_assertion, invalid_input,

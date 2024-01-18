@@ -17,7 +17,7 @@ parts:
   - file: impl/environment
 
 
-- caption: Examples
+- caption: Examples low-level API
   maxdepth: 2
   numbered: False
   chapters:
@@ -25,6 +25,15 @@ parts:
   - file: examples/pub-sub
   - file: examples/two-flows
   - file: examples/rpc1
+
+- caption: Ergonomic API
+  maxdepth: 2
+  numbered: False
+  chapters:
+  - file: ergo/ergo
+  - file: ergo/api
+
+
 
 - caption: Python API
   maxdepth: 2
