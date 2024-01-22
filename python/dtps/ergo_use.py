@@ -1,4 +1,5 @@
 import asyncio
+import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Tuple
 
@@ -112,10 +113,30 @@ class ContextManagerUseSubscription(SubscriptionInterface):
         await self.ldi.stop()
 
 
+# min frequency to warn for
+WARN_USE_PUBLISH_CONTEXT_N_per_S = 0.5
+WARN_USE_PUBLISH_CONTEXT_HORIZON_S = 10.0
+WARN_USE_PUBLISH_CONTEXT_N_MIN = 4
+
+
 class ContextManagerUseContext(DTPSContext):
     def __init__(self, master: ContextManagerUse, components: Tuple[str, ...]):
         self.master = master
         self.components = components
+
+        self.last_published = []
+
+    def _get_frequency_publishing(self) -> float:
+        now = time.time()
+        while self.last_published[0] < now - WARN_USE_PUBLISH_CONTEXT_HORIZON_S:
+            self.last_published.pop(0)
+        if not self.last_published:
+            return 0.0
+        t0 = self.last_published[0]
+        t1 = self.last_published[-1]
+        n = len(self.last_published)
+        freq = (t1 - t0) / n
+        return freq
 
     async def aclose(self) -> None:
         await self.master.aclose()
@@ -170,7 +191,6 @@ class ContextManagerUseContext(DTPSContext):
         self, on_data: Callable[[RawData], Awaitable[None]], /, max_frequency: Optional[float] = None
     ) -> "SubscriptionInterface":
         url = await self._get_best_url()
-        # ldi = await self.master.client.listen_url(url, on_data, inline_data=False, raise_on_error=False)
         inline_data = max_frequency is None
         ldi = await self.master.client.listen_url(url, on_data, inline_data=inline_data, raise_on_error=True)
         # logger.debug(f"subscribed to {url} -> {t}")
@@ -186,7 +206,17 @@ class ContextManagerUseContext(DTPSContext):
         return url
 
     async def publish(self, data: RawData) -> None:
+        self.last_published.append(time.time())
+        freq = self._get_frequency_publishing()
         url = await self._get_best_url()
+        enough = len(self.last_published) >= WARN_USE_PUBLISH_CONTEXT_N_MIN
+
+        if enough and (freq > WARN_USE_PUBLISH_CONTEXT_N_per_S):
+            msg = (
+                f"The publishing frequency for\n    {url}\nis {freq:.1f} messages per second:"
+                "consider using publisher() to publish using websockets"
+            )
+            logger.warn(msg)
         await self.master.client.publish(url, data)
 
     async def publisher(self) -> "ContextManagerUseContextPublisher":

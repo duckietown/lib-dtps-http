@@ -17,6 +17,7 @@ from . import logger
 __all__ = [
     "clock_main",
     "get_clock_app",
+    "server_main",
 ]
 
 
@@ -51,3 +52,8 @@ def get_clock_app() -> web.Application:
 def clock_main(args: Optional[List[str]] = None) -> None:
     dtps_server = get_clock_dtps()
     asyncio.run(interpret_command_line_and_start(dtps_server, args))
+
+
+def server_main(args: Optional[List[str]] = None) -> None:
+    s = DTPSServer.create(on_startup=[])
+    asyncio.run(interpret_command_line_and_start(s, args))

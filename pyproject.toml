@@ -41,6 +41,7 @@ prettyprinter = "^0.18.0"
 [tool.poetry.scripts]
 
 dtps-http-py-server-example-clock = 'dtps_http_programs:clock_main'
+dtps-http-py-server = 'dtps_http_programs:server_main'
 dtps-http-py-client-stats = 'dtps_http_programs:dtps_stats_main'
 dtps-http-py-proxy = 'dtps_http_programs:dtps_proxy_main'
 dtps-http-py-send-continuous = 'dtps_http_programs:dtps_send_continuous_main'

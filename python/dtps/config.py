@@ -52,6 +52,9 @@ async def context(base_name: str = "self", environment: Optional[Mapping[str, st
 
     You need to call context.aclose() at the end to clean up resources.
 
+
+        c = context("mio", environment={'DTPS_BASE_MIO': url})
+
     """
     base_name = base_name.lower()
     if environment is None:

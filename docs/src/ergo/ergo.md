@@ -11,7 +11,7 @@ We call "contexts" the "entrypoints" into a DTPS hierarchy.
 
 Contexts are created from environment variables of the form `DTPS_BASE_<context name>`.
 
-By convention, the context name is `self` for the "main" context.
+By convention, the context name is `self` for the `main` context.
 
 The basic configuration simply points the context to a URL.
 
@@ -25,7 +25,7 @@ Or we can use a unix socket:
 
 ### Creating servers
 
-In addition, we can use the special prefix "create:" to create a new DTPS server.
+In addition, we can use the special prefix `create:` to create a new DTPS server.
 
 For example:
 
@@ -297,7 +297,6 @@ The `call()` method is used to call a remote procedure.
 It takes a `RawData` object as input and returns a `RawData` object as output.
 
 
-
 ```python 
 from dtps import DTPSContext, RawData
 async def example_call(context: DTPSContext): 
@@ -305,4 +304,43 @@ async def example_call(context: DTPSContext):
     result: RawData = await context.call(rd)
 ```
 
-Note: the ability to subscribe to a `call()` endpoint is not available yet in this API.
+From the server side, you can create a handler for the call by passing a parameter `transform` to the `queue_create()` method.
+
+The idea is that the `transform` parameter is a function that takes a `RawData` object as input and returns a `RawData` object as output, and the transformed data is what is put in the queue.
+If there is an error, the callback should return a `TransformError` with an error code and a message.
+
+The following is a complete example:
+
+```python
+
+from dtps import RawData, context, TransformError
+from typing import Union
+
+
+async def example_listen() -> None:
+    # DTPS_BASE_SELF = "create:http://:8000/"
+
+    me = await context("self")
+
+    async def transform(rd: RawData, /) -> Union[RawData, TransformError]:
+    
+        # interpret json, yaml, cbor, etc. as a phython object
+        number = rd.get_as_native_object()
+        if not isinstance(number, int):
+            # return error
+            return TransformError(400, f"Expected an integer for this parameter, got {type(number)}")
+    
+        if number % 2 == 0:
+            # if the number is even, we return a string
+            result = RawData.cbor_from_native_object(
+                {'ok': True, 'msg': f"Got an even number {number}"}
+            )
+            return result
+        else:
+            # return error
+            return TransformError(400, f"Expected an even integer, got {number}")
+      
+    await (me / "rpc").queue_create(transform=transform)
+
+    
+```

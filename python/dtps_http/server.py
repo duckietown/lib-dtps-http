@@ -1182,6 +1182,8 @@ class DTPSServer:
 
 <p>This response coming to you in HTML format because you requested it in HTML format.</p>
 
+<p>Content type: <code>{content_type}</code></p>
+
         """
         if is_image_content:
             # language=html
@@ -1238,7 +1240,6 @@ class DTPSServer:
                 else:
                     # convert to base64
                     is_image_content = True
-
                     encoded: bytes = base64.b64encode(rd.content)
 
                     initial_data_html: str = encoded.decode("ascii")

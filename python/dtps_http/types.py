@@ -18,7 +18,8 @@ SourceID = NewType("SourceID", str)
 
 TopicNameS = NewType("TopicNameS", str)
 
-ContentType = NewType("ContentType", str)
+# ContentType = NewType("ContentType", str)
+ContentType = str
 
 
 @dataclass(frozen=True)

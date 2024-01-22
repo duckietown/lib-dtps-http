@@ -58,7 +58,7 @@ The output must be a `ObjectTransformResult`, which is the union of `RawData` or
 
 The 40x status codes are used to indicate that the client made a mistake, e.g. the input was not an integer.
 
-### Setting the trasnform function
+### Setting the transform function
 
 The transform function is set in the `create_oq()` function call:
 
