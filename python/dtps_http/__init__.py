@@ -4,10 +4,10 @@ import coloredlogs  # type: ignore
 
 coloredlogs.install(level="DEBUG")  # type: ignore
 
-from logging import getLogger, DEBUG, INFO
+from logging import getLogger, INFO, WARNING
 
 logger = getLogger(__name__)
-logger.setLevel(DEBUG)
+logger.setLevel(INFO)
 
 from .client import *
 from .constants import *
@@ -21,5 +21,6 @@ from .utils import *
 from .object_queue import *
 
 getLogger("asyncio").setLevel(INFO)
+getLogger('aiohttp.access').setLevel(WARNING)
 getLogger("aiopubsub").setLevel(INFO)
 getLogger("Hub").setLevel(INFO)
