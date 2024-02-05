@@ -1,3 +1,6 @@
+__version__ = "1.0.2"
+
+
 from logging import DEBUG, getLogger
 
 logger = getLogger(__name__)
