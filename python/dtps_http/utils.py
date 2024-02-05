@@ -8,7 +8,7 @@ from io import StringIO
 
 import prettyprinter as pp
 
-pp.install_extras()
+pp.install_extras(exclude=os.environ.get("PRETTYPRINT_EXTRAS_EXCLUDE", "").split(","))
 
 from typing import (
     Any,
