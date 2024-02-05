@@ -6,7 +6,7 @@ build-backend = "poetry_dynamic_versioning.backend"
 [tool]
 [tool.poetry]
 name = "dtps-http"
-version = "1.0.4"
+version = "1.0.5"
 description = ""
 authors = ["Andrea Censi <AndreaCensi@users.noreply.github.com>"]
 packages = [
