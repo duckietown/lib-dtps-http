@@ -194,7 +194,7 @@ def get_context_info(environment: Optional[Mapping[str, str]]) -> ContextsInfo:
     for k, v in environment.items():
         if not k.startswith(BASE):
             continue
-        rest = k[len(BASE) :]
+        rest = k[len(BASE):]
 
         name, _, rest = rest.partition("_")
 
@@ -203,7 +203,7 @@ def get_context_info(environment: Optional[Mapping[str, str]]) -> ContextsInfo:
             contexts[name] = ContextInfo(urls=[])
 
         if v.startswith("create:"):
-            x = cast(URLString, v[len("create:") :])
+            x = cast(URLString, v[len("create:"):])
             create = True
 
         else:
@@ -212,7 +212,7 @@ def get_context_info(environment: Optional[Mapping[str, str]]) -> ContextsInfo:
         try:
             parse_url_unescape(x)
         except ValueError as e:
-            msg = f"Invalid url given by environment:\n{k} = {v}."
+            msg = f"Invalid url given by environment:\n{k} = {v}\nExtracted url: {x}"
             raise ValueError(msg) from e
         contexts[name].urls.append(ContextUrl(url=x, create=create))
 
