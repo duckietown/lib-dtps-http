@@ -173,7 +173,10 @@ class ContextManagerUseContext(DTPSContext):
         return TopicNameV.from_components(self.components)
 
     def navigate(self, *components: str) -> "DTPSContext":
-        return self.master.get_context_by_components(self.components + components)
+        c = []
+        for comp in components:
+            c.extend([_ for _ in comp.split("/") if _])
+        return self.master.get_context_by_components(self.components + tuple(c))
 
     async def list(self) -> List[str]:
         # TODO: DTSW-4801: implement list()

@@ -11,6 +11,7 @@ from dtps_tests.utils import create_use_pair
 
 async def check_ergo_simple(base: DTPSContext, max_frequency: Optional[float], send_before: bool) -> None:
     node_input = await (base / "dtps" / "node" / "in").queue_create()
+    node_input = base.navigate("dtps/node/in")
 
     rd = RawData(content=b"hello", content_type=MIME_TEXT)
 
