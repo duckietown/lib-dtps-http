@@ -155,11 +155,13 @@ async def app_start(
     available_urls: List[URLString] = []
     for tcp in tcps:
         tcp_host, port = tcp
-        the_url0 = cast(URLString, f"http://{tcp_host}:{port}/")
-        logger.info(f"Starting TCP server - the URL is {the_url0!r}")
 
         tcp_site = web.TCPSite(runner, tcp_host, port)
+
         await tcp_site.start()
+        port = tcp_site._server.sockets[0].getsockname()[1]
+        the_url0 = cast(URLString, f"http://{tcp_host}:{port}/")
+        logger.info(f"Starting TCP server - the URL is {the_url0!r}")
 
         if tcp_host != "0.0.0.0":
             available_urls.append(the_url0)
