@@ -5,8 +5,8 @@ from unittest import IsolatedAsyncioTestCase
 from dtps import DTPSContext
 from dtps_http import MIME_TEXT, RawData
 from dtps_http_tests.utils import test_timeout
-from dtps_tests import logger
-from dtps_tests.utils import create_use_pair
+from . import logger
+from .utils import create_use_pair
 
 
 async def go(base: DTPSContext, max_frequency: Optional[float]) -> None:
