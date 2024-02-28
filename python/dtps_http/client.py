@@ -645,9 +645,10 @@ class DTPSClient:
                         "path": path,
                     }
                 )
-        else:
-            proxy_job = ProxyJob(node_id, urls, mask_origin)
-            patch.append({"op": "add", "path": path, "value": asdict(proxy_job)})
+        # add
+        proxy_job = ProxyJob(node_id, urls, mask_origin)
+        patch.append({"op": "add", "path": path, "value": asdict(proxy_job)})
+        # compile patch
         as_json = json.dumps(patch).encode("utf-8")
         # FIXME: need to use REL_PROXIED
         url = join(url0, TOPIC_PROXIED.as_relative_url())
