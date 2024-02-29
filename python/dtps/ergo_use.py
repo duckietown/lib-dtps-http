@@ -22,6 +22,7 @@ from dtps_http import (
     URL,
     url_to_string,
     URLIndexer,
+    NoSuchTopic,
 )
 from dtps_http.client import ListenDataInterface
 from dtps_http.structures import ConnectionJob
@@ -280,6 +281,41 @@ class ContextManagerUseContext(DTPSContext):
             )
 
         await self.master.client.add_topic(self.master.best_url, topic, parameters)
+        return self
+
+    async def until_ready(
+            self,
+            retry_every: float = 2.0,
+            retry_max: Optional[int] = None,
+            timeout: Optional[float] = None,
+            print_every: float = 10.0,
+            quiet: bool = False,
+    ) -> "DTPSContext":
+        stime: float = time.time()
+        num_tries: int = 0
+        printed_last: float = time.time()
+        while True:
+            # check timeout
+            if timeout is not None and time.time() - stime > timeout:
+                msg = f"Timeout waiting for {self._get_components_as_topic()}"
+                raise TimeoutError(msg)
+            # check max tries
+            if retry_max is not None and num_tries >= retry_max:
+                msg = f"Max tries reached waiting for {self._get_components_as_topic()}"
+                raise TimeoutError(msg)
+            # perform GET
+            try:
+                await self.data_get()
+                return self
+            except NoSuchTopic:
+                if not quiet and time.time() - printed_last > print_every:
+                    waited: float = time.time() - stime
+                    logger.warning(f"I have been waiting for {self._get_components_as_topic()} for {waited:.0f}s")
+                    printed_last = time.time()
+                # wait and retry
+                await asyncio.sleep(retry_every)
+                num_tries += 1
+                continue
         return self
 
     async def connect_to(self, c: "DTPSContext", /) -> "ConnectionInterface":
