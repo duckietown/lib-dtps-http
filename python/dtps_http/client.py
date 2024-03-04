@@ -607,9 +607,10 @@ class DTPSClient:
                 raise ValueError(f"unknown scheme {url.scheme!r} for {repr(url)}")
 
             timeout = aiohttp.ClientTimeout(total=conn_timeout)
-            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                # self.logger.debug(f"my_session: {url} -> {use_url}")
-                yield session, use_url
+            async with connector:
+                async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                    # self.logger.debug(f"my_session: {url} -> {use_url}")
+                    yield session, use_url
 
     async def get_proxied(self, url0: URLIndexer) -> Dict[TopicNameV, ProxyJob]:
         # FIXME: need to use REL_PROXIED
@@ -870,7 +871,7 @@ class DTPSClient:
         url_index = self._look_cache(url_index)
         metadata = await self.get_metadata(url_index)
         if metadata.connections_url is None:
-            msg = f"Connection functionality not available: {pretty (metadata)}"
+            msg = f"Connection functionality not available: {pretty(metadata)}"
             raise ValueError(msg)
 
         path = "/" + escape_json_pointer(connection_name.as_dash_sep())
@@ -892,7 +893,7 @@ class DTPSClient:
         url_index = self._look_cache(url_index)
         metadata = await self.get_metadata(url_index)
         if metadata.connections_url is None:
-            msg = f"Connection functionality not available: {pretty (metadata)}"
+            msg = f"Connection functionality not available: {pretty(metadata)}"
             raise ValueError(msg)
 
         path = "/" + escape_json_pointer(connection_name.as_dash_sep())
@@ -1622,7 +1623,8 @@ def channel_msgs_parse(d: bytes) -> "ChannelMsgs":
 #     Ok(patch)
 # }
 #
-# pub async fn remove_tpt_connection(conbase: &TypeOfConnection, connection_name: &CompositeName) -> DTPSR<()> {
+# pub async fn remove_tpt_connection(conbase: &TypeOfConnection, connection_name: &CompositeName) ->
+# DTPSR<()> {
 #     let md = crate::get_metadata(conbase).await?;
 #     let url = match md.connections_url {
 #         None => {
