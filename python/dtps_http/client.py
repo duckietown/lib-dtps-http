@@ -56,7 +56,7 @@ from .constants import (
     REL_STREAM_PUSH,
     TOPIC_PROXIED,
 )
-from .exceptions import EventListeningNotAvailable
+from .exceptions import EventListeningNotAvailable, NoSuchTopic
 from .link_headers import get_link_headers
 from .structures import (
     ChannelInfo,
@@ -646,9 +646,10 @@ class DTPSClient:
                         "path": path,
                     }
                 )
-        else:
-            proxy_job = ProxyJob(node_id, urls, mask_origin)
-            patch.append({"op": "add", "path": path, "value": asdict(proxy_job)})
+        # add
+        proxy_job = ProxyJob(node_id, urls, mask_origin)
+        patch.append({"op": "add", "path": path, "value": asdict(proxy_job)})
+        # compile patch
         as_json = json.dumps(patch).encode("utf-8")
         # FIXME: need to use REL_PROXIED
         url = join(url0, TOPIC_PROXIED.as_relative_url())
@@ -719,6 +720,9 @@ class DTPSClient:
                             message = res_bytes.decode("utf-8")
                         except:
                             message = res_bytes
+                        resp: ClientResponse = resp
+                        if resp.status == 404:
+                            raise NoSuchTopic(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
                         raise ValueError(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
 
                     if accept is not None and content_type != accept:
@@ -727,6 +731,8 @@ class DTPSClient:
                         )
                     return rd
         except CancelledError:
+            raise
+        except NoSuchTopic:
             raise
         except:
             self.logger.error(f"cannot connect to {url=!r} {use_url=!r} \n{traceback.format_exc()}")

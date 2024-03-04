@@ -24,6 +24,7 @@ __all__ = [
     "DTPSContext",
     "HistoryInterface",
     "SubscriptionInterface",
+    "PublisherInterface",
 ]
 
 _ = Sequence
@@ -194,6 +195,21 @@ class DTPSContext(ABC):
         """
         Creates this resource (if it doesn't exist).
         Returns self.
+        """
+
+    @abstractmethod
+    async def until_ready(
+            self,
+            retry_every: float = 1.0,
+            retry_max: Optional[int] = None,
+            timeout: Optional[float] = None,
+            print_every: float = 10.0,
+            quiet: bool = False,
+    ) -> "DTPSContext":
+        """
+        Waits until the resource is ready.
+        Returns context pointing to a (now existing) resource.
+        Retuns self.
         """
 
     # connection

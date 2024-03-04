@@ -295,6 +295,16 @@ class ContextManagerCreateContext(DTPSContext):
 
         return self
 
+    async def until_ready(
+            self,
+            retry_every: float = 2.0,
+            retry_max: Optional[int] = None,
+            timeout: Optional[float] = None,
+            print_every: float = 10.0,
+            quiet: bool = False,
+    ) -> "DTPSContext":
+        return self
+
     async def connect_to(self, c: "DTPSContext", /) -> "ConnectionInterface":
         msg = 'Cannot use this method for "create" contexts because Python does not support the functionality'
         raise NotImplementedError(msg)

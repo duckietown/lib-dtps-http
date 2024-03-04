@@ -9,7 +9,7 @@ from io import StringIO
 import prettyprinter as pp
 from aiohttp.web_exceptions import HTTPNotFound
 
-pp.install_extras()
+pp.install_extras(exclude=filter(len, os.environ.get("PRETTYPRINT_EXTRAS_EXCLUDE", "").split(",")))
 
 from typing import (
     Any,
