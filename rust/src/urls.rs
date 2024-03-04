@@ -89,7 +89,7 @@ pub fn parse_url_ext(mut s0: &str) -> DTPSR<TypeOfConnection> {
             let end = after_scheme.find(']').unwrap();
             let socket_name = &after_scheme[1..end].to_string();
             let mut path = &after_scheme[end + 1..];
-            if path.len() == 0 {
+            if path.is_empty() {
                 path = "/";
             }
             let socket_name = socket_name.replace(SPECIAL_CHAR, "/");
@@ -100,7 +100,7 @@ pub fn parse_url_ext(mut s0: &str) -> DTPSR<TypeOfConnection> {
                 query,
             };
 
-            info_with_info!("UnixCon: parsed {:?} as {:?}", s, con);
+            // info_with_info!("UnixCon: parsed {:?} as {:?}", s, con);
             return Ok(UNIX(con));
         }
 
@@ -130,12 +130,12 @@ pub fn parse_url_ext(mut s0: &str) -> DTPSR<TypeOfConnection> {
                 query,
             };
 
-            info_with_info!("UnixCon: parsed {:?} as {:?}", s, con);
+            // info_with_info!("UnixCon: parsed {:?} as {:?}", s, con);
             Ok(UNIX(con))
         } else {
             let path_start = after_scheme.rfind('/').unwrap();
             let socket_name = &after_scheme[..path_start];
-            let path = (&after_scheme[path_start..].to_string()).clone();
+            let path = after_scheme[path_start..].to_string().clone();
             Ok(UNIX(UnixCon {
                 scheme,
                 socket_name: socket_name.to_string(),
@@ -147,7 +147,7 @@ pub fn parse_url_ext(mut s0: &str) -> DTPSR<TypeOfConnection> {
         match Url::parse(s0) {
             Ok(p) => {
                 if p.scheme() == "file" {
-                    eprintln!("parse raw: {p:?}");
+                    // eprintln!("parse raw: {p:?}");
                     Ok(TypeOfConnection::File(
                         p.host().map(|s| s.to_string()),
                         FilePaths::Absolute(p.path().to_string()),
@@ -169,12 +169,10 @@ pub fn join_path(base: &str, s: &str) -> (String, Option<String>) {
     };
     if s.starts_with("/") {
         (s.to_string(), query)
+    } else if base.ends_with("/") {
+        (canonical(format!("{}{}", base, s)), query)
     } else {
-        if base.ends_with("/") {
-            (canonical(format!("{}{}", base, s)), query)
-        } else {
-            (canonical(format!("{}/{}", base, s)), query)
-        }
+        (canonical(format!("{}/{}", base, s)), query)
     }
 }
 
@@ -228,7 +226,7 @@ mod tests {
         eprintln!("test_p1 {s:?} -> {x:?}");
         assert_eq!(
             x,
-            super::TypeOfConnection::UNIX(super::UnixCon {
+            super::TypeOfConnection::UNIX(UnixCon {
                 scheme: "http+unix".to_string(),
                 socket_name: "/sockets/argo/node1/_node".to_string(),
                 path: "/".to_string(),
@@ -241,7 +239,7 @@ mod tests {
     fn url_parse_p2() {
         // without end /
         let s = "http+unix://%2Fsockets%2Fargo%2Fnode1%2F_node";
-        let x = super::parse_url_ext(s).unwrap();
+        let x = parse_url_ext(s).unwrap();
         debug_with_info!("test_p1 {s:?} {x:?}");
         assert_eq!(
             x,

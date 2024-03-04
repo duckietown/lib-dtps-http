@@ -547,7 +547,7 @@ impl ServerState {
         });
 
         self.job_manager
-            .add_job(&topic_name2, "proxy listening job", connect_job, true, true, 1.0, ssa2)?;
+            .add_job(&topic_name2, "proxy listening job", connect_job, false, true, 1.0, ssa2)?;
 
         let fi = ForwardInfo {
             urls: cons.clone(),
@@ -1354,6 +1354,7 @@ pub async fn observe_node_proxy(
     expect_node_id: Option<String>,
     ss_mutex: ServerStateAccess,
 ) -> DTPSR<()> {
+    info_with_info!("observe_node_proxy: observing proxy at {}", mounted_at.as_dash_sep());
     let cons_set = HashSet::from_iter(cons.clone().into_iter());
     let url = compute_best_alternative(&cons_set, expect_node_id.clone()).await?;
     let (md, index_internal_at_t0) = loop {
@@ -1372,12 +1373,16 @@ pub async fn observe_node_proxy(
         }
     };
 
+    info_with_info!("observe_node_proxy: found first information");
+
     let who_answers = match &md.answering {
         None => {
+            error_with_info!("observe_node_proxy: nobody answering");
             return not_available!("Nobody is answering {url:}:\n{md:?}");
         }
         Some(n) => {
             if incompatible(&expect_node_id, &md.answering) {
+                error_with_info!("observe_node_proxy: wrong node answering {n} at {url}");
                 return not_available!(
                 "observe_node_proxy: invalid proxy connection: we expect {expect_node_id:?} but we find {n} at {url}",
                 );
@@ -1390,13 +1395,17 @@ pub async fn observe_node_proxy(
     {
         let ss = ss_mutex.lock().await;
         if who_answers == ss.node_id {
+            error_with_info!("observe_node_proxy: we find ourselves at {url}");
             return invalid_input!(
                 "observe_node_proxy: invalid proxy connection: we find ourselves at the connection {url}"
             );
         }
     }
 
+    info_with_info!("observe_node_proxy: finding stats");
     let stats = get_stats(&url, Some(who_answers)).await;
+
+    info_with_info!("observe_node_proxy: obtained stats");
     let link1 = match stats {
         UrlResult::Inaccessible(_) => {
             // TODO
@@ -1412,6 +1421,8 @@ pub async fn observe_node_proxy(
     {
         let mut ss = ss_mutex.lock().await;
         let info = ss.proxied.get_mut(&mounted_at).unwrap();
+        info_with_info!("observe_node_proxy: setting established");
+
         info.established = Some(ForwardInfoEstablished {
             using: url.clone(),
             md: md.clone(),
@@ -1425,6 +1436,7 @@ pub async fn observe_node_proxy(
     }
 
     if md.content_type != CONTENT_TYPE_DTPS_INDEX_CBOR {
+        info_with_info!("observe_node_proxy: will exit because this is a queue not an index");
         return Ok(());
     }
 
@@ -1432,6 +1444,7 @@ pub async fn observe_node_proxy(
     let (_handle, rx) = get_events_stream_inline(&inline_url).await;
 
     for_each_from_stream(rx, |lue| async {
+        debug_with_info!("observe_node_proxy: obained a notification {:?}", lue);
         let notification = match lue {
             ListenURLEvents::InsertNotification(not) => not,
             ListenURLEvents::WarningMsg(_)
@@ -1464,7 +1477,11 @@ pub async fn observe_node_proxy(
     })
     .await?;
 
-    Ok(())
+    dtpserror_other!("The proxied disconnected")
+    //
+    // info_with_info!("observe_node_proxy: finished observing proxy at {url}");
+    //
+    // Ok(())
 }
 
 pub async fn for_each_from_stream<T, F, Fut>(mut rx: BroadcastReceiver<T>, f: F) -> DTPSR<()>
