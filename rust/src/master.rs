@@ -644,7 +644,13 @@ pub async fn handle_websocket_generic2(path: String, ws: warp::ws::WebSocket, ss
             let s = format!("handle_websocket_generic2:\n{}", e);
             debug_with_info!("{s}");
             let msgs = vec![MsgServerToClient::ErrorMsg(ErrorMsg { comment: s.clone() })];
-            send_as_ws_cbor(&msgs, &mut ws_tx).await.unwrap();
+
+            match send_as_ws_cbor(&msgs, &mut ws_tx).await {
+                Ok(_) => {}
+                Err(e) => {
+                    debug_with_info!("Cannot send error message: {:?}", e);
+                }
+            }
 
             // get first 16 chars
             let reason = s.chars().take(16).collect::<String>();
@@ -766,7 +772,12 @@ pub async fn handle_events_push(path: String, ws: warp::ws::WebSocket, ssa: Serv
             let s = format!("handle_websocket_generic2:\n{}", e);
             debug_with_info!("{s}");
             let msgs = vec![MsgServerToClient::ErrorMsg(ErrorMsg { comment: s.clone() })];
-            send_as_ws_cbor(&msgs, &mut ws_tx).await.unwrap();
+            match send_as_ws_cbor(&msgs, &mut ws_tx).await {
+                Ok(_) => {}
+                Err(e) => {
+                    debug_with_info!("Cannot send error message: {:?}", e);
+                }
+            }
 
             // get first 16 chars
             let reason = s.chars().take(16).collect::<String>();

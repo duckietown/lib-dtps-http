@@ -1,15 +1,24 @@
 extern crate dtps_http;
 
-use dtps_http::cli_server;
+use dtps_http::{cli_server, cli_stats, cli_subscribe};
+use std::{env, process};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // check first argument
-    // if first argument is "listen", call cli_listen()
-    // if first argument is "subscribe", call cli_subscribe()
-    // if first argument is "stats", call cli_stats()
-    // if first argument is "server", call cli_server()
-    // else, print usage
+    let args: Vec<String> = env::args().collect();
 
-    cli_server().await
+    if args.is_empty() {
+        println!("Usage: program <subcommand> [<args>]");
+        process::exit(1);
+    }
+
+    match args[1].as_str() {
+        "server" => cli_server().await,
+        "subscribe" => cli_subscribe().await,
+        "stats" => cli_stats().await,
+        _ => {
+            println!("Invalid subcommand. Usage: program <subcommand> [<args>]");
+            process::exit(2);
+        }
+    }
 }

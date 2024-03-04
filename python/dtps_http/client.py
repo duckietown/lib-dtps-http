@@ -56,7 +56,7 @@ from .constants import (
     REL_STREAM_PUSH,
     TOPIC_PROXIED,
 )
-from .exceptions import EventListeningNotAvailable
+from .exceptions import EventListeningNotAvailable, NoSuchTopic
 from .link_headers import get_link_headers
 from .structures import (
     ChannelInfo,
@@ -607,9 +607,10 @@ class DTPSClient:
                 raise ValueError(f"unknown scheme {url.scheme!r} for {repr(url)}")
 
             timeout = aiohttp.ClientTimeout(total=conn_timeout)
-            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                # self.logger.debug(f"my_session: {url} -> {use_url}")
-                yield session, use_url
+            async with connector:
+                async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                    # self.logger.debug(f"my_session: {url} -> {use_url}")
+                    yield session, use_url
 
     async def get_proxied(self, url0: URLIndexer) -> Dict[TopicNameV, ProxyJob]:
         # FIXME: need to use REL_PROXIED
@@ -645,9 +646,10 @@ class DTPSClient:
                         "path": path,
                     }
                 )
-        else:
-            proxy_job = ProxyJob(node_id, urls, mask_origin)
-            patch.append({"op": "add", "path": path, "value": asdict(proxy_job)})
+        # add
+        proxy_job = ProxyJob(node_id, urls, mask_origin)
+        patch.append({"op": "add", "path": path, "value": asdict(proxy_job)})
+        # compile patch
         as_json = json.dumps(patch).encode("utf-8")
         # FIXME: need to use REL_PROXIED
         url = join(url0, TOPIC_PROXIED.as_relative_url())
@@ -718,6 +720,9 @@ class DTPSClient:
                             message = res_bytes.decode("utf-8")
                         except:
                             message = res_bytes
+                        resp: ClientResponse = resp
+                        if resp.status == 404:
+                            raise NoSuchTopic(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
                         raise ValueError(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
 
                     if accept is not None and content_type != accept:
@@ -726,6 +731,8 @@ class DTPSClient:
                         )
                     return rd
         except CancelledError:
+            raise
+        except NoSuchTopic:
             raise
         except:
             self.logger.error(f"cannot connect to {url=!r} {use_url=!r} \n{traceback.format_exc()}")
@@ -864,7 +871,7 @@ class DTPSClient:
         url_index = self._look_cache(url_index)
         metadata = await self.get_metadata(url_index)
         if metadata.connections_url is None:
-            msg = f"Connection functionality not available: {pretty (metadata)}"
+            msg = f"Connection functionality not available: {pretty(metadata)}"
             raise ValueError(msg)
 
         path = "/" + escape_json_pointer(connection_name.as_dash_sep())
@@ -886,7 +893,7 @@ class DTPSClient:
         url_index = self._look_cache(url_index)
         metadata = await self.get_metadata(url_index)
         if metadata.connections_url is None:
-            msg = f"Connection functionality not available: {pretty (metadata)}"
+            msg = f"Connection functionality not available: {pretty(metadata)}"
             raise ValueError(msg)
 
         path = "/" + escape_json_pointer(connection_name.as_dash_sep())
@@ -1616,7 +1623,8 @@ def channel_msgs_parse(d: bytes) -> "ChannelMsgs":
 #     Ok(patch)
 # }
 #
-# pub async fn remove_tpt_connection(conbase: &TypeOfConnection, connection_name: &CompositeName) -> DTPSR<()> {
+# pub async fn remove_tpt_connection(conbase: &TypeOfConnection, connection_name: &CompositeName) ->
+# DTPSR<()> {
 #     let md = crate::get_metadata(conbase).await?;
 #     let url = match md.connections_url {
 #         None => {

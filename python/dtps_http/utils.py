@@ -7,8 +7,9 @@ from asyncio import CancelledError
 from io import StringIO
 
 import prettyprinter as pp
+from aiohttp.web_exceptions import HTTPNotFound
 
-pp.install_extras()
+pp.install_extras(exclude=filter(len, os.environ.get("PRETTYPRINT_EXTRAS_EXCLUDE", "").split(",")))
 
 from typing import (
     Any,
@@ -69,6 +70,8 @@ else:
                 return await func(*args, **kwargs)
             except CancelledError:
                 raise
+            except HTTPNotFound:
+                raise
             except BaseException:
                 logger.error(
                     f"async_error_catcher: Exception in async in {func.__name__}:\n{traceback.format_exc()}"
@@ -84,6 +87,8 @@ else:
                 async for _ in func(*args, **kwargs):
                     yield _
             except CancelledError:
+                raise
+            except HTTPNotFound:
                 raise
             except BaseException:
                 logger.error(f"Exception in async in {func.__name__}:\n{traceback.format_exc()}")

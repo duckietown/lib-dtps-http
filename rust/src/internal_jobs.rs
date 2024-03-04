@@ -76,7 +76,7 @@ impl InternalJobManager {
         let handle = tokio::spawn(async move {
             let name2 = name2.clone();
             debug_with_info!("job {:?}[{desc2}] starting", name2.as_dash_sep());
-            Self::run_job(
+            let ok = Self::run_job(
                 name2.clone(),
                 desc2.clone(),
                 job_function,
@@ -86,10 +86,16 @@ impl InternalJobManager {
                 ssa,
             )
             .await;
-            if restart_on_success || restart_on_error {
+
+            if ok.is_ok() && restart_on_success {
                 error_with_info!("job {:?}[{desc2}] finished but it should restart", name2.as_dash_sep());
-            } else {
-                debug_with_info!("job {:?}[{desc2}] finished (no restart)", name2.as_dash_sep());
+            }
+
+            if ok.is_err() && restart_on_error {
+                error_with_info!(
+                    "job {:?}[{desc2}] finished with error but it should restart",
+                    name2.as_dash_sep()
+                );
             }
         });
         let j = InternalJob { handle, desc };
@@ -105,8 +111,8 @@ impl InternalJobManager {
         restart_on_error: bool,
         backoff: f32,
         ssa: ServerStateAccess,
-    ) {
-        let prefix = format!("job {name:?}[{desc}]:", name = name.as_dash_sep(), desc = desc);
+    ) -> DTPSR<()> {
+        let prefix = format!("job {name:?} [{desc}]:", name = name.as_dash_sep(), desc = desc);
         debug_with_info!("{prefix} handler started");
         let mut handle = job_function();
         let mut iteration = -1;
@@ -120,9 +126,9 @@ impl InternalJobManager {
                 }
             }
             let r = handle.await;
-            // debug_with_info!("{prefix} finished OK = {}", r.is_ok());
+            debug_with_info!("{prefix} finished OK = {}", r.is_ok());
 
-            match r {
+            match &r {
                 Ok(_) => {
                     // debug_with_info!("Iteration {iteration} of {prefix} finished OK");
 
@@ -132,7 +138,7 @@ impl InternalJobManager {
                     }
 
                     if !restart_on_success {
-                        break;
+                        return Ok(());
                     }
                 }
                 Err(e) => {
@@ -146,10 +152,11 @@ impl InternalJobManager {
                     }
 
                     if !restart_on_error {
-                        break;
+                        return r;
                     }
                 }
             };
+            debug_with_info!("{prefix} backing off for {backoff} seconds and restarting");
 
             tokio::time::sleep(Duration::from_secs_f32(backoff)).await;
             handle = job_function();
