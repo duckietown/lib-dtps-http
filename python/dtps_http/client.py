@@ -55,6 +55,7 @@ from .constants import (
     REL_PROXIED,
     REL_STREAM_PUSH,
     TOPIC_PROXIED,
+    HTTP_TIMEOUT,
 )
 from .exceptions import EventListeningNotAvailable, NoSuchTopic
 from .link_headers import get_link_headers
@@ -680,7 +681,7 @@ class DTPSClient:
         url = self._look_cache(url0)
         use_url = None
         try:
-            async with self.my_session(url, conn_timeout=2) as (session, use_url):
+            async with self.my_session(url, conn_timeout=HTTP_TIMEOUT) as (session, use_url):
                 async with session.patch(use_url, data=data, headers=headers) as resp:
                     res_bytes: bytes = await resp.read()
                     content_type = ContentType(resp.headers.get("content-type", MIME_OCTET))
@@ -709,7 +710,7 @@ class DTPSClient:
         url = self._look_cache(url0)
         use_url = None
         try:
-            async with self.my_session(url, conn_timeout=2) as (session, use_url):
+            async with self.my_session(url, conn_timeout=HTTP_TIMEOUT) as (session, use_url):
                 async with session.get(use_url) as resp:
                     res_bytes: bytes = await resp.read()
                     content_type = ContentType(resp.headers.get("content-type", "application/octet-stream"))
@@ -743,7 +744,7 @@ class DTPSClient:
 
         url = self._look_cache(url0)
         use_url = None
-        async with self.my_session(url, conn_timeout=2) as (session, use_url):
+        async with self.my_session(url, conn_timeout=HTTP_TIMEOUT) as (session, use_url):
             async with session.delete(use_url) as resp:
                 res_bytes: bytes = await resp.read()
                 resp.raise_for_status()
@@ -752,7 +753,7 @@ class DTPSClient:
         url = self._look_cache(url0)
         use_url = None
         try:
-            async with self.my_session(url, conn_timeout=2) as (session, use_url):
+            async with self.my_session(url, conn_timeout=HTTP_TIMEOUT) as (session, use_url):
                 async with session.head(use_url) as resp:
                     await my_raise_for_status(resp, url0)
 

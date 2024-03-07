@@ -1,3 +1,5 @@
+import os
+
 from .types import ContentType, TopicNameV
 
 __all__ = [
@@ -98,3 +100,5 @@ MIME_JPEG = ContentType("image/jpeg")
 MIME_OCTET = ContentType("application/octet-stream")
 
 ENV_MASK_ORIGIN = "DTPS_HTTP_MASK_ORIGIN"
+
+HTTP_TIMEOUT: float = float(os.environ.get("DTPS_HTTP_TIMEOUT", "10"))
