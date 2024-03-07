@@ -307,7 +307,7 @@ class ContextManagerUseContext(DTPSContext):
             try:
                 await self.data_get()
                 return self
-            except NoSuchTopic:
+            except (asyncio.TimeoutError, NoSuchTopic):
                 if not quiet and time.time() - printed_last > print_every:
                     waited: float = time.time() - stime
                     logger.warning(f"I have been waiting for {self._get_components_as_topic()} for {waited:.0f}s")
