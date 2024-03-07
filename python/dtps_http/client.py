@@ -722,7 +722,8 @@ class DTPSClient:
                         except:
                             message = res_bytes
                         resp: ClientResponse = resp
-                        if resp.status == 404:
+                        # TODO: error 500 should raise a ValueError instead. This is needed until DTSW-5206 is fixed
+                        if resp.status in [404, 500]:
                             raise NoSuchTopic(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
                         raise ValueError(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
 
