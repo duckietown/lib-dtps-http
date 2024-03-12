@@ -178,7 +178,10 @@ class ObjectQueue:
         if self.max_history is not None:
             if len(self.stored) > self.max_history:
                 x = self.stored.pop(0)
-                self.saved.pop(x, None)
+                ds_old = self.saved.pop(x, None)
+                if ds_old is not None:
+                    del self._data[ds_old.digest]
+
         self._pub.publish(
             Key(self._name.as_relative_url(), K_INDEX), use_seq
         )  # logger.debug(f"published #{self._seq} {self._name}: {obj!r}")
