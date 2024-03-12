@@ -175,6 +175,7 @@ class ObjectQueue:
         self._data[digest] = obj
         self.stored.append(use_seq)
         self.saved[use_seq] = ds
+
         if self.max_history is not None:
             if len(self.stored) > self.max_history:
                 x = self.stored.pop(0)
