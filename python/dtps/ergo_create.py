@@ -20,6 +20,7 @@ from dtps_http import (
     url_to_string,
     URLString,
 )
+from dtps_http.constants import DEFAULT_MAX_HISTORY
 from dtps_http.object_queue import ObjectTransformContext, transform_identity, TransformError
 from dtps_http.types_of_source import (
     ForwardedQueue,
@@ -271,6 +272,7 @@ class ContextManagerCreateContext(DTPSContext):
     async def queue_create(
         self,
         *,
+        max_history: int = DEFAULT_MAX_HISTORY,
         parameters: Optional[TopicRefAdd] = None,
         transform: Optional[RPCFunction] = None,
     ) -> "DTPSContext":
@@ -290,7 +292,8 @@ class ContextManagerCreateContext(DTPSContext):
                 return await transform(otc.raw_data)
 
         await server.create_oq(
-            topic, content_info=parameters.content_info, tp=parameters.properties, transform=transform_use
+            topic, content_info=parameters.content_info, tp=parameters.properties, transform=transform_use,
+            max_history=max_history
         )
 
         return self

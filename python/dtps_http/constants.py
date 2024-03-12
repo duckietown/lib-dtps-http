@@ -43,6 +43,7 @@ __all__ = [
     "TOPIC_PROXIED",
     "TOPIC_STATE_NOTIFICATION",
     "TOPIC_STATE_SUMMARY",
+    "DEFAULT_MAX_HISTORY"
 ]
 
 HEADER_NO_CACHE = {
@@ -102,3 +103,5 @@ MIME_OCTET = ContentType("application/octet-stream")
 ENV_MASK_ORIGIN = "DTPS_HTTP_MASK_ORIGIN"
 
 HTTP_TIMEOUT: float = float(os.environ.get("DTPS_HTTP_TIMEOUT", "10"))
+
+DEFAULT_MAX_HISTORY: int = 1
