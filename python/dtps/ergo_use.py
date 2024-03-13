@@ -23,6 +23,7 @@ from dtps_http import (
     url_to_string,
     URLIndexer,
     NoSuchTopic,
+    DEFAULT_MAX_HISTORY,
 )
 from dtps_http.client import ListenDataInterface
 from dtps_http.structures import ConnectionJob
@@ -252,6 +253,7 @@ class ContextManagerUseContext(DTPSContext):
     async def queue_create(
         self,
         *,
+        max_history: int = DEFAULT_MAX_HISTORY,
         parameters: Optional[TopicRefAdd] = None,
         transform: Optional[ObjectTransformFunction] = None,
     ) -> "DTPSContext":
