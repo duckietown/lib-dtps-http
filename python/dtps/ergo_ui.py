@@ -17,6 +17,7 @@ from dtps_http import (
     RawData,
     TopicRefAdd,
     URLString,
+    DEFAULT_MAX_HISTORY,
 )
 
 __all__ = [
@@ -189,6 +190,7 @@ class DTPSContext(ABC):
     async def queue_create(
         self,
         *,
+        max_history: int = DEFAULT_MAX_HISTORY,
         parameters: Optional[TopicRefAdd] = None,
         transform: Optional[RPCFunction] = None,
     ) -> "DTPSContext":

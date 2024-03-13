@@ -1,10 +1,10 @@
-__version__ = "1.0.5"
+__version__ = "1.0.8"
 
 
-from logging import DEBUG, getLogger
+from logging import INFO, getLogger
 
 logger = getLogger(__name__)
-logger.setLevel(DEBUG)
+logger.setLevel(INFO)
 
 from .config import *
 from .ergo_ui import *
