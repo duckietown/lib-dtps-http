@@ -23,8 +23,8 @@ async def on_startup(s: DTPSServer) -> None:
 
     @async_error_catcher
     async def on_received_in(q: ObjectQueue, i: int) -> None:
-        saved: DataSaved = q.saved[i]
-        data: RawData = q.get(saved.digest)
+        data: Optional[RawData] = q.data_from_seq(i)
+        assert data is not None
         # just publish the same data
         await queue_out.publish(data)
 

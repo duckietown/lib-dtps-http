@@ -213,9 +213,13 @@ class OurQueue(Source):
 
     async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData":
         oq = server.get_oq(self.topic_name)
-        if not oq.stored:
+
+        last: Optional[RawData] = await oq.last_data()
+
+        if last is None:
             return NotAvailableYet(f"no data yet for {self.topic_name.as_dash_sep()}")
-        return oq.last_data()
+
+        return last
 
     async def publish(self, presented_as: str, server: "DTPSServer", rd: RawData) -> "PostResult":
         oq = server.get_oq(self.topic_name)
@@ -236,7 +240,11 @@ class OurQueue(Source):
 
     async def patch(self, presented_as: str, server: "DTPSServer", patch: JsonPatch) -> "PostResult":
         oq = server.get_oq(self.topic_name)
-        last_data = oq.last_data()
+        last_data: Optional[RawData] = await oq.last_data()
+
+        if last_data is None:
+            raise ValueError("You cannot patch a resource with no initial value. The queue is empty.")
+
         ob = last_data.get_as_native_object()
         try:
             # noinspection PyTypeChecker

@@ -112,6 +112,7 @@ from .structures import (
     TopicsIndex,
     TopicsIndexWire,
     WarningMsg,
+    DataSaved,
 )
 from .types import ContentType, NodeID, SourceID, TopicNameV, URLString
 from .types_of_source import (
@@ -590,7 +591,11 @@ class DTPSServer:
         self, name: TopicNameV, expect_node_id: Optional[NodeID], urls: Sequence[URLString], mask_origin: bool
     ) -> None:
         oq = self.get_oq(TOPIC_PROXIED)
-        x = oq.last_data()
+
+        x: Optional[RawData] = await oq.last_data()
+        if x is None:
+            raise ValueError(f"No data in queue for topic {TOPIC_PROXIED}")
+
         d = cast(dict, x.get_as_native_object())
         urls = sorted(list(urls))
         p = ProxyJob(node_id=expect_node_id, urls=urls, mask_origin=mask_origin)
@@ -714,7 +719,11 @@ class DTPSServer:
         self.started.set()
 
     async def on_proxied_changed(self, oq: ObjectQueue, _: int) -> None:
-        x = cast(dict, oq.last_data().get_as_native_object())
+        last: Optional[RawData] = await oq.last_data()
+        if last is None:
+            raise ValueError(f"No data in queue")
+
+        x = cast(dict, last.get_as_native_object())
         current = list(self._forwarded)
         topics = list(TopicNameV.from_dash_sep(_) for _ in x)
 
@@ -924,11 +933,11 @@ class DTPSServer:
 
         oq = self.get_oq(source.topic_name)
         presented_as = request.url.path
-        history = {}
-        for i in oq.stored:
-            ds = oq.saved[i]
-            a = oq.get_data_ready(ds, presented_as, inline_data=False)
-            history[a.index] = asdict(a)
+
+        history: Dict[int, dict] = {
+            ds.index: asdict(oq.get_data_ready(ds, presented_as, inline_data=False))
+            for ds in (await oq.history())
+        }
 
         cbor = cbor2.dumps(history)
         rd = RawData(content=cbor, content_type=CONTENT_TYPE_TOPIC_HISTORY_CBOR)
@@ -1544,7 +1553,11 @@ pre {{
             self.logger.error(msg)
             raise web.HTTPNotFound(text=msg, headers=headers)
         oq = self._oqs[topic_name]
-        data = oq.get(digest)
+        try:
+            data = oq.get(digest)
+        except KeyError:
+            msg = f"Message with digest {digest!r} not found in topic {topic_name_s!r}. Maybe it expired?"
+            raise web.HTTPNotFound(text=msg, headers=headers)
         headers[HEADER_DATA_UNIQUE_ID] = oq.tr.unique_id
         headers[HEADER_DATA_ORIGIN_NODE_ID] = oq.tr.origin_node
 
@@ -1598,7 +1611,7 @@ pre {{
         self.logger.debug(f"serve_events: {request.url} topic_name={topic_name_s} send_data={send_data}")
 
         exit_event = asyncio.Event()
-        ci = oq_.get_channel_info()
+        ci = await oq_.get_channel_info()
 
         self.logger.debug(f"serve_events: {request.url} sending {ci}")
         await ws.send_bytes(get_tagged_cbor(ci))
@@ -1606,7 +1619,14 @@ pre {{
         @async_error_catcher
         async def send_message(_: ObjectQueue, i: int) -> None:
             self.logger.debug(f"serve_events: new message {i}")
-            mdata = oq_.saved[i]
+
+            mdata: Optional[DataSaved] = oq_.from_seq(i)
+            if mdata is None:
+                raise ValueError(f"ERROR-7: Outgoing message with sequence ID {i} is not available anymore. "
+                                 f"This is an issue already reported here: "
+                                 f"https://github.com/duckietown/lib-dtps-http/issues/7. Please, use this link to "
+                                 f"report the occurrence of this issue.")
+
             digest = mdata.digest
 
             presented_as = request.url.path
@@ -1634,9 +1654,8 @@ pre {{
 
         s = oq_.subscribe(send_message)
 
-        if oq_.stored:
-            last = oq_.last()
-
+        last: Optional[DataSaved] = await oq_.last()
+        if last is not None:
             await send_message(oq_, last.index)
 
         try:

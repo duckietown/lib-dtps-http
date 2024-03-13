@@ -213,13 +213,19 @@ class ContextManagerCreateContext(DTPSContext):
         oq0 = self._get_server().get_oq(self._get_components_as_topic())
 
         async def wrap(oq: ObjectQueue, i: int) -> None:
-            saved: DataSaved = oq.saved[i]
-            data: RawData = oq.get(saved.digest)
+            data: Optional[RawData] = oq.data_from_seq(i)
+            if data is None:
+                raise ValueError(f"ERROR-8: Incoming message with sequence ID {i} is not available anymore. "
+                                 f"This is an issue already reported here: "
+                                 f"https://github.com/duckietown/lib-dtps-http/issues/8. Please, use this link to "
+                                 f"report the occurrence of this issue.")
             await on_data(data)
 
-        if oq0.stored:
-            data2: RawData = oq0.get(oq0.last().digest)
+        # trigger callback on the last data available (if any)
+        data2: Optional[RawData] = await oq0.last_data()
+        if data2 is not None:
             await on_data(data2)
+
         sub_id = oq0.subscribe(wrap)
 
         return ContextManagerCreateContextSubscriber(sub_id, oq0)

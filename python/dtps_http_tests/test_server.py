@@ -3,7 +3,7 @@ import json
 import os
 import tempfile
 import unittest
-from typing import cast, Literal
+from typing import cast, Literal, Optional
 
 import cbor2
 import yaml
@@ -255,7 +255,10 @@ async def doit(topic_mime: Literal["json", "cbor", "yaml"], patch_mime: Literal[
                     resp = await session.patch(use_url, headers=headers, data=data)
                     resp.raise_for_status()
 
-            rd2 = oq.last_data()
+            rd2: Optional[RawData] = await oq.last_data()
+            if rd2 is None:
+                raise ValueError(f"No data in queue")
+
             ob2 = rd2.get_as_native_object()
 
             logger.info(f"ob1={ob1!r}")

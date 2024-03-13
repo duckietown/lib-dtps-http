@@ -1,5 +1,6 @@
 import json
 import time
+from collections import defaultdict
 from dataclasses import dataclass, dataclass as original_dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
@@ -35,6 +36,8 @@ __all__ = [
     "ObjectTransformResult",
     "TransformError",
 ]
+
+from .utils import RLock
 
 SUB_ID = int
 K_INDEX = "index"
@@ -73,17 +76,6 @@ async def transform_identity(otc: ObjectTransformContext) -> RawData:
 
 
 class ObjectQueue:
-    stored: List[int]
-    saved: Dict[int, DataSaved]
-    _data: Dict[str, RawData]
-    _seq: int
-    _name: TopicNameV
-    _hub: Hub
-    _pub: Publisher
-    _sub: Subscriber
-    tr: TopicRef
-    max_history: Optional[int]
-    transform: ObjectTransformFunction
 
     def __init__(
         self,
@@ -96,32 +88,35 @@ class ObjectQueue:
         if max_history is not None and max_history < 1:
             msg = f"Invalid max_history: {max_history}"
             raise ValueError(msg)
-        self._hub = hub
-        self._pub = Publisher(self._hub, Key())
-        self._sub = Subscriber(self._hub, name.as_relative_url())
-        self._seq = 0
-        self._data = {}
-        self._name = name
-        self.tr = tr
-        self.max_history = max_history
-        self.stored = []
-        self.saved = {}
-        self._transform = transform
+        self._hub: Hub = hub
+        self._pub: Publisher = Publisher(self._hub, Key())
+        self._sub: Subscriber = Subscriber(self._hub, name.as_relative_url())
+        self._seq: int = 0
+        self._data: Dict[str, RawData] = {}
+        self._name: TopicNameV = name
+        self.tr: TopicRef = tr
+        self.max_history: Optional[int] = max_history
+        self._stored: List[int] = []
+        self._saved: Dict[int, DataSaved] = {}
+        self._references: Dict[str, int] = defaultdict(int)
+        self._transform: ObjectTransformFunction = transform
         self.listeners = {}
         self.nlisteners = 0
+        self._data_lock: RLock = RLock()
 
-    def get_channel_info(self) -> ChannelInfo:
-        if not self.stored:
-            newest = None
-            oldest = None
-        else:
-            ds_oldest = self.saved[self.stored[0]]
-            ds_newest = self.saved[self.stored[-1]]
-            oldest = ChannelInfoDesc(sequence=ds_oldest.index, time_inserted=ds_oldest.time_inserted)
-            newest = ChannelInfoDesc(sequence=ds_newest.index, time_inserted=ds_newest.time_inserted)
+    async def get_channel_info(self) -> ChannelInfo:
+        async with self._data_lock:
+            if not self._stored:
+                newest = None
+                oldest = None
+            else:
+                ds_oldest = self._saved[self._stored[0]]
+                ds_newest = self._saved[self._stored[-1]]
+                oldest = ChannelInfoDesc(sequence=ds_oldest.index, time_inserted=ds_oldest.time_inserted)
+                newest = ChannelInfoDesc(sequence=ds_newest.index, time_inserted=ds_newest.time_inserted)
 
-        ci = ChannelInfo(queue_created=self.tr.created, num_total=self._seq, newest=newest, oldest=oldest)
-        return ci
+            ci = ChannelInfo(queue_created=self.tr.created, num_total=self._seq, newest=newest, oldest=oldest)
+            return ci
 
     async def publish_text(self, text: str, content_type: ContentType = MIME_TEXT) -> PostResult:
         data = text.encode("utf-8")
@@ -147,41 +142,46 @@ class ObjectQueue:
         Publish raw bytes.
 
         """
+        async with self._data_lock:
+            try:
+                obj = await self._transform(ObjectTransformContext(raw_data=obj0, topic=self._name, queue=self))
+            except Exception as e:
+                msg = f"Error while transforming {obj0}: {e}"
+                return TransformError(500, msg)
 
-        try:
-            obj = await self._transform(ObjectTransformContext(raw_data=obj0, topic=self._name, queue=self))
-        except Exception as e:
-            msg = f"Error while transforming {obj0}: {e}"
-            return TransformError(500, msg)
+            if isinstance(obj, TransformError):
+                logger.error(f"Error while transforming {obj0}: {obj}")
+                return obj
 
-        if isinstance(obj, TransformError):
-            logger.error(f"Error while transforming {obj0}: {obj}")
-            return obj
+            use_seq = self._seq
+            self._seq += 1
+            digest = obj.digest()
+            clocks = self.current_clocks()
+            ds = DataSaved(
+                origin_node=self.tr.origin_node,
+                unique_id=self.tr.unique_id,
+                index=use_seq,
+                time_inserted=time.time_ns(),
+                digest=digest,
+                content_type=obj.content_type,
+                content_length=len(obj.content),
+                clocks=clocks,
+            )
 
-        use_seq = self._seq
-        self._seq += 1
-        digest = obj.digest()
-        clocks = self.current_clocks()
-        ds = DataSaved(
-            origin_node=self.tr.origin_node,
-            unique_id=self.tr.unique_id,
-            index=use_seq,
-            time_inserted=time.time_ns(),
-            digest=digest,
-            content_type=obj.content_type,
-            content_length=len(obj.content),
-            clocks=clocks,
-        )
-        self._data[digest] = obj
-        self.stored.append(use_seq)
-        self.saved[use_seq] = ds
+            self._data[digest] = obj
+            self._stored.append(use_seq)
+            self._saved[use_seq] = ds
+            self._references[digest] += 1
 
-        if self.max_history is not None:
-            if len(self.stored) > self.max_history:
-                x = self.stored.pop(0)
-                ds_old = self.saved.pop(x, None)
-                if ds_old is not None:
-                    del self._data[ds_old.digest]
+            if self.max_history is not None:
+                if len(self._stored) > self.max_history:
+                    x = self._stored.pop(0)
+                    ds_old = self._saved.pop(x)
+                    self._references[ds_old.digest] -= 1
+
+                    if self._references[ds_old.digest] == 0:
+                        self._references.pop(ds_old.digest)
+                        self._data.pop(ds_old.digest)
 
         self._pub.publish(
             Key(self._name.as_relative_url(), K_INDEX), use_seq
@@ -200,18 +200,42 @@ class ObjectQueue:
         clocks.wall[self.tr.unique_id] = MinMax(min=now, max=now)
         return clocks
 
-    def last(self) -> DataSaved:
-        if self.stored:
-            last = self.stored[-1]
-            return self.saved[last]
-        else:
-            raise KeyError("No data in queue")
+    async def last(self) -> Optional[DataSaved]:
+        async with self._data_lock:
+            if self._stored:
+                last = self._stored[-1]
+                return self._saved[last]
+            else:
+                return None
 
-    def last_data(self) -> RawData:
-        return self.get(self.last().digest)
+    async def last_data(self) -> Optional[RawData]:
+        async with self._data_lock:
+            last: Optional[DataSaved] = await self.last()
+            if last is None:
+                return None
+            try:
+                return self.get(last.digest)
+            except KeyError:
+                return None
+
+    async def history(self) -> List[DataSaved]:
+        async with self._data_lock:
+            return [self._saved[i] for i in self._stored]
 
     def get(self, digest: str) -> RawData:
         return self._data[digest]
+
+    def from_seq(self, seq: int) -> Optional[DataSaved]:
+        try:
+            return self._saved[seq]
+        except KeyError:
+            return None
+
+    def data_from_seq(self, seq: int) -> Optional[RawData]:
+        try:
+            return self.get(self._saved[seq].digest)
+        except KeyError:
+            return None
 
     def subscribe(self, callback: "Callable[[ObjectQueue, int], Awaitable[None]]") -> SUB_ID:
         listener_id = self.nlisteners
