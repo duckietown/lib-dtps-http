@@ -23,6 +23,7 @@ from dtps_http import (
     url_to_string,
     URLIndexer,
     NoSuchTopic,
+    DEFAULT_MAX_HISTORY,
 )
 from dtps_http.client import ListenDataInterface
 from dtps_http.structures import ConnectionJob
@@ -252,6 +253,7 @@ class ContextManagerUseContext(DTPSContext):
     async def queue_create(
         self,
         *,
+        max_history: int = DEFAULT_MAX_HISTORY,
         parameters: Optional[TopicRefAdd] = None,
         transform: Optional[ObjectTransformFunction] = None,
     ) -> "DTPSContext":
@@ -307,7 +309,7 @@ class ContextManagerUseContext(DTPSContext):
             try:
                 await self.data_get()
                 return self
-            except NoSuchTopic:
+            except (asyncio.TimeoutError, NoSuchTopic):
                 if not quiet and time.time() - printed_last > print_every:
                     waited: float = time.time() - stime
                     logger.warning(f"I have been waiting for {self._get_components_as_topic()} for {waited:.0f}s")
