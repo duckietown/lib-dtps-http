@@ -21,6 +21,7 @@ from dtps_http import (
     URLString,
 )
 from dtps_http.object_queue import ObjectTransformContext, transform_identity, TransformError
+from dtps_http.structures import InsertNotification
 from dtps_http.types_of_source import (
     ForwardedQueue,
     Native,
@@ -211,14 +212,15 @@ class ContextManagerCreateContext(DTPSContext):
     ) -> "SubscriptionInterface":
         oq0 = self._get_server().get_oq(self._get_components_as_topic())
 
-        async def wrap(oq: ObjectQueue, i: int) -> None:
-            saved: DataSaved = oq.saved[i]
-            data: RawData = oq.get(saved.digest)
-            await on_data(data)
+        async def wrap(oq: ObjectQueue, inot: InsertNotification) -> None:
+            # saved: DataSaved = oq.saved[i]
+            # data: RawData = oq.get(saved.digest)
+            await on_data(inot.raw_data)
 
         if oq0.stored:
-            data2: RawData = oq0.get(oq0.last().digest)
-            await on_data(data2)
+            last = oq0.last_data()
+            # data2: RawData = oq0.get(oq0.last().digest)
+            await on_data(last)
         sub_id = oq0.subscribe(wrap)
 
         return ContextManagerCreateContextSubscriber(sub_id, oq0)
@@ -296,12 +298,12 @@ class ContextManagerCreateContext(DTPSContext):
         return self
 
     async def until_ready(
-            self,
-            retry_every: float = 2.0,
-            retry_max: Optional[int] = None,
-            timeout: Optional[float] = None,
-            print_every: float = 10.0,
-            quiet: bool = False,
+        self,
+        retry_every: float = 2.0,
+        retry_max: Optional[int] = None,
+        timeout: Optional[float] = None,
+        print_every: float = 10.0,
+        quiet: bool = False,
     ) -> "DTPSContext":
         return self
 

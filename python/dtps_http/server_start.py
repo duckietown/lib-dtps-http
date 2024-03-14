@@ -159,7 +159,8 @@ async def app_start(
         tcp_site = web.TCPSite(runner, tcp_host, port)
 
         await tcp_site.start()
-        port = tcp_site._server.sockets[0].getsockname()[1]
+        if port == 0:
+            port = tcp_site._server.sockets[0].getsockname()[1]  # type: ignore
         the_url0 = cast(URLString, f"http://{tcp_host}:{port}/")
         logger.info(f"Starting TCP server - the URL is {the_url0!r}")
 

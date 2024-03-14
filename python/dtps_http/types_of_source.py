@@ -232,7 +232,8 @@ class OurQueue(Source):
         if isinstance(otr, TransformError):
             return otr
         else:
-            return oq.get(otr.digest)
+            # return oq.blob_manager.get_blob(otr.digest)
+            return oq.last_data()
 
     async def patch(self, presented_as: str, server: "DTPSServer", patch: JsonPatch) -> "PostResult":
         oq = server.get_oq(self.topic_name)

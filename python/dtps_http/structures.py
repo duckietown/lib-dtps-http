@@ -290,7 +290,7 @@ class DataSaved:
     unique_id: SourceID
     index: int
     time_inserted: int
-    digest: str
+    digest: Digest
     content_type: ContentType
     content_length: int
     clocks: "Clocks"
@@ -308,7 +308,7 @@ class DataReady:
     unique_id: SourceID
     index: int
     time_inserted: int
-    digest: str
+    digest: Digest
     content_type: ContentType
     content_length: int
     clocks: Clocks

@@ -1,13 +1,14 @@
 import json
 import time
 from dataclasses import dataclass, dataclass as original_dataclass
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from typing import Awaitable, Callable, Dict, List, Optional, Union
 
 import cbor2
 import yaml
 from aiopubsub import Hub, Key, Publisher, Subscriber
 
 from . import logger
+from .blob_manager import BlobManager
 from .constants import (
     MIME_CBOR,
     MIME_JSON,
@@ -20,6 +21,7 @@ from .structures import (
     Clocks,
     DataReady,
     DataSaved,
+    InsertNotification,
     MinMax,
     RawData,
     ResourceAvailability,
@@ -75,7 +77,7 @@ async def transform_identity(otc: ObjectTransformContext) -> RawData:
 class ObjectQueue:
     stored: List[int]
     saved: Dict[int, DataSaved]
-    _data: Dict[str, RawData]
+    # _data: Dict[str, RawData]
     _seq: int
     _name: TopicNameV
     _hub: Hub
@@ -84,6 +86,7 @@ class ObjectQueue:
     tr: TopicRef
     max_history: Optional[int]
     transform: ObjectTransformFunction
+    blob_manager: BlobManager
 
     def __init__(
         self,
@@ -91,6 +94,7 @@ class ObjectQueue:
         name: TopicNameV,
         tr: TopicRef,
         max_history: Optional[int],
+        blob_manager: BlobManager,
         transform: ObjectTransformFunction = transform_identity,
     ):
         if max_history is not None and max_history < 1:
@@ -100,7 +104,7 @@ class ObjectQueue:
         self._pub = Publisher(self._hub, Key())
         self._sub = Subscriber(self._hub, name.as_relative_url())
         self._seq = 0
-        self._data = {}
+        # self._data = {}
         self._name = name
         self.tr = tr
         self.max_history = max_history
@@ -109,6 +113,8 @@ class ObjectQueue:
         self._transform = transform
         self.listeners = {}
         self.nlisteners = 0
+        self.blob_manager = blob_manager
+        self.name_for_blob_manager = name.as_relative_url()
 
     def get_channel_info(self) -> ChannelInfo:
         if not self.stored:
@@ -160,8 +166,9 @@ class ObjectQueue:
 
         use_seq = self._seq
         self._seq += 1
-        digest = obj.digest()
+        # digest = obj.digest()
         clocks = self.current_clocks()
+        digest = self.blob_manager.save_blob(obj.content, (self.name_for_blob_manager, use_seq))
         ds = DataSaved(
             origin_node=self.tr.origin_node,
             unique_id=self.tr.unique_id,
@@ -172,15 +179,23 @@ class ObjectQueue:
             content_length=len(obj.content),
             clocks=clocks,
         )
-        self._data[digest] = obj
+
+        # self._data[digest] = obj
         self.stored.append(use_seq)
         self.saved[use_seq] = ds
         if self.max_history is not None:
-            if len(self.stored) > self.max_history:
-                x = self.stored.pop(0)
-                self.saved.pop(x, None)
+            while len(self.stored) > self.max_history:
+                x_old: int = self.stored.pop(0)
+                if x_old in self.saved:  # should always be true
+                    ds_old = self.saved.pop(x_old)
+                    # extend deadline by an arbitrary 10 seconds
+                    # (should not be needed, but just in case)
+                    self.blob_manager.extend_deadline(ds_old.digest, 10)
+                    self.blob_manager.release_blob(ds_old.digest, (self.name_for_blob_manager, x_old))
+
+        inot = InsertNotification(ds, obj0)
         self._pub.publish(
-            Key(self._name.as_relative_url(), K_INDEX), use_seq
+            Key(self._name.as_relative_url(), K_INDEX), inot
         )  # logger.debug(f"published #{self._seq} {self._name}: {obj!r}")
 
         reached_at = self._name.as_relative_url()
@@ -204,12 +219,11 @@ class ObjectQueue:
             raise KeyError("No data in queue")
 
     def last_data(self) -> RawData:
-        return self.get(self.last().digest)
+        last = self.last()
+        data = self.blob_manager.get_blob(self.last().digest)
+        return RawData(content=data, content_type=last.content_type)
 
-    def get(self, digest: str) -> RawData:
-        return self._data[digest]
-
-    def subscribe(self, callback: "Callable[[ObjectQueue, int], Awaitable[None]]") -> SUB_ID:
+    def subscribe(self, callback: "Callable[[ObjectQueue, InsertNotification], Awaitable[None]]") -> SUB_ID:
         listener_id = self.nlisteners
         self.nlisteners += 1
 
@@ -218,7 +232,6 @@ class ObjectQueue:
         key = Key(self._name.as_relative_url(), K_INDEX)
 
         self._sub.add_async_listener(key, wrap_callback)
-        # self._sub.remove_listener(key, wrap_callback)
         self.listeners[listener_id] = (key, wrap_callback)
 
         return listener_id
@@ -265,17 +278,20 @@ class ObjectQueue:
 
 class Wrapper:
     def __init__(
-        self, f: "Callable[[ObjectQueue, int], Awaitable[None]]", oq: ObjectQueue, listener_id: SUB_ID
+        self,
+        f: "Callable[[ObjectQueue, InsertNotification], Awaitable[None]]",
+        oq: ObjectQueue,
+        listener_id: SUB_ID,
     ):
         self.f = f
         self.oq = oq
         self.listener_id = listener_id
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"Wrapper({self.listener_id})"
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Wrapper({self.listener_id})"
 
-    async def __call__(self, _key: Key, msg: Any):
+    async def __call__(self, _key: Key, msg: InsertNotification) -> None:
         return await self.f(self.oq, msg)

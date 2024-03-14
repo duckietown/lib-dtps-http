@@ -41,6 +41,7 @@ from multidict import CIMultiDict
 from pydantic.dataclasses import dataclass
 
 from . import __version__, logger as logger0
+from .blob_manager import BlobManager
 from .client import DTPSClient, FoundMetadata, unescape_json_pointer
 from .constants import (
     CONTENT_TYPE_DTPS_DATAREADY_CBOR,
@@ -90,10 +91,8 @@ from .structures import (
     ConnectionEstablished,
     ContentInfo,
     DataReady,
-    Digest,
     ErrorMsg,
     FinishedMsg,
-    get_digest,
     InsertNotification,
     is_image,
     is_structure,
@@ -181,78 +180,6 @@ def get_static_dir() -> str:
 
     msg = f"Static directory not found: {options}."
     raise FileNotFoundError(msg)
-
-
-from dataclasses import dataclass
-from typing import Set
-
-
-@dataclass
-class SavedBlob:
-    content: bytes
-    who_needs_it: Set[str]
-    deadline: float
-
-
-class BlobManager:
-    blobs: Dict[Digest, SavedBlob]
-    blobs_forgotten: Dict[Digest, float]
-
-    def __init__(self):
-        self.blobs = {}
-        self.blobs_forgotten = {}
-
-    def cleanup_blobs(self) -> None:
-        now = time.time()
-        todrop = []
-
-        for digest, sb in list(self.blobs.items()):
-            no_one_needs_it = len(sb.who_needs_it) == 0
-            deadline_passed = now > sb.deadline
-            if no_one_needs_it and deadline_passed:
-                todrop.append(digest)
-
-        for digest in todrop:
-            # print(f"Dropping blob {digest} because deadline passed")
-            self.blobs.pop(digest, None)
-            self.blobs_forgotten[digest] = now
-
-    def release_blob(self, digest: Digest, who_needs_it: str):
-        if digest not in self.blobs:
-            return
-        sb = self.blobs[digest]
-        sb.who_needs_it.remove(who_needs_it)
-        if len(sb.who_needs_it) == 0:
-            deadline_passed = time.time() > sb.deadline
-            if deadline_passed:
-                self.blobs.pop(digest, None)
-                self.blobs_forgotten[digest] = time.time()
-
-    def save_blob(self, content: bytes, who_needs_it: str) -> Digest:
-        digest = get_digest(content)
-        if digest not in self.blobs:
-            self.blobs[digest] = SavedBlob(
-                content=content,
-                who_needs_it={who_needs_it},
-                deadline=time.time(),
-            )
-        else:
-            sb = self.blobs[digest]
-            sb.who_needs_it.add(who_needs_it)
-        return digest
-
-    def save_blob_deadline(self, content: bytes, deadline: float) -> Digest:
-        digest = get_digest(content)
-        if digest not in self.blobs:
-            self.blobs[digest] = SavedBlob(
-                content=content,
-                who_needs_it=set(),
-                deadline=deadline,
-            )
-        else:
-            sb = self.blobs[digest]
-            sb.deadline = max(deadline, sb.deadline)
-        return digest
 
 
 class DTPSServer:
@@ -653,7 +580,9 @@ class DTPSServer:
             content_info=content_info,
         )
 
-        self._oqs[name] = ObjectQueue(self.hub, name, tr, max_history=max_history, transform=transform)
+        self._oqs[name] = ObjectQueue(
+            self.hub, name, tr, max_history=max_history, blob_manager=self.blob_manager, transform=transform
+        )
         await self._update_lists()
         return self._oqs[name]
 
@@ -671,7 +600,7 @@ class DTPSServer:
             properties=TopicProperties.streamable_readonly(),
             created=time.time_ns(),
         )
-        self._oqs[ROOT] = ObjectQueue(self.hub, ROOT, tr, max_history=5)
+        self._oqs[ROOT] = ObjectQueue(self.hub, ROOT, tr, blob_manager=self.blob_manager, max_history=5)
         index = self.create_root_index()
         wire = index.to_wire()
         as_cbor = cbor2.dumps(asdict(wire))
@@ -687,7 +616,9 @@ class DTPSServer:
             properties=TopicProperties.streamable_readonly(),
             created=time.time_ns(),
         )
-        self._oqs[TOPIC_LIST] = ObjectQueue(self.hub, TOPIC_LIST, tr, max_history=100)
+        self._oqs[TOPIC_LIST] = ObjectQueue(
+            self.hub, TOPIC_LIST, tr, blob_manager=self.blob_manager, max_history=100
+        )
 
         await self.create_oq(TOPIC_LOGS, content_info=ContentInfo.simple(MIME_JSON), max_history=100)
         await self.create_oq(TOPIC_CLOCK, content_info=ContentInfo.simple(MIME_JSON), max_history=10)
@@ -713,9 +644,10 @@ class DTPSServer:
 
         self.started.set()
 
-    async def on_proxied_changed(self, oq: ObjectQueue, _: int) -> None:
-        x = cast(dict, oq.last_data().get_as_native_object())
+    async def on_proxied_changed(self, _: ObjectQueue, inot: InsertNotification) -> None:
+        # x = cast(dict, oq.last_data().get_as_native_object())
         current = list(self._forwarded)
+        x = cast(dict, inot.raw_data.get_as_native_object())
         topics = list(TopicNameV.from_dash_sep(_) for _ in x)
 
         added = set(topics) - set(current)
@@ -1544,7 +1476,7 @@ pre {{
             self.logger.error(msg)
             raise web.HTTPNotFound(text=msg, headers=headers)
         oq = self._oqs[topic_name]
-        data = oq.get(digest)
+        data = oq.last_data()
         headers[HEADER_DATA_UNIQUE_ID] = oq.tr.unique_id
         headers[HEADER_DATA_ORIGIN_NODE_ID] = oq.tr.origin_node
 
@@ -1604,13 +1536,14 @@ pre {{
         await ws.send_bytes(get_tagged_cbor(ci))
 
         @async_error_catcher
-        async def send_message(_: ObjectQueue, i: int) -> None:
-            self.logger.debug(f"serve_events: new message {i}")
-            mdata = oq_.saved[i]
-            digest = mdata.digest
+        async def send_message(_: ObjectQueue, inot: InsertNotification) -> None:
+            # self.logger.debug(f"serve_events: new message {i}")
+            # mdata = oq_.saved[i]
+            ds = inot.data_saved
+            digest = ds.digest
 
             presented_as = request.url.path
-            data = oq_.get_data_ready(mdata, presented_as, inline_data=send_data)
+            data = oq_.get_data_ready(ds, presented_as, inline_data=send_data)
 
             if ws.closed:
                 exit_event.set()
@@ -1623,7 +1556,7 @@ pre {{
                 pass
 
             if send_data:
-                the_bytes = oq_.get(digest).content
+                the_bytes = inot.raw_data.content
                 chunk = Chunk(digest=digest, i=0, n=1, index=0, data=the_bytes)
 
                 try:
@@ -1636,8 +1569,10 @@ pre {{
 
         if oq_.stored:
             last = oq_.last()
+            last_data = oq_.last_data()
+            inot = InsertNotification(last, last_data)
 
-            await send_message(oq_, last.index)
+            await send_message(oq_, inot)
 
         try:
             await exit_event.wait()
