@@ -19,6 +19,7 @@ from dtps_http import (
     TopicRefAdd,
     url_to_string,
     URLString,
+    DEFAULT_MAX_HISTORY,
 )
 from dtps_http.object_queue import ObjectTransformContext, transform_identity, TransformError
 from dtps_http.structures import InsertNotification
@@ -273,6 +274,7 @@ class ContextManagerCreateContext(DTPSContext):
     async def queue_create(
         self,
         *,
+        max_history: int = DEFAULT_MAX_HISTORY,
         parameters: Optional[TopicRefAdd] = None,
         transform: Optional[RPCFunction] = None,
     ) -> "DTPSContext":
@@ -292,7 +294,11 @@ class ContextManagerCreateContext(DTPSContext):
                 return await transform(otc.raw_data)
 
         await server.create_oq(
-            topic, content_info=parameters.content_info, tp=parameters.properties, transform=transform_use
+            topic,
+            content_info=parameters.content_info,
+            tp=parameters.properties,
+            transform=transform_use,
+            max_history=max_history,
         )
 
         return self

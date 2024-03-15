@@ -253,7 +253,7 @@ class ContextManagerUseContext(DTPSContext):
     async def queue_create(
         self,
         *,
-        max_history: int = DEFAULT_MAX_HISTORY,
+        max_history: int = None,
         parameters: Optional[TopicRefAdd] = None,
         transform: Optional[ObjectTransformFunction] = None,
     ) -> "DTPSContext":
@@ -263,6 +263,10 @@ class ContextManagerUseContext(DTPSContext):
 
         if transform is not None:
             msg = "transform is not supported for remote queues"
+            raise ValueError(msg)
+
+        if max_history is not None:
+            msg = "max_history is not supported for remote queues"
             raise ValueError(msg)
 
         try:
