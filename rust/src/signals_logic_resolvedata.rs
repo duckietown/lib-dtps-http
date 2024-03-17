@@ -24,7 +24,7 @@ impl ResolveDataSingle for TypeOFSource {
         match self {
             TypeOFSource::Digest(digest, content_type) => {
                 let ss = ss_mutex.lock().await;
-                let data = ss.get_blob_bytes(digest)?;
+                let data = ss.blob_manager.get_blob_bytes(digest)?;
                 let rd = RawData::new(data, content_type);
                 Ok(ResolvedData::RawData(rd))
             }
@@ -165,7 +165,7 @@ async fn resolve_our_queue(topic_name: &TopicName, ss_mutex: ServerStateAccess) 
         Some(v) => {
             let data_saved = oq.saved.get(v).unwrap();
             let content = context!(
-                ss.get_blob_bytes(&data_saved.digest),
+                ss.blob_manager.get_blob_bytes(&data_saved.digest),
                 "Cannot get blob bytes for topic {:?}:\n {data_saved:#?}",
                 topic_name.as_dash_sep(),
             )?;

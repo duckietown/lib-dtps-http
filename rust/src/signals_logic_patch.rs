@@ -221,7 +221,7 @@ async fn patch_our_queue(ssa: ServerStateAccess, patch: &Patch, topic_name: &Top
         }
         let last = oq.stored.last().unwrap();
         let data_saved = oq.saved.get(last).unwrap();
-        let content = ss.get_blob_bytes(&data_saved.digest)?;
+        let content = ss.blob_manager.get_blob_bytes(&data_saved.digest)?;
         let raw_data = RawData::new(content, &data_saved.content_type);
         (data_saved.clone(), raw_data)
     };

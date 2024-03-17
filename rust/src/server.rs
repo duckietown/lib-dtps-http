@@ -634,7 +634,7 @@ pub async fn get_series_of_messages_for_notification_(
         vec1
     };
 
-    ss.save_blob_for_time(
+    ss.blob_manager.save_blob_for_time(
         &this_one.digest,
         &insert_notification.raw_data.content,
         delta_availability,
@@ -799,7 +799,7 @@ async fn handler_topic_html_summary(
         Some(index) => {
             let l = x.saved.get(index).unwrap();
             let digest = &l.digest;
-            let content = match ss.get_blob(digest) {
+            let content = match ss.blob_manager.get_blob(digest) {
                 None => {
                     return Err(warp::reject::not_found());
                 }
@@ -825,7 +825,7 @@ async fn handler_topic_html_summary(
 
         if data.content_length <= data.digest.len() {
             if printable {
-                let rd = ss.get_blob(&data.digest).unwrap();
+                let rd = ss.blob_manager.get_blob(&data.digest).unwrap();
                 let s = String::from_utf8(rd.clone()).unwrap();
                 html! {
                   (s)
