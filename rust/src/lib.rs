@@ -121,6 +121,7 @@ mod client_metadata;
 mod client_tpt;
 mod utils_patch;
 
+mod blob_manager;
 mod cli_program_listen;
 mod cli_program_server;
 mod cli_program_stats;

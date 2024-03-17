@@ -206,14 +206,16 @@ class DTPSServer:
         cls,
         on_startup: "Sequence[Callable[[DTPSServer], Awaitable[None]]]" = (),
         nickname: Optional[str] = None,
+        enable_clock: bool = True,
     ) -> "DTPSServer":
-        return cls(on_startup=on_startup, nickname=nickname)
+        return cls(on_startup=on_startup, nickname=nickname, enable_clock=enable_clock)
 
     def __init__(
         self,
         *,
-        on_startup: "Sequence[Callable[[DTPSServer], Awaitable[None]]]" = (),
-        nickname: Optional[str] = None,
+        on_startup: "Sequence[Callable[[DTPSServer], Awaitable[None]]]",
+        nickname: Optional[str],
+        enable_clock: bool,
     ) -> None:
         if nickname is None:
             nickname = str(id(self))
@@ -244,7 +246,7 @@ class DTPSServer:
         routes.get("/{topic:.*}")(self.serve_get)
         routes.delete("/{topic:.*}")(self.serve_delete)
 
-        self.blob_manager = BlobManager()
+        self.blob_manager = BlobManager(cleanup_interval=5.0, forget_forgetting_interval=5.0)
 
         # mount a static directory for the web interface
         static_dir = get_static_dir()
@@ -266,6 +268,7 @@ class DTPSServer:
 
         self.started = asyncio.Event()
         self.shutdown_event = asyncio.Event()
+        self.enable_clock = enable_clock
 
     def add_registrations(self, registrations: Sequence[Registration]) -> None:
         self.registrations.extend(registrations)
@@ -621,7 +624,8 @@ class DTPSServer:
         )
 
         await self.create_oq(TOPIC_LOGS, content_info=ContentInfo.simple(MIME_JSON), max_history=100)
-        await self.create_oq(TOPIC_CLOCK, content_info=ContentInfo.simple(MIME_JSON), max_history=10)
+        if self.enable_clock:
+            await self.create_oq(TOPIC_CLOCK, content_info=ContentInfo.simple(MIME_JSON), max_history=10)
         await self.create_oq(TOPIC_AVAILABILITY, content_info=ContentInfo.simple(MIME_JSON), max_history=10)
         await self.create_oq(TOPIC_STATE_SUMMARY, content_info=ContentInfo.simple(MIME_JSON), max_history=10)
 
@@ -634,7 +638,8 @@ class DTPSServer:
             TOPIC_STATE_NOTIFICATION, content_info=ContentInfo.simple(MIME_CBOR), max_history=10
         )
 
-        self.remember_task(asyncio.create_task(update_clock(self, TOPIC_CLOCK, 1.0, 0.0)))
+        if self.enable_clock:
+            self.remember_task(asyncio.create_task(update_clock(self, TOPIC_CLOCK, 1.0, 0.0)))
 
         for f in self._more_on_startup:
             await f(self)
@@ -1852,6 +1857,7 @@ async def update_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, i
         t = time.time_ns()
         data = str(t).encode()
         await oq.publish(RawData(content=data, content_type=MIME_JSON))
+        data = None
         try:
             await asyncio.sleep(interval)
         except CancelledError:

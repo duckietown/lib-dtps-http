@@ -11,6 +11,8 @@ __all__ = [
     "BlobManager",
 ]
 
+from .utils_every_once_in_a_while import EveryOnceInAWhile
+
 
 @dataclass
 class SavedBlob:
@@ -23,9 +25,20 @@ class BlobManager:
     blobs: Dict[Digest, SavedBlob]
     blobs_forgotten: Dict[Digest, float]
 
-    def __init__(self):
+    forget_forgetting_interval: float
+    cleanup_interval: float
+    cleanup_time: EveryOnceInAWhile
+
+    def __init__(self, *, forget_forgetting_interval: float, cleanup_interval: float):
         self.blobs = {}
         self.blobs_forgotten = {}
+        self.forget_forgetting_interval = forget_forgetting_interval
+        self.cleanup_interval = cleanup_interval
+        self.cleanup_time = EveryOnceInAWhile(cleanup_interval)
+
+    def cleanup_blobs_if_its_time(self) -> None:
+        if self.cleanup_time.now():
+            self.cleanup_blobs()
 
     def cleanup_blobs(self) -> None:
         now = time.time()
@@ -41,6 +54,12 @@ class BlobManager:
             # print(f"Dropping blob {digest} because deadline passed")
             self.blobs.pop(digest, None)
             self.blobs_forgotten[digest] = now
+
+        # forget the forgotten blobs
+
+        for digest, ts in list(self.blobs_forgotten.items()):
+            if now - ts > self.forget_forgetting_interval:
+                self.blobs_forgotten.pop(digest, None)
 
     def get_blob(self, digest: Digest) -> bytes:
         if digest not in self.blobs:
@@ -62,7 +81,7 @@ class BlobManager:
                 self.blobs_forgotten[digest] = time.time()
 
     def save_blob(self, content: bytes, who_needs_it: Tuple[str, int]) -> Digest:
-        self.cleanup_blobs()
+        self.cleanup_blobs_if_its_time()
         digest = get_digest(content)
         if digest not in self.blobs:
             self.blobs[digest] = SavedBlob(
@@ -76,7 +95,7 @@ class BlobManager:
         return digest
 
     def save_blob_deadline(self, content: bytes, deadline: float) -> Digest:
-        self.cleanup_blobs()
+        self.cleanup_blobs_if_its_time()
         digest = get_digest(content)
         if digest not in self.blobs:
             self.blobs[digest] = SavedBlob(

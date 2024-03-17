@@ -131,16 +131,9 @@ fn resolve(
     other_mountpoints: &[TopicName],
 ) -> DTPSR<TypeOFSource> {
     let mut subtopics: Vec<(TopicName, Vec<String>, Vec<String>, TypeOFSource)> = vec![];
-    // let mut subtopics_vec = vec![];
 
-    // if path_components.len() == 0 && ends_with_dash {
-    //     p =
-    //     return Ok(TypeOFSource::OurQueue(TopicName::root(), p));
-    // }
-    // debug_with_info!(" = all_sources =\n{:#?} ", all_sources);
     for (k, source) in all_sources.iter() {
         let topic_components = k.as_components();
-        // subtopics_vec.push(topic_components.clone());
 
         if topic_components.is_empty() {
             continue;
@@ -160,7 +153,6 @@ fn resolve(
 
             Some(rest) => rest,
         };
-        // if !ends_with_dash {}
         // debug_with_info!("pushing: {k:?}");
         subtopics.push((k.clone(), matched, rest, source.clone()));
     }

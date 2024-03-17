@@ -74,6 +74,10 @@ async def transform_identity(otc: ObjectTransformContext) -> RawData:
     return otc.raw_data
 
 
+# tolerance for removal of blobs after they are not needed anymore
+TOLERANCE_REMOVAL = 0.0
+
+
 class ObjectQueue:
     stored: List[int]
     saved: Dict[int, DataSaved]
@@ -189,9 +193,10 @@ class ObjectQueue:
                 x_old: int = self.stored.pop(0)
                 if x_old in self.saved:  # should always be true
                     ds_old = self.saved.pop(x_old)
-                    # extend deadline by an arbitrary 10 seconds
-                    # (should not be needed, but just in case)
-                    self.blob_manager.extend_deadline(ds_old.digest, 10)
+                    if TOLERANCE_REMOVAL is not None:
+                        # extend deadline by an arbitrary 10 seconds
+                        # (should not be needed, but just in case)
+                        self.blob_manager.extend_deadline(ds_old.digest, TOLERANCE_REMOVAL)
                     self.blob_manager.release_blob(ds_old.digest, (self.name_for_blob_manager, x_old))
 
         inot = InsertNotification(ds, obj0)
