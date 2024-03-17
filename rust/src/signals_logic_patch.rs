@@ -213,8 +213,6 @@ async fn patch_our_queue(ssa: ServerStateAccess, patch: &Patch, topic_name: &Top
     let mut ss = ssa.lock().await;
 
     let (data_saved, raw_data) = {
-        // let ss = ss_mutex.lock().await;
-
         let oq = ss.get_queue(topic_name)?;
         if oq.saved.is_empty() {
             return invalid_input!("patch_our_queue: {topic_name:?} is empty");
