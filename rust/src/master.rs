@@ -83,64 +83,6 @@ pub async fn serve_master_post(
             e.as_handler_response()
         }
     }
-
-    // return match ds {
-    //     TypeOFSource::OurQueue(topic_name, _) => {
-    //         debug_with_info!("Pushing to topic {:?}", topic_name);
-    //         handle_topic_post(&topic_name, ss_mutex, &rd).await
-    //     }
-    //     TypeOFSource::ForwardedQueue(fq) => {
-    //         let con = {
-    //             let ss = ss_mutex.lock().await;
-    //             let sub = ss.proxied.get(&fq.subscription).unwrap();
-    //             match &sub.established {
-    //                 None => {
-    //                     let msg = "Subscription not established";
-    //                     let res = http::Response::builder()
-    //                         .status(StatusCode::NOT_FOUND) //ok
-    //                         .body(Body::from(msg.to_string()))
-    //                         .unwrap();
-    //                     return Ok(res);
-    //                 }
-    //                 Some(est) => est.using.join(fq.his_topic_name.as_relative_url())?,
-    //             }
-    //         };
-    //         let resp = make_request(&con, hyper::Method::POST, &rd.content, Some(&rd.content_type), None).await?;
-    //         if !resp.status().is_success() {
-    //             let s = format!("The proxied request did not succeed. con ={con} ");
-    //             error_with_info!("{s}");
-    //         }
-    //
-    //         Ok(resp)
-    //     }
-    //     TypeOFSource::Transformed(source, t) => {
-    //         let clocks = Clocks::default();
-    //
-    //         ds.push(ss_mutex.clone(), &rd, &clocks).await
-    //         //
-    //         // debug_with_info!("Pushing to transformed {source:?} / {t:?} with rd = {rd:?}");
-    //         // let clocks = Clocks::default();
-    //         // source.push(ss_mutex, &rd,& clocks).await?;
-    //         // let s = "";
-    //         // let res = http::Response::builder()
-    //         //     .status(StatusCode::OK)
-    //         //     .body(Body::from(s))
-    //         //     .unwrap();
-    //         // Ok(res)
-    //
-    //         // debug_with_info!("Pushing to topic {:?}", topic_name);
-    //         // handle_topic_post(&topic_name, ss_mutex, &rd).await
-    //     }
-    //     _ => {
-    //         let s = format!("We do not support POST to {path_str}: {ds:?}");
-    //         error_with_info!("{s}");
-    //         let res = http::Response::builder()
-    //             .status(StatusCode::METHOD_NOT_ALLOWED)
-    //             .body(Body::from(s))
-    //             .unwrap();
-    //         Ok(res)
-    //     }
-    // };
 }
 
 pub async fn serve_master_patch(
@@ -236,7 +178,7 @@ pub async fn serve_master_head(
     ss_mutex: ServerStateAccess,
     headers: HeaderMap,
 ) -> HandlersResponse {
-    debug_with_info!("HEAD {} ", path.as_str());
+    // debug_with_info!("HEAD {} ", path.as_str());
 
     let path_str = path_normalize(&path);
     // debug_with_info!("serve_master_head: path_str: {}", path_str);
@@ -347,7 +289,7 @@ pub async fn serve_master_head(
     //     }
     //     Err(e) => Err(e),
     // }
-    x
+    return x;
 }
 
 fn path_normalize(path: &warp::path::FullPath) -> String {
@@ -418,31 +360,6 @@ pub async fn serve_master_get(
         }
     }
 
-    // if false {
-    //     if !path_components.contains(&STATIC_PREFIX.to_string()) {
-    //         let good_url = get_good_url_for_components(&path_components);
-    //         if good_url != path_str {
-    //             let good_relative_url = format!("./{}/", path_components.last().unwrap());
-    //
-    //             debug_with_info!(
-    //                 "Redirecting\n - {}\n->  {};\n rel = {}\n",
-    //                 path_str,
-    //                 good_url,
-    //                 good_relative_url
-    //             );
-    //
-    //             let text_response = format!("Redirecting to {}", good_url);
-    //             let res = http::Response::builder()
-    //                 .status(StatusCode::MOVED_PERMANENTLY)
-    //                 .header(header::LOCATION, good_relative_url)
-    //                 .body(Body::from(text_response))
-    //                 .unwrap();
-    //
-    //             // TODO: renable
-    //             return Ok(res);
-    //         }
-    //     }
-    // }
     let f = {
         let ss = ss_mutex.lock().await;
         interpret_path(&path_str, &query, &referrer, &ss).await
@@ -461,6 +378,8 @@ pub async fn serve_master_get(
     let resd = match r {
         Ok(x) => x,
         Err(s) => {
+            // log the error
+            // error_with_info!("serve_master_get: {path_str:?} resolve_data_single error: {s}");
             return s.into();
         }
     };
@@ -479,18 +398,28 @@ pub async fn serve_master_get(
             } else {
                 CONTENT_TYPE_OCTET_STREAM
             };
+            let msg = format!("204: No content:\n{s}");
 
             let res = http::Response::builder()
                 .status(StatusCode::NO_CONTENT)
                 .header(header::CONTENT_TYPE, use_content_type)
-                .body(Body::from(s))
+                .body(Body::from(msg))
                 .unwrap();
             return Ok(res);
         }
         ResolvedData::NotFound(s) => {
-            let msg = format!("Not found - {s}");
+            let msg = format!("404: Not found:\n{s}");
             let res = http::Response::builder()
                 .status(StatusCode::NOT_FOUND) //ok
+                .header(header::CONTENT_TYPE, CONTENT_TYPE_TEXT_PLAIN)
+                .body(Body::from(msg))
+                .unwrap();
+            return Ok(res);
+        }
+        ResolvedData::NotReachable(s) => {
+            let msg = format!("503: Not reachable:\n{s}");
+            let res = http::Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE) //ok
                 .header(header::CONTENT_TYPE, CONTENT_TYPE_TEXT_PLAIN)
                 .body(Body::from(msg))
                 .unwrap();
@@ -592,6 +521,7 @@ fn make_friendly_visualization(
     Ok(resp)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn visualize_data(
     path: &str,
     properties: &TopicProperties,
@@ -613,7 +543,7 @@ pub async fn visualize_data(
         let mut resp = Response::new(Body::from(content.to_vec()));
         let h = resp.headers_mut();
 
-        log::debug!("visualize_data: content_type: {content_type} {path}");
+        // log::debug!("visualize_data: content_type: {content_type} {path}");
         if path == "/" {
             put_patchable_headers(h)?;
         }

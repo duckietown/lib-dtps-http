@@ -8,10 +8,13 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use http::StatusCode;
 
+use crate::signals_logic::ForwardedQueue;
+use crate::ResponseUnobtained;
 use crate::{
-    context, debug_with_info, get_dataready, not_implemented, putinside, signals_logic_streams::transform, DataReady,
-    GetMeta, OtherProxied, RawData, ResolveDataSingle, ResolvedData, ServerStateAccess, SourceComposition, TopicName,
-    TopicProperties, TypeOFSource, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR,
+    context, debug_with_info, get_dataready, make_request2, not_implemented, putinside,
+    signals_logic_streams::transform, DataReady, GetMeta, OtherProxied, RawData, ResolveDataSingle, ResolvedData,
+    ResponseResult, ServerStateAccess, SourceComposition, TopicName, TopicProperties, TypeOFSource,
+    CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR,
 };
 use crate::{get_rawdata, get_rawdata_status};
 
@@ -25,20 +28,7 @@ impl ResolveDataSingle for TypeOFSource {
                 let rd = RawData::new(data, content_type);
                 Ok(ResolvedData::RawData(rd))
             }
-            TypeOFSource::ForwardedQueue(q) => {
-                let ss = ss_mutex.lock().await;
-                let use_url = &ss.proxied_topics.get(&q.my_topic_name).unwrap().data_url;
-
-                let (status, rd) = get_rawdata_status(use_url).await?;
-
-                // debug_with_info!("ForwardedQueue: {:?} -> {:?} -> {use_url:?} -> {status:?} -> {rd:?}", q.my_topic_name, q.his_topic_name);
-                if status == StatusCode::NO_CONTENT {
-                    let msg = "This topic does not have any data yet".to_string();
-                    Ok(ResolvedData::NotAvailableYet(msg))
-                } else {
-                    Ok(ResolvedData::RawData(rd))
-                }
-            }
+            TypeOFSource::ForwardedQueue(q) => resolve_data_single_forwarded_queue(q, presented_as, ss_mutex).await,
             TypeOFSource::OurQueue(q, _) => resolve_our_queue(q, ss_mutex).await,
             TypeOFSource::Compose(_sc) => {
                 let index = self.get_meta_index(presented_as, ss_mutex).await?;
@@ -204,4 +194,18 @@ async fn single_compose(
     }
 
     Ok(ResolvedData::Regular(result_dict))
+}
+
+async fn resolve_data_single_forwarded_queue(
+    fq: &ForwardedQueue,
+    presented_as: &str,
+    ss_mutex: ServerStateAccess,
+) -> DTPSR<ResolvedData> {
+    let ss = ss_mutex.lock().await;
+    let use_url = &ss.proxied_topics.get(&fq.my_topic_name).unwrap().data_url;
+
+    let (status, rd) = get_rawdata_status(use_url).await?;
+
+    let r2 = make_request2(use_url, hyper::Method::GET, b"", None, None).await?;
+    return r2.into();
 }

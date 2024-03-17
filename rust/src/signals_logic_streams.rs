@@ -593,6 +593,7 @@ pub fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<ResolvedDa
         ResolvedData::Regular(d) => d,
         ResolvedData::NotAvailableYet(s) => return Ok(ResolvedData::NotAvailableYet(s)),
         ResolvedData::NotFound(s) => return Ok(ResolvedData::NotFound(s)),
+        ResolvedData::NotReachable(s) => return Ok(ResolvedData::NotReachable(s)),
         ResolvedData::RawData(rd) => rd.get_as_cbor()?,
     };
     Ok(ResolvedData::Regular(transform.apply(d)?))

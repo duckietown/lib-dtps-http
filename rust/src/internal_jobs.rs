@@ -102,7 +102,15 @@ impl InternalJobManager {
         self.jobs.insert(name.clone(), j);
         Ok(())
     }
+    pub async fn stop_all_jobs(&mut self) -> DTPSR<()> {
+        for (c, j) in self.jobs.drain() {
+            let h = j.handle;
+            h.abort();
 
+            assert!(h.await.unwrap_err().is_cancelled());
+        }
+        Ok(())
+    }
     pub async fn run_job(
         name: CompositeName,
         desc: String,

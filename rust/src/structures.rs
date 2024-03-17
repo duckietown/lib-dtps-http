@@ -186,8 +186,9 @@ impl DataReady {
 pub enum ResolvedData {
     RawData(RawData),
     Regular(CBORValue),
-    NotAvailableYet(String),
-    NotFound(String),
+    NotAvailableYet(String), // equivalent to NoContent
+    NotFound(String),        // equivalent to 404
+    NotReachable(String),    // equivalent to 530 or connection refused
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

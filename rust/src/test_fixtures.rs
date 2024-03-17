@@ -93,9 +93,17 @@ pub async fn instance_python_test_fixture() -> DTPSR<ConnectionFixture> {
 
 pub async fn instance_rust() -> TestFixture {
     init_logging();
-    let mut server = DTPSServer::new(None, None, "cloudflare".to_string(), None, hashmap! {}, vec![], vec![])
-        .await
-        .unwrap();
+    let mut server = DTPSServer::new(
+        None,
+        None,
+        "cloudflare".to_string(),
+        vec![],
+        hashmap! {},
+        vec![],
+        vec![],
+    )
+    .await
+    .unwrap();
 
     let handles = server.start_serving().await.unwrap();
 

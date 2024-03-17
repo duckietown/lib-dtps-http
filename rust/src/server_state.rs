@@ -1444,7 +1444,7 @@ pub async fn observe_node_proxy(
     let (_handle, rx) = get_events_stream_inline(&inline_url).await;
 
     for_each_from_stream(rx, |lue| async {
-        debug_with_info!("observe_node_proxy: obained a notification {:?}", lue);
+        // debug_with_info!("observe_node_proxy: obained a notification {:?}", lue);
         let notification = match lue {
             ListenURLEvents::InsertNotification(not) => not,
             ListenURLEvents::WarningMsg(_)

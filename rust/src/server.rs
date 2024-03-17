@@ -49,7 +49,7 @@ pub struct DTPSServer {
     pub mutex: ServerStateAccess,
     pub cloudflare_tunnel_name: Option<String>,
     pub cloudflare_executable: String,
-    pub unix_path: Option<String>,
+    pub unix_path: Vec<String>,
     initial_proxy: HashMap<String, TypeOfConnection>,
     topic_connections: Vec<ConnectionJob>,
 }
@@ -59,7 +59,7 @@ impl DTPSServer {
         listen_address: Option<SocketAddr>,
         cloudflare_tunnel_name: Option<String>,
         cloudflare_executable: String,
-        unix_path: Option<String>,
+        unix_path: Vec<String>,
         initial_proxy: HashMap<String, TypeOfConnection>,
         topic_connections: Vec<ConnectionJob>,
         aliases: Vec<TopicAlias>,
@@ -272,12 +272,8 @@ impl DTPSServer {
         let unix_path = env::temp_dir().join(socketanme);
 
         let mut unix_paths: Vec<String> = vec![unix_path.to_str().unwrap().to_string()];
-        match &self.unix_path {
-            Some(x) => {
-                unix_paths.push(x.clone());
-            }
-            None => {}
-        }
+        // add the paths from the configuration
+        unix_paths.extend(self.unix_path.clone());
 
         for (i, unix_path) in unix_paths.iter().enumerate() {
             let the_path = Path::new(&unix_path);
@@ -413,7 +409,7 @@ impl DTPSServer {
 
             _ = sig_int.recv() => {
                 info_with_info!("SIGINT received");
-                    res = Err(DTPSError::Interrupted);
+                    res = Err(DTPSError::Interrupted("SIGINT received".to_string()));
             },
             _ = sig_hup.recv() => {
                 info_with_info!("SIGHUP received: gracefully shutting down");
@@ -469,6 +465,12 @@ impl DTPSServer {
         ));
 
         Ok(handle)
+    }
+
+    pub async fn finish(&mut self) -> DTPSR<()> {
+        let lock = self.get_lock();
+        let ss = &mut lock.lock().await;
+        ss.job_manager.stop_all_jobs().await
     }
 }
 
@@ -932,7 +934,6 @@ struct EventsQuery {
     send_data: Option<u8>,
 }
 
-const DEFAULT_PORT: u16 = 8000;
 const DEFAULT_HOST: &str = "0.0.0.0";
 const DEFAULT_CLOUDFLARE_EXECUTABLE: &str = "cloudflared";
 
@@ -941,8 +942,8 @@ const DEFAULT_CLOUDFLARE_EXECUTABLE: &str = "cloudflared";
 #[command(author, version, about, long_about = None)]
 pub struct ServerArgs {
     /// TCP Port to bind to
-    #[arg(long, default_value_t = DEFAULT_PORT)]
-    tcp_port: u16,
+    #[arg(long)]
+    tcp_port: Option<u16>,
 
     /// Hostname to bind to
     #[arg(long, default_value_t = DEFAULT_HOST.to_string())]
@@ -950,7 +951,7 @@ pub struct ServerArgs {
 
     /// Optional UNIX path to listen to
     #[arg(long)]
-    unix_path: Option<String>,
+    unix_path: Vec<String>,
 
     /// Cloudflare tunnel to start
     #[arg(long)]
@@ -1012,8 +1013,8 @@ pub fn address_from_host_port(host: &str, port: u16) -> DTPSR<SocketAddr> {
 pub async fn create_server_from_command_line() -> DTPSR<DTPSServer> {
     let args = ServerArgs::parse();
 
-    let listen_address = if args.tcp_port > 0 {
-        Some(address_from_host_port(args.tcp_host.as_str(), args.tcp_port)?)
+    let listen_address = if let Some(port) = args.tcp_port {
+        Some(address_from_host_port(args.tcp_host.as_str(), port)?)
     } else {
         None
     };

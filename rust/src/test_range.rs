@@ -15,7 +15,7 @@ pub mod tests {
     use tokio::process::Command;
 
     use crate::utils_cbor::as_cbor_value;
-    use crate::{add_proxy, remove_proxy};
+    use crate::{add_proxy, get_resolved, remove_proxy, ResolvedData};
     use crate::{client_verbs, get_metadata, DTPSLowLevel};
     use crate::{create_topic, delete_topic};
     use crate::{
@@ -820,5 +820,66 @@ pub mod tests {
         //  publish_cbor(&con_topic, &data).await?;
 
         Ok(())
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_disappearance_rust_rust(
+        #[future] instance: TestFixture,
+        #[future] instance2: TestFixture,
+    ) -> DTPSR<()> {
+        check_disappearance(instance, instance2).await
+    }
+
+    async fn check_disappearance(mut switchboard_t: TestFixture, mut node_t: TestFixture) -> DTPSR<()> {
+        init_logging();
+        // first mount the node
+        let topic = TopicName::from_dash_sep("topic")?;
+        DTPSLowLevel::create_topic(
+            &node_t.cf.con.clone(),
+            &topic,
+            &TopicRefAdd {
+                app_data: Default::default(),
+                properties: TopicProperties::rw(),
+                content_info: ContentInfo::simple(CONTENT_TYPE_CBOR, None),
+            },
+        )
+        .await?;
+        let initial = hashmap! {"value" => "initial"};
+        let topic_orig_con = node_t.cf.con.join(topic.as_relative_url())?;
+
+        DTPSLowLevel::publish_cbor(&topic_orig_con, &initial).await?;
+
+        let mountpoint = TopicName::from_dash_sep("mounted")?;
+
+        let urls = [node_t.cf.con.clone()];
+        let mask_origin = false;
+        DTPSLowLevel::add_proxy(&switchboard_t.cf.con, &mountpoint, None, &urls, mask_origin).await?;
+
+        let proxied_topic = switchboard_t
+            .cf
+            .con
+            .join(mountpoint.as_relative_url())?
+            .join(topic.as_relative_url())?;
+
+        // wait 1 second
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+
+        log::info!("proxied_topic: {}", proxied_topic.to_url_repr());
+
+        // now getting the data
+        client_verbs::get_rawdata(&proxied_topic).await?;
+        // stop the node
+        node_t.server.finish().await?;
+
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        // this should throw
+        let res = get_resolved(&proxied_topic, None).await?;
+
+        return match res {
+            ResolvedData::NotReachable(_) => Ok(()),
+            _ => DTPSError::other("Expected NotReachable"),
+        };
     }
 }
