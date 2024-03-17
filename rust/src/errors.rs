@@ -25,7 +25,7 @@ pub enum DTPSError {
     #[error("DTPSError: Topic not found:\n{}", indent_inside(.0))]
     TopicNotFound(String),
 
-    #[error("DTPSError: Mount pint not ready:\n{}", indent_inside(.0))]
+    #[error("DTPSError: Mount point not ready:\n{}", indent_inside(.0))]
     MountpointNotReady(String),
 
     #[error("DTPSError: Topic already exists:\n{}", indent_inside(.0))]

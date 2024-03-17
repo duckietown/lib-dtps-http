@@ -832,6 +832,7 @@ pub mod tests {
         check_disappearance(instance, instance2).await
     }
 
+    /// Checks that the server returns NotReachable when the proxied server disappears
     async fn check_disappearance(mut switchboard_t: TestFixture, mut node_t: TestFixture) -> DTPSR<()> {
         init_logging();
         // first mount the node
@@ -877,6 +878,63 @@ pub mod tests {
         // this should throw
         let res = get_resolved(&proxied_topic, None).await?;
 
+        return match res {
+            ResolvedData::NotReachable(_) => Ok(()),
+            _ => DTPSError::other("Expected NotReachable"),
+        };
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_check_proxy_not_existing_rust_rust(
+        #[future] instance: TestFixture,
+        #[future] instance2: TestFixture,
+    ) -> DTPSR<()> {
+        check_proxy_not_existing(instance, instance2).await
+    }
+
+    /// Checks that the server returns NotReachable when the proxied server doesn't exist
+    async fn check_proxy_not_existing(mut switchboard_t: TestFixture, mut node_t: TestFixture) -> DTPSR<()> {
+        init_logging();
+        // first mount the node
+        let topic = TopicName::from_dash_sep("topic")?;
+        DTPSLowLevel::create_topic(
+            &node_t.cf.con.clone(),
+            &topic,
+            &TopicRefAdd {
+                app_data: Default::default(),
+                properties: TopicProperties::rw(),
+                content_info: ContentInfo::simple(CONTENT_TYPE_CBOR, None),
+            },
+        )
+        .await?;
+        let initial = hashmap! {"value" => "initial"};
+        let topic_orig_con = node_t.cf.con.join(topic.as_relative_url())?;
+
+        DTPSLowLevel::publish_cbor(&topic_orig_con, &initial).await?;
+
+        let mountpoint = TopicName::from_dash_sep("mounted")?;
+
+        // stop the node before adding the proxy
+        node_t.server.finish().await?;
+
+        let urls = [node_t.cf.con.clone()];
+        let mask_origin = false;
+        DTPSLowLevel::add_proxy(&switchboard_t.cf.con, &mountpoint, None, &urls, mask_origin).await?;
+
+        let proxied_topic = switchboard_t
+            .cf
+            .con
+            .join(mountpoint.as_relative_url())?
+            .join(topic.as_relative_url())?;
+
+        log::info!("proxied_topic: {}", proxied_topic.to_url_repr());
+
+        // this should throw
+        let res = get_resolved(&proxied_topic, None).await?;
+
+        log::info!("res: {:?}", res);
         return match res {
             ResolvedData::NotReachable(_) => Ok(()),
             _ => DTPSError::other("Expected NotReachable"),

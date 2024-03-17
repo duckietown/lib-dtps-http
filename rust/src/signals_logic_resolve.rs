@@ -170,14 +170,15 @@ fn resolve(
         // check if it is a subtopic of a mountpoint
         for mountpoint in other_mountpoints {
             let mountpoint_components = mountpoint.as_components();
-            match is_prefix_of(path_components, mountpoint_components) {
+            match is_prefix_of(mountpoint_components, path_components) {
                 None => continue,
                 Some(_rest) => {
                     let s = format!(
-                        "This path {} corresponds to a mountpoint but the connection is not established yet.",
-                        path_components.join("/")
+                        "The path \"{}\" corresponds to the mountpoint \"{}\"\nbut the connection is not established yet.",
+                        path_components.join("/"),
+                        mountpoint.as_dash_sep(),
                     );
-                    return Err(DTPSError::TopicNotFound(s));
+                    return Err(DTPSError::MountpointNotReady(s));
                 }
             };
         }
