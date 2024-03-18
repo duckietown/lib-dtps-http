@@ -86,6 +86,7 @@ from .object_queue import (
     TransformError,
 )
 from .structures import (
+    Bounds,
     ChannelMsgs,
     Chunk,
     ConnectionEstablished,
@@ -145,6 +146,7 @@ class ForwardedTopic:
     reachability: List[TopicReachability]
     properties: TopicProperties
     content_info: ContentInfo
+    bounds: Bounds
 
 
 @original_dataclass
@@ -206,14 +208,16 @@ class DTPSServer:
         cls,
         on_startup: "Sequence[Callable[[DTPSServer], Awaitable[None]]]" = (),
         nickname: Optional[str] = None,
+        enable_clock: bool = True,
     ) -> "DTPSServer":
-        return cls(on_startup=on_startup, nickname=nickname)
+        return cls(on_startup=on_startup, nickname=nickname, enable_clock=enable_clock)
 
     def __init__(
         self,
         *,
-        on_startup: "Sequence[Callable[[DTPSServer], Awaitable[None]]]" = (),
-        nickname: Optional[str] = None,
+        on_startup: "Sequence[Callable[[DTPSServer], Awaitable[None]]]",
+        nickname: Optional[str],
+        enable_clock: bool,
     ) -> None:
         if nickname is None:
             nickname = str(id(self))
@@ -244,7 +248,7 @@ class DTPSServer:
         routes.get("/{topic:.*}")(self.serve_get)
         routes.delete("/{topic:.*}")(self.serve_delete)
 
-        self.blob_manager = BlobManager()
+        self.blob_manager = BlobManager(cleanup_interval=5.0, forget_forgetting_interval=5.0)
 
         # mount a static directory for the web interface
         static_dir = get_static_dir()
@@ -266,6 +270,7 @@ class DTPSServer:
 
         self.started = asyncio.Event()
         self.shutdown_event = asyncio.Event()
+        self.enable_clock = enable_clock
 
     def add_registrations(self, registrations: Sequence[Registration]) -> None:
         self.registrations.extend(registrations)
@@ -502,6 +507,7 @@ class DTPSServer:
                 forward_url_events_inline_data=metadata.events_data_inline_url,
                 content_info=tr2.content_info,  # FIXME: content info
                 properties=tr2.properties,
+                bounds=tr2.bounds,
             )
             #
             # self.logger.info(
@@ -549,10 +555,13 @@ class DTPSServer:
         self,
         name: TopicNameV,
         content_info: ContentInfo,
-        tp: Optional[TopicProperties] = None,
-        max_history: Optional[int] = None,
+        *,
+        tp: Optional[TopicProperties],
+        bounds: Optional[Bounds],
         transform: ObjectTransformFunction = transform_identity,
     ) -> ObjectQueue:
+        if bounds is None:
+            bounds = Bounds.default()
         if name in self._forwarded:
             raise ValueError(f"Topic '{name.as_dash_sep()}' is a forwarded one")
         if name in self._oqs:
@@ -578,10 +587,11 @@ class DTPSServer:
             created=time.time_ns(),
             properties=tp,
             content_info=content_info,
+            bounds=bounds,
         )
 
         self._oqs[name] = ObjectQueue(
-            self.hub, name, tr, max_history=max_history, blob_manager=self.blob_manager, transform=transform
+            self.hub, name, tr, bounds=bounds, blob_manager=self.blob_manager, transform=transform
         )
         await self._update_lists()
         return self._oqs[name]
@@ -599,8 +609,11 @@ class DTPSServer:
             content_info=content_info,
             properties=TopicProperties.streamable_readonly(),
             created=time.time_ns(),
+            bounds=Bounds.max_length(10),
         )
-        self._oqs[ROOT] = ObjectQueue(self.hub, ROOT, tr, blob_manager=self.blob_manager, max_history=5)
+        self._oqs[ROOT] = ObjectQueue(
+            self.hub, ROOT, tr, blob_manager=self.blob_manager, bounds=Bounds.max_length(10)
+        )
         index = self.create_root_index()
         wire = index.to_wire()
         as_cbor = cbor2.dumps(asdict(wire))
@@ -615,26 +628,58 @@ class DTPSServer:
             content_info=content_info,
             properties=TopicProperties.streamable_readonly(),
             created=time.time_ns(),
+            bounds=Bounds.max_length(10),
         )
         self._oqs[TOPIC_LIST] = ObjectQueue(
-            self.hub, TOPIC_LIST, tr, blob_manager=self.blob_manager, max_history=100
+            self.hub,
+            TOPIC_LIST,
+            tr,
+            blob_manager=self.blob_manager,
+            bounds=Bounds.max_length(10),
         )
 
-        await self.create_oq(TOPIC_LOGS, content_info=ContentInfo.simple(MIME_JSON), max_history=100)
-        await self.create_oq(TOPIC_CLOCK, content_info=ContentInfo.simple(MIME_JSON), max_history=10)
-        await self.create_oq(TOPIC_AVAILABILITY, content_info=ContentInfo.simple(MIME_JSON), max_history=10)
-        await self.create_oq(TOPIC_STATE_SUMMARY, content_info=ContentInfo.simple(MIME_JSON), max_history=10)
+        await self.create_oq(
+            TOPIC_LOGS, content_info=ContentInfo.simple(MIME_JSON), tp=None, bounds=Bounds.max_length(100)
+        )
+        if self.enable_clock:
+            await self.create_oq(
+                TOPIC_CLOCK,
+                content_info=ContentInfo.simple(MIME_JSON),
+                tp=None,
+                bounds=Bounds.max_length(10),
+            )
+        await self.create_oq(
+            TOPIC_AVAILABILITY,
+            content_info=ContentInfo.simple(MIME_JSON),
+            tp=None,
+            bounds=Bounds.max_length(10),
+        )
+        await self.create_oq(
+            TOPIC_STATE_SUMMARY,
+            content_info=ContentInfo.simple(MIME_JSON),
+            tp=None,
+            bounds=Bounds.max_length(10),
+        )
 
-        oq = await self.create_oq(TOPIC_PROXIED, content_info=ContentInfo.simple(MIME_JSON), max_history=10)
+        oq = await self.create_oq(
+            TOPIC_PROXIED,
+            content_info=ContentInfo.simple(MIME_JSON),
+            tp=None,
+            bounds=Bounds.max_length(10),
+        )
         rd = RawData(content=b"{}", content_type=MIME_JSON)
         await oq.publish(rd)
         oq.subscribe(self.on_proxied_changed)
 
         await self.create_oq(
-            TOPIC_STATE_NOTIFICATION, content_info=ContentInfo.simple(MIME_CBOR), max_history=10
+            TOPIC_STATE_NOTIFICATION,
+            content_info=ContentInfo.simple(MIME_CBOR),
+            tp=None,
+            bounds=Bounds.max_length(10),
         )
 
-        self.remember_task(asyncio.create_task(update_clock(self, TOPIC_CLOCK, 1.0, 0.0)))
+        if self.enable_clock:
+            self.remember_task(asyncio.create_task(update_clock(self, TOPIC_CLOCK, 1.0, 0.0)))
 
         for f in self._more_on_startup:
             await f(self)
@@ -733,6 +778,7 @@ class DTPSServer:
                 properties=fd.properties,
                 created=time.time_ns(),
                 content_info=fd.content_info,
+                bounds=fd.bounds,
             )
             topics[qual_topic_name] = tr
 
@@ -755,6 +801,7 @@ class DTPSServer:
                         properties=TopicProperties.streamable_readonly(),
                         created=time.time_ns(),
                         content_info=ContentInfo.simple(CONTENT_TYPE_DTPS_INDEX_CBOR),
+                        bounds=Bounds.unbounded(),  # XXX
                     )
 
         index_internal = TopicsIndex(topics=topics)
@@ -1419,7 +1466,7 @@ pre {{
 
                     value = operation.operation["value"]
                     trf = TopicRefAdd.from_json(value)
-                    await self.create_oq(topic, trf.content_info, trf.properties)
+                    await self.create_oq(topic, trf.content_info, tp=trf.properties, bounds=trf.bounds)
                     self.logger.info(f"created new topic: '{topic.as_dash_sep()}'")
 
                 elif isinstance(operation, (ReplaceOperation, MoveOperation, TestOperation, CopyOperation)):
@@ -1852,6 +1899,7 @@ async def update_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, i
         t = time.time_ns()
         data = str(t).encode()
         await oq.publish(RawData(content=data, content_type=MIME_JSON))
+        data = None
         try:
             await asyncio.sleep(interval)
         except CancelledError:

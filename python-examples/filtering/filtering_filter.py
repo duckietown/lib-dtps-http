@@ -5,6 +5,7 @@ from dtps_http import (
     async_error_catcher, ContentInfo, DataSaved, DTPSServer,
     interpret_command_line_and_start, logger, MIME_JSON, ObjectQueue, RawData, TopicNameV, TopicProperties,
 )
+from dtps_http.structures import Bounds, InsertNotification
 
 __all__ = [
     "dtps_example_manual_filter_main",
@@ -16,17 +17,15 @@ __all__ = [
 async def on_startup(s: DTPSServer) -> None:
     IN = TopicNameV.from_dash_sep("node/in")
     OUT = TopicNameV.from_dash_sep("node/out")
-    queue_in = await s.create_oq(IN, content_info=ContentInfo.simple(MIME_JSON),
+    queue_in = await s.create_oq(IN, content_info=ContentInfo.simple(MIME_JSON), bounds=Bounds.max_length(2),
                                  tp=TopicProperties.rw_pushable())
-    queue_out = await s.create_oq(OUT, content_info=ContentInfo.simple(MIME_JSON),
+    queue_out = await s.create_oq(OUT, content_info=ContentInfo.simple(MIME_JSON), bounds=Bounds.max_length(2),
                                   tp=TopicProperties.streamable_readonly())
 
     @async_error_catcher
-    async def on_received_in(q: ObjectQueue, i: int) -> None:
-        saved: DataSaved = q.saved[i]
-        data: RawData = q.get(saved.digest)
+    async def on_received_in(q: ObjectQueue, inot: InsertNotification) -> None:
         # just publish the same data
-        await queue_out.publish(data)
+        await queue_out.publish(inot.raw_data)
 
     queue_in.subscribe(on_received_in)
 

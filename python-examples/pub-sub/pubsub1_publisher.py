@@ -14,7 +14,8 @@ async def on_startup(s: DTPSServer) -> None:
     OUT = TopicNameV.from_dash_sep("node/out")
     # We create the output queue.
     # You can give a lot of details
-    queue_out = await s.create_oq(OUT, content_info=ContentInfo.simple(MIME_JSON))
+    queue_out = await s.create_oq(OUT, content_info=ContentInfo.simple(MIME_JSON),
+                                  tp=None, bounds=None)
 
     # We create a task that periodically publishes to the queue
     @async_error_catcher

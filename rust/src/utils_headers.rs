@@ -179,8 +179,11 @@ pub fn get_accept_header(headers: &HeaderMap) -> Vec<String> {
 }
 
 pub fn get_content_type<T>(resp: &http::Response<T>) -> String {
-    resp.headers()
-        .get(CONTENT_TYPE)
+    get_content_type_from_headers(resp.headers())
+}
+
+pub fn get_content_type_from_headers(h: &HeaderMap<HeaderValue>) -> String {
+    h.get(CONTENT_TYPE)
         .map(|x| x.to_str().unwrap().to_string())
         .unwrap_or(CONTENT_TYPE_OCTET_STREAM.to_string())
 }

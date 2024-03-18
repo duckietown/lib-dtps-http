@@ -7,6 +7,8 @@ pub use indent::indent_all_with;
 use cbor_manipulation::*;
 pub use cli_program_listen::cli_listen;
 pub use cli_program_server::cli_server;
+pub use cli_program_server::cli_stress_test;
+
 pub use cli_program_stats::cli_stats;
 pub use cli_program_subscribe::cli_subscribe;
 use client_history::*;
@@ -121,6 +123,7 @@ mod client_metadata;
 mod client_tpt;
 mod utils_patch;
 
+mod blob_manager;
 mod cli_program_listen;
 mod cli_program_server;
 mod cli_program_stats;
@@ -133,6 +136,7 @@ mod client_verbs;
 mod client_websocket_read;
 mod interface;
 mod signals_logic_call;
+mod test_requests;
 mod utils_queues;
 mod utils_time;
 mod utils_websocket;

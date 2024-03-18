@@ -59,7 +59,7 @@ async def on_startup(s: DTPSServer) -> None:
         produces_content_type=[MIME_CBOR, MIME_JSON]
     )
 
-    queue_in = await s.create_oq(IN, content_info=content_info,
+    queue_in = await s.create_oq(IN, content_info=content_info, bounds=None,
                                  tp=TopicProperties.rw_pushable(), transform=t)
 
     r1 = await queue_in.publish_json(0)

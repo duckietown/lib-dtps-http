@@ -14,7 +14,7 @@ use crate::{
 #[async_trait]
 impl Patchable for TypeOFSource {
     async fn patch(&self, presented_as: &str, ssa: ServerStateAccess, patch: &Patch) -> DTPSR<DataSaved> {
-        debug_with_info!("patching {self:#?} with {patch:#?}");
+        // debug_with_info!("patching {self:#?} with {patch:#?}");
         match self {
             TypeOFSource::ForwardedQueue(fq) => {
                 let con = {
@@ -149,7 +149,7 @@ async fn patch_composition(ss_mutex: ServerStateAccess, patch: &Patch, sc: &Sour
                     Some(tra.app_data),
                     &tra.properties,
                     &tra.content_info,
-                    None,
+                    tra.bounds,
                 )?;
             }
             PatchOperation::Remove(ro) => {
@@ -213,15 +213,13 @@ async fn patch_our_queue(ssa: ServerStateAccess, patch: &Patch, topic_name: &Top
     let mut ss = ssa.lock().await;
 
     let (data_saved, raw_data) = {
-        // let ss = ss_mutex.lock().await;
-
         let oq = ss.get_queue(topic_name)?;
         if oq.saved.is_empty() {
             return invalid_input!("patch_our_queue: {topic_name:?} is empty");
         }
         let last = oq.stored.last().unwrap();
         let data_saved = oq.saved.get(last).unwrap();
-        let content = ss.get_blob_bytes(&data_saved.digest)?;
+        let content = ss.blob_manager.get_blob_bytes(&data_saved.digest)?;
         let raw_data = RawData::new(content, &data_saved.content_type);
         (data_saved.clone(), raw_data)
     };

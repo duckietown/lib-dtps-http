@@ -1,7 +1,7 @@
 import json
 import time
 from dataclasses import dataclass, dataclass as original_dataclass
-from typing import Awaitable, Callable, Dict, List, Optional, Union
+from typing import Awaitable, Callable, Dict, List, Union
 
 import cbor2
 import yaml
@@ -16,6 +16,7 @@ from .constants import (
     MIME_YAML,
 )
 from .structures import (
+    Bounds,
     ChannelInfo,
     ChannelInfoDesc,
     Clocks,
@@ -74,6 +75,10 @@ async def transform_identity(otc: ObjectTransformContext) -> RawData:
     return otc.raw_data
 
 
+# tolerance for removal of blobs after they are not needed anymore
+TOLERANCE_REMOVAL = 0.0
+
+
 class ObjectQueue:
     stored: List[int]
     saved: Dict[int, DataSaved]
@@ -84,7 +89,7 @@ class ObjectQueue:
     _pub: Publisher
     _sub: Subscriber
     tr: TopicRef
-    max_history: Optional[int]
+    bounds: Bounds
     transform: ObjectTransformFunction
     blob_manager: BlobManager
 
@@ -93,13 +98,11 @@ class ObjectQueue:
         hub: Hub,
         name: TopicNameV,
         tr: TopicRef,
-        max_history: Optional[int],
+        bounds: Bounds,
         blob_manager: BlobManager,
         transform: ObjectTransformFunction = transform_identity,
     ):
-        if max_history is not None and max_history < 1:
-            msg = f"Invalid max_history: {max_history}"
-            raise ValueError(msg)
+        self.bounds = bounds
         self._hub = hub
         self._pub = Publisher(self._hub, Key())
         self._sub = Subscriber(self._hub, name.as_relative_url())
@@ -107,7 +110,6 @@ class ObjectQueue:
         # self._data = {}
         self._name = name
         self.tr = tr
-        self.max_history = max_history
         self.stored = []
         self.saved = {}
         self._transform = transform
@@ -184,14 +186,15 @@ class ObjectQueue:
         self.stored.append(use_seq)
         self.saved[use_seq] = ds
 
-        if self.max_history is not None:
-            while len(self.stored) > self.max_history:
+        if self.bounds.max_size is not None:  # TODO: implement the semantics for others
+            while len(self.stored) > self.bounds.max_size:
                 x_old: int = self.stored.pop(0)
                 if x_old in self.saved:  # should always be true
                     ds_old = self.saved.pop(x_old)
-                    # extend deadline by an arbitrary 10 seconds
-                    # (should not be needed, but just in case)
-                    self.blob_manager.extend_deadline(ds_old.digest, 10)
+                    if TOLERANCE_REMOVAL is not None:
+                        # extend deadline by an arbitrary 10 seconds
+                        # (should not be needed, but just in case)
+                        self.blob_manager.extend_deadline(ds_old.digest, TOLERANCE_REMOVAL)
                     self.blob_manager.release_blob(ds_old.digest, (self.name_for_blob_manager, x_old))
 
         inot = InsertNotification(ds, obj0)

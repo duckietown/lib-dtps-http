@@ -131,16 +131,9 @@ fn resolve(
     other_mountpoints: &[TopicName],
 ) -> DTPSR<TypeOFSource> {
     let mut subtopics: Vec<(TopicName, Vec<String>, Vec<String>, TypeOFSource)> = vec![];
-    // let mut subtopics_vec = vec![];
 
-    // if path_components.len() == 0 && ends_with_dash {
-    //     p =
-    //     return Ok(TypeOFSource::OurQueue(TopicName::root(), p));
-    // }
-    // debug_with_info!(" = all_sources =\n{:#?} ", all_sources);
     for (k, source) in all_sources.iter() {
         let topic_components = k.as_components();
-        // subtopics_vec.push(topic_components.clone());
 
         if topic_components.is_empty() {
             continue;
@@ -160,7 +153,6 @@ fn resolve(
 
             Some(rest) => rest,
         };
-        // if !ends_with_dash {}
         // debug_with_info!("pushing: {k:?}");
         subtopics.push((k.clone(), matched, rest, source.clone()));
     }
@@ -170,14 +162,15 @@ fn resolve(
         // check if it is a subtopic of a mountpoint
         for mountpoint in other_mountpoints {
             let mountpoint_components = mountpoint.as_components();
-            match is_prefix_of(path_components, mountpoint_components) {
+            match is_prefix_of(mountpoint_components, path_components) {
                 None => continue,
                 Some(_rest) => {
                     let s = format!(
-                        "This path {} corresponds to a mountpoint but the connection is not established yet.",
-                        path_components.join("/")
+                        "The path \"{}\" corresponds to the mountpoint \"{}\"\nbut the connection is not established yet.",
+                        path_components.join("/"),
+                        mountpoint.as_dash_sep(),
                     );
-                    return Err(DTPSError::TopicNotFound(s));
+                    return Err(DTPSError::MountpointNotReady(s));
                 }
             };
         }

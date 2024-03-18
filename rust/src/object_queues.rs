@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use tokio::sync::broadcast;
 
+use crate::structures_topicref::Bounds;
 use crate::time_nanos_i64;
 use crate::{merge_clocks, Clocks, DataSaved, ListenURLEvents, MinMax, RawData, TopicRefInternal, DTPSR};
 
@@ -13,8 +14,8 @@ pub struct ObjectQueue {
     pub tx: broadcast::Sender<usize>,
     pub seq: usize,
     pub tr: TopicRefInternal,
-    pub max_history: Option<usize>,
-
+    // pub max_history: Option<usize>,
+    // pub bounds: Bounds,
     pub tx_notification: broadcast::Sender<ListenURLEvents>,
 }
 
@@ -25,12 +26,12 @@ pub struct InsertNotification {
 }
 
 impl ObjectQueue {
-    pub fn new(tr: TopicRefInternal, max_history: Option<usize>) -> Self {
+    pub fn new(tr: TopicRefInternal) -> Self {
         let (tx, _rx) = broadcast::channel(1024);
         let (tx_notification, _rx) = broadcast::channel(1024);
-        if let Some(max_history) = max_history {
-            assert!(max_history > 0);
-        }
+        // if let Some(max_history) = max_history {
+        //     assert!(max_history > 0);
+        // }
         ObjectQueue {
             seq: 0,
             stored: Vec::new(),
@@ -39,7 +40,7 @@ impl ObjectQueue {
             tx,
             tr,
             tx_notification,
-            max_history,
+            // bounds,
         }
     }
 
@@ -100,8 +101,9 @@ impl ObjectQueue {
         self.saved.insert(saved_data.index, saved_data.clone());
         self.stored.push(saved_data.index);
         let mut dropped = Vec::new();
-        if let Some(max_history) = self.max_history {
+        if let Some(max_history) = self.tr.bounds.max_size {
             while self.stored.len() > max_history {
+                // FIXME: implement the entire thing
                 let index = self.stored.remove(0);
                 let ds = self.saved.remove(&index).unwrap();
                 dropped.push((ds.digest, ds.index));

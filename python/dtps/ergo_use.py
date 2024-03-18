@@ -13,6 +13,7 @@ from dtps_http import (
     join,
     MIME_OCTET,
     NodeID,
+    NoSuchTopic,
     ObjectTransformFunction,
     parse_url_unescape,
     RawData,
@@ -22,11 +23,9 @@ from dtps_http import (
     URL,
     url_to_string,
     URLIndexer,
-    NoSuchTopic,
-    DEFAULT_MAX_HISTORY,
 )
 from dtps_http.client import ListenDataInterface
-from dtps_http.structures import ConnectionJob
+from dtps_http.structures import Bounds, ConnectionJob
 from . import logger
 from .config import ContextInfo, ContextManager
 from .ergo_ui import (
@@ -253,20 +252,18 @@ class ContextManagerUseContext(DTPSContext):
     async def queue_create(
         self,
         *,
-        max_history: int = None,
         parameters: Optional[TopicRefAdd] = None,
         transform: Optional[ObjectTransformFunction] = None,
+        bounds: Optional[Bounds] = None,
     ) -> "DTPSContext":
+        if bounds is None:
+            bounds = Bounds.default()
         topic = self._get_components_as_topic()
 
         url = await self._get_best_url()
 
         if transform is not None:
             msg = "transform is not supported for remote queues"
-            raise ValueError(msg)
-
-        if max_history is not None:
-            msg = "max_history is not supported for remote queues"
             raise ValueError(msg)
 
         try:
@@ -284,18 +281,19 @@ class ContextManagerUseContext(DTPSContext):
                 content_info=ContentInfo.simple(MIME_OCTET),
                 properties=TopicProperties.rw_pushable(),
                 app_data={},
+                bounds=bounds,
             )
 
         await self.master.client.add_topic(self.master.best_url, topic, parameters)
         return self
 
     async def until_ready(
-            self,
-            retry_every: float = 2.0,
-            retry_max: Optional[int] = None,
-            timeout: Optional[float] = None,
-            print_every: float = 10.0,
-            quiet: bool = False,
+        self,
+        retry_every: float = 2.0,
+        retry_max: Optional[int] = None,
+        timeout: Optional[float] = None,
+        print_every: float = 10.0,
+        quiet: bool = False,
     ) -> "DTPSContext":
         stime: float = time.time()
         num_tries: int = 0
@@ -316,7 +314,9 @@ class ContextManagerUseContext(DTPSContext):
             except (asyncio.TimeoutError, NoSuchTopic):
                 if not quiet and time.time() - printed_last > print_every:
                     waited: float = time.time() - stime
-                    logger.warning(f"I have been waiting for {self._get_components_as_topic()} for {waited:.0f}s")
+                    logger.warning(
+                        f"I have been waiting for {self._get_components_as_topic()} for {waited:.0f}s"
+                    )
                     printed_last = time.time()
                 # wait and retry
                 await asyncio.sleep(retry_every)

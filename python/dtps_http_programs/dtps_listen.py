@@ -1,8 +1,6 @@
 import argparse
 import asyncio
 import time
-from io import StringIO
-from pprint import pprint
 from typing import List, Optional
 
 from dtps_http import (

@@ -5,7 +5,7 @@ from dtps_http import (
     app_start,
     check_is_unix_socket,
     ContentInfo,
-    DataSaved,
+    DEFAULT_MAX_HISTORY,
     DTPSServer,
     join,
     MIME_OCTET,
@@ -19,10 +19,9 @@ from dtps_http import (
     TopicRefAdd,
     url_to_string,
     URLString,
-    DEFAULT_MAX_HISTORY,
 )
 from dtps_http.object_queue import ObjectTransformContext, transform_identity, TransformError
-from dtps_http.structures import InsertNotification
+from dtps_http.structures import Bounds, InsertNotification
 from dtps_http.types_of_source import (
     ForwardedQueue,
     Native,
@@ -277,7 +276,10 @@ class ContextManagerCreateContext(DTPSContext):
         max_history: int = DEFAULT_MAX_HISTORY,
         parameters: Optional[TopicRefAdd] = None,
         transform: Optional[RPCFunction] = None,
+        bounds: Optional[Bounds] = None,
     ) -> "DTPSContext":
+        if bounds is None:
+            bounds = Bounds.default()
         server = self._get_server()
         topic = self._get_components_as_topic()
         if parameters is None:
@@ -285,6 +287,7 @@ class ContextManagerCreateContext(DTPSContext):
                 content_info=ContentInfo.simple(MIME_OCTET),
                 properties=TopicProperties.rw_pushable(),
                 app_data={},
+                bounds=bounds,
             )
         if transform is None:
             transform_use = transform_identity
@@ -298,7 +301,7 @@ class ContextManagerCreateContext(DTPSContext):
             content_info=parameters.content_info,
             tp=parameters.properties,
             transform=transform_use,
-            max_history=max_history,
+            bounds=bounds,
         )
 
         return self
@@ -313,7 +316,7 @@ class ContextManagerCreateContext(DTPSContext):
     ) -> "DTPSContext":
         return self
 
-    async def connect_to(self, c: "DTPSContext", /) -> "ConnectionInterface":
+    async def connect_to(self, c: "DTPSContext", /) -> "ConnectionInterface":  # type: ignore
         msg = 'Cannot use this method for "create" contexts because Python does not support the functionality'
         raise NotImplementedError(msg)
 

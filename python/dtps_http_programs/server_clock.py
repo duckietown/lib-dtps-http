@@ -25,7 +25,7 @@ __all__ = [
 async def run_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, initial_delay: float) -> None:
     await asyncio.sleep(initial_delay)
     logger.info(f"Starting clock {topic_name.as_relative_url()} with interval {interval}")
-    oq = await s.create_oq(topic_name, content_info=ContentInfo.simple(MIME_JSON))
+    oq = await s.create_oq(topic_name, content_info=ContentInfo.simple(MIME_JSON), tp=None, bounds=None)
     while True:
         t = time.time_ns()
         await oq.publish_json(t)

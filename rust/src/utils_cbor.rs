@@ -5,6 +5,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_cbor::Value::{Null as CBORNull, Text as CBORText};
 
+use crate::ResolvedData::NotReachable;
 use crate::{
     context, debug_with_info, dtpserror_other, ResolvedData,
     ResolvedData::{NotAvailableYet, NotFound, Regular},
@@ -46,7 +47,7 @@ pub fn putinside(result_dict: &mut serde_cbor::value::Value, prefix: &Vec<String
         Regular(x) => {
             where_to_put.insert(key_to_put, x);
         }
-        NotAvailableYet(x) => {
+        NotAvailableYet(x) | NotReachable(x) => {
             // TODO: do more here
             where_to_put.insert(key_to_put, CBORNull);
             where_to_put.insert(key_to_put2, CBORText(x));

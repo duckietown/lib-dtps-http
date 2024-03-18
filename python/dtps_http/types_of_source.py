@@ -13,6 +13,7 @@ from . import logger
 from .constants import CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_PATCH_CBOR
 from .object_queue import PostResult, TransformError
 from .structures import (
+    Bounds,
     ContentInfo,
     DataReady,
     DataSaved,
@@ -414,6 +415,7 @@ class SourceComposition(Source):
             created=0,
             properties=self.get_properties(server),
             content_info=content_info,
+            bounds=Bounds.unbounded(),  # TODO: warn?
         )
         return TopicsIndex(topics=topics)
 

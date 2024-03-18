@@ -25,7 +25,7 @@ pub enum DTPSError {
     #[error("DTPSError: Topic not found:\n{}", indent_inside(.0))]
     TopicNotFound(String),
 
-    #[error("DTPSError: Mount pint not ready:\n{}", indent_inside(.0))]
+    #[error("DTPSError: Mount point not ready:\n{}", indent_inside(.0))]
     MountpointNotReady(String),
 
     #[error("DTPSError: Topic already exists:\n{}", indent_inside(.0))]
@@ -41,7 +41,7 @@ pub enum DTPSError {
     Other(String),
 
     #[error("DTPSError: Interrupted")]
-    Interrupted,
+    Interrupted(String),
 
     #[error("DTPSError: Not reachable:\n{}", indent_inside(.0))]
     ResourceNotReachable(String),
@@ -180,7 +180,12 @@ impl DTPSError {
             DTPSError::TopicNotFound(..) | DTPSError::ResourceNotFound(..) => StatusCode::NOT_FOUND,
             DTPSError::InvalidInput(..) => StatusCode::BAD_REQUEST,
             DTPSError::MountpointNotReady(..) => StatusCode::SERVICE_UNAVAILABLE,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
+            DTPSError::NotAvailable(..) => StatusCode::SERVICE_UNAVAILABLE,
+            _ => {
+                error_with_info!("Unknown status code for error: {:#?}, giving generic 500.", self);
+
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         }
     }
 
