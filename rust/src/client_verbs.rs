@@ -281,7 +281,7 @@ pub async fn make_request2(
     let resp = match r0 {
         Ok(x) => x,
         Err(e) => {
-            debug_with_info!("make_request: {e:?}");
+            // debug_with_info!("make_request: {e:?}");
 
             let x: ResponseUnobtained = if e.is_connect() {
                 let msg = e.to_string();
@@ -417,7 +417,7 @@ pub async fn make_request(
     //     }
     // }
     // r0.map_err(|e| anyhow::anyhow!("make_request: {e:?}"))?;
-    debug_with_info!("make_request:\n{use_url}\n{r0:?}");
+    // debug_with_info!("make_request:\n{use_url}\n{r0:?}");
 
     let resp = match r0 {
         Ok(x) => x,

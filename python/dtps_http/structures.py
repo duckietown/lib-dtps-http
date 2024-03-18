@@ -7,7 +7,7 @@ import cbor2
 from multidict import CIMultiDict
 from pydantic.dataclasses import dataclass
 
-from .constants import HEADER_LINK_BENCHMARK, MIME_CBOR, MIME_JSON, MIME_TEXT
+from .constants import DEFAULT_MAX_HISTORY, HEADER_LINK_BENCHMARK, MIME_CBOR, MIME_JSON, MIME_TEXT
 from .types import ContentType, NodeID, SourceID, TopicNameS, TopicNameV, URLString
 from .urls import join, parse_url_unescape, URL, url_to_string, URLIndexer
 from .utils import pydantic_parse
@@ -284,6 +284,29 @@ class Clocks:
         return Clocks(logical={}, wall={})
 
 
+@dataclass(frozen=True)
+class Bounds:
+    min_size: int
+    min_time_ms: int
+    min_bytes: int
+
+    max_size: Optional[int]
+    max_time_ms: Optional[int]
+    max_bytes: Optional[int]
+
+    @classmethod
+    def unbounded(cls) -> "Bounds":
+        return cls(min_size=0, min_time_ms=0, max_size=None, max_time_ms=None, min_bytes=0, max_bytes=None)
+
+    @classmethod
+    def max_length(cls, n: int) -> "Bounds":
+        return cls(min_size=0, min_time_ms=0, max_size=n, max_time_ms=None, min_bytes=0, max_bytes=None)
+
+    @classmethod
+    def default(cls) -> "Bounds":
+        return cls.max_length(DEFAULT_MAX_HISTORY)
+
+
 @dataclass
 class DataSaved:
     origin_node: NodeID
@@ -382,6 +405,7 @@ class TopicRefWire:
     created: int
     properties: TopicProperties
     content_info: ContentInfo
+    bounds: Bounds
 
     def to_internal(self, where_available: List[URL], /) -> "TopicRef":
         reachability = []
@@ -396,6 +420,7 @@ class TopicRefWire:
             created=self.created,
             properties=self.properties,
             content_info=self.content_info,
+            bounds=self.bounds,
         )
 
 
@@ -408,6 +433,7 @@ class TopicRef:
     created: int
     properties: TopicProperties
     content_info: ContentInfo
+    bounds: Bounds
 
     def to_wire(self) -> "TopicRefWire":
         reachability = []
@@ -421,6 +447,7 @@ class TopicRef:
             created=self.created,
             properties=self.properties,
             content_info=self.content_info,
+            bounds=self.bounds,
         )
 
 
@@ -429,6 +456,7 @@ class TopicRefAdd:
     app_data: Dict[str, str]
     properties: TopicProperties
     content_info: ContentInfo
+    bounds: Bounds
 
     @classmethod
     def from_json(cls, s: Any) -> "TopicRefAdd":

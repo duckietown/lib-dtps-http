@@ -1,7 +1,7 @@
 import json
 import time
 from dataclasses import dataclass, dataclass as original_dataclass
-from typing import Awaitable, Callable, Dict, List, Optional, Union
+from typing import Awaitable, Callable, Dict, List, Union
 
 import cbor2
 import yaml
@@ -16,6 +16,7 @@ from .constants import (
     MIME_YAML,
 )
 from .structures import (
+    Bounds,
     ChannelInfo,
     ChannelInfoDesc,
     Clocks,
@@ -88,7 +89,7 @@ class ObjectQueue:
     _pub: Publisher
     _sub: Subscriber
     tr: TopicRef
-    max_history: Optional[int]
+    bounds: Bounds
     transform: ObjectTransformFunction
     blob_manager: BlobManager
 
@@ -97,13 +98,11 @@ class ObjectQueue:
         hub: Hub,
         name: TopicNameV,
         tr: TopicRef,
-        max_history: Optional[int],
+        bounds: Bounds,
         blob_manager: BlobManager,
         transform: ObjectTransformFunction = transform_identity,
     ):
-        if max_history is not None and max_history < 1:
-            msg = f"Invalid max_history: {max_history}"
-            raise ValueError(msg)
+        self.bounds = bounds
         self._hub = hub
         self._pub = Publisher(self._hub, Key())
         self._sub = Subscriber(self._hub, name.as_relative_url())
@@ -111,7 +110,6 @@ class ObjectQueue:
         # self._data = {}
         self._name = name
         self.tr = tr
-        self.max_history = max_history
         self.stored = []
         self.saved = {}
         self._transform = transform
@@ -188,8 +186,8 @@ class ObjectQueue:
         self.stored.append(use_seq)
         self.saved[use_seq] = ds
 
-        if self.max_history is not None:
-            while len(self.stored) > self.max_history:
+        if self.bounds.max_size is not None:  # TODO: implement the semantics for others
+            while len(self.stored) > self.bounds.max_size:
                 x_old: int = self.stored.pop(0)
                 if x_old in self.saved:  # should always be true
                     ds_old = self.saved.pop(x_old)

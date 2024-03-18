@@ -11,6 +11,7 @@ from dtps_http import (
     RawData,
     TopicNameV,
 )
+from dtps_http.structures import Bounds
 from dtps_http.utils_every_once_in_a_while import EveryOnceInAWhile
 
 
@@ -30,7 +31,10 @@ async def async_main():
     await asyncio.sleep(1)
 
     oq = await s.create_oq(
-        TopicNameV.from_dash_sep("topic1"), content_info=ContentInfo.simple(MIME_OCTET), max_history=2
+        TopicNameV.from_dash_sep("topic1"),
+        content_info=ContentInfo.simple(MIME_OCTET),
+        tp=None,
+        bounds=Bounds.max_length(2),
     )
 
     from pympler import muppy, summary

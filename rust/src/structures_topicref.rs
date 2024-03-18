@@ -60,6 +60,45 @@ pub struct DataDesc {
     pub examples: Vec<RawData>,
 }
 
+/// The bounds for the data storage
+/// First, keep everything until the size is at least min_size
+/// Then, keep everything until the delay is at least min_time
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, JsonSchema)]
+pub struct Bounds {
+    pub min_size: usize,
+    pub min_time_ms: usize,
+    pub min_bytes: usize,
+
+    pub max_size: Option<usize>,
+    pub max_time_ms: Option<usize>,
+    pub max_bytes: Option<usize>,
+}
+
+impl Bounds {
+    pub fn unbounded() -> Self {
+        Self {
+            min_size: 0,
+            min_time_ms: 0,
+            min_bytes: 0,
+
+            max_size: None,
+            max_time_ms: None,
+            max_bytes: None,
+        }
+    }
+    pub fn max_length(n: usize) -> Self {
+        Self {
+            min_size: 0,
+            min_time_ms: 0,
+            min_bytes: 0,
+
+            max_size: Some(n),
+            max_time_ms: None,
+            max_bytes: None,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 pub struct ContentInfo {
     pub accept: HashMap<String, DataDesc>,
@@ -76,6 +115,7 @@ pub struct TopicRefWire {
     pub created: i64,
     pub properties: TopicProperties,
     pub content_info: ContentInfo,
+    pub bounds: Bounds,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +127,7 @@ pub struct TopicRefInternal {
     pub created: i64,
     pub properties: TopicProperties,
     pub content_info: ContentInfo,
+    pub bounds: Bounds,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -94,6 +135,7 @@ pub struct TopicRefAdd {
     pub app_data: HashMap<String, NodeAppData>,
     pub properties: TopicProperties,
     pub content_info: ContentInfo,
+    pub bounds: Bounds,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
@@ -135,6 +177,7 @@ impl TopicRefInternal {
             reachability,
             properties: self.properties.clone(),
             content_info: self.content_info.clone(),
+            bounds: self.bounds.clone(),
         }
     }
     pub fn from_wire(wire: &TopicRefWire, conbase: &TypeOfConnection) -> Self {
@@ -151,6 +194,7 @@ impl TopicRefInternal {
             reachability,
             properties: wire.properties.clone(),
             content_info: wire.content_info.clone(),
+            bounds: wire.bounds.clone(),
         }
     }
     pub fn add_path(&self, rel: &str) -> Self {
@@ -167,6 +211,7 @@ impl TopicRefInternal {
             reachability,
             properties: self.properties.clone(),
             content_info: self.content_info.clone(),
+            bounds: self.bounds.clone(),
         }
     }
 }

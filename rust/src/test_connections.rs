@@ -8,6 +8,7 @@ pub mod tests {
     use crate::client_proxy::add_proxy;
     use crate::client_tpt::{add_tpt_connection, remove_tpt_connection};
     use crate::client_verbs::post_json;
+    use crate::structures_topicref::Bounds;
     use crate::{
         debug_with_info, init_logging,
         test_fixtures::TestFixture,
@@ -33,7 +34,7 @@ pub mod tests {
                 CONTENT_TYPE_CBOR,
                 &TopicProperties::rw(),
                 None,
-                None,
+                Bounds::unbounded(),
             )?;
             ss.new_topic(
                 &topic_name2,
@@ -41,7 +42,7 @@ pub mod tests {
                 CONTENT_TYPE_CBOR,
                 &TopicProperties::rw(),
                 None,
-                None,
+                Bounds::unbounded(),
             )?;
         }
 
@@ -117,7 +118,7 @@ pub mod tests {
                 CONTENT_TYPE_CBOR,
                 &TopicProperties::rw(),
                 None,
-                None,
+                Bounds::unbounded(),
             )?;
             ss.new_topic(
                 &topic_name2,
@@ -125,7 +126,7 @@ pub mod tests {
                 CONTENT_TYPE_CBOR,
                 &TopicProperties::rw(),
                 None,
-                None,
+                Bounds::unbounded(),
             )?;
         }
 

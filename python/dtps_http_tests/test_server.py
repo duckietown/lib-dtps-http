@@ -31,6 +31,7 @@ from dtps_http import (
     URLIndexer,
     URLString,
 )
+from dtps_http.structures import Bounds
 from . import logger
 from .utils import test_timeout
 
@@ -54,6 +55,7 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
                         content_info=ContentInfo.simple(MIME_JSON),
                         properties=TopicProperties.rw_pushable(),
                         app_data={},
+                        bounds=Bounds.unbounded(),
                     )
                     topic = TopicNameV.from_dash_sep("a/b")
 
@@ -178,6 +180,7 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
             content_info=ContentInfo.simple(MIME_JSON),
             properties=TopicProperties.rw_pushable(),
             app_data={},
+            bounds=Bounds.unbounded(),
         )
         async with DTPSClient.create() as client:
             await client.add_topic(url, TopicNameV.from_dash_sep("a/b"), tra)
@@ -217,7 +220,9 @@ async def doit(topic_mime: Literal["json", "cbor", "yaml"], patch_mime: Literal[
             else:
                 raise Exception(f"Unknown topic_mime={topic_mime!r}")
 
-            oq = await dtps_server.create_oq(topic, content_info=ContentInfo.simple(topic_content_type))
+            oq = await dtps_server.create_oq(
+                topic, content_info=ContentInfo.simple(topic_content_type), tp=None, bounds=Bounds.unbounded()
+            )
             ob1 = {"A": {"B": ["C", "D"]}}
 
             if topic_mime == "json":

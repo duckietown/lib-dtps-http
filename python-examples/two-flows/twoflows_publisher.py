@@ -31,7 +31,7 @@ async def on_startup(s: DTPSServer) -> None:
         # Topic name is a concatenation of prefix and name (overload of __plus__)
         topic_name = prefix + TopicNameV.from_dash_sep(name)
         # Creates the queue for the topic
-        queue_out = await s.create_oq(topic_name, content_info=ContentInfo.simple(MIME_JSON))
+        queue_out = await s.create_oq(topic_name, content_info=ContentInfo.simple(MIME_JSON), tp=None, bounds=None)
         # Creates the task that periodically publishes to the queue
         asyncio.create_task(periodic_publish(queue_out, period))
 

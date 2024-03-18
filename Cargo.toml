@@ -80,6 +80,13 @@ getaddrs = "0.1.0"
 name = "dtps-rust"
 path = "rust/bin/dtps_main.rs"
 
+
+[[bin]]
+name = "dtps-http-rs-server-stress-test"
+path = "rust/bin/stress_test.rs"
+
+
+
 [[bin]]
 name = "dtps-http-rs-server-example-clock"
 path = "rust/bin/server.rs"

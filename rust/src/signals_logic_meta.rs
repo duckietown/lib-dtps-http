@@ -3,6 +3,7 @@ use std::{collections::HashMap, path::PathBuf};
 use async_trait::async_trait;
 use maplit::hashmap;
 
+use crate::structures_topicref::Bounds;
 use crate::{
     debug_with_info, not_implemented, urls::make_relative, ContentInfo, DTPSError, DataProps, ForwardingStep, GetMeta,
     LinkBenchmark, ServerStateAccess, SourceComposition, TopicName, TopicReachabilityInternal, TopicRefInternal,
@@ -58,6 +59,7 @@ async fn get_sc_meta(
             created,
             properties,
             content_info: ContentInfo::generic(),
+            bounds: Bounds::max_length(1), // XXX
         },
     );
     let index = TopicsIndexInternal { topics };
@@ -185,6 +187,7 @@ impl TypeOFSource {
                         created: 0,
                         properties: props.clone(),
                         content_info: ContentInfo::generic(),
+                        bounds: Bounds::max_length(1),
                     };
                     tr.reachability.push(TopicReachabilityInternal {
                         con: Relative(filename.clone(), None),

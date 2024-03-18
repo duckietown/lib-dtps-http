@@ -1,6 +1,6 @@
 use crate::server_state::SavedBlob;
 use crate::utils_time::time_nanos_i64;
-use crate::{error_with_info, warn_with_info, DTPSError, DTPSR};
+use crate::{debug_with_info, error_with_info, warn_with_info, DTPSError, DTPSR};
 use bytes::Bytes;
 use std::cmp::max;
 use std::collections::{HashMap, HashSet};
@@ -8,16 +8,34 @@ use std::collections::{HashMap, HashSet};
 pub struct BlobManager {
     pub blobs: HashMap<String, SavedBlob>,
     pub blobs_forgotten: HashMap<String, i64>,
+    pub forget_forgetting_interval_s: f32,
 }
 
 impl BlobManager {
-    pub fn new() -> Self {
+    pub fn new(forget_forgetting_interval_s: f32) -> Self {
         BlobManager {
             blobs: HashMap::new(),
             blobs_forgotten: HashMap::new(),
+            forget_forgetting_interval_s,
         }
     }
+    pub fn summarize(&self) -> String {
+        let mut s = String::new();
+        s.push_str("Blobs:\n");
+        for (digest, sb) in self.blobs.iter() {
+            let mut s_needed = String::new();
+            for (who, i) in sb.who_needs_it.iter() {
+                s_needed.push_str(&format!(" ['{who}'@{i}] "));
+            }
 
+            s.push_str(&format!(" {digest}: {} {}\n", sb.content.len(), s_needed));
+        }
+        s.push_str(&format!("Forgotten blobs: {}\n", self.blobs_forgotten.len()));
+        // for (digest, ts) in self.blobs_forgotten.iter() {
+        //     // s.push_str(&format!("  {digest}: {ts}\n"));
+        // }
+        s
+    }
     pub fn guarantee_blob_exists(&mut self, digest: &str, seconds: f64) {
         // debug_with_info!("Guarantee blob {digest} exists for {seconds} seconds more");
         let now = time_nanos_i64();
@@ -42,10 +60,20 @@ impl BlobManager {
             }
         }
         for digest in todrop {
-            // debug_with_info!("Dropping blob {digest} because deadline passed");
             self.blobs.remove(&digest);
 
             self.blobs_forgotten.insert(digest, now);
+        }
+        let mut todrop_memories = Vec::new();
+        for (digest, ts) in self.blobs_forgotten.iter() {
+            let delta = now - ts;
+            let seconds = delta as f64 / 1_000_000_000.0;
+            if seconds > self.forget_forgetting_interval_s as f64 {
+                todrop_memories.push(digest.clone());
+            }
+        }
+        for digest in todrop_memories {
+            self.blobs_forgotten.remove(&digest);
         }
     }
     pub fn release_blob(&mut self, digest: &str, who: &str, i: usize) {

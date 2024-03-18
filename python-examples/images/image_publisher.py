@@ -1,5 +1,6 @@
 import asyncio
 
+from dtps_http.structures import Bounds
 import numpy as np
 
 from dtps_http import (
@@ -15,7 +16,7 @@ async def on_startup(s: DTPSServer) -> None:
     OUT = TopicNameV.from_dash_sep("node/out")
     # We create the output queue.
     # You can give a lot of details
-    queue_out = await s.create_oq(OUT, content_info=ContentInfo.simple(MIME_JPEG))
+    queue_out = await s.create_oq(OUT, content_info=ContentInfo.simple(MIME_JPEG), tp=None, bounds=Bounds.max_length(2))
 
     # We create a task that periodically publishes to the queue
     @async_error_catcher

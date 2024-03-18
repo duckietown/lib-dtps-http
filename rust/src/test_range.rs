@@ -14,6 +14,7 @@ pub mod tests {
     use serde_json::json;
     use tokio::process::Command;
 
+    use crate::structures_topicref::Bounds;
     use crate::utils_cbor::as_cbor_value;
     use crate::{add_proxy, get_resolved, remove_proxy, ResolvedData};
     use crate::{client_verbs, get_metadata, DTPSLowLevel};
@@ -66,7 +67,7 @@ pub mod tests {
             CONTENT_TYPE_JSON,
             &TopicProperties::rw(),
             None,
-            None,
+            Bounds::unbounded(),
         )
         .unwrap();
 
@@ -86,7 +87,7 @@ pub mod tests {
             CONTENT_TYPE_JSON,
             &TopicProperties::rw(),
             None,
-            None,
+            Bounds::unbounded(),
         )
         .unwrap();
 
@@ -113,7 +114,14 @@ pub mod tests {
         {
             let mut ss = instance.ssa.lock().await;
             let topic_name = TopicName::from_dash_sep("a/b")?;
-            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
+            ss.new_topic(
+                &topic_name,
+                None,
+                CONTENT_TYPE_CBOR,
+                &TopicProperties::rw(),
+                None,
+                Bounds::unbounded(),
+            )?;
             for i in 0..10 {
                 ss.publish_object_as_cbor(&topic_name, &i, None)?;
             }
@@ -132,7 +140,14 @@ pub mod tests {
         {
             let mut ss = instance.ssa.lock().await;
             let topic_name = TopicName::from_dash_sep("a/b")?;
-            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
+            ss.new_topic(
+                &topic_name,
+                None,
+                CONTENT_TYPE_CBOR,
+                &TopicProperties::rw(),
+                None,
+                Bounds::unbounded(),
+            )?;
             for i in 0..10 {
                 let h = hashmap! {"value" => i};
                 ss.publish_object_as_cbor(&topic_name, &h, None)?;
@@ -175,7 +190,14 @@ pub mod tests {
         {
             let mut ss = instance.ssa.lock().await;
             let topic_name = TopicName::from_dash_sep("a/b")?;
-            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
+            ss.new_topic(
+                &topic_name,
+                None,
+                CONTENT_TYPE_CBOR,
+                &TopicProperties::rw(),
+                None,
+                Bounds::unbounded(),
+            )?;
         }
         let con_original = instance.cf.con.join("a/b/")?;
 
@@ -216,7 +238,14 @@ pub mod tests {
 
         {
             let mut ss = instance.ssa.lock().await;
-            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
+            ss.new_topic(
+                &topic_name,
+                None,
+                CONTENT_TYPE_CBOR,
+                &TopicProperties::rw(),
+                None,
+                Bounds::unbounded(),
+            )?;
         }
         let con_original = instance.cf.con.join(topic_name.as_relative_url())?;
 
@@ -258,7 +287,14 @@ pub mod tests {
 
         {
             let mut ss = instance.ssa.lock().await;
-            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
+            ss.new_topic(
+                &topic_name,
+                None,
+                CONTENT_TYPE_CBOR,
+                &TopicProperties::rw(),
+                None,
+                Bounds::unbounded(),
+            )?;
             for i in 0..n {
                 let h = hashmap! {"value" => i};
                 ss.publish_object_as_cbor(&topic_name, &h, None)?;
@@ -440,6 +476,7 @@ pub mod tests {
             app_data: Default::default(),
             properties: TopicProperties::rw(),
             content_info: ContentInfo::simple(CONTENT_TYPE_CBOR, None),
+            bounds: Bounds::unbounded(),
         };
         let con_topic = create_topic(&cf.con, &topic_name, &tra).await?;
         let h = hashmap! {"value" => "initial"};
@@ -562,6 +599,7 @@ pub mod tests {
             app_data: hashmap! {},
             properties,
             content_info,
+            bounds: Bounds::unbounded(),
         };
 
         //first time ok
@@ -611,7 +649,14 @@ pub mod tests {
 
         {
             let mut ss = instance.ssa.lock().await;
-            ss.new_topic(&topic_name, None, CONTENT_TYPE_CBOR, &TopicProperties::rw(), None, None)?;
+            ss.new_topic(
+                &topic_name,
+                None,
+                CONTENT_TYPE_CBOR,
+                &TopicProperties::rw(),
+                None,
+                Bounds::unbounded(),
+            )?;
             for i in 0..n {
                 let h = hashmap! {"value" => i};
                 ss.publish_object_as_cbor(&topic_name, &h, None)?;
@@ -690,6 +735,7 @@ pub mod tests {
                 app_data: Default::default(),
                 properties: TopicProperties::rw(),
                 content_info: ContentInfo::simple(CONTENT_TYPE_CBOR, None),
+                bounds: Bounds::unbounded(),
             },
         )
         .await?;
@@ -733,6 +779,7 @@ pub mod tests {
                 app_data: Default::default(),
                 properties: TopicProperties::rw(),
                 content_info: ContentInfo::simple(CONTENT_TYPE_CBOR, None),
+                bounds: Bounds::unbounded(),
             },
         )
         .await?;
@@ -749,7 +796,7 @@ pub mod tests {
     #[awt]
     #[tokio::test]
     async fn check_proxied_patch_rust(#[future] instance: TestFixture, #[future] instance2: TestFixture) -> DTPSR<()> {
-        crate::test_range::tests::check_proxied_patch(instance.cf, instance2.cf).await
+        check_proxied_patch(instance.cf, instance2.cf).await
     }
 
     #[rstest]
@@ -759,7 +806,7 @@ pub mod tests {
         #[future] instance_python: ConnectionFixture,
         #[future] instance_python2: ConnectionFixture,
     ) -> DTPSR<()> {
-        let x = crate::test_range::tests::check_proxied_patch(instance_python, instance_python2).await;
+        let x = check_proxied_patch(instance_python, instance_python2).await;
         match &x {
             Ok(_) => {}
             Err(e) => {
@@ -780,6 +827,7 @@ pub mod tests {
                 app_data: Default::default(),
                 properties: TopicProperties::rw(),
                 content_info: ContentInfo::simple(CONTENT_TYPE_CBOR, None),
+                bounds: Bounds::unbounded(),
             },
         )
         .await?;
@@ -799,14 +847,14 @@ pub mod tests {
         // wait 1 second
         tokio::time::sleep(Duration::from_millis(1000)).await;
 
-        log::info!("proxied_topic: {}", proxied_topic.to_url_repr());
+        info!("proxied_topic: {}", proxied_topic.to_url_repr());
 
         let patch = Patch(vec![PatchOperation::Add(AddOperation {
             path: "/added".to_string(),
             value: serde_json::Value::String("new".to_string()),
         })]);
 
-        client_verbs::patch_data(&proxied_topic, &patch).await?;
+        patch_data(&proxied_topic, &patch).await?;
         let h_expected = hashmap! {"value" => "initial", "added" => "new"};
         let h_expected_value = as_cbor_value(&h_expected)?;
         // let h = DTPSLowLevel::get_rawdata(&proxied_topic).await?.get_as_cbor()?;
@@ -844,6 +892,7 @@ pub mod tests {
                 app_data: Default::default(),
                 properties: TopicProperties::rw(),
                 content_info: ContentInfo::simple(CONTENT_TYPE_CBOR, None),
+                bounds: Bounds::unbounded(),
             },
         )
         .await?;
@@ -867,10 +916,10 @@ pub mod tests {
         // wait 1 second
         tokio::time::sleep(Duration::from_millis(1000)).await;
 
-        log::info!("proxied_topic: {}", proxied_topic.to_url_repr());
+        info!("proxied_topic: {}", proxied_topic.to_url_repr());
 
         // now getting the data
-        client_verbs::get_rawdata(&proxied_topic).await?;
+        get_rawdata(&proxied_topic).await?;
         // stop the node
         node_t.server.finish().await?;
 
@@ -906,6 +955,7 @@ pub mod tests {
                 app_data: Default::default(),
                 properties: TopicProperties::rw(),
                 content_info: ContentInfo::simple(CONTENT_TYPE_CBOR, None),
+                bounds: Bounds::unbounded(),
             },
         )
         .await?;
@@ -929,12 +979,12 @@ pub mod tests {
             .join(mountpoint.as_relative_url())?
             .join(topic.as_relative_url())?;
 
-        log::info!("proxied_topic: {}", proxied_topic.to_url_repr());
+        info!("proxied_topic: {}", proxied_topic.to_url_repr());
 
         // this should throw
         let res = get_resolved(&proxied_topic, None).await?;
 
-        log::info!("res: {:?}", res);
+        info!("res: {:?}", res);
         return match res {
             ResolvedData::NotReachable(_) => Ok(()),
             _ => DTPSError::other("Expected NotReachable"),

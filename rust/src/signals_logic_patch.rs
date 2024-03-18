@@ -149,7 +149,7 @@ async fn patch_composition(ss_mutex: ServerStateAccess, patch: &Patch, sc: &Sour
                     Some(tra.app_data),
                     &tra.properties,
                     &tra.content_info,
-                    None,
+                    tra.bounds,
                 )?;
             }
             PatchOperation::Remove(ro) => {

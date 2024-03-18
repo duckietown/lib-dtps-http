@@ -7,6 +7,8 @@ pub use indent::indent_all_with;
 use cbor_manipulation::*;
 pub use cli_program_listen::cli_listen;
 pub use cli_program_server::cli_server;
+pub use cli_program_server::cli_stress_test;
+
 pub use cli_program_stats::cli_stats;
 pub use cli_program_subscribe::cli_subscribe;
 use client_history::*;

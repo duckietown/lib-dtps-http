@@ -29,6 +29,7 @@ use crate::blob_manager::BlobManager;
 use crate::client_link_benchmark::{compute_best_alternative, get_stats, incompatible, UrlResult};
 use crate::get_events_stream_inline;
 use crate::get_index;
+use crate::structures_topicref::Bounds;
 use crate::time_nanos_i64;
 use crate::wrap_recv;
 use crate::TypeOfResource;
@@ -327,13 +328,14 @@ impl ServerState {
                 patchable: true,
             },
             content_info: ContentInfo::simple(CONTENT_TYPE_DTPS_INDEX_CBOR, Some(schema_for!(TopicsIndexWire))),
+            bounds: Bounds::max_length(10),
         };
-        oqs.insert(TopicName::root(), ObjectQueue::new(tr, Some(10)));
+        oqs.insert(TopicName::root(), ObjectQueue::new(tr));
 
         let node_started = time_nanos_i64();
 
         let (status_tx, status_rx) = mpsc::unbounded_channel::<ComponentStatusNotification>();
-
+        let forget_forgetting_interval_s = 60.0;
         let mut ss = ServerState {
             node_id,
             node_started,
@@ -341,7 +343,7 @@ impl ServerState {
             oqs,
             proxied_other: HashMap::new(),
             proxied_topics: HashMap::new(),
-            blob_manager: BlobManager::new(),
+            blob_manager: BlobManager::new(forget_forgetting_interval_s),
             proxied: HashMap::new(),
             advertise_urls: vec![],
             local_dirs: HashMap::new(),
@@ -366,7 +368,7 @@ impl ServerState {
             CONTENT_TYPE_JSON,
             &p,
             None,
-            Some(10),
+            Bounds::max_length(10),
         )?;
 
         ss.new_topic(
@@ -375,7 +377,7 @@ impl ServerState {
             CONTENT_TYPE_JSON,
             &p,
             Some(schema_for!(i64)),
-            Some(10),
+            Bounds::max_length(10),
         )?;
         ss.new_topic(
             &TopicName::from_dash_sep(TOPIC_LIST_AVAILABILITY)?,
@@ -383,7 +385,7 @@ impl ServerState {
             CONTENT_TYPE_JSON,
             &p,
             None,
-            Some(10),
+            Bounds::max_length(10),
         )?;
         ss.new_topic(
             &TopicName::from_dash_sep(TOPIC_LOGS)?,
@@ -391,7 +393,7 @@ impl ServerState {
             CONTENT_TYPE_JSON,
             &p,
             None,
-            Some(10),
+            Bounds::max_length(10),
         )?;
 
         ss.new_topic(
@@ -400,7 +402,7 @@ impl ServerState {
             CONTENT_TYPE_YAML,
             &p,
             Some(schema_for!(ComponentStatusNotification)),
-            Some(10),
+            Bounds::max_length(10),
         )?;
 
         ss.new_topic(
@@ -409,7 +411,7 @@ impl ServerState {
             CONTENT_TYPE_YAML,
             &p,
             None,
-            Some(10),
+            Bounds::max_length(10),
         )?;
 
         let p = TopicProperties {
@@ -427,7 +429,7 @@ impl ServerState {
             CONTENT_TYPE_JSON,
             &p,
             Some(schema_for!(Proxied)),
-            Some(1),
+            Bounds::max_length(1),
         )?;
         ss.publish_json(&TopicName::from_dash_sep(TOPIC_PROXIED)?, "{}", None)?;
 
@@ -446,7 +448,7 @@ impl ServerState {
             CONTENT_TYPE_JSON,
             &p,
             Some(schema_for!(ConnectionsWire)),
-            Some(1),
+            Bounds::max_length(1),
         )?;
         ss.publish_json(&TopicName::from_dash_sep(TOPIC_CONNECTIONS)?, "{}", None)?;
 
@@ -732,10 +734,10 @@ impl ServerState {
         content_type: &str,
         properties: &TopicProperties,
         schema: Option<RootSchema>,
-        max_history: Option<usize>,
+        bounds: Bounds,
     ) -> DTPSR<()> {
         let content_info = ContentInfo::simple(content_type, schema);
-        self.new_topic_ci(topic_name, app_data, properties, &content_info, max_history)
+        self.new_topic_ci(topic_name, app_data, properties, &content_info, bounds)
     }
     pub fn new_topic_ci(
         &mut self,
@@ -743,7 +745,7 @@ impl ServerState {
         app_data: Option<HashMap<String, NodeAppData>>,
         properties: &TopicProperties,
         content_info: &ContentInfo,
-        max_history: Option<usize>,
+        bounds: Bounds,
     ) -> DTPSR<()> {
         if self.oqs.contains_key(topic_name) {
             return Err(DTPSError::TopicAlreadyExists(topic_name.to_relative_url()));
@@ -761,10 +763,11 @@ impl ServerState {
             reachability: vec![],
             properties: properties.clone(),
             content_info: content_info.clone(),
+            bounds,
         };
         let oqs = &mut self.oqs;
 
-        oqs.insert(topic_name.clone(), ObjectQueue::new(tr, max_history));
+        oqs.insert(topic_name.clone(), ObjectQueue::new(tr));
         info_with_info!("New topic: {:?}", topic_name);
 
         self.update_my_topic()
@@ -835,6 +838,7 @@ impl ServerState {
 
         let oq = self.oqs.get_mut(topic_name).unwrap();
         let (data, ds, dropped_digests) = oq.push(&data0, clocks)?;
+        // debug_with_info!("Published to {:?} with digest {:?} dropped {:?}", topic_name, ds.digest, dropped_digests);
         // Note: we now transform the data (possibly) to the expected content type
         let new_digest = ds.digest.clone();
         let comment = format!("Index = {}", ds.index);
@@ -847,6 +851,7 @@ impl ServerState {
             self.blob_manager.release_blob(&digest, topic_name.as_dash_sep(), i);
         }
         self.blob_manager.cleanup_blobs();
+        // debug_with_info!("summary: {}", self.blob_manager.summarize());
         Ok(ds)
     }
 
@@ -984,6 +989,7 @@ impl ServerState {
                 created: 0,
                 properties: prop,
                 content_info: ContentInfo::generic(),
+                bounds: Bounds::max_length(10),
             };
 
             tr.reachability.push(TopicReachabilityInternal {
@@ -1017,6 +1023,7 @@ impl ServerState {
                 created: 0,
                 properties: prop,
                 content_info: ContentInfo::generic(),
+                bounds: Bounds::max_length(10),
             };
 
             tr.reachability.push(TopicReachabilityInternal {
@@ -1053,6 +1060,7 @@ impl ServerState {
                         patchable: false,
                     },
                     content_info: ContentInfo::generic(),
+                    bounds: Bounds::max_length(10),
                 }
             };
             topics.insert(alias.clone(), tr);
