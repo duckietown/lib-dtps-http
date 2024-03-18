@@ -1,4 +1,4 @@
-__version__ = "1.0.8"
+__version__ = "1.0.11"
 
 import coloredlogs  # type: ignore
 
@@ -21,7 +21,7 @@ from .utils import *
 from .object_queue import *
 
 getLogger("asyncio").setLevel(INFO)
-getLogger('aiohttp.access').setLevel(WARNING)
+getLogger("aiohttp.access").setLevel(WARNING)
 getLogger("aiopubsub").setLevel(INFO)
 getLogger("Hub").setLevel(INFO)
 getLogger("urllib3.connectionpool").setLevel(WARNING)
