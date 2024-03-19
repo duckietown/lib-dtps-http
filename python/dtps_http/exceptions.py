@@ -19,3 +19,7 @@ class EventListeningNotAvailable(DTPSClientException):
 
 class NoSuchTopic(DTPSClientException):
     pass
+
+
+class TopicOriginUnavailable(DTPSClientException):
+    pass

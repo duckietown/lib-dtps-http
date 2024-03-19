@@ -57,7 +57,7 @@ from .constants import (
     TOPIC_PROXIED,
     HTTP_TIMEOUT,
 )
-from .exceptions import EventListeningNotAvailable, NoSuchTopic
+from .exceptions import EventListeningNotAvailable, NoSuchTopic, TopicOriginUnavailable
 from .link_headers import get_link_headers
 from .structures import (
     ChannelInfo,
@@ -724,6 +724,8 @@ class DTPSClient:
                         resp: ClientResponse = resp
                         if resp.status == 404:
                             raise NoSuchTopic(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
+                        if resp.status == 503:
+                            raise TopicOriginUnavailable(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
                         raise ValueError(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
 
                     if accept is not None and content_type != accept:
@@ -734,6 +736,8 @@ class DTPSClient:
         except CancelledError:
             raise
         except NoSuchTopic:
+            raise
+        except TopicOriginUnavailable:
             raise
         except:
             self.logger.error(f"cannot connect to {url=!r} {use_url=!r} \n{traceback.format_exc()}")

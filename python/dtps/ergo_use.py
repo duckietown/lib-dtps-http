@@ -25,6 +25,7 @@ from dtps_http import (
     URLIndexer,
 )
 from dtps_http.client import ListenDataInterface
+from dtps_http.exceptions import TopicOriginUnavailable
 from dtps_http.structures import Bounds, ConnectionJob
 from . import logger
 from .config import ContextInfo, ContextManager
@@ -311,7 +312,7 @@ class ContextManagerUseContext(DTPSContext):
             try:
                 await self.data_get()
                 return self
-            except (asyncio.TimeoutError, NoSuchTopic):
+            except (asyncio.TimeoutError, NoSuchTopic, TopicOriginUnavailable):
                 if not quiet and time.time() - printed_last > print_every:
                     waited: float = time.time() - stime
                     logger.warning(
