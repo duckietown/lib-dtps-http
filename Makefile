@@ -12,15 +12,15 @@ publish: build
 bump: bump-patch
 
 bump-patch:
-	./bump-version.sh patch
+	bumpversion --tag --verbose patch
 	git push --tags
 
 bump-minor:
-	./bump-version.sh minor
+	bumpversion --tag --verbose minor
 	git push --tags
 
 bump-major:
-	./bump-version.sh major
+	bumpversion --tag --verbose major
 	git push --tags
 
 .PHONY: docs docs-serve

@@ -47,7 +47,7 @@ docker-build-debug:
 	docker buildx build --build-arg CARGO_PROFILE=dev --build-arg DEST=debug --progress plain --platform linux/arm64,linux/amd64 --push --tag $(tag) .
 
 docker-build-release:
-	docker buildx build --build-arg CARGO_PROFILE=release --build-arg DEST=release --progress plain --platform linux/arm64,linux/amd64 --push --tag $(tag) .
+	docker buildx build --build-arg CARGO_PROFILE=release --build-arg DEST=release --progress plain --platform linux/arm64,linux/amd64 --push --tag $(tag):release .
 
 creds=$(realpath $(PWD))
 run-demo:

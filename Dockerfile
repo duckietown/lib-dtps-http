@@ -17,7 +17,13 @@ RUN rm -rf /wd/target/$DEST/deps/
 RUN rm -rf /wd/target/$DEST/build/
 RUN rm -rf /wd/target/$DEST/examples/
 RUN rm -rf /wd/target/$DEST/incremental/
-
+RUN rm -rf /wd/target/$DEST/bin/dtps-rust
+RUN rm -rf /wd/target/$DEST/bin/dtps-http-rs-server-example-clock
+RUN rm -rf /wd/target/$DEST/bin/dtps-http-rs-server-stress-test
+RUN rm -rf /wd/target/$DEST/bin/dtps-http-rs-subscribe
+RUN rm -rf /wd/target/$DEST/bin/dtps-http-rs-client-stats
+RUN rm -rf /wd/target/$DEST/bin/dtps-http-rs-listen
+ 
 # get cloudflare executable
 
 FROM alpine/curl as builder2
@@ -37,7 +43,7 @@ RUN apt-get update && apt-get install -y ca-certificates # needed for https to w
 COPY --from=builder2 /tmp/cloudflared /usr/bin
 
 ARG DEST=release
-COPY --from=builder1 /wd/target/$DEST /usr/bin
+COPY --from=builder1 /wd/target/$DEST/dtps-http-rs-server /usr/bin/dtps-http-rs-server
 RUN ls -a -l -h -S /usr/bin
 
 ENV RUST_LOG="warn,dtps_http=debug"
