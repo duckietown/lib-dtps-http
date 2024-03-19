@@ -24,9 +24,11 @@ __all__ = [
     "ConnectionInterface",
     "DTPSContext",
     "HistoryInterface",
-    "SubscriptionInterface",
     "PublisherInterface",
+    "SubscriptionInterface",
 ]
+
+from dtps_http.structures import Bounds
 
 _ = Sequence
 RPCFunction = Callable[[RawData], Awaitable[ObjectTransformResult]]
@@ -190,9 +192,9 @@ class DTPSContext(ABC):
     async def queue_create(
         self,
         *,
-        max_history: int = DEFAULT_MAX_HISTORY,
         parameters: Optional[TopicRefAdd] = None,
         transform: Optional[RPCFunction] = None,
+        bounds: Optional[Bounds] = None,
     ) -> "DTPSContext":
         """
         Creates this resource (if it doesn't exist).
@@ -201,12 +203,12 @@ class DTPSContext(ABC):
 
     @abstractmethod
     async def until_ready(
-            self,
-            retry_every: float = 1.0,
-            retry_max: Optional[int] = None,
-            timeout: Optional[float] = None,
-            print_every: float = 10.0,
-            quiet: bool = False,
+        self,
+        retry_every: float = 1.0,
+        retry_max: Optional[int] = None,
+        timeout: Optional[float] = None,
+        print_every: float = 10.0,
+        quiet: bool = False,
     ) -> "DTPSContext":
         """
         Waits until the resource is ready.

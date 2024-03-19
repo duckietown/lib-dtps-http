@@ -5,7 +5,6 @@ from dtps_http import (
     app_start,
     check_is_unix_socket,
     ContentInfo,
-    DEFAULT_MAX_HISTORY,
     DTPSServer,
     join,
     MIME_OCTET,
@@ -273,7 +272,6 @@ class ContextManagerCreateContext(DTPSContext):
     async def queue_create(
         self,
         *,
-        max_history: int = DEFAULT_MAX_HISTORY,
         parameters: Optional[TopicRefAdd] = None,
         transform: Optional[RPCFunction] = None,
         bounds: Optional[Bounds] = None,
