@@ -195,7 +195,7 @@ class DTPSServer:
     _forwarded: Dict[TopicNameV, ForwardedTopic]
 
     tasks: "List[asyncio.Task[Any]]"
-    digest_to_urls: Dict[str, List[URL]]
+    # digest_to_urls: Dict[str, List[URL]]
     node_app_data: Dict[str, bytes]
     registrations: List[Registration]
     available_urls: "List[URLString]"
@@ -264,7 +264,7 @@ class DTPSServer:
         self.available_urls = []
         self.node_id = NodeID(f"{self.nickname}-{str(uuid.uuid4())[:8]}")
 
-        self.digest_to_urls = {}
+        # self.digest_to_urls = {}
 
         self.registrations = []
 

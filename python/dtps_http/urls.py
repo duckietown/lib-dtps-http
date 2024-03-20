@@ -121,7 +121,7 @@ def join(url: URL, path0: str) -> URL:
     return res
 
 
-@functools.lru_cache(maxsize=None)
+@functools.lru_cache(maxsize=128)
 def _norm_parts(path: str) -> List[str]:
     if not path.startswith("/"):
         path = "/" + path

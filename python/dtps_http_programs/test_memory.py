@@ -43,7 +43,7 @@ async def async_main():
     nbytes = 0
     nmessages = 0
     bm = s.blob_manager
-    publish_period = 0.01
+    publish_period = 0.001
     # all_objects = muppy.get_objects()
     from pympler import tracker
 
@@ -61,40 +61,72 @@ async def async_main():
             nmessages += 1
 
         if every_once.now():
-            # bm.cleanup_blobs()
-            n = gc.collect()
-            print(f"Garbage collection collected {n}")
+            bm.cleanup_blobs()
+
+            obs = gc.get_objects()
+            for o in obs:
+                if o is obs:
+                    continue
+                if isinstance(o, (type, bytes)):
+                    continue
+                try:
+                    l = len(o)
+                except:
+                    pass
+                else:
+                    if l > 500:
+                        print(f"found {type(o)} of length {l}")
+                        if l > 50000:
+                            print("first element", o[0])
+                            print("last element", o[-1])
+
+                if isinstance(o, dict):
+                    if len(o) > 1500:
+                        first_keys = list(o)[:4]
+                        last_keys = list(o)[-4:]
+                        print(
+                            f"found dict of length {len(o)}; first_keys={first_keys}; last_keys={last_keys}"
+                        )
+
+                        r2 = gc.get_referrers(o)
+                        r2 = [_ for _ in r2 if _ is not obs and _ is not o]
+                        r2_Typed = [type(_) for _ in r2]
+                        print(f"referrences to dict: {r2_Typed}")
+            obs = None
+
             print(f"Pushed {nmessages} with {nbytes / 1024 / 1024:.1f} MB")
 
             print(f"{len(oq.saved)=}")
             print(f"{len(oq.stored)=}")
             print(f"{len(bm.blobs)=}")
             print(f"{len(bm.blobs_forgotten)=}")
-            queue_sizes = s.hub.get_all_subscriber_queue_sizes()
-            print(f"{queue_sizes=}")
-            #
-            # while True:
-            #     without_outcome = {k: v for k, v in Global.active.items() if v.co.outcome is None}
-            #
-            #     logger.info(
-            #         "task stats ",
-            #         created=len(Global.created),
-            #         nactive=len(Global.active),
-            #         nnotfinished=len(without_outcome),
-            #     )
-            #     logger.info(joinlines("/".join(_) for _ in without_outcome))
-            #     logger.info("checking memory")
-            print("New objects since last time")
-            tr.print_diff()
 
-            all_objects_now = muppy.get_objects()
+            if True:
+                # queue_sizes = s.hub.get_all_subscriber_queue_sizes()
+                # print(f"{queue_sizes=}")
+                #
+                # while True:
+                #     without_outcome = {k: v for k, v in Global.active.items() if v.co.outcome is None}
+                #
+                #     logger.info(
+                #         "task stats ",
+                #         created=len(Global.created),
+                #         nactive=len(Global.active),
+                #         nnotfinished=len(without_outcome),
+                #     )
+                #     logger.info(joinlines("/".join(_) for _ in without_outcome))
+                #     logger.info("checking memory")
+                print("New objects since last time")
+                tr.print_diff()
 
-            sum1 = summary.summarize(all_objects_now)
-            print("Current summary")
-            summary.print_(sum1, limit=50)
-            sum1 = None
-            all_objects_now = None
-            #
+                all_objects_now = muppy.get_objects()
+
+                sum1 = summary.summarize(all_objects_now)
+                print("Current summary")
+                summary.print_(sum1, limit=50)
+                sum1 = None
+                all_objects_now = None
+                #
             # diff = summary.get_diff(all_objects, all_objects_now)
             # summary.print_(diff)
             # n = gc.collect()

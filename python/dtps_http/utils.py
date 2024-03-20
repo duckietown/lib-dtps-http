@@ -112,7 +112,7 @@ def multidict_update(dest: CIMultiDict[X], src: Union[CIMultiDict[X], CIMultiDic
         dest.add(k, v)
 
 
-@functools.lru_cache(maxsize=None)
+@functools.lru_cache(maxsize=128)
 def should_mask_origin() -> bool:
     default = False
     v = os.environ.get(ENV_MASK_ORIGIN, str(default))
