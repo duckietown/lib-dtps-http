@@ -44,6 +44,7 @@ __all__ = [
     "TransportData",
     "WarningMsg",
     "is_structure",
+    "Bounds",
 ]
 
 
