@@ -441,6 +441,7 @@ class DTPSServer:
                 self.logger.debug("removing topic %s", new_topic)
                 await self.remove_forward(new_topic)
 
+        # TODO: note that this remains the choice for ever
         for topic_name in added:
             tr = ti.topics[topic_name]
             new_topic = prefix + topic_name
@@ -486,6 +487,8 @@ class DTPSServer:
             r = possible[0]
             url_to_use = parse_url_unescape(r.url)
             assert isinstance(url_to_use, URL), url_to_use
+
+            self.logger.info(f"Proxying {new_topic} through {url_to_use} with benchmark info {r.benchmark}")
 
             metadata = await dtpsclient.get_metadata(url_to_use)
 

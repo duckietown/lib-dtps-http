@@ -13,6 +13,7 @@ from .urls import join, parse_url_unescape, URL, url_to_string, URLIndexer
 from .utils import pydantic_parse
 
 __all__ = [
+    "Bounds",
     "ChannelInfo",
     "ChannelInfoDesc",
     "Chunk",
@@ -44,13 +45,12 @@ __all__ = [
     "TransportData",
     "WarningMsg",
     "is_structure",
-    "Bounds",
 ]
 
 
 @dataclass
 class LinkBenchmark:
-    complexity: int  # 0 for local, 1 for using named, +2 for each network hop
+    complexity: int  # 0 for local, 1 for using named unix socket, +2 for each network hop
     bandwidth: int  # B/s
     latency_ns: int  # seconds
     reliability_percent: int  # 0..100
