@@ -6,6 +6,7 @@ pub static CONTENT_TYPE_DTPS_INDEX_CBOR: &str = "application/vnd.dt.dtps-index+c
 pub static CONTENT_TYPE_TOPIC_HISTORY_CBOR: &str = "application/vnd.dt.dtps-history+cbor";
 pub static HEADER_CONTENT_LOCATION: &str = "content-location";
 pub static CONTENT_TYPE_DTPS_DATAREADY_CBOR: &str = "application/vnd.dt.dtps-dataready+cbor";
+pub static HEADER_MAX_FREQUENCY: &str = "X-DTPS-Max-Frequency";
 pub static HEADER_DATA_ORIGIN_NODE_ID: &str = "x-dtps-data-origin-node";
 pub static HEADER_DATA_UNIQUE_ID: &str = "x-dtps-data-unique-id";
 pub static HEADER_LINK_BENCHMARK: &str = "x-dtps-link-benchmark";

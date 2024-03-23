@@ -4,9 +4,15 @@ __all__ = [
     "EveryOnceInAWhile",
 ]
 
+from typing import Optional
+
 
 class EveryOnceInAWhile:
     """Simple class to do a task every once in a while."""
+
+    interval: Optional[float]
+    last: float
+    ever_called: bool
 
     def __init__(self, interval: float, do_first_now: bool = True):
         self.interval = interval
@@ -19,7 +25,7 @@ class EveryOnceInAWhile:
     def now(self) -> bool:
         n = time.time()
         dt = n - self.last
-        if dt > self.interval:
+        if dt >= self.interval:
             self.last = n
             self.ever_called = True
             return True

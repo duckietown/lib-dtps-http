@@ -4,7 +4,7 @@ use sha256::digest;
 
 use crate::{
     identify_presentation, invalid_input, ContentPresentation, DTPSError, RawData, CONTENT_TYPE_CBOR,
-    CONTENT_TYPE_JSON, DTPSR,
+    CONTENT_TYPE_JSON, CONTENT_TYPE_OCTET_STREAM, DTPSR,
 };
 
 impl RawData {
@@ -103,6 +103,9 @@ impl RawData {
         if self.content_type == ct {
             return Ok(self.clone());
         }
+        if ct == CONTENT_TYPE_OCTET_STREAM {
+            return Ok(RawData::new(self.content.clone(), ct));
+        }
         let mine = identify_presentation(self.content_type.as_str());
         let desired = identify_presentation(ct);
 
@@ -112,7 +115,10 @@ impl RawData {
             ContentPresentation::JSON => serde_json::to_vec(&value)?,
             ContentPresentation::YAML => Bytes::from(serde_yaml::to_string(&value)?).to_vec(),
             ContentPresentation::PlainText | ContentPresentation::Other => {
-                return DTPSError::other(format!("cannot translate from {:?} to {:?}", mine, desired));
+                return DTPSError::other(format!(
+                    "cannot translate from {:?} to {:?}, classified as {:?}",
+                    mine, ct, desired
+                ));
             }
         };
         Ok(RawData::new(bytes, ct))

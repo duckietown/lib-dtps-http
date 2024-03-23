@@ -11,6 +11,7 @@ use tungstenite::{
 };
 use warp::{http::header, hyper::Body, reply::Response, ws::Message as WarpMessage};
 
+use crate::utils_every_once::EveryOnceInAWhile;
 use crate::{
     clocks::Clocks, debug_with_info, display_printable, divide_in_components, error_with_info, get_accept_header,
     get_header_with_default, get_series_of_messages_for_notification_, interpret_path, make_html,
@@ -21,7 +22,7 @@ use crate::{
     PushResult, RawData, ResolveDataSingle, ResolvedData, ServerStateAccess, TopicName, TopicProperties,
     TopicsIndexInternal, TypeOFSource, WarningMsg, CONTENT_TYPE, CONTENT_TYPE_DTPS_DATAREADY_CBOR,
     CONTENT_TYPE_OCTET_STREAM, CONTENT_TYPE_PATCH_CBOR, CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_TEXT_HTML,
-    CONTENT_TYPE_TEXT_PLAIN, CONTENT_TYPE_YAML, DTPSR, JAVASCRIPT_SEND,
+    CONTENT_TYPE_TEXT_PLAIN, CONTENT_TYPE_YAML, DTPSR, HEADER_MAX_FREQUENCY, JAVASCRIPT_SEND,
 };
 
 pub async fn serve_master_post(
@@ -558,12 +559,25 @@ pub async fn visualize_data(
     }
 }
 
-pub async fn handle_websocket_generic2(path: String, ws: warp::ws::WebSocket, ssa: ServerStateAccess, send_data: bool) {
+pub async fn handle_websocket_generic2(
+    path: String,
+    ws: warp::ws::WebSocket,
+    h: HeaderMap,
+    ssa: ServerStateAccess,
+    send_data: bool,
+) {
     debug_with_info!("WEBSOCKET {path} send_data={send_data}");
     let (mut ws_tx, ws_rx) = ws.split();
     let (receiver, join_handle) = receive_from_websocket(ws_rx);
-
-    match handle_websocket_generic2_(path, &mut ws_tx, receiver, ssa, send_data).await {
+    let max_frequency: Option<f32> = if h.contains_key(HEADER_MAX_FREQUENCY) {
+        // get the value as float
+        let s = h.get(HEADER_MAX_FREQUENCY).unwrap().to_str().unwrap();
+        let f = s.parse::<f32>().unwrap();
+        Some(f)
+    } else {
+        None
+    };
+    match handle_websocket_generic2_(path, &mut ws_tx, receiver, ssa, send_data, max_frequency).await {
         Ok(_) => {
             let msg = WarpMessage::close_with(CloseCode::Normal, "ok");
             let _ = ws_tx.send(msg).await.map_err(|e| {
@@ -600,6 +614,7 @@ pub async fn handle_websocket_generic2_(
     _receiver: UnboundedReceiverStream<MsgClientToServer>,
     ssa: ServerStateAccess,
     send_data: bool,
+    max_frequency: Option<f32>,
 ) -> DTPSR<()> {
     let referrer = None;
     let query = HashMap::new();
@@ -610,13 +625,14 @@ pub async fn handle_websocket_generic2_(
     }?;
     let stream = ds.get_data_stream(path.as_str(), ssa.clone()).await?;
 
-    handle_websocket_data_stream(ws_tx, stream, send_data, ssa.clone()).await
+    handle_websocket_data_stream(ws_tx, stream, send_data, max_frequency, ssa.clone()).await
 }
 
 pub async fn handle_websocket_data_stream(
     ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
     data_stream: DataStream,
     send_data: bool,
+    max_frequency: Option<f32>,
     ssa: ServerStateAccess,
 ) -> DTPSR<()> {
     let mut starting_messaging = vec![];
@@ -630,6 +646,9 @@ pub async fn handle_websocket_data_stream(
 
         starting_messaging.append(&mut for_this);
     }
+
+    let period = max_frequency.map(|f| 1.0 / f).unwrap_or(0.0);
+    let mut when = EveryOnceInAWhile::new(period, true);
 
     send_as_ws_cbor(&starting_messaging, ws_tx).await?;
 
@@ -646,7 +665,13 @@ pub async fn handle_websocket_data_stream(
                     ListenURLEvents::InsertNotification(r) => {
                         let mut ss = ssa.lock().await;
 
-                        get_series_of_messages_for_notification_(send_data, &r, DELTA_WEBSOCKET_AVAIL, &mut ss).await
+                        if when.now() {
+                            get_series_of_messages_for_notification_(send_data, &r, DELTA_WEBSOCKET_AVAIL, &mut ss)
+                                .await
+                        } else {
+                            vec![]
+                        }
+                        // get_series_of_messages_for_notification_(send_data, &r, DELTA_WEBSOCKET_AVAIL, &mut ss).await
                     }
                     ListenURLEvents::WarningMsg(m) => {
                         vec![MsgServerToClient::WarningMsg(m)]

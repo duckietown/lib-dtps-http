@@ -10,17 +10,7 @@ from typing import (
     Sequence,
 )
 
-from jsonpatch import JsonPatch
-
-from dtps_http import (
-    DataSaved,
-    NodeID,
-    ObjectTransformResult,
-    RawData,
-    TopicRefAdd,
-    URLString,
-    DEFAULT_MAX_HISTORY,
-)
+from dtps_http import Bounds, DataSaved, NodeID, ObjectTransformResult, RawData, TopicRefAdd, URLString
 
 __all__ = [
     "ConnectionInterface",
@@ -30,8 +20,6 @@ __all__ = [
     "PublisherInterface",
     "SubscriptionInterface",
 ]
-
-from dtps_http.structures import Bounds
 
 _ = Sequence
 RPCFunction = Callable[[RawData], Awaitable[ObjectTransformResult]]
@@ -274,7 +262,8 @@ class PublisherInterface(ABC):
         """Stops the publisher"""
 
     # TODO: DTSW-4880: add function to get number of connections
-    # TODO: DTSW-4879: should we pass back the desired frequency? (max of all frequencies) or bandwidth constraints?
+    # TODO: DTSW-4879: should we pass back the desired frequency? (max of all frequencies) or bandwidth
+    #  constraints?
     # @abstractmethod
     # async def num_connections(self) -> RawData:
     #     """Publishes data to the resource and waits for the response"""

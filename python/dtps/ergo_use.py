@@ -350,6 +350,8 @@ class ContextManagerUseContext(DTPSContext):
     ) -> "SubscriptionInterface":
         msg = "subscribe_diff is not supported for remote contexts yet"
         raise NotImplementedError(msg)
+        a: SubscriptionInterface
+        return a
 
 
 class ConnectionInterfaceImpl(ConnectionInterface):

@@ -44,6 +44,7 @@ from .constants import (
     CONTENT_TYPE_PATCH_JSON,
     HEADER_CONTENT_LOCATION,
     HEADER_DATA_ORIGIN_NODE_ID,
+    HEADER_MAX_FREQUENCY,
     HEADER_NODE_ID,
     MIME_JSON,
     MIME_OCTET,
@@ -983,6 +984,7 @@ class DTPSClient:
             inline_data=inline_data,
             raise_on_error=raise_on_error,
             add_silence=None,
+            max_frequency=max_frequency,
             callback=filter_data,  # stop_condition=stop_condition
         )
 
@@ -997,6 +999,7 @@ class DTPSClient:
         inline_data: bool,
         raise_on_error: bool,
         add_silence: Optional[float],
+        max_frequency: Optional[float],
         callback: Callable[[ListenURLEvents], Awaitable[None]],
         # stop_condition: "Optional[asyncio.Event]",
     ) -> ListenDataInterface:
@@ -1013,6 +1016,7 @@ class DTPSClient:
                 add_silence=add_silence,
                 callback=callback,
                 stop_condition=stop_condition,
+                max_frequency=max_frequency,
             )
         )
         # else:
@@ -1092,6 +1096,7 @@ class DTPSClient:
         add_silence: Optional[float],
         callback: Callable[[ListenURLEvents], Awaitable[None]],
         stop_condition: "asyncio.Event",
+        max_frequency: Optional[float],
     ) -> None:
         """Iterates using direct data in websocket."""
         # self.logger.info(f"listen_url_events_with_data_inline {url_websockets}")
@@ -1099,7 +1104,12 @@ class DTPSClient:
         received_first = False
         async with self.my_session(url_websockets) as (session, use_url):
             ws: ClientWebSocketResponse
-            async with session.ws_connect(use_url) as ws:
+            headers = {}
+            if max_frequency is not None:
+                headers[HEADER_MAX_FREQUENCY] = str(max_frequency)
+
+            headers["hello"] = "de"
+            async with session.ws_connect(use_url, headers=headers) as ws:
                 # await callback(ConnectionEstablished(comment=f"opened session to {url_websockets}"))
                 #  noinspection PyProtectedMember
                 # headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())
@@ -1233,7 +1243,7 @@ class DTPSClient:
                                             # logger.debug(f"downloading {url_websockets} from {cm}")
                                             data = await self._download_from_urls(url_websockets, cm)
                                         except Exception as e:
-                                            msg = f"error in downloading {cm}: {e.__class__.__name__} {e!r}"
+                                            msg = f"error in downloading {cm}: {e.__class__.__name__}\n{e}"
                                             self.logger.error(msg)
                                             await callback(ErrorMsg(comment=msg))
                                             if raise_on_error:
@@ -1322,6 +1332,7 @@ class DTPSClient:
         add_silence: Optional[float],
         inline_data: bool,
         callback: Callable[[ListenURLEvents], Awaitable[None]],
+        max_frequency: Optional[float],
     ) -> ListenDataInterface:
         i = ListenDataContinuousImp(None)
         t = asyncio.create_task(
@@ -1334,6 +1345,7 @@ class DTPSClient:
                 inline_data=inline_data,
                 callback=callback,
                 ldi=i,
+                max_frequency=max_frequency,
             )
         )
         i.task = t
@@ -1353,6 +1365,7 @@ class DTPSClient:
         add_silence: Optional[float],
         inline_data: bool,
         callback: Callable[[ListenURLEvents], Awaitable[None]],
+        max_frequency: Optional[float],
     ):
         while not ldi.stop_condition.is_set():
             try:
@@ -1415,6 +1428,7 @@ class DTPSClient:
                     raise_on_error=raise_on_error,
                     inline_data=False,
                     add_silence=add_silence,
+                    max_frequency=max_frequency,
                     callback=callback,  # stop_condition=stop_condition
                 )
 
@@ -1431,6 +1445,7 @@ class DTPSClient:
                     raise_on_error=raise_on_error,
                     inline_data=True,
                     add_silence=add_silence,
+                    max_frequency=max_frequency,
                     callback=callback,
                 )
 

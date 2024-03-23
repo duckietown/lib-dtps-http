@@ -139,15 +139,16 @@ impl DTPSServer {
             })
             .and(clone_access.clone())
             .and(warp::query::<EventsQuery>())
+            .and(warp::header::headers_cloned())
             .and(warp::ws())
             .map({
-                move |path: String, state1: ServerStateAccess, q: EventsQuery, ws: warp::ws::Ws| {
+                move |path: String, state1: ServerStateAccess, q: EventsQuery, h: HeaderMap, ws: warp::ws::Ws| {
                     let send_data = match q.send_data {
                         Some(x) => x != 0,
                         None => false,
                     };
 
-                    ws.on_upgrade(move |socket| handle_websocket_generic2(path, socket, state1, send_data))
+                    ws.on_upgrade(move |socket| handle_websocket_generic2(path, socket, h, state1, send_data))
                 }
             });
         let topic_event_s_push = warp::path::full()

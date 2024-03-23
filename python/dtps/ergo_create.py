@@ -31,6 +31,7 @@ from dtps_http.types_of_source import (
     OurQueue,
     SourceComposition,
 )
+from dtps_http.utils_every_once_in_a_while import EveryOnceInAWhile
 from .config import ContextInfo, ContextManager
 from .ergo_ui import (
     ConnectionInterface,
@@ -214,10 +215,14 @@ class ContextManagerCreateContext(DTPSContext):
     ) -> "SubscriptionInterface":
         oq0 = self._get_server().get_oq(self._get_components_as_topic())
 
+        when = EveryOnceInAWhile(1.0 / max_frequency if max_frequency is not None else 0)
+
         async def wrap(oq: ObjectQueue, inot: InsertNotification) -> None:
             # saved: DataSaved = oq.saved[i]
             # data: RawData = oq.get(saved.digest)
-            await on_data(inot.raw_data)
+
+            if when.now():
+                await on_data(inot.raw_data)
 
         if oq0.stored:
             last = oq0.last_data()
