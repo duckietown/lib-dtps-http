@@ -10,6 +10,8 @@ from typing import (
     Sequence,
 )
 
+from jsonpatch import JsonPatch
+
 from dtps_http import (
     DataSaved,
     NodeID,
@@ -24,6 +26,7 @@ __all__ = [
     "ConnectionInterface",
     "DTPSContext",
     "HistoryInterface",
+    "PatchType",
     "PublisherInterface",
     "SubscriptionInterface",
 ]
@@ -32,6 +35,8 @@ from dtps_http.structures import Bounds
 
 _ = Sequence
 RPCFunction = Callable[[RawData], Awaitable[ObjectTransformResult]]
+
+PatchType = List[Dict[str, Any]]
 
 
 class DTPSContext(ABC):
@@ -108,12 +113,23 @@ class DTPSContext(ABC):
         on_data: Callable[[RawData], Awaitable[None]],
         /,
         max_frequency: Optional[float] = None,
-        # service_level=None,
-        # timeout: Optional[float] = None
     ) -> "SubscriptionInterface":
         """
         The subscription is persistent: if the topic is not available, we wait until
         it is (up to a timeout).
+        """
+        ...
+
+    @abstractmethod
+    async def subscribe_diff(
+        self,
+        on_data: Callable[[PatchType], Awaitable[None]],
+        /,
+    ) -> "SubscriptionInterface":
+        """
+        Obtains the stream of data as a series of diffs, as JSON patch.
+
+        Note: the first call will return the full data. (set / value)
         """
         ...
 
@@ -171,7 +187,7 @@ class DTPSContext(ABC):
 
     # patch
     @abstractmethod
-    async def patch(self, patch_data: List[Dict[str, Any]], /) -> None:
+    async def patch(self, patch_data: PatchType, /) -> None:
         """
         Applies a patch to the resource.
         The patch is a list of operations, as defined in RFC 6902.

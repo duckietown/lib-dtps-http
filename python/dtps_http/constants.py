@@ -10,6 +10,7 @@ __all__ = [
     "CONTENT_TYPE_PATCH_JSON",
     "CONTENT_TYPE_PATCH_YAML",
     "CONTENT_TYPE_TOPIC_HISTORY_CBOR",
+    "DEFAULT_MAX_HISTORY",
     "ENV_MASK_ORIGIN",
     "EVENTS_SUFFIX",
     "HEADER_CONTENT_LOCATION",
@@ -43,7 +44,6 @@ __all__ = [
     "TOPIC_PROXIED",
     "TOPIC_STATE_NOTIFICATION",
     "TOPIC_STATE_SUMMARY",
-    "DEFAULT_MAX_HISTORY"
 ]
 
 HEADER_NO_CACHE = {
@@ -56,6 +56,7 @@ HEADER_NODE_PASSED_THROUGH = "X-DTPS-Node-ID-Passed-Through"
 HEADER_LINK_BENCHMARK = "X-DTPS-link-benchmark"
 HEADER_DATA_UNIQUE_ID = "X-DTPS-data-unique-id"
 HEADER_DATA_ORIGIN_NODE_ID = "X-DTPS-data-origin-node"
+HEADER_MAX_FREQUENCY = "X-DTPS-Max-Frequency"
 
 TOPIC_LIST = TopicNameV.from_dash_sep("dtps/topic_list")
 TOPIC_CLOCK = TopicNameV.from_dash_sep("dtps/clock")

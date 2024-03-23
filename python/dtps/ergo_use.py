@@ -33,6 +33,7 @@ from .ergo_ui import (
     ConnectionInterface,
     DTPSContext,
     HistoryInterface,
+    PatchType,
     PublisherInterface,
     SubscriptionInterface,
 )
@@ -197,7 +198,9 @@ class ContextManagerUseContext(DTPSContext):
     ) -> "SubscriptionInterface":
         url = await self._get_best_url()
         inline_data = max_frequency is None
-        ldi = await self.master.client.listen_url(url, on_data, inline_data=inline_data, raise_on_error=True)
+        ldi = await self.master.client.listen_url(
+            url, on_data, inline_data=inline_data, raise_on_error=True, max_frequency=max_frequency
+        )
         # logger.debug(f"subscribed to {url} -> {t}")
         return ContextManagerUseSubscription(ldi)
 
@@ -341,6 +344,12 @@ class ContextManagerUseContext(DTPSContext):
         await self.master.client.connect(url, name, connection_job)
 
         return ConnectionInterfaceImpl(self.master, url, name)
+
+    async def subscribe_diff(
+        self, on_data: Callable[[PatchType], Awaitable[None]], /
+    ) -> "SubscriptionInterface":
+        msg = "subscribe_diff is not supported for remote contexts yet"
+        raise NotImplementedError(msg)
 
 
 class ConnectionInterfaceImpl(ConnectionInterface):

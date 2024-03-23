@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Sequence, Tuple, Union
 
+from jsonpatch import JsonPatch
+
 from dtps_http import (
     app_start,
     check_is_unix_socket,
@@ -34,6 +36,7 @@ from .ergo_ui import (
     ConnectionInterface,
     DTPSContext,
     HistoryInterface,
+    PatchType,
     PublisherInterface,
     RPCFunction,
     SubscriptionInterface,
@@ -318,5 +321,42 @@ class ContextManagerCreateContext(DTPSContext):
         msg = 'Cannot use this method for "create" contexts because Python does not support the functionality'
         raise NotImplementedError(msg)
 
+    async def subscribe_diff(
+        self, on_data: Callable[[PatchType], Awaitable[None]], /
+    ) -> "SubscriptionInterface":
+        differ = Differ()
+
+        async def sub_diff(data: RawData) -> None:
+            patch = differ.push(data)
+            if patch is None:
+                return
+            await on_data(patch)
+
+        return await self.subscribe(sub_diff)
+
     def __repr__(self) -> str:
         return f"ContextManagerCreateContext({self.components!r}, {self.master!r})"
+
+
+class Differ:
+    def __init__(self) -> None:
+        self.first_arrived = False
+        self.current = None
+
+    def push(self, data: RawData) -> Optional[PatchType]:
+        if not self.first_arrived:
+            self.first_arrived = True
+            self.current = data.get_as_native_object()
+            patch = [
+                {"op": "replace", "path": "", "value": self.current},
+            ]
+            return patch
+
+        prev = self.current
+        new_one = data.get_as_native_object()
+        if prev == new_one:
+            return []
+        patch = JsonPatch.from_diff(prev, new_one)  # type: ignore
+        operations = patch.to_string(lambda f: f)
+        self.current = new_one
+        return cast(PatchType, operations)

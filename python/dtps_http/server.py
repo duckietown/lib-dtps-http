@@ -408,7 +408,9 @@ class DTPSServer:
                     ti2 = ti2_.to_internal([best_url])
                     await self._process_change_topics(dtpsclient, name, ti2, mask_origin=finfo.mask_origin)
 
-                ldi = await dtpsclient.listen_url(url, on_data, inline_data=True, raise_on_error=False)
+                ldi = await dtpsclient.listen_url(
+                    url, on_data, inline_data=True, raise_on_error=False, max_frequency=None
+                )
                 try:
                     condition = asyncio.create_task(self.shutdown_event.wait())
                     waiting = asyncio.create_task(ldi.wait_for_done())

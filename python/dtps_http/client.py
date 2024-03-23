@@ -725,7 +725,9 @@ class DTPSClient:
                         if resp.status == 404:
                             raise NoSuchTopic(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
                         if resp.status == 503:
-                            raise TopicOriginUnavailable(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
+                            raise TopicOriginUnavailable(
+                                f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}"
+                            )
                         raise ValueError(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
 
                     if accept is not None and content_type != accept:
@@ -860,12 +862,15 @@ class DTPSClient:
         *,
         inline_data: bool,
         raise_on_error: bool,
+        max_frequency: Optional[float],
     ) -> ListenDataInterface:
         available = await self.ask_index(urlbase)
         topic = available.topics[topic_name]
         url = cast(URLTopic, await self.choose_best(topic.reachability))
 
-        return await self.listen_url(url, cb, inline_data=inline_data, raise_on_error=raise_on_error)
+        return await self.listen_url(
+            url, cb, inline_data=inline_data, raise_on_error=raise_on_error, max_frequency=max_frequency
+        )
 
     async def connect(
         self,
@@ -919,6 +924,7 @@ class DTPSClient:
         inline_data: bool,
         raise_on_error: bool,
         connection_timeout: float = 10,
+        max_frequency: Optional[float],
         # stop_condition: Optional[asyncio.Event] = None,
     ) -> ListenDataInterface:
         url_topic = self._look_cache(url_topic)

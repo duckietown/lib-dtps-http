@@ -71,7 +71,9 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
                         logger.info(f"found {rd!r}")
                         received.append(rd_)
 
-                    ldi = await client.listen_url(url_topic, found, inline_data=True, raise_on_error=True)
+                    ldi = await client.listen_url(
+                        url_topic, found, inline_data=True, raise_on_error=True, max_frequency=None
+                    )
                     task_push = await client.push_continuous(
                         url_topic, queue_in=queue_in, queue_out=queue_out
                     )
