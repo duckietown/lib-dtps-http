@@ -340,7 +340,7 @@ class DTPSServer:
         """Add a task to the list of tasks to be cancelled on shutdown"""
         self.tasks.append(task)
 
-    async def _update_lists(self):
+    async def _update_lists(self) -> None:
         if TOPIC_LIST not in self._oqs:
             raise AssertionError(f"Topic {TOPIC_LIST.as_relative_url()} not found")
         if ROOT not in self._oqs:
@@ -1415,7 +1415,7 @@ pre {{
                 patch = JsonPatch.from_string(decoded)
             elif content_type == CONTENT_TYPE_PATCH_CBOR:
                 p = cbor2.loads(data)
-                patch = JsonPatch(p)
+                patch = JsonPatch(p)  # type: ignore
             elif content_type == CONTENT_TYPE_PATCH_YAML:
                 p = yaml.safe_load(data)
                 patch = JsonPatch(p)
@@ -1452,7 +1452,7 @@ pre {{
                 patch = JsonPatch.from_string(decoded)
             elif content_type == CONTENT_TYPE_PATCH_CBOR:
                 p = cbor2.loads(data)
-                patch = JsonPatch(p)
+                patch = JsonPatch(p)  # type: ignore
             elif content_type == CONTENT_TYPE_PATCH_YAML:
                 p = yaml.safe_load(data)
                 patch = JsonPatch(p)
@@ -1461,7 +1461,7 @@ pre {{
                 return web.Response(status=415, text=msg)
             # logger.info(f"decoded: {decoded} patch: {patch}")
 
-            for operation in patch._ops:
+            for operation in patch._ops:  # type: ignore
                 if isinstance(operation, RemoveOperation):
                     raise NotImplementedError(
                         f"Cannot handle {operation!r}"
@@ -1473,7 +1473,7 @@ pre {{
                     if topic.is_root():
                         raise ValueError(f"Cannot create root topic (path = {operation.path!r})")
 
-                    value = operation.operation["value"]
+                    value = operation.operation["value"]  #  type: ignore
                     trf = TopicRefAdd.from_json(value)
                     await self.create_oq(topic, trf.content_info, tp=trf.properties, bounds=trf.bounds)
                     self.logger.info(f"created new topic: '{topic.as_dash_sep()}'")
@@ -1670,18 +1670,18 @@ pre {{
         oq_ = self._oqs[oq.topic_name]
 
         while True:  # TODO: respect on_shutdown
-            msg = await ws.receive()
+            wm = await ws.receive()
             # self.logger.debug(f"serve_push_stream_oq: received {msg}")
 
-            if msg.type == WSMsgType.CLOSE:
+            if wm.type == WSMsgType.CLOSE:
                 break
 
-            elif msg.type == WSMsgType.BINARY:
+            elif wm.type == WSMsgType.BINARY:
                 # read cbor
                 try:
-                    data = cbor2.loads(msg.data)
+                    data = cbor2.loads(wm.data)
                 except:
-                    msg = f"Cannot decode {msg.data!r}"
+                    msg = f"Cannot decode {wm.data!r}"
                     self.logger.error(msg)
                     result = PushResult(False, msg)
                     await ws.send_bytes(get_tagged_cbor(result))
@@ -1712,7 +1712,7 @@ pre {{
                     continue
 
             else:
-                msg = f"Cannot handle message type {msg!r}"
+                msg = f"Cannot handle message type {wm.type!r}"
                 self.logger.error(msg)
                 result = PushResult(False, msg)
                 await ws.send_bytes(get_tagged_cbor(result))

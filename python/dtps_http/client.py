@@ -1129,7 +1129,7 @@ class DTPSClient:
                         try:
                             if add_silence is not None:
                                 try:
-                                    msg = await asyncio.wait_for(wmsg_task, timeout=add_silence)
+                                    wm = await asyncio.wait_for(wmsg_task, timeout=add_silence)
                                 except asyncio.exceptions.TimeoutError:
                                     # logger.debug(f"add_silence {add_silence} expired")
                                     await callback(
@@ -1137,7 +1137,7 @@ class DTPSClient:
                                     )
                                     continue
                             else:
-                                msg = await wmsg_task
+                                wm = await wmsg_task
                         except ShutdownAsked:
                             msg = f"shutdown asked: ending listen_url"
                             await callback(FinishedMsg(comment=msg))
@@ -1148,29 +1148,29 @@ class DTPSClient:
                             break
 
                         if not received_first:
-                            await callback(ConnectionEstablished(comment=f"received {msg}"))
+                            await callback(ConnectionEstablished(comment=f"received {wm}"))
                             received_first = True
 
-                        if msg.type == aiohttp.WSMsgType.CLOSE:  # aiohttp-specific
+                        if wm.type == aiohttp.WSMsgType.CLOSE:  # aiohttp-specific
                             if nreceived == 0:
                                 await callback(ErrorMsg(comment="Closed, but not even one event received"))
 
                             await callback(FinishedMsg(comment="closed"))
                             break
-                        elif msg.type == aiohttp.WSMsgType.CLOSING:  # aiohttp-specific
+                        elif wm.type == aiohttp.WSMsgType.CLOSING:  # aiohttp-specific
                             if nreceived == 0:
                                 await callback(ErrorMsg(comment="Closing, but not even one event received"))
                             await callback(FinishedMsg(comment="closing"))
                             break
-                        elif msg.type == aiohttp.WSMsgType.ERROR:
-                            await callback(ErrorMsg(comment=str(msg.data)))
+                        elif wm.type == aiohttp.WSMsgType.ERROR:
+                            await callback(ErrorMsg(comment=str(wm.data)))
                             if raise_on_error:
-                                raise Exception(str(msg.data))
-                        elif msg.type == aiohttp.WSMsgType.BINARY:
+                                raise Exception(str(wm.data))
+                        elif wm.type == aiohttp.WSMsgType.BINARY:
                             try:
-                                cm: ChannelMsgs = channel_msgs_parse(msg.data)
+                                cm: ChannelMsgs = channel_msgs_parse(wm.data)
                             except Exception as e:
-                                s = f"error in parsing {msg.data!r}: {e.__class__.__name__}:\n{e}"
+                                s = f"error in parsing {wm.data!r}: {e.__class__.__name__}:\n{e}"
                                 self.logger.error(s)
                                 await callback(ErrorMsg(comment=s))
                                 if raise_on_error:
@@ -1195,13 +1195,13 @@ class DTPSClient:
 
                                         data = b""
                                         for _ in range(dr.chunks_arriving):
-                                            msg = await ws.receive()
-                                            cm = channel_msgs_parse(msg.data)  # FIXME: need to use primitives
+                                            wm = await ws.receive()
+                                            cm = channel_msgs_parse(wm.data)  # FIXME: need to use primitives
 
                                             if isinstance(cm, Chunk):
                                                 data += cm.data
                                             else:
-                                                s = f"unexpected message while waiting for chunks {msg!r}"
+                                                s = f"unexpected message while waiting for chunks {wm!r}"
                                                 self.logger.error(s)
                                                 await callback(ErrorMsg(comment=s))
                                                 if raise_on_error:
@@ -1271,7 +1271,7 @@ class DTPSClient:
                                         raise Exception(s)
 
                         else:
-                            s = f"listen_url_events_: unexpected message type {msg.type} with {msg.data!r}"
+                            s = f"listen_url_events_: unexpected message type {wm.type} with {wm.data!r}"
                             self.logger.error(s)
                             await callback(ErrorMsg(comment=s))
                             if raise_on_error:

@@ -39,7 +39,7 @@ from .utils import test_timeout
 class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
     @test_timeout(10)
     @async_error_catcher
-    async def test_push1(self):
+    async def test_push1(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             socket_node = os.path.join(td, "node")
             dtps_server = DTPSServer.create(nickname="node")
@@ -100,7 +100,7 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
                     # await task_sub
 
     @test_timeout(10)
-    async def test_static1(self):
+    async def test_static1(self) -> None:
         port = 8432
         args = ["--tcp-port", str(port)]
         dtps_server = DTPSServer.create()
@@ -135,39 +135,39 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
                 raise
 
     @test_timeout(10)
-    async def test_patch1_json_json(self):
+    async def test_patch1_json_json(self) -> None:
         await doit("json", "json")
 
     @test_timeout(10)
-    async def test_patch1_json_cbor(self):
+    async def test_patch1_json_cbor(self) -> None:
         await doit("json", "cbor")
 
     @test_timeout(10)
-    async def test_patch1_cbor_json(self):
+    async def test_patch1_cbor_json(self) -> None:
         await doit("cbor", "json")
 
     @test_timeout(10)
-    async def test_patch1_cbor_cbor(self):
+    async def test_patch1_cbor_cbor(self) -> None:
         await doit("cbor", "cbor")
 
     @test_timeout(10)
-    async def test_patch1_cbor_yaml(self):
+    async def test_patch1_cbor_yaml(self) -> None:
         await doit("cbor", "yaml")
 
     @test_timeout(10)
-    async def test_patch1_yaml_cbor(self):
+    async def test_patch1_yaml_cbor(self) -> None:
         await doit("yaml", "cbor")
 
     @test_timeout(10)
-    async def test_patch1_json_yaml(self):
+    async def test_patch1_json_yaml(self) -> None:
         await doit("json", "yaml")
 
     @test_timeout(10)
-    async def test_patch1_yaml_json(self):
+    async def test_patch1_yaml_json(self) -> None:
         await doit("yaml", "json")
 
     @test_timeout(10)
-    async def test_patch_creation(self):
+    async def test_patch_creation(self) -> None:
         port = 8435
         args = ["--tcp-port", str(port)]
         dtps_server = DTPSServer.create()

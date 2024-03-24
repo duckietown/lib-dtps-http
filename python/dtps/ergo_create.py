@@ -366,6 +366,6 @@ class Differ:
         if prev == new_one:
             return []
         patch = JsonPatch.from_diff(prev, new_one)  # type: ignore
-        operations = patch.to_string(lambda f: f)
+        operations = patch.to_string(lambda f: f)  # type: ignore
         self.current = new_one
         return cast(PatchType, operations)

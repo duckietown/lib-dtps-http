@@ -242,6 +242,7 @@ class HistoryInterface(ABC):
     async def summary(self, nmax: int, /) -> Dict[int, DataSaved]:
         """Returns a summary of the history, with at most nmax entries."""
 
+    @abstractmethod
     async def get(self, index: int, /) -> RawData:
         """Returns the data at the given index."""
         ...
