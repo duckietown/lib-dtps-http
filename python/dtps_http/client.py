@@ -1108,7 +1108,6 @@ class DTPSClient:
             if max_frequency is not None:
                 headers[HEADER_MAX_FREQUENCY] = str(max_frequency)
 
-            headers["hello"] = "de"
             async with session.ws_connect(use_url, headers=headers) as ws:
                 # await callback(ConnectionEstablished(comment=f"opened session to {url_websockets}"))
                 #  noinspection PyProtectedMember
