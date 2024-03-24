@@ -61,7 +61,7 @@ class NotFound:
 ResolvedData = Union[RawData, Native, NotAvailableYet, NotFound]
 
 if TYPE_CHECKING:
-    from .server import DTPSServer, encode_url
+    from .server import DTPSServer
     from .client import DTPSClient
 
 
@@ -378,6 +378,8 @@ async def load_datasaved_resp(
         deadline = time.time() + 60.0
         digest = server.blob_manager.save_blob_deadline(rd.content, deadline)
         available_until = server.blob_manager.get_blob_deadline(digest)
+
+        from .server import encode_url
 
         url = encode_url(digest, content_type=rd.content_type)
 

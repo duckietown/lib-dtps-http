@@ -255,7 +255,7 @@ class ObjectQueue:
             logger.error(f"Could not unsubscribe {sub_id}: {e}")
 
     def get_data_ready(self, ds: DataSaved, inline_data: bool) -> DataReady:
-        from dtps_http.server import encode_url
+        from .server import encode_url
 
         available_interval = 60
         available_until = self.blob_manager.extend_deadline(ds.digest, available_interval)
