@@ -140,6 +140,7 @@ class ServerWrapped:
 
 async def app_start(
     s: DTPSServer,
+    /,
     *,
     tcps: Sequence[Tuple[str, int]] = (),
     unix_paths: Sequence[str] = (),
