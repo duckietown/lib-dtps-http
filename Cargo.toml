@@ -1,6 +1,6 @@
 [package]
 name = "dtps-http"
-version = "1.0.14"
+version = "1.1.0"
 edition = "2021"
 build = "rust/build.rs"
 
