@@ -1,5 +1,4 @@
 import asyncio
-from typing import Optional
 from unittest import IsolatedAsyncioTestCase
 
 from dtps import DTPSContext
@@ -9,7 +8,7 @@ from . import logger
 from .utils import create_use_pair
 
 
-async def go(base: DTPSContext, max_frequency: Optional[float]) -> None:
+async def go(base: DTPSContext, inline: bool) -> None:
     node_input = await (base / "dtps" / "node" / "in").queue_create()
     node_output = await (base / "dtps" / "node" / "out").queue_create()
 
@@ -24,8 +23,8 @@ async def go(base: DTPSContext, max_frequency: Optional[float]) -> None:
     async def on_output(_: RawData, /) -> None:
         event.set()
 
-    sub1 = await node_input.subscribe(on_input, max_frequency=max_frequency)
-    sub2 = await node_output.subscribe(on_output, max_frequency=max_frequency)
+    sub1 = await node_input.subscribe(on_input, inline=inline)
+    sub2 = await node_output.subscribe(on_output, inline=inline)
 
     rd = RawData(content=b"hello", content_type=MIME_TEXT)
 
@@ -50,12 +49,12 @@ class TestCreate(IsolatedAsyncioTestCase):
     @test_timeout(5)
     async def test_create_inline(self):
         async with create_use_pair("testcreate") as (context_create, context_use):
-            await go(context_create, max_frequency=None)
+            await go(context_create, inline=True)
 
     @test_timeout(5)
     async def test_create_offline(self):
         async with create_use_pair("testcreate") as (context_create, context_use):
-            await go(context_create, max_frequency=100)
+            await go(context_create, inline=False)
 
 
 class TestUse(IsolatedAsyncioTestCase):
@@ -63,10 +62,10 @@ class TestUse(IsolatedAsyncioTestCase):
     async def test_use_inline(self):
         # create a server
         async with create_use_pair("testuse") as (context_create, context_use):
-            await go(context_use, max_frequency=None)
+            await go(context_use, inline=True)
 
     @test_timeout(10)
     async def test_use_offline(self):
         # create a server
         async with create_use_pair("testuse") as (context_create, context_use):
-            await go(context_use, max_frequency=100)
+            await go(context_use, inline=False)

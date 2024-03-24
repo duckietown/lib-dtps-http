@@ -161,7 +161,7 @@ class TestExpose(IsolatedAsyncioTestCase):
                 logger.info(f"direct: {rec}")
                 received.append(rec)
 
-            sub = await exposed.mounted.subscribe(on_received, inline=inline, max_frequency=None)
+            sub = await exposed.mounted.subscribe(on_received, inline=inline)
             await asyncio.sleep(2)
             logger.info(f"subscribed: {sub}")
             # publish to the topic
