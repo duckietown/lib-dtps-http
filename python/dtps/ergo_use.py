@@ -246,7 +246,9 @@ class ContextManagerUseContext(DTPSContext):
         url = await self._get_best_url()
         return await client.call(url, data)
 
-    async def expose(self, c: DTPSContext | Sequence[str], /, *, mask_origin: bool = False) -> "DTPSContext":
+    async def expose(
+        self, c: "DTPSContext | Sequence[str]", /, *, mask_origin: bool = False
+    ) -> "DTPSContext":
         topic = self._get_components_as_topic()
         url0 = self.master.best_url
         if isinstance(c, DTPSContext):
