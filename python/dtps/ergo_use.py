@@ -195,12 +195,15 @@ class ContextManagerUseContext(DTPSContext):
         return await self.master.client.get(url, None)
 
     async def subscribe(
-        self, on_data: Callable[[RawData], Awaitable[None]], /, max_frequency: Optional[float] = None
+        self,
+        on_data: Callable[[RawData], Awaitable[None]],
+        /,
+        max_frequency: Optional[float] = None,
+        inline: bool = True,
     ) -> "SubscriptionInterface":
         url = await self._get_best_url()
-        inline_data = max_frequency is None
         ldi = await self.master.client.listen_url(
-            url, on_data, inline_data=inline_data, raise_on_error=True, max_frequency=max_frequency
+            url, on_data, inline_data=inline, raise_on_error=True, max_frequency=max_frequency
         )
         # logger.debug(f"subscribed to {url} -> {t}")
         return ContextManagerUseSubscription(ldi)

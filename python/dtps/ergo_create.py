@@ -211,16 +211,17 @@ class ContextManagerCreateContext(DTPSContext):
             raise AssertionError(f"Unexpected {res}")
 
     async def subscribe(
-        self, on_data: Callable[[RawData], Awaitable[None]], /, max_frequency: Optional[float] = None
+        self,
+        on_data: Callable[[RawData], Awaitable[None]],
+        /,
+        max_frequency: Optional[float] = None,
+        inline: bool = True,
     ) -> "SubscriptionInterface":
         oq0 = self._get_server().get_oq(self._get_components_as_topic())
 
         when = EveryOnceInAWhile(1.0 / max_frequency if max_frequency is not None else 0)
 
-        async def wrap(oq: ObjectQueue, inot: InsertNotification) -> None:
-            # saved: DataSaved = oq.saved[i]
-            # data: RawData = oq.get(saved.digest)
-
+        async def wrap(_: ObjectQueue, inot: InsertNotification) -> None:
             if when.now():
                 await on_data(inot.raw_data)
 
@@ -228,6 +229,7 @@ class ContextManagerCreateContext(DTPSContext):
             last = oq0.last_data()
             # data2: RawData = oq0.get(oq0.last().digest)
             await on_data(last)
+        _ = inline
         sub_id = oq0.subscribe(wrap)
 
         return ContextManagerCreateContextSubscriber(sub_id, oq0)

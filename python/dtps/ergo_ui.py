@@ -101,6 +101,7 @@ class DTPSContext(ABC):
         on_data: Callable[[RawData], Awaitable[None]],
         /,
         max_frequency: Optional[float] = None,
+        inline: bool = True,
     ) -> "SubscriptionInterface":
         """
         The subscription is persistent: if the topic is not available, we wait until

@@ -3,7 +3,7 @@ import os
 import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import AsyncContextManager, AsyncIterator, Optional, TYPE_CHECKING
+from typing import AsyncContextManager, AsyncIterator, TYPE_CHECKING
 from unittest import IsolatedAsyncioTestCase
 
 from dtps import context_cleanup, DTPSContext
@@ -144,24 +144,24 @@ class TestExpose(IsolatedAsyncioTestCase):
     @test_timeout(20)
     @async_error_catcher
     async def test_forwarded_websocket_offline(self):
-        await self.check_forwarded_websocket_(max_frequency=100)
+        await self.check_forwarded_websocket_(inline=False)
 
     @test_timeout(20)
     @async_error_catcher
     async def test_forwarded_websocket_inline(self):
-        await self.check_forwarded_websocket_(max_frequency=None)
+        await self.check_forwarded_websocket_(inline=True)
 
-    async def check_forwarded_websocket_(self, max_frequency: Optional[float] = None):
+    async def check_forwarded_websocket_(self, inline: bool):
         async with get_exposed_topic("expose3") as exposed:
             # subscribe to the topic
             received = []
             sent = []
 
-            async def on_received(rec: RawData):
+            async def on_received(rec: RawData) -> None:
                 logger.info(f"direct: {rec}")
                 received.append(rec)
 
-            sub = await exposed.mounted.subscribe(on_received, max_frequency=max_frequency)
+            sub = await exposed.mounted.subscribe(on_received, inline=inline, max_frequency=None)
             await asyncio.sleep(2)
             logger.info(f"subscribed: {sub}")
             # publish to the topic
@@ -173,6 +173,8 @@ class TestExpose(IsolatedAsyncioTestCase):
 
             await asyncio.sleep(3)
 
+            logger.info(f"sent: {sent}")
+            logger.info(f"received: {received}")
             # check that the messages were received
             self.assertEqual(received, sent)
 
