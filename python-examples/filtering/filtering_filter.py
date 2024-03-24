@@ -2,10 +2,9 @@ import asyncio
 from typing import List, Optional
 
 from dtps_http import (
-    async_error_catcher, ContentInfo, DataSaved, DTPSServer,
-    interpret_command_line_and_start, logger, MIME_JSON, ObjectQueue, RawData, TopicNameV, TopicProperties,
+    async_error_catcher, Bounds, ContentInfo, DTPSServer, InsertNotification,
+    interpret_command_line_and_start, logger, MIME_JSON, ObjectQueue, TopicNameV, TopicProperties,
 )
-from dtps_http.structures import Bounds, InsertNotification
 
 __all__ = [
     "dtps_example_manual_filter_main",
@@ -19,7 +18,8 @@ async def on_startup(s: DTPSServer) -> None:
     OUT = TopicNameV.from_dash_sep("node/out")
     queue_in = await s.create_oq(IN, content_info=ContentInfo.simple(MIME_JSON), bounds=Bounds.max_length(2),
                                  tp=TopicProperties.rw_pushable())
-    queue_out = await s.create_oq(OUT, content_info=ContentInfo.simple(MIME_JSON), bounds=Bounds.max_length(2),
+    queue_out = await s.create_oq(OUT, content_info=ContentInfo.simple(MIME_JSON),
+                                  bounds=Bounds.max_length(2),
                                   tp=TopicProperties.streamable_readonly())
 
     @async_error_catcher

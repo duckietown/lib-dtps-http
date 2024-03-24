@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Sequence, Tuple, Union
 
+from jsonpatch import JsonPatch
+
 from dtps_http import (
     app_start,
     check_is_unix_socket,
@@ -29,11 +31,13 @@ from dtps_http.types_of_source import (
     OurQueue,
     SourceComposition,
 )
+from dtps_http.utils_every_once_in_a_while import EveryOnceInAWhile
 from .config import ContextInfo, ContextManager
 from .ergo_ui import (
     ConnectionInterface,
     DTPSContext,
     HistoryInterface,
+    PatchType,
     PublisherInterface,
     RPCFunction,
     SubscriptionInterface,
@@ -119,7 +123,7 @@ class ContextManagerCreateContext(DTPSContext):
     async def aclose(self) -> None:
         await self.master.aclose()
 
-    async def get_urls(self) -> List[str]:
+    async def get_urls(self) -> List[URLString]:
         server = self._get_server()
         urls = server.available_urls
 
@@ -207,19 +211,25 @@ class ContextManagerCreateContext(DTPSContext):
             raise AssertionError(f"Unexpected {res}")
 
     async def subscribe(
-        self, on_data: Callable[[RawData], Awaitable[None]], /, max_frequency: Optional[float] = None
+        self,
+        on_data: Callable[[RawData], Awaitable[None]],
+        /,
+        max_frequency: Optional[float] = None,
+        inline: bool = True,
     ) -> "SubscriptionInterface":
         oq0 = self._get_server().get_oq(self._get_components_as_topic())
 
-        async def wrap(oq: ObjectQueue, inot: InsertNotification) -> None:
-            # saved: DataSaved = oq.saved[i]
-            # data: RawData = oq.get(saved.digest)
-            await on_data(inot.raw_data)
+        when = EveryOnceInAWhile(1.0 / max_frequency if max_frequency is not None else 0)
+
+        async def wrap(_: ObjectQueue, inot: InsertNotification) -> None:
+            if when.now():
+                await on_data(inot.raw_data)
 
         if oq0.stored:
             last = oq0.last_data()
             # data2: RawData = oq0.get(oq0.last().digest)
             await on_data(last)
+        _ = inline
         sub_id = oq0.subscribe(wrap)
 
         return ContextManagerCreateContextSubscriber(sub_id, oq0)
@@ -256,7 +266,9 @@ class ContextManagerCreateContext(DTPSContext):
             raise Exception(f"{res.http_code}: {res.message}")
         return res
 
-    async def expose(self, p: "Sequence[str] | DTPSContext", /) -> None:
+    async def expose(
+        self, p: "Sequence[str] | DTPSContext", /, *, mask_origin: bool = False
+    ) -> "DTPSContext":
         if isinstance(p, DTPSContext):
             urls = await p.get_urls()
             node_id = await p.get_node_id()
@@ -264,10 +276,10 @@ class ContextManagerCreateContext(DTPSContext):
             urls = cast(Sequence[URLString], p)
             node_id = None
 
-        mask_origin = False
         server = self._get_server()
         topic = self._get_components_as_topic()
         await server.expose(topic, node_id, urls, mask_origin=mask_origin)
+        return self
 
     async def queue_create(
         self,
@@ -318,5 +330,42 @@ class ContextManagerCreateContext(DTPSContext):
         msg = 'Cannot use this method for "create" contexts because Python does not support the functionality'
         raise NotImplementedError(msg)
 
+    async def subscribe_diff(
+        self, on_data: Callable[[PatchType], Awaitable[None]], /
+    ) -> "SubscriptionInterface":
+        differ = Differ()
+
+        async def sub_diff(data: RawData) -> None:
+            patch = differ.push(data)
+            if patch is None:
+                return
+            await on_data(patch)
+
+        return await self.subscribe(sub_diff)
+
     def __repr__(self) -> str:
         return f"ContextManagerCreateContext({self.components!r}, {self.master!r})"
+
+
+class Differ:
+    def __init__(self) -> None:
+        self.first_arrived = False
+        self.current = None
+
+    def push(self, data: RawData) -> Optional[PatchType]:
+        if not self.first_arrived:
+            self.first_arrived = True
+            self.current = data.get_as_native_object()
+            patch = [
+                {"op": "replace", "path": "", "value": self.current},
+            ]
+            return patch
+
+        prev = self.current
+        new_one = data.get_as_native_object()
+        if prev == new_one:
+            return []
+        patch = JsonPatch.from_diff(prev, new_one)  # type: ignore
+        operations = patch.to_string(lambda f: f)  # type: ignore
+        self.current = new_one
+        return cast(PatchType, operations)

@@ -1,4 +1,5 @@
 import copy
+import time
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING, Union
@@ -242,7 +243,7 @@ class OurQueue(Source):
         ob = last_data.get_as_native_object()
         try:
             # noinspection PyTypeChecker
-            ob2 = patch.apply(ob)
+            ob2 = patch.apply(ob)  # type: ignore
         except jsonpatch.JsonPatchException as e:
             msg = f"Cannot apply patch {patch} to {ob}"
             logger.error(msg + f": {e}")
@@ -281,9 +282,9 @@ class ForwardedQueue(Source):
             async with dtpsclient.my_session(url_data) as (session2, use_url2):
                 async with session2.get(use_url2) as resp_data:
                     await my_raise_for_status(resp_data, url_data)
-                    data = await resp_data.read()
+                    content = await resp_data.read()
                     content_type = ContentType(resp_data.content_type)
-                    data = RawData(content_type=content_type, content=data)
+                    data = RawData(content_type=content_type, content=content)
                     return data
 
     async def patch(self, presented_as: str, server: "DTPSServer", patch: JsonPatch) -> "PostResult":
@@ -361,9 +362,9 @@ class ForwardedQueue(Source):
 async def load_datasaved_resp(
     server: "DTPSServer", base_url: URL, client: "DTPSClient", resp_data: ClientResponse, presented_as: str
 ) -> DataReady:
-    data = await resp_data.read()
+    content = await resp_data.read()
     content_type = ContentType(resp_data.content_type)
-    data = RawData(content_type=content_type, content=data)
+    data = RawData(content_type=content_type, content=content)
 
     s: Any = data.get_as_native_object()
     ds = pydantic_parse(DataSaved, s)
@@ -374,10 +375,19 @@ async def load_datasaved_resp(
         url = join(base_url, location)
 
         rd = await client.get(url, accept=ds.content_type)
-        available_for = 60.0
-        urlref, avail = server._store_data(rd, available_for, presented_as)
+        deadline = time.time() + 60.0
+        digest = server.blob_manager.save_blob_deadline(rd.content, deadline)
+        available_until = server.blob_manager.get_blob_deadline(digest)
 
-        dr.availability.append(ResourceAvailability(url=urlref, available_until=avail))
+        from .server import encode_url
+
+        url = encode_url(digest, content_type=rd.content_type)
+
+        dr.availability.append(ResourceAvailability(url=url, available_until=available_until))
+        break
+    else:
+        # TODO: how to deal with failure?
+        raise ValueError(f"no location in {locations}")
 
     return dr
 
@@ -501,7 +511,7 @@ class Transformed(Source):
             native = rd.get_as_native_object()
             path = "".join("/" + o for o in self.transform.components)
             ops = [{"op": "replace", "path": path, "value": native}]
-            patch = JsonPatch(ops)
+            patch = JsonPatch(ops)  # type: ignore
 
             return await self.source.patch(presented_as, server, patch)
         else:

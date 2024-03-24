@@ -69,7 +69,8 @@ async def read_continuous(urlbase0: URL) -> None:
                                                      add_silence=add_silence,
                                                      raise_on_error=raise_on_error,
                                                      switch_identity_ok=switch_identity_ok,
-                                                     callback=callback)
+                                                     callback=callback,
+                                                     max_frequency=None)
         await ldi.wait_for_done()
         
 

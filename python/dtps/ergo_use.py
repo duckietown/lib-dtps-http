@@ -1,7 +1,7 @@
 import asyncio
 import time
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Tuple, Sequence
 
 import cbor2
 from aiohttp import ClientResponseError
@@ -14,7 +14,6 @@ from dtps_http import (
     MIME_OCTET,
     NodeID,
     NoSuchTopic,
-    ObjectTransformFunction,
     parse_url_unescape,
     RawData,
     TopicNameV,
@@ -23,6 +22,7 @@ from dtps_http import (
     URL,
     url_to_string,
     URLIndexer,
+    URLString,
 )
 from dtps_http.client import ListenDataInterface
 from dtps_http.exceptions import TopicOriginUnavailable
@@ -33,7 +33,9 @@ from .ergo_ui import (
     ConnectionInterface,
     DTPSContext,
     HistoryInterface,
+    PatchType,
     PublisherInterface,
+    RPCFunction,
     SubscriptionInterface,
 )
 
@@ -143,7 +145,7 @@ class ContextManagerUseContext(DTPSContext):
     async def aclose(self) -> None:
         await self.master.aclose()
 
-    async def get_urls(self) -> List[str]:
+    async def get_urls(self) -> List[URLString]:
         all_urls = self.master.all_urls
         rurl = self._get_components_as_topic().as_relative_url()
         return [url_to_string(join(u, rurl)) for u in all_urls]
@@ -193,11 +195,16 @@ class ContextManagerUseContext(DTPSContext):
         return await self.master.client.get(url, None)
 
     async def subscribe(
-        self, on_data: Callable[[RawData], Awaitable[None]], /, max_frequency: Optional[float] = None
+        self,
+        on_data: Callable[[RawData], Awaitable[None]],
+        /,
+        max_frequency: Optional[float] = None,
+        inline: bool = True,
     ) -> "SubscriptionInterface":
         url = await self._get_best_url()
-        inline_data = max_frequency is None
-        ldi = await self.master.client.listen_url(url, on_data, inline_data=inline_data, raise_on_error=True)
+        ldi = await self.master.client.listen_url(
+            url, on_data, inline_data=inline, raise_on_error=True, max_frequency=max_frequency
+        )
         # logger.debug(f"subscribed to {url} -> {t}")
         return ContextManagerUseSubscription(ldi)
 
@@ -242,19 +249,27 @@ class ContextManagerUseContext(DTPSContext):
         url = await self._get_best_url()
         return await client.call(url, data)
 
-    async def expose(self, c: DTPSContext) -> "DTPSContext":
+    async def expose(
+        self, c: "DTPSContext | Sequence[str]", /, *, mask_origin: bool = False
+    ) -> "DTPSContext":
         topic = self._get_components_as_topic()
         url0 = self.master.best_url
-        urls = await c.get_urls()
-        node_id = await c.get_node_id()
-        await self.master.client.add_proxy(cast(URLIndexer, url0), topic, node_id, urls, mask_origin=False)
+        if isinstance(c, DTPSContext):
+            urls = await c.get_urls()
+            node_id = await c.get_node_id()
+        else:
+            urls = cast(List[URLString], list(c))
+            node_id = None
+        await self.master.client.add_proxy(
+            cast(URLIndexer, url0), topic, node_id, urls, mask_origin=mask_origin
+        )
         return self
 
     async def queue_create(
         self,
         *,
         parameters: Optional[TopicRefAdd] = None,
-        transform: Optional[ObjectTransformFunction] = None,
+        transform: Optional[RPCFunction] = None,
         bounds: Optional[Bounds] = None,
     ) -> "DTPSContext":
         if bounds is None:
@@ -341,6 +356,14 @@ class ContextManagerUseContext(DTPSContext):
         await self.master.client.connect(url, name, connection_job)
 
         return ConnectionInterfaceImpl(self.master, url, name)
+
+    async def subscribe_diff(
+        self, on_data: Callable[[PatchType], Awaitable[None]], /
+    ) -> "SubscriptionInterface":
+        msg = "subscribe_diff is not supported for remote contexts yet"
+        raise NotImplementedError(msg)
+        a: SubscriptionInterface
+        return a
 
 
 class ConnectionInterfaceImpl(ConnectionInterface):

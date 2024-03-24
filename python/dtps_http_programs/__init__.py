@@ -1,7 +1,6 @@
 __version__ = "1.0.14"
 
-
-from logging import getLogger, DEBUG
+from logging import DEBUG, getLogger
 
 logger = getLogger(__name__)
 logger.setLevel(DEBUG)

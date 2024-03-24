@@ -44,7 +44,9 @@ from .constants import (
     CONTENT_TYPE_PATCH_JSON,
     HEADER_CONTENT_LOCATION,
     HEADER_DATA_ORIGIN_NODE_ID,
+    HEADER_MAX_FREQUENCY,
     HEADER_NODE_ID,
+    HTTP_TIMEOUT,
     MIME_JSON,
     MIME_OCTET,
     REL_CONNECTIONS,
@@ -55,7 +57,6 @@ from .constants import (
     REL_PROXIED,
     REL_STREAM_PUSH,
     TOPIC_PROXIED,
-    HTTP_TIMEOUT,
 )
 from .exceptions import EventListeningNotAvailable, NoSuchTopic, TopicOriginUnavailable
 from .link_headers import get_link_headers
@@ -725,7 +726,9 @@ class DTPSClient:
                         if resp.status == 404:
                             raise NoSuchTopic(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
                         if resp.status == 503:
-                            raise TopicOriginUnavailable(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
+                            raise TopicOriginUnavailable(
+                                f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}"
+                            )
                         raise ValueError(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
 
                     if accept is not None and content_type != accept:
@@ -860,12 +863,15 @@ class DTPSClient:
         *,
         inline_data: bool,
         raise_on_error: bool,
+        max_frequency: Optional[float],
     ) -> ListenDataInterface:
         available = await self.ask_index(urlbase)
         topic = available.topics[topic_name]
         url = cast(URLTopic, await self.choose_best(topic.reachability))
 
-        return await self.listen_url(url, cb, inline_data=inline_data, raise_on_error=raise_on_error)
+        return await self.listen_url(
+            url, cb, inline_data=inline_data, raise_on_error=raise_on_error, max_frequency=max_frequency
+        )
 
     async def connect(
         self,
@@ -919,6 +925,7 @@ class DTPSClient:
         inline_data: bool,
         raise_on_error: bool,
         connection_timeout: float = 10,
+        max_frequency: Optional[float],
         # stop_condition: Optional[asyncio.Event] = None,
     ) -> ListenDataInterface:
         url_topic = self._look_cache(url_topic)
@@ -977,6 +984,7 @@ class DTPSClient:
             inline_data=inline_data,
             raise_on_error=raise_on_error,
             add_silence=None,
+            max_frequency=max_frequency,
             callback=filter_data,  # stop_condition=stop_condition
         )
 
@@ -991,6 +999,7 @@ class DTPSClient:
         inline_data: bool,
         raise_on_error: bool,
         add_silence: Optional[float],
+        max_frequency: Optional[float],
         callback: Callable[[ListenURLEvents], Awaitable[None]],
         # stop_condition: "Optional[asyncio.Event]",
     ) -> ListenDataInterface:
@@ -1007,6 +1016,7 @@ class DTPSClient:
                 add_silence=add_silence,
                 callback=callback,
                 stop_condition=stop_condition,
+                max_frequency=max_frequency,
             )
         )
         # else:
@@ -1086,6 +1096,7 @@ class DTPSClient:
         add_silence: Optional[float],
         callback: Callable[[ListenURLEvents], Awaitable[None]],
         stop_condition: "asyncio.Event",
+        max_frequency: Optional[float],
     ) -> None:
         """Iterates using direct data in websocket."""
         # self.logger.info(f"listen_url_events_with_data_inline {url_websockets}")
@@ -1093,7 +1104,11 @@ class DTPSClient:
         received_first = False
         async with self.my_session(url_websockets) as (session, use_url):
             ws: ClientWebSocketResponse
-            async with session.ws_connect(use_url) as ws:
+            headers = {}
+            if max_frequency is not None:
+                headers[HEADER_MAX_FREQUENCY] = str(max_frequency)
+
+            async with session.ws_connect(use_url, headers=headers) as ws:
                 # await callback(ConnectionEstablished(comment=f"opened session to {url_websockets}"))
                 #  noinspection PyProtectedMember
                 # headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())
@@ -1114,7 +1129,7 @@ class DTPSClient:
                         try:
                             if add_silence is not None:
                                 try:
-                                    msg = await asyncio.wait_for(wmsg_task, timeout=add_silence)
+                                    wm = await asyncio.wait_for(wmsg_task, timeout=add_silence)
                                 except asyncio.exceptions.TimeoutError:
                                     # logger.debug(f"add_silence {add_silence} expired")
                                     await callback(
@@ -1122,7 +1137,7 @@ class DTPSClient:
                                     )
                                     continue
                             else:
-                                msg = await wmsg_task
+                                wm = await wmsg_task
                         except ShutdownAsked:
                             msg = f"shutdown asked: ending listen_url"
                             await callback(FinishedMsg(comment=msg))
@@ -1133,29 +1148,29 @@ class DTPSClient:
                             break
 
                         if not received_first:
-                            await callback(ConnectionEstablished(comment=f"received {msg}"))
+                            await callback(ConnectionEstablished(comment=f"received {wm}"))
                             received_first = True
 
-                        if msg.type == aiohttp.WSMsgType.CLOSE:  # aiohttp-specific
+                        if wm.type == aiohttp.WSMsgType.CLOSE:  # aiohttp-specific
                             if nreceived == 0:
                                 await callback(ErrorMsg(comment="Closed, but not even one event received"))
 
                             await callback(FinishedMsg(comment="closed"))
                             break
-                        elif msg.type == aiohttp.WSMsgType.CLOSING:  # aiohttp-specific
+                        elif wm.type == aiohttp.WSMsgType.CLOSING:  # aiohttp-specific
                             if nreceived == 0:
                                 await callback(ErrorMsg(comment="Closing, but not even one event received"))
                             await callback(FinishedMsg(comment="closing"))
                             break
-                        elif msg.type == aiohttp.WSMsgType.ERROR:
-                            await callback(ErrorMsg(comment=str(msg.data)))
+                        elif wm.type == aiohttp.WSMsgType.ERROR:
+                            await callback(ErrorMsg(comment=str(wm.data)))
                             if raise_on_error:
-                                raise Exception(str(msg.data))
-                        elif msg.type == aiohttp.WSMsgType.BINARY:
+                                raise Exception(str(wm.data))
+                        elif wm.type == aiohttp.WSMsgType.BINARY:
                             try:
-                                cm: ChannelMsgs = channel_msgs_parse(msg.data)
+                                cm: ChannelMsgs = channel_msgs_parse(wm.data)
                             except Exception as e:
-                                s = f"error in parsing {msg.data!r}: {e.__class__.__name__}:\n{e}"
+                                s = f"error in parsing {wm.data!r}: {e.__class__.__name__}:\n{e}"
                                 self.logger.error(s)
                                 await callback(ErrorMsg(comment=s))
                                 if raise_on_error:
@@ -1180,13 +1195,13 @@ class DTPSClient:
 
                                         data = b""
                                         for _ in range(dr.chunks_arriving):
-                                            msg = await ws.receive()
-                                            cm = channel_msgs_parse(msg.data)  # FIXME: need to use primitives
+                                            wm = await ws.receive()
+                                            cm = channel_msgs_parse(wm.data)  # FIXME: need to use primitives
 
                                             if isinstance(cm, Chunk):
                                                 data += cm.data
                                             else:
-                                                s = f"unexpected message while waiting for chunks {msg!r}"
+                                                s = f"unexpected message while waiting for chunks {wm!r}"
                                                 self.logger.error(s)
                                                 await callback(ErrorMsg(comment=s))
                                                 if raise_on_error:
@@ -1227,7 +1242,7 @@ class DTPSClient:
                                             # logger.debug(f"downloading {url_websockets} from {cm}")
                                             data = await self._download_from_urls(url_websockets, cm)
                                         except Exception as e:
-                                            msg = f"error in downloading {cm}: {e.__class__.__name__} {e!r}"
+                                            msg = f"error in downloading {cm}: {e.__class__.__name__}\n{e}"
                                             self.logger.error(msg)
                                             await callback(ErrorMsg(comment=msg))
                                             if raise_on_error:
@@ -1256,7 +1271,7 @@ class DTPSClient:
                                         raise Exception(s)
 
                         else:
-                            s = f"listen_url_events_: unexpected message type {msg.type} with {msg.data!r}"
+                            s = f"listen_url_events_: unexpected message type {wm.type} with {wm.data!r}"
                             self.logger.error(s)
                             await callback(ErrorMsg(comment=s))
                             if raise_on_error:
@@ -1316,6 +1331,7 @@ class DTPSClient:
         add_silence: Optional[float],
         inline_data: bool,
         callback: Callable[[ListenURLEvents], Awaitable[None]],
+        max_frequency: Optional[float],
     ) -> ListenDataInterface:
         i = ListenDataContinuousImp(None)
         t = asyncio.create_task(
@@ -1328,6 +1344,7 @@ class DTPSClient:
                 inline_data=inline_data,
                 callback=callback,
                 ldi=i,
+                max_frequency=max_frequency,
             )
         )
         i.task = t
@@ -1347,6 +1364,7 @@ class DTPSClient:
         add_silence: Optional[float],
         inline_data: bool,
         callback: Callable[[ListenURLEvents], Awaitable[None]],
+        max_frequency: Optional[float],
     ):
         while not ldi.stop_condition.is_set():
             try:
@@ -1409,6 +1427,7 @@ class DTPSClient:
                     raise_on_error=raise_on_error,
                     inline_data=False,
                     add_silence=add_silence,
+                    max_frequency=max_frequency,
                     callback=callback,  # stop_condition=stop_condition
                 )
 
@@ -1425,6 +1444,7 @@ class DTPSClient:
                     raise_on_error=raise_on_error,
                     inline_data=True,
                     add_silence=add_silence,
+                    max_frequency=max_frequency,
                     callback=callback,
                 )
 

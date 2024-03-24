@@ -71,6 +71,7 @@ async def dtps_listen_main_f(
             add_silence=1,
             inline_data=inline_data,
             callback=callback,
+            max_frequency=None,
         )
 
     if error_msgs and raise_on_error:

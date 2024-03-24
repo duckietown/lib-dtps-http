@@ -54,7 +54,8 @@ async def listen(dtpsclient: DTPSClient, abs_url: URL, tn: str, ) -> None:
                                                  add_silence=None,
                                                  raise_on_error=False,
                                                  callback=callback,
-                                                 switch_identity_ok=False)
+                                                 switch_identity_ok=False,
+                                                 max_frequency=None)
        
 
 

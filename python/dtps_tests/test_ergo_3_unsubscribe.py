@@ -1,5 +1,4 @@
 import asyncio
-from typing import Optional
 from unittest import IsolatedAsyncioTestCase
 
 from dtps import DTPSContext
@@ -9,7 +8,7 @@ from dtps_tests import logger
 from dtps_tests.utils import create_use_pair
 
 
-async def check_ergo_unsub(base: DTPSContext, max_frequency: Optional[float]) -> None:
+async def check_ergo_unsub(base: DTPSContext, inline: bool) -> None:
     node_input = await (base / "dtps" / "node" / "in").queue_create()
 
     rd = RawData(content=b"hello", content_type=MIME_TEXT)
@@ -22,7 +21,7 @@ async def check_ergo_unsub(base: DTPSContext, max_frequency: Optional[float]) ->
         logger.info(f"received #{n}")
         received.append(data)
 
-    sub1 = await node_input.subscribe(on_input, max_frequency=max_frequency)
+    sub1 = await node_input.subscribe(on_input, inline=inline)
 
     await asyncio.sleep(1)
 
@@ -51,7 +50,7 @@ class TestErgoUnsub(IsolatedAsyncioTestCase):
         async with create_use_pair("testcreate") as (context_create, context_use):
             await check_ergo_unsub(
                 context_create,
-                max_frequency=None,
+                inline=True,
             )
 
     @test_timeout(15)
@@ -59,7 +58,7 @@ class TestErgoUnsub(IsolatedAsyncioTestCase):
         async with create_use_pair("testcreate") as (context_create, context_use):
             await check_ergo_unsub(
                 context_create,
-                max_frequency=100,
+                inline=False,
             )
 
     @test_timeout(15)
@@ -68,7 +67,7 @@ class TestErgoUnsub(IsolatedAsyncioTestCase):
         async with create_use_pair("testuse") as (context_create, context_use):
             await check_ergo_unsub(
                 context_use,
-                max_frequency=None,
+                inline=True,
             )
 
     @test_timeout(15)
@@ -77,5 +76,5 @@ class TestErgoUnsub(IsolatedAsyncioTestCase):
         async with create_use_pair("testuse") as (context_create, context_use):
             await check_ergo_unsub(
                 context_use,
-                max_frequency=100,
+                inline=False,
             )

@@ -10,28 +10,21 @@ from typing import (
     Sequence,
 )
 
-from dtps_http import (
-    DataSaved,
-    NodeID,
-    ObjectTransformResult,
-    RawData,
-    TopicRefAdd,
-    URLString,
-    DEFAULT_MAX_HISTORY,
-)
+from dtps_http import Bounds, DataSaved, NodeID, ObjectTransformResult, RawData, TopicRefAdd, URLString
 
 __all__ = [
     "ConnectionInterface",
     "DTPSContext",
     "HistoryInterface",
+    "PatchType",
     "PublisherInterface",
     "SubscriptionInterface",
 ]
 
-from dtps_http.structures import Bounds
-
 _ = Sequence
 RPCFunction = Callable[[RawData], Awaitable[ObjectTransformResult]]
+
+PatchType = List[Dict[str, Any]]
 
 
 class DTPSContext(ABC):
@@ -108,12 +101,24 @@ class DTPSContext(ABC):
         on_data: Callable[[RawData], Awaitable[None]],
         /,
         max_frequency: Optional[float] = None,
-        # service_level=None,
-        # timeout: Optional[float] = None
+        inline: bool = True,
     ) -> "SubscriptionInterface":
         """
         The subscription is persistent: if the topic is not available, we wait until
         it is (up to a timeout).
+        """
+        ...
+
+    @abstractmethod
+    async def subscribe_diff(
+        self,
+        on_data: Callable[[PatchType], Awaitable[None]],
+        /,
+    ) -> "SubscriptionInterface":
+        """
+        Obtains the stream of data as a series of diffs, as JSON patch.
+
+        Note: the first call will return the full data. (set / value)
         """
         ...
 
@@ -171,7 +176,7 @@ class DTPSContext(ABC):
 
     # patch
     @abstractmethod
-    async def patch(self, patch_data: List[Dict[str, Any]], /) -> None:
+    async def patch(self, patch_data: PatchType, /) -> None:
         """
         Applies a patch to the resource.
         The patch is a list of operations, as defined in RFC 6902.
@@ -181,7 +186,9 @@ class DTPSContext(ABC):
     # proxy
 
     @abstractmethod
-    async def expose(self, urls: "Sequence[str] | DTPSContext", /) -> None:
+    async def expose(
+        self, urls: "Sequence[str] | DTPSContext", /, *, mask_origin: bool = False
+    ) -> "DTPSContext":
         """
         Creates this topic as a proxy to the given urls or to the context..
 
@@ -235,6 +242,7 @@ class HistoryInterface(ABC):
     async def summary(self, nmax: int, /) -> Dict[int, DataSaved]:
         """Returns a summary of the history, with at most nmax entries."""
 
+    @abstractmethod
     async def get(self, index: int, /) -> RawData:
         """Returns the data at the given index."""
         ...
@@ -258,7 +266,8 @@ class PublisherInterface(ABC):
         """Stops the publisher"""
 
     # TODO: DTSW-4880: add function to get number of connections
-    # TODO: DTSW-4879: should we pass back the desired frequency? (max of all frequencies) or bandwidth constraints?
+    # TODO: DTSW-4879: should we pass back the desired frequency? (max of all frequencies) or bandwidth
+    #  constraints?
     # @abstractmethod
     # async def num_connections(self) -> RawData:
     #     """Publishes data to the resource and waits for the response"""

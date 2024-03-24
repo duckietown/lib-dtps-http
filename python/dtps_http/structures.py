@@ -219,7 +219,7 @@ class RawData:
             msg = (
                 f"Cannot convert non-structure content to native object (content_type="
                 f"{self.content_type!r})\n"
-                f"data = {self.content}"
+                f"data = {self.content!r}"
             )
             raise ValueError(msg)
 
@@ -349,7 +349,7 @@ class DataReady:
     def from_cbor(cls, s: bytes) -> "DataReady":
         struct = cbor2.loads(s)
         if not isinstance(struct, dict):
-            raise ValueError(f"Expected a dictionary here: {s}\n{struct}")
+            raise ValueError(f"Expected a dictionary here: {s!r}\n{struct}")
         return pydantic_parse(cls, struct)
 
     def as_data_saved(self) -> DataSaved:

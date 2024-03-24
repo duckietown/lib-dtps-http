@@ -14,7 +14,7 @@ from .utils import create_rust_server, create_use_pair
 class TestExposeMultiple(IsolatedAsyncioTestCase):
     @test_timeout(120)
     @async_error_catcher
-    async def test_expose_multiple(self):
+    async def test_expose_multiple(self) -> None:
         S = AsyncExitStack()
 
         async with S:

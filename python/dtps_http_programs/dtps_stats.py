@@ -69,6 +69,7 @@ async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> Non
                 functools.partial(new_observation, name),
                 inline_data=inline_data,
                 raise_on_error=False,
+                max_frequency=None,
             )
             t = asyncio.create_task(ldi.wait_for_done())
             subcriptions.append(t)

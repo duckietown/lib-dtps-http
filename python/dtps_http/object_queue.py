@@ -29,7 +29,6 @@ from .structures import (
     TopicRef,
 )
 from .types import ContentType, TopicNameV
-from .urls import get_relative_url
 
 __all__ = [
     "ObjectQueue",
@@ -202,8 +201,8 @@ class ObjectQueue:
             Key(self._name.as_relative_url(), K_INDEX), inot
         )  # logger.debug(f"published #{self._seq} {self._name}: {obj!r}")
 
-        reached_at = self._name.as_relative_url()
-        data_ready = self.get_data_ready(ds, reached_at, False)
+        # reached_at = self._name.as_relative_url()
+        data_ready = self.get_data_ready(ds, False)
         return data_ready
 
     def current_clocks(self) -> Clocks:
@@ -255,15 +254,20 @@ class ObjectQueue:
         except Exception as e:
             logger.error(f"Could not unsubscribe {sub_id}: {e}")
 
-    def get_data_ready(self, ds: DataSaved, presented_as: str, inline_data: bool) -> DataReady:
-        actual_url = self._name.as_relative_url() + "data/" + ds.digest + "/"
-        rel_url = get_relative_url(actual_url, presented_as)
+    def get_data_ready(self, ds: DataSaved, inline_data: bool) -> DataReady:
+        from .server import encode_url
+
+        available_interval = 60
+        available_until = self.blob_manager.extend_deadline(ds.digest, available_interval)
+
+        actual_url = encode_url(digest=ds.digest, content_type=ds.content_type)
+        # rel_url = get_relative_url(actual_url, presented_as)
         if inline_data:
             nchunks = 1
             availability_ = []
         else:
             nchunks = 0
-            availability_ = [ResourceAvailability(url=rel_url, available_until=time.time() + 60)]
+            availability_ = [ResourceAvailability(url=actual_url, available_until=available_until)]
 
         data = DataReady(
             index=ds.index,

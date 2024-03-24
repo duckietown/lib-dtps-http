@@ -27,6 +27,7 @@ from typing import (
 import cbor2
 import yaml
 from aiohttp import web, WSMsgType
+from aiohttp.web_exceptions import HTTPBadRequest
 from aiopubsub import Hub
 from jsonpatch import (
     AddOperation,
@@ -54,6 +55,7 @@ from .constants import (
     HEADER_CONTENT_LOCATION,
     HEADER_DATA_ORIGIN_NODE_ID,
     HEADER_DATA_UNIQUE_ID,
+    HEADER_MAX_FREQUENCY,
     HEADER_NO_AVAIL,
     HEADER_NO_CACHE,
     HEADER_NODE_ID,
@@ -92,6 +94,7 @@ from .structures import (
     ConnectionEstablished,
     ContentInfo,
     DataReady,
+    Digest,
     ErrorMsg,
     FinishedMsg,
     InsertNotification,
@@ -125,6 +128,7 @@ from .types_of_source import (
 )
 from .urls import parse_url_unescape, URL, URLIndexer, URLWS
 from .utils import async_error_catcher, multidict_update
+from .utils_every_once_in_a_while import EveryOnceInAWhile
 
 SEND_DATA_ARGNAME = "send_data"
 ROOT = TopicNameV.root()
@@ -240,8 +244,8 @@ class DTPSServer:
         routes.get("/{topic:.*}" + REL_URL_HISTORY + "/")(self.serve_history)
         routes.get("/{topic:.*}" + REL_STREAM_PUSH_SUFFIX + "/")(self.serve_push_stream)
 
-        routes.get("/{topic:.*}/data/{digest}/")(self.serve_data_get)
-        routes.get("/data/{digest}/")(self.serve_data_get)
+        # routes.get("/{topic:.*}/data/{digest}/")(self.serve_data_get)
+        # routes.get("/data/{digest}/")(self.serve_data_get)
         routes.post("/{topic:.*}")(self.serve_post)
         routes.patch("/{topic:.*}")(self.serve_patch)
 
@@ -336,7 +340,7 @@ class DTPSServer:
         """Add a task to the list of tasks to be cancelled on shutdown"""
         self.tasks.append(task)
 
-    async def _update_lists(self):
+    async def _update_lists(self) -> None:
         if TOPIC_LIST not in self._oqs:
             raise AssertionError(f"Topic {TOPIC_LIST.as_relative_url()} not found")
         if ROOT not in self._oqs:
@@ -408,7 +412,9 @@ class DTPSServer:
                     ti2 = ti2_.to_internal([best_url])
                     await self._process_change_topics(dtpsclient, name, ti2, mask_origin=finfo.mask_origin)
 
-                ldi = await dtpsclient.listen_url(url, on_data, inline_data=True, raise_on_error=False)
+                ldi = await dtpsclient.listen_url(
+                    url, on_data, inline_data=True, raise_on_error=False, max_frequency=None
+                )
                 try:
                     condition = asyncio.create_task(self.shutdown_event.wait())
                     waiting = asyncio.create_task(ldi.wait_for_done())
@@ -905,11 +911,11 @@ class DTPSServer:
             raise web.HTTPNotFound(text=f"Topic {topic_name_s} is not a queue", headers=headers)
 
         oq = self.get_oq(source.topic_name)
-        presented_as = request.url.path
+        # presented_as = request.url.path
         history = {}
         for i in oq.stored:
             ds = oq.saved[i]
-            a = oq.get_data_ready(ds, presented_as, inline_data=False)
+            a = oq.get_data_ready(ds, inline_data=False)
             history[a.index] = asdict(a)
 
         cbor = cbor2.dumps(history)
@@ -1409,7 +1415,7 @@ pre {{
                 patch = JsonPatch.from_string(decoded)
             elif content_type == CONTENT_TYPE_PATCH_CBOR:
                 p = cbor2.loads(data)
-                patch = JsonPatch(p)
+                patch = JsonPatch(p)  # type: ignore
             elif content_type == CONTENT_TYPE_PATCH_YAML:
                 p = yaml.safe_load(data)
                 patch = JsonPatch(p)
@@ -1446,7 +1452,7 @@ pre {{
                 patch = JsonPatch.from_string(decoded)
             elif content_type == CONTENT_TYPE_PATCH_CBOR:
                 p = cbor2.loads(data)
-                patch = JsonPatch(p)
+                patch = JsonPatch(p)  # type: ignore
             elif content_type == CONTENT_TYPE_PATCH_YAML:
                 p = yaml.safe_load(data)
                 patch = JsonPatch(p)
@@ -1455,7 +1461,7 @@ pre {{
                 return web.Response(status=415, text=msg)
             # logger.info(f"decoded: {decoded} patch: {patch}")
 
-            for operation in patch._ops:
+            for operation in patch._ops:  # type: ignore
                 if isinstance(operation, RemoveOperation):
                     raise NotImplementedError(
                         f"Cannot handle {operation!r}"
@@ -1467,7 +1473,7 @@ pre {{
                     if topic.is_root():
                         raise ValueError(f"Cannot create root topic (path = {operation.path!r})")
 
-                    value = operation.operation["value"]
+                    value = operation.operation["value"]  #  type: ignore
                     trf = TopicRefAdd.from_json(value)
                     await self.create_oq(topic, trf.content_info, tp=trf.properties, bounds=trf.bounds)
                     self.logger.info(f"created new topic: '{topic.as_dash_sep()}'")
@@ -1500,37 +1506,27 @@ pre {{
 
     # routes.get("/{ignore:.*}/:blobs/{digest}/{content_type}")(self.serve_blob)
 
-    def _store_data(self, rd: RawData, available_for: float, presented_as: str) -> Tuple[URLString, float]:
-        now = time.time()
-        deadline = now + available_for
-        digest = self.blob_manager.save_blob_deadline(rd.content, deadline)
-
-        b64 = base64.urlsafe_b64encode(rd.content_type.encode()).decode("ascii")
-
-        url = URLString(f"./:blobs/{digest}/{b64}")
-        return url, now + available_for
-
-    @async_error_catcher
-    async def serve_data_get(self, request: web.Request) -> web.Response:
-        headers: CIMultiDict[str] = CIMultiDict()
-        multidict_update(headers, self.get_headers_alternatives(request))
-        self._add_own_headers(headers)
-        if "topic" not in request.match_info:
-            topic_name_s = ""
-        else:
-            topic_name_s = request.match_info["topic"] + "/"
-        topic_name = TopicNameV.from_relative_url(topic_name_s)
-        digest = request.match_info["digest"]
-        if topic_name not in self._oqs:
-            msg = f"Cannot resolve topic: {request.url}\ntopic: {topic_name_s!r}"
-            self.logger.error(msg)
-            raise web.HTTPNotFound(text=msg, headers=headers)
-        oq = self._oqs[topic_name]
-        data = oq.last_data()
-        headers[HEADER_DATA_UNIQUE_ID] = oq.tr.unique_id
-        headers[HEADER_DATA_ORIGIN_NODE_ID] = oq.tr.origin_node
-
-        return web.Response(body=data.content, headers=headers, content_type=data.content_type)
+    # @async_error_catcher
+    # async def serve_data_get(self, request: web.Request) -> web.Response:
+    #     headers: CIMultiDict[str] = CIMultiDict()
+    #     multidict_update(headers, self.get_headers_alternatives(request))
+    #     self._add_own_headers(headers)
+    #     if "topic" not in request.match_info:
+    #         topic_name_s = ""
+    #     else:
+    #         topic_name_s = request.match_info["topic"] + "/"
+    #     topic_name = TopicNameV.from_relative_url(topic_name_s)
+    #     digest = request.match_info["digest"]
+    #     if topic_name not in self._oqs:
+    #         msg = f"Cannot resolve topic: {request.url}\ntopic: {topic_name_s!r}"
+    #         self.logger.error(msg)
+    #         raise web.HTTPNotFound(text=msg, headers=headers)
+    #     oq = self._oqs[topic_name]
+    #     data = oq.last_data()
+    #     headers[HEADER_DATA_UNIQUE_ID] = oq.tr.unique_id
+    #     headers[HEADER_DATA_ORIGIN_NODE_ID] = oq.tr.origin_node
+    #
+    #     return web.Response(body=data, headers=headers, content_type=data.content_type)
 
     @async_error_catcher
     async def serve_events(self, request: web.Request) -> web.WebSocketResponse:
@@ -1552,6 +1548,19 @@ pre {{
             msg = f"Cannot resolve topic: {request.url}\ntopic: {topic_name_s!r}"
             raise web.HTTPNotFound(text=msg, headers=headers)
 
+        headers = request.headers  # type: ignore
+        self.logger.info(f"serve_events: {headers=}")
+        if HEADER_MAX_FREQUENCY in headers:
+            s = headers[HEADER_MAX_FREQUENCY]
+            try:
+                max_frequency = float(s)
+            except ValueError:
+                msg = f"Cannot interpret header {HEADER_MAX_FREQUENCY} set to {s:r}"
+                raise HTTPBadRequest(text=msg)
+        else:
+            max_frequency = None
+        self.logger.info(f"serve_events: {max_frequency=}")
+
         ws = web.WebSocketResponse()
         multidict_update(ws.headers, self.get_headers_alternatives(request))
         self._add_own_headers(ws.headers)
@@ -1570,7 +1579,7 @@ pre {{
             await ws.prepare(request)
 
             # self.logger.info(f"serve_events_forwarder: {request.url} topic_name={topic_name_s} fd={fd}")
-            await self.serve_events_forwarder(ws, presented_as, fd, send_data)
+            await self.serve_events_forwarder(ws, presented_as, fd, send_data, max_frequency=max_frequency)
             return ws
 
         oq_ = self._oqs[topic_name]
@@ -1585,6 +1594,8 @@ pre {{
         self.logger.debug(f"serve_events: {request.url} sending {ci}")
         await ws.send_bytes(get_tagged_cbor(ci))
 
+        every = EveryOnceInAWhile(1.0 / max_frequency if max_frequency is not None else 0.0)
+
         @async_error_catcher
         async def send_message(_: ObjectQueue, inot: InsertNotification) -> None:
             # self.logger.debug(f"serve_events: new message {i}")
@@ -1592,28 +1603,29 @@ pre {{
             ds = inot.data_saved
             digest = ds.digest
 
-            presented_as = request.url.path
-            data = oq_.get_data_ready(ds, presented_as, inline_data=send_data)
+            # presented_as = request.url.path
+            data = oq_.get_data_ready(ds, inline_data=send_data)
 
             if ws.closed:
                 exit_event.set()
                 return
 
-            try:
-                await ws.send_bytes(get_tagged_cbor(data))
-            except ConnectionResetError:
-                exit_event.set()
-                pass
-
-            if send_data:
-                the_bytes = inot.raw_data.content
-                chunk = Chunk(digest=digest, i=0, n=1, index=0, data=the_bytes)
-
+            if every.now():
                 try:
-                    await ws.send_bytes(get_tagged_cbor(chunk))
+                    await ws.send_bytes(get_tagged_cbor(data))
                 except ConnectionResetError:
                     exit_event.set()
                     pass
+
+                if send_data:
+                    the_bytes = inot.raw_data.content
+                    chunk = Chunk(digest=digest, i=0, n=1, index=0, data=the_bytes)
+
+                    try:
+                        await ws.send_bytes(get_tagged_cbor(chunk))
+                    except ConnectionResetError:
+                        exit_event.set()
+                        pass
 
         s = oq_.subscribe(send_message)
 
@@ -1658,18 +1670,18 @@ pre {{
         oq_ = self._oqs[oq.topic_name]
 
         while True:  # TODO: respect on_shutdown
-            msg = await ws.receive()
+            wm = await ws.receive()
             # self.logger.debug(f"serve_push_stream_oq: received {msg}")
 
-            if msg.type == WSMsgType.CLOSE:
+            if wm.type == WSMsgType.CLOSE:
                 break
 
-            elif msg.type == WSMsgType.BINARY:
+            elif wm.type == WSMsgType.BINARY:
                 # read cbor
                 try:
-                    data = cbor2.loads(msg.data)
+                    data = cbor2.loads(wm.data)
                 except:
-                    msg = f"Cannot decode {msg.data!r}"
+                    msg = f"Cannot decode {wm.data!r}"
                     self.logger.error(msg)
                     result = PushResult(False, msg)
                     await ws.send_bytes(get_tagged_cbor(result))
@@ -1700,7 +1712,7 @@ pre {{
                     continue
 
             else:
-                msg = f"Cannot handle message type {msg!r}"
+                msg = f"Cannot handle message type {wm.type!r}"
                 self.logger.error(msg)
                 result = PushResult(False, msg)
                 await ws.send_bytes(get_tagged_cbor(result))
@@ -1716,6 +1728,7 @@ pre {{
         presented_as: str,
         fd: ForwardedTopic,
         inline_data: bool,
+        max_frequency: Optional[float],
     ) -> None:
         # assert fd.forward_url_events is not None
         while not self.shutdown_event.is_set():
@@ -1727,7 +1740,12 @@ pre {{
                         await self.serve_events_forward_simple(ws, url)
                     elif (url := fd.forward_url_events) is not None:
                         await self.serve_events_forwarder_one(
-                            ws, presented_as, url, inline_data_send=inline_data, inline_data_receive=False
+                            ws,
+                            presented_as,
+                            url,
+                            inline_data_send=inline_data,
+                            inline_data_receive=False,
+                            max_frequency=max_frequency,
                         )
                     else:
                         raise ValueError(f"Events not supported")
@@ -1747,6 +1765,7 @@ pre {{
                         url,
                         inline_data_send=inline_data,
                         inline_data_receive=inline_data_receive,
+                        max_frequency=max_frequency,
                     )
 
             except CancelledError:
@@ -1794,6 +1813,7 @@ pre {{
         url: URLWS,
         inline_data_receive: bool,
         inline_data_send: bool,
+        max_frequency: Optional[float],
     ) -> None:
         available_for = 60.0
         assert isinstance(url, URL)
@@ -1812,7 +1832,9 @@ pre {{
                         availability = []
                         chunks_arriving = 1
                     else:
-                        the_url, available_until = self._store_data(lue.raw_data, available_for, presented_as)
+                        the_url, available_until = get_data_url(
+                            self.blob_manager, lue.raw_data, available_for
+                        )
                         self.logger.debug(
                             f"serve_events_forwarder_one: sending ref {the_url} {available_until}"
                         )
@@ -1861,6 +1883,7 @@ pre {{
                 raise_on_error=False,
                 add_silence=None,
                 callback=callback,
+                max_frequency=max_frequency,
             )
 
             await ld.wait_for_done_or_stop_on_event(self.shutdown_event)
@@ -1902,7 +1925,6 @@ async def update_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, i
         t = time.time_ns()
         data = str(t).encode()
         await oq.publish(RawData(content=data, content_type=MIME_JSON))
-        data = None
         try:
             await asyncio.sleep(interval)
         except CancelledError:
@@ -1936,3 +1958,19 @@ def topic_name_from_json_pointer(path: str) -> TopicNameV:
         components.append(p)
 
     return TopicNameV.from_components(components)
+
+
+def get_data_url(blob_manager: BlobManager, rd: RawData, available_for: float) -> Tuple[URLString, float]:
+    now = time.time()
+    deadline = now + available_for
+    digest = blob_manager.save_blob_deadline(rd.content, deadline)
+    return encode_url(digest, rd.content_type), deadline
+
+
+def encode_url(digest: Digest, content_type: str) -> URLString:
+    if not content_type:
+        raise ValueError(f"Cannot encode url for empty content type")
+    b64 = base64.urlsafe_b64encode(content_type.encode()).decode("ascii")
+
+    url = URLString(f"./:blobs/{digest}/{b64}")
+    return url
