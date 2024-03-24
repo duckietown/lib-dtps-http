@@ -191,7 +191,7 @@ def check_is_unix_socket(u: str) -> None:
         raise ValueError(msg)
 
 
-def parse_cbor_tagged(b: bytes, /, *Ts: Type[X]) -> X:
+def parse_cbor_tagged(b: bytes, *Ts: Type[X]) -> X:
     as_struct = cbor2.loads(b)
     if not isinstance(as_struct, dict):
         raise ValueError(f"parse_cbor_tagged: {as_struct!r} is not a dict")
