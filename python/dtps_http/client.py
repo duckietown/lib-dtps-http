@@ -46,6 +46,7 @@ from .constants import (
     HEADER_DATA_ORIGIN_NODE_ID,
     HEADER_MAX_FREQUENCY,
     HEADER_NODE_ID,
+    HTTP_TIMEOUT,
     MIME_JSON,
     MIME_OCTET,
     REL_CONNECTIONS,
@@ -56,7 +57,6 @@ from .constants import (
     REL_PROXIED,
     REL_STREAM_PUSH,
     TOPIC_PROXIED,
-    HTTP_TIMEOUT,
 )
 from .exceptions import EventListeningNotAvailable, NoSuchTopic, TopicOriginUnavailable
 from .link_headers import get_link_headers

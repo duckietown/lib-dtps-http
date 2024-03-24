@@ -1,5 +1,4 @@
 import asyncio
-from typing import Optional
 from unittest import IsolatedAsyncioTestCase
 
 from dtps import DTPSContext

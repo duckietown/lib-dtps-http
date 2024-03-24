@@ -56,7 +56,7 @@ class TestDiff(IsolatedAsyncioTestCase):
             self.assertEqual(real, reconstructed)
 
 
-def reconstruct(patches: List[PatchType], initial: object) -> list[object]:
+def reconstruct(patches: List[PatchType], initial: object) -> List[object]:
     all_states = [initial]
     for patch in patches:
         p = JsonPatch.from_string(patch, loads=lambda f: f)  # type: ignore

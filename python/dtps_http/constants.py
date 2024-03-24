@@ -86,7 +86,6 @@ REL_HISTORY = "dtps-history"
 REL_CONNECTIONS = "dtps-connections"
 REL_PROXIED = "dtps-proxied"
 
-
 EVENTS_SUFFIX = ":events"
 REL_STREAM_PUSH_SUFFIX = ":push"
 REL_URL_META = ":meta"
