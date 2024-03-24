@@ -28,3 +28,10 @@ repos:
     -   id: cargo-check
   repo: https://github.com/doublify/pre-commit-rust
   rev: v1.0
+- repo: local
+  hooks:
+  - id: pyright
+    name: Pyright
+    entry: pyright
+    language: system
+    types: [python]

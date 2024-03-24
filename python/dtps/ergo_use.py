@@ -14,7 +14,6 @@ from dtps_http import (
     MIME_OCTET,
     NodeID,
     NoSuchTopic,
-    ObjectTransformFunction,
     parse_url_unescape,
     RawData,
     TopicNameV,
@@ -36,6 +35,7 @@ from .ergo_ui import (
     HistoryInterface,
     PatchType,
     PublisherInterface,
+    RPCFunction,
     SubscriptionInterface,
 )
 
@@ -264,7 +264,7 @@ class ContextManagerUseContext(DTPSContext):
         self,
         *,
         parameters: Optional[TopicRefAdd] = None,
-        transform: Optional[ObjectTransformFunction] = None,
+        transform: Optional[RPCFunction] = None,
         bounds: Optional[Bounds] = None,
     ) -> "DTPSContext":
         if bounds is None:
