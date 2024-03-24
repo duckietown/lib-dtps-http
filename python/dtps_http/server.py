@@ -1579,7 +1579,7 @@ pre {{
             await ws.prepare(request)
 
             # self.logger.info(f"serve_events_forwarder: {request.url} topic_name={topic_name_s} fd={fd}")
-            await self.serve_events_forwarder(ws, presented_as, fd, send_data)
+            await self.serve_events_forwarder(ws, presented_as, fd, send_data, max_frequency=max_frequency)
             return ws
 
         oq_ = self._oqs[topic_name]
@@ -1728,6 +1728,7 @@ pre {{
         presented_as: str,
         fd: ForwardedTopic,
         inline_data: bool,
+        max_frequency: Optional[float],
     ) -> None:
         # assert fd.forward_url_events is not None
         while not self.shutdown_event.is_set():
@@ -1739,7 +1740,12 @@ pre {{
                         await self.serve_events_forward_simple(ws, url)
                     elif (url := fd.forward_url_events) is not None:
                         await self.serve_events_forwarder_one(
-                            ws, presented_as, url, inline_data_send=inline_data, inline_data_receive=False
+                            ws,
+                            presented_as,
+                            url,
+                            inline_data_send=inline_data,
+                            inline_data_receive=False,
+                            max_frequency=max_frequency,
                         )
                     else:
                         raise ValueError(f"Events not supported")
@@ -1759,6 +1765,7 @@ pre {{
                         url,
                         inline_data_send=inline_data,
                         inline_data_receive=inline_data_receive,
+                        max_frequency=max_frequency,
                     )
 
             except CancelledError:

@@ -185,7 +185,9 @@ class DTPSContext(ABC):
     # proxy
 
     @abstractmethod
-    async def expose(self, urls: "Sequence[str] | DTPSContext", /) -> None:
+    async def expose(
+        self, urls: "Sequence[str] | DTPSContext", /, *, mask_origin: bool = False
+    ) -> "DTPSContext":
         """
         Creates this topic as a proxy to the given urls or to the context..
 

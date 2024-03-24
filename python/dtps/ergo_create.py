@@ -123,7 +123,7 @@ class ContextManagerCreateContext(DTPSContext):
     async def aclose(self) -> None:
         await self.master.aclose()
 
-    async def get_urls(self) -> List[str]:
+    async def get_urls(self) -> List[URLString]:
         server = self._get_server()
         urls = server.available_urls
 
@@ -264,7 +264,9 @@ class ContextManagerCreateContext(DTPSContext):
             raise Exception(f"{res.http_code}: {res.message}")
         return res
 
-    async def expose(self, p: "Sequence[str] | DTPSContext", /) -> None:
+    async def expose(
+        self, p: "Sequence[str] | DTPSContext", /, *, mask_origin: bool = False
+    ) -> "DTPSContext":
         if isinstance(p, DTPSContext):
             urls = await p.get_urls()
             node_id = await p.get_node_id()
@@ -272,10 +274,10 @@ class ContextManagerCreateContext(DTPSContext):
             urls = cast(Sequence[URLString], p)
             node_id = None
 
-        mask_origin = False
         server = self._get_server()
         topic = self._get_components_as_topic()
         await server.expose(topic, node_id, urls, mask_origin=mask_origin)
+        return self
 
     async def queue_create(
         self,

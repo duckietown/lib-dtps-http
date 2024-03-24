@@ -23,6 +23,8 @@ class EveryOnceInAWhile:
         self.ever_called = False
 
     def now(self) -> bool:
+        if self.interval is None:
+            return True
         n = time.time()
         dt = n - self.last
         if dt >= self.interval:

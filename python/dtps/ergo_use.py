@@ -1,7 +1,7 @@
 import asyncio
 import time
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Sequence, Tuple
 
 import cbor2
 from aiohttp import ClientResponseError
@@ -23,6 +23,7 @@ from dtps_http import (
     URL,
     url_to_string,
     URLIndexer,
+    URLString,
 )
 from dtps_http.client import ListenDataInterface
 from dtps_http.exceptions import TopicOriginUnavailable
@@ -144,7 +145,7 @@ class ContextManagerUseContext(DTPSContext):
     async def aclose(self) -> None:
         await self.master.aclose()
 
-    async def get_urls(self) -> List[str]:
+    async def get_urls(self) -> List[URLString]:
         all_urls = self.master.all_urls
         rurl = self._get_components_as_topic().as_relative_url()
         return [url_to_string(join(u, rurl)) for u in all_urls]
@@ -245,12 +246,18 @@ class ContextManagerUseContext(DTPSContext):
         url = await self._get_best_url()
         return await client.call(url, data)
 
-    async def expose(self, c: DTPSContext) -> "DTPSContext":
+    async def expose(self, c: DTPSContext | Sequence[str], /, *, mask_origin: bool = False) -> "DTPSContext":
         topic = self._get_components_as_topic()
         url0 = self.master.best_url
-        urls = await c.get_urls()
-        node_id = await c.get_node_id()
-        await self.master.client.add_proxy(cast(URLIndexer, url0), topic, node_id, urls, mask_origin=False)
+        if isinstance(c, DTPSContext):
+            urls = await c.get_urls()
+            node_id = await c.get_node_id()
+        else:
+            urls = cast(List[URLString], list(c))
+            node_id = None
+        await self.master.client.add_proxy(
+            cast(URLIndexer, url0), topic, node_id, urls, mask_origin=mask_origin
+        )
         return self
 
     async def queue_create(

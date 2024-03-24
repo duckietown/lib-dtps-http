@@ -95,6 +95,9 @@ class BlobManager:
         return digest
 
     def save_blob_deadline(self, content: bytes, deadline: float) -> Digest:
+        now = time.time()
+        if deadline < now - 3:
+            raise ValueError(f"The deadline {deadline} is supposed to be a time in the future")
         self.cleanup_blobs_if_its_time()
         digest = get_digest(content)
         if digest not in self.blobs:
@@ -107,6 +110,12 @@ class BlobManager:
             sb = self.blobs[digest]
             sb.deadline = max(deadline, sb.deadline)
         return digest
+
+    def get_blob_deadline(self, digest: Digest) -> float:
+        if digest not in self.blobs:
+            raise ValueError(f"Blob {digest} not found")
+        sb = self.blobs[digest]
+        return sb.deadline
 
     def extend_deadline(self, digest: Digest, seconds: float) -> float:
         if digest not in self.blobs:

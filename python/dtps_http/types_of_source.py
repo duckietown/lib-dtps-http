@@ -1,4 +1,5 @@
 import copy
+import time
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING, Union
@@ -60,7 +61,7 @@ class NotFound:
 ResolvedData = Union[RawData, Native, NotAvailableYet, NotFound]
 
 if TYPE_CHECKING:
-    from .server import DTPSServer
+    from .server import DTPSServer, encode_url
     from .client import DTPSClient
 
 
@@ -374,10 +375,17 @@ async def load_datasaved_resp(
         url = join(base_url, location)
 
         rd = await client.get(url, accept=ds.content_type)
-        available_for = 60.0
-        urlref, avail = server._store_data(rd, available_for, presented_as)
+        deadline = time.time() + 60.0
+        digest = server.blob_manager.save_blob_deadline(rd.content, deadline)
+        available_until = server.blob_manager.get_blob_deadline(digest)
 
-        dr.availability.append(ResourceAvailability(url=urlref, available_until=avail))
+        url = encode_url(digest, content_type=rd.content_type)
+
+        dr.availability.append(ResourceAvailability(url=url, available_until=available_until))
+        break
+    else:
+        # TODO: how to deal with failure?
+        raise ValueError(f"no location in {locations}")
 
     return dr
 
