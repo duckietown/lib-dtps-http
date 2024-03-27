@@ -704,7 +704,7 @@ class DTPSClient:
             raise
 
     async def get(self, url0: URL, accept: Optional[str]) -> RawData:
-        headers = {}
+        headers: dict[str, str] = {}
         if accept is not None:
             headers["accept"] = accept
 
@@ -747,7 +747,7 @@ class DTPSClient:
             raise
 
     async def delete(self, url0: URL) -> None:
-        headers = {}
+        headers: dict[str, str] = {}
 
         url = self._look_cache(url0)
         use_url = None
@@ -1038,29 +1038,26 @@ class DTPSClient:
         if the condition is set, we raise ConditionSatistied.
         """
         t_wait = asyncio.create_task(self.shutdown_event.wait())
-        condition_wait = asyncio.create_task(condition.wait())
-        tasks = [t_wait, a, condition_wait]
-        try:
-            finished, unfinished = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        except CancelledError:
-            a.cancel()
-            t_wait.cancel()
-            condition_wait.cancel()
-            raise
+        t_condition_wait = asyncio.create_task(condition.wait())
+        tasks = [t_wait, a, t_condition_wait]
 
+        done, not_done = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+
+        for t in not_done:
+            t.cancel()
+
+        # case 1: the shutdown was asked
         if self.shutdown_event.is_set():
-            a.cancel()
-            condition_wait.cancel()
+            # logger.info('shutdown was asked')
             raise ShutdownAsked()
         elif condition.is_set():
-            a.cancel()
-            t_wait.cancel()
+            # logger.info('condition is now set')
+            # case2: the condition was satisfied
             raise ConditionSatistied()
-
         else:
-            t_wait.cancel()
-            assert len(finished) == 1
-            return finished.pop().result()
+            res = await a
+            # logger.info(f'the result is obtained: {res}')
+            return res
 
     async def _download_from_urls(self, urlbase: URL, dr: DataReady) -> RawData:
         url_datas = [join(urlbase, _.url) for _ in dr.availability]
@@ -1104,7 +1101,7 @@ class DTPSClient:
         received_first = False
         async with self.my_session(url_websockets) as (session, use_url):
             ws: ClientWebSocketResponse
-            headers = {}
+            headers: dict[str, str] = {}
             if max_frequency is not None:
                 headers[HEADER_MAX_FREQUENCY] = str(max_frequency)
 
@@ -1122,10 +1119,9 @@ class DTPSClient:
                             await callback(FinishedMsg(comment="closed"))
                             break
 
-                        wmsg_task = asyncio.create_task(
-                            self._wait_until_shutdown(asyncio.create_task(ws.receive()), stop_condition)
+                        wmsg_task = self._wait_until_shutdown(
+                            asyncio.create_task(ws.receive()), stop_condition
                         )
-
                         try:
                             if add_silence is not None:
                                 try:

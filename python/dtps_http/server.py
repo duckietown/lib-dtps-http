@@ -252,7 +252,9 @@ class DTPSServer:
         routes.get("/{topic:.*}")(self.serve_get)
         routes.delete("/{topic:.*}")(self.serve_delete)
 
-        self.blob_manager = BlobManager(cleanup_interval=5.0, forget_forgetting_interval=5.0)
+        self.blob_manager = BlobManager(
+            cleanup_interval=5.0, forget_forgetting_interval=5.0
+        )  # TODO: make smaller than 5
 
         # mount a static directory for the web interface
         static_dir = get_static_dir()
@@ -569,6 +571,7 @@ class DTPSServer:
         bounds: Optional[Bounds],
         transform: ObjectTransformFunction = transform_identity,
     ) -> ObjectQueue:
+        # self.logger.info(f"Creating {name} tp = {tp} bounds = {bounds}")
         if bounds is None:
             bounds = Bounds.default()
         if name in self._forwarded:
@@ -1359,6 +1362,8 @@ pre {{
             headers = self._headers(request)
 
             presented_as = request.url.path
+
+            # self.logger.info(f"serve_post: {request.url!r} -> {source!r}")
             pr: PostResult = await source.publish(presented_as, self, rd)
 
             if isinstance(pr, TransformError):

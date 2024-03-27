@@ -6,6 +6,7 @@ from .structures import (
     Digest,
     get_digest,
 )
+from . import logger
 
 __all__ = [
     "BlobManager",
@@ -79,6 +80,13 @@ class BlobManager:
             if deadline_passed:
                 self.blobs.pop(digest, None)
                 self.blobs_forgotten[digest] = time.time()
+            else:
+                dt = sb.deadline - time.time()
+                # msg = f'I am not releasing the blob because it is still being used for transmission, for another {dt}s'
+                # logger.info(msg)
+        else:
+            msg = f"I am not releasing the blob because who_needs_it is not empty = {sb.who_needs_it}"
+            # logger.info(msg)
 
     def save_blob(self, content: bytes, who_needs_it: Tuple[str, int]) -> Digest:
         self.cleanup_blobs_if_its_time()

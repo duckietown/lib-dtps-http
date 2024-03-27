@@ -117,6 +117,8 @@ class ObjectQueue:
         self.blob_manager = blob_manager
         self.name_for_blob_manager = name.as_relative_url()
 
+        self.request_counter = 0
+
     def get_channel_info(self) -> ChannelInfo:
         if not self.stored:
             newest = None
@@ -185,12 +187,15 @@ class ObjectQueue:
         self.stored.append(use_seq)
         self.saved[use_seq] = ds
 
+        # logger.info(
+        #    f'pushing, bounds = {self.bounds}  stored = {len(self.stored)}  saved = {len(self.saved)} '
+        #    f'blobs={len(self.blob_manager.blobs)}')
         if self.bounds.max_size is not None:  # TODO: implement the semantics for others
             while len(self.stored) > self.bounds.max_size:
                 x_old: int = self.stored.pop(0)
                 if x_old in self.saved:  # should always be true
                     ds_old = self.saved.pop(x_old)
-                    if TOLERANCE_REMOVAL is not None:
+                    if TOLERANCE_REMOVAL is not None and TOLERANCE_REMOVAL > 0:
                         # extend deadline by an arbitrary 10 seconds
                         # (should not be needed, but just in case)
                         self.blob_manager.extend_deadline(ds_old.digest, TOLERANCE_REMOVAL)
@@ -259,6 +264,9 @@ class ObjectQueue:
 
         available_interval = 60
         available_until = self.blob_manager.extend_deadline(ds.digest, available_interval)
+
+        # who = (self.name_for_blob_manager + '-request', self.request_counter)
+        # self.request_counter += 1
 
         actual_url = encode_url(digest=ds.digest, content_type=ds.content_type)
         # rel_url = get_relative_url(actual_url, presented_as)
