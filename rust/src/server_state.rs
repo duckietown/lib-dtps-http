@@ -228,9 +228,7 @@ pub struct ServerState {
 
     /// The other proxied resources (like other websites)
     pub proxied_other: HashMap<TopicName, OtherProxyInfo>,
-    //
-    // pub blobs: HashMap<String, SavedBlob>,
-    // pub blobs_forgotten: HashMap<String, i64>,
+
     pub blob_manager: BlobManager,
 
     advertise_urls: Vec<String>,
@@ -646,8 +644,6 @@ impl ServerState {
         connection_job: &ConnectionJob,
         ssa: ServerStateAccess,
     ) -> DTPSR<()> {
-        // let event = SharedStatusNotification::new(job_name.as_dash_sep());
-        // let event_clone = event.clone();
         let connection_name = connection_name.clone();
         let connection_job = connection_job.clone();
 
@@ -689,7 +685,6 @@ impl ServerState {
             topic_name.clone(),
             ProxiedTopicInfo {
                 tr_original: tr_original.clone(),
-                // tr,
                 from_subscription: from_subscription.clone(),
                 its_topic_name: its_topic_name.clone(),
 
@@ -800,7 +795,7 @@ impl ServerState {
         let index_internal = self.create_topic_index();
         let index = index_internal.to_wire(None);
         let data_cbor = serde_cbor::to_vec(&index).unwrap();
-        // self.publish(topic_name, content, CONTENT_TYPE_CBOR, clocks)content_
+
         self.publish(&TopicName::root(), &data_cbor, CONTENT_TYPE_DTPS_INDEX_CBOR, None)?;
 
         let mut topics: Vec<String> = Vec::new();

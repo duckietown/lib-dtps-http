@@ -128,7 +128,7 @@ class TopicReachability:
 
     benchmark: LinkBenchmark
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         # s = url_to_string(self.url)
         if "///" in self.url:
             msg = f"Invalid URL: {self.url!r}"
@@ -189,6 +189,9 @@ def get_digest(s: bytes) -> Digest:
 class RawData:
     content: bytes
     content_type: ContentType
+
+    def short_description(self) -> str:
+        return f"RawData({self.content_type}; {len(self.content)} bytes)"
 
     @classmethod
     def simple_string(cls, s: str) -> "RawData":
@@ -468,7 +471,7 @@ class TopicRefAdd:
 class TopicsIndex:
     topics: Dict[TopicNameV, TopicRef]
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         for k, v in self.topics.items():
             if not v.reachability:
                 msg = f"Topic {k.as_dash_sep()!r} has no reachability"
@@ -609,7 +612,7 @@ class ProxyJob:
     def from_json(cls, s: Any) -> "ProxyJob":
         return pydantic_parse(cls, s)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.urls:
             msg = "Empty urls"
             raise ValueError(msg)

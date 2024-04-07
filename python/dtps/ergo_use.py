@@ -103,7 +103,7 @@ class ContextManagerUseContextPublisher(PublisherInterface):
         await self.queue_in.put(rd)
         success = await self.queue_out.get()
         if not success:
-            raise Exception(f"Could not push {rd!r}")
+            raise Exception(f"Could not push {rd.short_description()}")
 
     async def terminate(self) -> None:
         self.task_push.cancel()

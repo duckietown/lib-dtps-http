@@ -168,6 +168,8 @@ class ListenDataInterface(ABC):
         wait1 = asyncio.create_task(shutdown_event.wait())
         wait2 = asyncio.create_task(self.wait_for_done())
         done, pending = await asyncio.wait([wait1, wait2], return_when=asyncio.FIRST_COMPLETED)
+        for f in pending:
+            f.cancel()
         if shutdown_event.is_set():
             wait2.cancel()
             await self.stop()
@@ -1305,6 +1307,8 @@ class DTPSClient:
                         while True:
                             response = await ws.receive()
                             if response.type == aiohttp.WSMsgType.CLOSE:
+                                return False
+                            if response.type == aiohttp.WSMsgType.CLOSED:
                                 return False
 
                             elif response.type == aiohttp.WSMsgType.BINARY:

@@ -31,9 +31,7 @@ impl BlobManager {
             s.push_str(&format!(" {digest}: {} {}\n", sb.content.len(), s_needed));
         }
         s.push_str(&format!("Forgotten blobs: {}\n", self.blobs_forgotten.len()));
-        // for (digest, ts) in self.blobs_forgotten.iter() {
-        //     // s.push_str(&format!("  {digest}: {ts}\n"));
-        // }
+
         s
     }
     pub fn guarantee_blob_exists(&mut self, digest: &str, seconds: f64) {

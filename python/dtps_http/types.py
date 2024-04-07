@@ -26,7 +26,7 @@ ContentType = str
 class TopicNameV:
     components: Tuple[str, ...]
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         for c in self.components:
             if "/" in c:
                 raise ValueError(f"Invalid component {c!r} in {self!r}")

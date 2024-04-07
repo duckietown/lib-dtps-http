@@ -640,6 +640,7 @@ pub async fn get_series_of_messages_for_notification_(
         &insert_notification.raw_data.content,
         delta_availability,
     );
+    ss.blob_manager.cleanup_blobs();
 
     let nchunks = if send_data { 1 } else { 0 };
     let dr2 = DataReady {

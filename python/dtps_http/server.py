@@ -169,7 +169,7 @@ class ForwardInfo:
     mask_origin: bool
     task: "asyncio.Task[Any]"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         for u in self.urls:
             parse_url_unescape(u)
 
@@ -1478,7 +1478,7 @@ pre {{
                     if topic.is_root():
                         raise ValueError(f"Cannot create root topic (path = {operation.path!r})")
 
-                    value = operation.operation["value"]  #  type: ignore
+                    value = operation.operation["value"]  # type: ignore
                     trf = TopicRefAdd.from_json(value)
                     await self.create_oq(topic, trf.content_info, tp=trf.properties, bounds=trf.bounds)
                     self.logger.info(f"created new topic: '{topic.as_dash_sep()}'")
