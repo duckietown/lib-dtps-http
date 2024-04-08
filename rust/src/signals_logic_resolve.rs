@@ -82,13 +82,18 @@ pub async fn interpret_path(
     }
 
     if path_components.len() > 1 && path_components.first().unwrap() == ":ipfs" {
-        return if path_components.len() != 3 {
-            DTPSError::other(format!("Wrong number of components: {:?}; expected 3", path_components))
+        return if path_components.len() != 4 {
+            DTPSError::other(format!("Wrong number of components: {:?}; expected 4", path_components))
         } else {
             let digest = path_components.get(1).unwrap();
             let content_type = path_components.get(2).unwrap();
             let content_type = content_type.replace('_', "/");
-            Ok(TypeOFSource::Digest(digest.to_string(), content_type))
+            let token = path_components.get(3).unwrap();
+            Ok(TypeOFSource::Digest(
+                digest.to_string(),
+                content_type,
+                token.to_string(),
+            ))
         };
     }
 
@@ -359,7 +364,7 @@ impl TypeOFSource {
             TypeOFSource::Index(_) => {
                 not_implemented!("get_inside for {self:#?} with {s:?}")
             }
-            TypeOFSource::Digest(_, _) => {
+            TypeOFSource::Digest(_, _, token) => {
                 not_implemented!("get_inside for {self:#?} with {s:?}")
             }
             TypeOFSource::Deref(_c) => Ok(TypeOFSource::Transformed(

@@ -201,14 +201,6 @@ pub struct LocalDirInfo {
     pub local_dir: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct SavedBlob {
-    pub content: Vec<u8>,
-    pub who_needs_it: HashSet<(String, usize)>,
-    // will not be removed until who_needs_it is empty and the deadline has passed
-    pub deadline: i64,
-}
-
 #[derive(Debug)]
 pub struct ServerState {
     pub node_started: i64,
@@ -366,7 +358,7 @@ impl ServerState {
             CONTENT_TYPE_JSON,
             &p,
             None,
-            Bounds::max_length(10),
+            Bounds::max_length(1),
         )?;
 
         ss.new_topic(
@@ -375,7 +367,7 @@ impl ServerState {
             CONTENT_TYPE_JSON,
             &p,
             Some(schema_for!(i64)),
-            Bounds::max_length(10),
+            Bounds::max_length(1),
         )?;
         ss.new_topic(
             &TopicName::from_dash_sep(TOPIC_LIST_AVAILABILITY)?,
@@ -383,7 +375,7 @@ impl ServerState {
             CONTENT_TYPE_JSON,
             &p,
             None,
-            Bounds::max_length(10),
+            Bounds::max_length(1),
         )?;
         ss.new_topic(
             &TopicName::from_dash_sep(TOPIC_LOGS)?,
@@ -391,7 +383,7 @@ impl ServerState {
             CONTENT_TYPE_JSON,
             &p,
             None,
-            Bounds::max_length(10),
+            Bounds::max_length(1),
         )?;
 
         ss.new_topic(
@@ -400,7 +392,7 @@ impl ServerState {
             CONTENT_TYPE_YAML,
             &p,
             Some(schema_for!(ComponentStatusNotification)),
-            Bounds::max_length(10),
+            Bounds::max_length(1),
         )?;
 
         ss.new_topic(
@@ -409,7 +401,7 @@ impl ServerState {
             CONTENT_TYPE_YAML,
             &p,
             None,
-            Bounds::max_length(10),
+            Bounds::max_length(1),
         )?;
 
         let p = TopicProperties {
@@ -784,7 +776,8 @@ impl ServerState {
         };
 
         for (digest, index) in dropped_digests {
-            self.blob_manager.release_blob(&digest, topic_name.as_dash_sep(), index);
+            self.blob_manager
+                .release_blob_for_queue(&digest, topic_name.as_dash_sep(), index);
         }
 
         self.oqs.remove(topic_name);
@@ -841,12 +834,13 @@ impl ServerState {
             panic!("Internal inconsistency: digest mismatch");
         }
         self.blob_manager
-            .save_blob(&new_digest, &data.content, topic_name.as_dash_sep(), ds.index, &comment);
+            .save_blob_for_queue(&new_digest, &data.content, topic_name.as_dash_sep(), ds.index, &comment);
         for (digest, i) in dropped_digests {
-            self.blob_manager.release_blob(&digest, topic_name.as_dash_sep(), i);
+            self.blob_manager
+                .release_blob_for_queue(&digest, topic_name.as_dash_sep(), i);
         }
         self.blob_manager.cleanup_blobs();
-        // debug_with_info!("summary: {}", self.blob_manager.summarize());
+        debug_with_info!("summary: {}", self.blob_manager.summarize());
         Ok(ds)
     }
 
@@ -984,7 +978,7 @@ impl ServerState {
                 created: 0,
                 properties: prop,
                 content_info: ContentInfo::generic(),
-                bounds: Bounds::max_length(10),
+                bounds: Bounds::max_length(1),
             };
 
             tr.reachability.push(TopicReachabilityInternal {
@@ -1055,7 +1049,7 @@ impl ServerState {
                         patchable: false,
                     },
                     content_info: ContentInfo::generic(),
-                    bounds: Bounds::max_length(10),
+                    bounds: Bounds::max_length(1), // XXX
                 }
             };
             topics.insert(alias.clone(), tr);

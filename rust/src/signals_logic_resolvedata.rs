@@ -9,7 +9,6 @@ use bytes::Bytes;
 use http::StatusCode;
 
 use crate::signals_logic::ForwardedQueue;
-use crate::ResponseUnobtained;
 use crate::{
     context, debug_with_info, get_dataready, make_request2, not_implemented, putinside,
     signals_logic_streams::transform, DataReady, GetMeta, OtherProxied, RawData, ResolveDataSingle, ResolvedData,
@@ -17,14 +16,16 @@ use crate::{
     CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR,
 };
 use crate::{get_rawdata, get_rawdata_status};
+use crate::{DataSaved, ResponseUnobtained};
 
 #[async_trait]
 impl ResolveDataSingle for TypeOFSource {
     async fn resolve_data_single(&self, presented_as: &str, ss_mutex: ServerStateAccess) -> DTPSR<ResolvedData> {
         match self {
-            TypeOFSource::Digest(digest, content_type) => {
-                let ss = ss_mutex.lock().await;
-                let data = ss.blob_manager.get_blob_bytes(digest)?;
+            TypeOFSource::Digest(digest, content_type, token) => {
+                let mut ss = ss_mutex.lock().await;
+                let data = ss.blob_manager.get_blob_once(digest, token)?;
+
                 let rd = RawData::new(data, content_type);
                 Ok(ResolvedData::RawData(rd))
             }
@@ -100,12 +101,19 @@ impl ResolveDataSingle for TypeOFSource {
                 let x: &TypeOFSource = s;
                 match x {
                     TypeOFSource::OurQueue(topic, _) => {
-                        let ss = ss_mutex.lock().await;
-                        let q = ss.get_queue(topic)?;
+                        let mut ss = ss_mutex.lock().await;
+                        let dss: Vec<DataSaved> = {
+                            let mut res = vec![];
+                            let q = ss.get_queue(topic)?;
+                            for index in q.stored.iter() {
+                                let s = q.saved.get(index).unwrap();
+                                res.push(s.clone());
+                            }
+                            res
+                        };
                         let mut available: HashMap<usize, DataReady> = HashMap::new();
-                        for index in q.stored.iter() {
-                            let s = q.saved.get(index).unwrap();
-                            available.insert(s.index, get_dataready(s));
+                        for s in dss {
+                            available.insert(s.index, get_dataready(&mut ss.blob_manager, &s));
                         }
                         let history = available;
                         let bytes = serde_cbor::to_vec(&history).unwrap();

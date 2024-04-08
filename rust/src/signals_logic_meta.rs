@@ -161,7 +161,9 @@ impl TypeOFSource {
             TypeOFSource::Transformed(_, _) => {
                 Err(DTPSError::NotImplemented("get_meta_index for Transformed".to_string()))
             }
-            TypeOFSource::Digest(_, _) => Err(DTPSError::NotImplemented("get_meta_index for Digest".to_string())),
+            TypeOFSource::Digest(_, _, token) => {
+                Err(DTPSError::NotImplemented("get_meta_index for Digest".to_string()))
+            }
             TypeOFSource::Deref(_) => Err(DTPSError::NotImplemented("get_meta_index for Deref".to_string())),
             TypeOFSource::OtherProxied(_) => {
                 not_implemented!("OtherProxied: {self:?}")

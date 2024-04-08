@@ -24,19 +24,20 @@ use tokio::{
 };
 use tokio_stream::wrappers::{UnboundedReceiverStream, UnixListenerStream};
 use tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
+use uuid::Uuid;
 use warp::{hyper::Body, reply::Response, Filter, Rejection};
 
+use crate::blob_manager::BlobManager;
 use crate::utils_time::{epoch, format_nanos, time_nanos_i64};
 use crate::{
     cloudflare::open_cloudflare, constants::*, debug_with_info, divide_in_components, dtpserror_other, error_other,
-    error_with_info, format_digest_path, handle_events_push, handle_rejection, handle_websocket_generic2,
-    html_utils::make_html, info_with_info, internal_jobs::JobFunctionType, invalid_input, parse_url_ext,
-    put_common_headers, put_header_content_type, put_header_location, serve_master_get, serve_master_head,
-    serve_master_patch, serve_master_post, server_state::ConnectionJob, show_errors, sniff_and_start_proxy,
-    types::CompositeName, utils_headers, warn_with_info, ChannelInfo, ChannelInfoDesc, Chunk,
-    ComponentStatusNotification, DTPSError, DataReady, DataSaved, InsertNotification, ListenURLEvents,
-    MsgServerToClient, ObjectQueue, RawData, ResourceAvailabilityWire, ServerState, StatusSummary, TopicName,
-    TypeOfConnection, DTPSR,
+    error_with_info, handle_events_push, handle_rejection, handle_websocket_generic2, html_utils::make_html,
+    info_with_info, internal_jobs::JobFunctionType, invalid_input, parse_url_ext, put_common_headers,
+    put_header_content_type, put_header_location, serve_master_get, serve_master_head, serve_master_patch,
+    serve_master_post, server_state::ConnectionJob, show_errors, sniff_and_start_proxy, types::CompositeName,
+    utils_headers, warn_with_info, ChannelInfo, ChannelInfoDesc, Chunk, ComponentStatusNotification, DTPSError,
+    DataReady, DataSaved, InsertNotification, ListenURLEvents, MsgServerToClient, ObjectQueue, RawData,
+    ResourceAvailabilityWire, ServerState, StatusSummary, TopicName, TypeOfConnection, DTPSR,
 };
 
 const AVAILABILITY_LENGTH_SEC: f64 = 60.0;
@@ -596,11 +597,14 @@ pub fn get_channel_info_message(oq: &ObjectQueue) -> ChannelInfo {
     }
 }
 
-pub fn get_dataready(this_one: &DataSaved) -> DataReady {
-    let availability = vec![ResourceAvailabilityWire {
-        url: format_digest_path(&this_one.digest, &this_one.content_type),
-        available_until: epoch() + 60.0,
-    }];
+pub fn get_dataready(bm: &mut BlobManager, this_one: &DataSaved) -> DataReady {
+    let max_availability: f32 = 10.0;
+
+    let url = bm
+        .get_use_once_link(&this_one.digest, None, &this_one.content_type, max_availability)
+        .unwrap();
+    let available_until = epoch() + max_availability as f64;
+    let availability = vec![ResourceAvailabilityWire { url, available_until }];
 
     let nchunks = 0;
     DataReady {
@@ -628,19 +632,20 @@ pub async fn get_series_of_messages_for_notification_(
     let the_availability = if send_data {
         vec![]
     } else {
+        let url = ss.blob_manager.get_use_once_link_store(
+            &this_one.digest,
+            insert_notification.raw_data.content.as_ref(),
+            insert_notification.raw_data.content_type.as_str(),
+            delta_availability as f32,
+        );
+        // ss.blob_manager.cleanup_blobs();
+
         let vec1 = vec![ResourceAvailabilityWire {
-            url: format_digest_path(&this_one.digest, &this_one.content_type),
+            url,
             available_until: epoch() + delta_availability,
         }];
         vec1
     };
-
-    ss.blob_manager.save_blob_for_time(
-        &this_one.digest,
-        &insert_notification.raw_data.content,
-        delta_availability,
-    );
-    ss.blob_manager.cleanup_blobs();
 
     let nchunks = if send_data { 1 } else { 0 };
     let dr2 = DataReady {
@@ -792,7 +797,7 @@ async fn handler_topic_html_summary(
     topic_name: &TopicName,
     ss_mutex: ServerStateAccess,
 ) -> Result<http::Response<Body>, Rejection> {
-    let ss = ss_mutex.lock().await;
+    let mut ss = ss_mutex.lock().await;
 
     let x = ss.get_queue(topic_name)?;
 
@@ -818,28 +823,6 @@ async fn handler_topic_html_summary(
 
     let format_elapsed = |a| -> String { format_nanos(now - a) };
 
-    let data_or_digest = |data: &DataSaved| -> PreEscaped<String> {
-        let printable = matches!(
-            data.content_type.as_str(),
-            "application/yaml" | "application/x-yaml" | "text/yaml" | "text/vnd.yaml" | "application/json"
-        );
-        let url = format_digest_path(&data.digest, &data.content_type);
-
-        if data.content_length <= data.digest.len() {
-            if printable {
-                let rd = ss.blob_manager.get_blob(&data.digest).unwrap();
-                let s = String::from_utf8(rd.clone()).unwrap();
-                html! {
-                  (s)
-                }
-            } else {
-                let s = format!("{} bytes", data.content_length);
-                html! { a href=(url) { (s) } }
-            }
-        } else {
-            html! { a href=(url) { (data.digest.clone()) } }
-        }
-    };
     let mut latencies: Vec<i64> = vec![];
     for i in &x.stored {
         let data = x.saved.get(i).unwrap();
@@ -851,7 +834,7 @@ async fn handler_topic_html_summary(
         }
     }
 
-    let x = make_html(
+    let escaped = make_html(
         topic_name.as_relative_url(),
         html! {
 
@@ -900,7 +883,7 @@ async fn handler_topic_html_summary(
                             td { (format_nanos(latencies[i]))}
                             td { code {(data.content_type)} }
                             td { (data.content_length) }
-                            td { code { (data_or_digest(data)) } }
+                            td { code { (data_or_digest(&mut ss.blob_manager, data)) } }
                         }
                     }
                 }
@@ -909,12 +892,39 @@ async fn handler_topic_html_summary(
 
         },
     );
-    let markup = x.into_string();
+    let markup = escaped.into_string();
 
     Ok(http::Response::builder()
         .status(StatusCode::OK)
         .body(Body::from(markup))
         .unwrap())
+}
+
+pub fn data_or_digest(blob_manager: &mut BlobManager, data: &DataSaved) -> PreEscaped<String> {
+    let printable = matches!(
+        data.content_type.as_str(),
+        "application/yaml" | "application/x-yaml" | "text/yaml" | "text/vnd.yaml" | "application/json"
+    );
+    let url = blob_manager
+        .get_use_once_link(&data.digest, None, &data.content_type, 2.0)
+        .unwrap(); // FIXME: graceful
+                   //
+                   // let url = format_digest_path(&data.digest, &data.content_type, "none"); // TODO: verify
+
+    if data.content_length <= data.digest.len() {
+        if printable {
+            let rd = blob_manager.get_blob(&data.digest).unwrap();
+            let s = String::from_utf8(rd.clone()).unwrap();
+            html! {
+              (s)
+            }
+        } else {
+            let s = format!("{} bytes", data.content_length);
+            html! { a href=(url) { (s) } }
+        }
+    } else {
+        html! { a href=(url) { (data.digest.clone()) } }
+    }
 }
 
 // language=javascript

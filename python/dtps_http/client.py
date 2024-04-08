@@ -1098,7 +1098,7 @@ class DTPSClient:
         max_frequency: Optional[float],
     ) -> None:
         """Iterates using direct data in websocket."""
-        # self.logger.info(f"listen_url_events_with_data_inline {url_websockets}")
+        self.logger.info(f"listen_url_events_ {url_websockets}")
         nreceived = 0
         received_first = False
         async with self.my_session(url_websockets) as (session, use_url):
@@ -1153,6 +1153,10 @@ class DTPSClient:
                             if nreceived == 0:
                                 await callback(ErrorMsg(comment="Closed, but not even one event received"))
 
+                            await callback(FinishedMsg(comment="closed"))
+                            break
+
+                        if wm.type == aiohttp.WSMsgType.CLOSED:
                             await callback(FinishedMsg(comment="closed"))
                             break
                         elif wm.type == aiohttp.WSMsgType.CLOSING:  # aiohttp-specific

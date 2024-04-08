@@ -53,6 +53,7 @@ json-patch = "*"
 strip-ansi-escapes = "0.2.0"
 tempfile = "3.8.1"
 lazy_static = "1.4.0"
+uuid = { version = "0.8.2", features = ["v4"] }
 
 [target.'cfg(target_os = "wasi")'.dependencies]
 js-sys = "0.3"

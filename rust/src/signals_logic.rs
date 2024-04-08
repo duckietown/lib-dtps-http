@@ -27,7 +27,7 @@ pub enum TypeOFSource {
     },
     Compose(SourceComposition),
     Transformed(Box<TypeOFSource>, Transforms),
-    Digest(String, String),
+    Digest(String, String, String),
     Deref(SourceComposition),
     Index(Box<TypeOFSource>),
     Aliased(TopicName, Option<Box<TypeOFSource>>),
