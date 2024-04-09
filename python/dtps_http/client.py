@@ -218,8 +218,7 @@ class DTPSClient:
         @classmethod
         def create(
             cls, nickname: Optional[str] = None, shutdown_event: Optional[asyncio.Event] = None
-        ) -> "AsyncContextManager[DTPSClient]":
-            ...
+        ) -> "AsyncContextManager[DTPSClient]": ...
 
     else:
 
@@ -580,8 +579,7 @@ class DTPSClient:
 
         def my_session(
             self, url: URL, /, *, conn_timeout: Optional[float] = None
-        ) -> AsyncContextManager[Tuple[aiohttp.ClientSession, URLString]]:
-            ...
+        ) -> AsyncContextManager[Tuple[aiohttp.ClientSession, URLString]]: ...
 
     else:
 
@@ -1519,8 +1517,7 @@ async def pusher(
 
 class PushInterface(ABC):
     @abstractmethod
-    async def push_through(self, data: bytes, content_type: ContentType) -> bool:
-        ...
+    async def push_through(self, data: bytes, content_type: ContentType) -> bool: ...
 
 
 def escape_json_pointer(s: str) -> str:

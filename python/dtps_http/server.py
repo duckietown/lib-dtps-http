@@ -94,7 +94,6 @@ from .structures import (
     ConnectionEstablished,
     ContentInfo,
     DataReady,
-    Digest,
     ErrorMsg,
     FinishedMsg,
     InsertNotification,
@@ -1781,8 +1780,7 @@ pre {{
 
     if TYPE_CHECKING:
 
-        def _client(self, nickname: Optional[str] = None) -> AsyncContextManager[DTPSClient]:
-            ...
+        def _client(self, nickname: Optional[str] = None) -> AsyncContextManager[DTPSClient]: ...
 
     else:
 
@@ -1820,7 +1818,7 @@ pre {{
         inline_data_send: bool,
         max_frequency: Optional[float],
     ) -> None:
-        available_for = 60.0
+        available_for = 10.0
         assert isinstance(url, URL)
         self.logger.debug(f"serve_events_forwarder_one: {url} {inline_data_receive=} {inline_data_send=}")
 
@@ -1837,9 +1835,14 @@ pre {{
                         availability = []
                         chunks_arriving = 1
                     else:
-                        the_url, available_until = get_data_url(
-                            self.blob_manager, lue.raw_data, available_for
+                        available_until = time.time() + available_for
+                        digest = ds.digest
+                        the_url = self.blob_manager.get_use_once_link_store(
+                            digest, lue.raw_data.content, lue.raw_data.content_type, available_for
                         )
+                        # the_url, available_until = get_data_url(
+                        #     self.blob_manager, lue.raw_data, available_for
+                        # )
                         self.logger.debug(
                             f"serve_events_forwarder_one: sending ref {the_url} {available_until}"
                         )
@@ -1965,17 +1968,17 @@ def topic_name_from_json_pointer(path: str) -> TopicNameV:
     return TopicNameV.from_components(components)
 
 
-def get_data_url(blob_manager: BlobManager, rd: RawData, available_for: float) -> Tuple[URLString, float]:
-    now = time.time()
-    deadline = now + available_for
-    digest = blob_manager.save_blob_deadline(rd.content, deadline)
-    return encode_url(digest, rd.content_type), deadline
+# def get_data_url(blob_manager: BlobManager, rd: RawData, available_for: float) -> Tuple[URLString, float]:
+#     now = time.time()
+#     deadline = now + available_for
+#     digest = blob_manager.save_blob_deadline(rd.content, deadline)
+#     return encode_url(digest, rd.content_type), deadline
 
-
-def encode_url(digest: Digest, content_type: str) -> URLString:
-    if not content_type:
-        raise ValueError(f"Cannot encode url for empty content type")
-    b64 = base64.urlsafe_b64encode(content_type.encode()).decode("ascii")
-
-    url = URLString(f"./:blobs/{digest}/{b64}")
-    return url
+#
+# def encode_url(digest: Digest, content_type: str) -> URLString:
+#     if not content_type:
+#         raise ValueError(f"Cannot encode url for empty content type")
+#     b64 = base64.urlsafe_b64encode(content_type.encode()).decode("ascii")
+#
+#     url = URLString(f"./:blobs/{digest}/{b64}")
+#     return url

@@ -73,8 +73,7 @@ if TYPE_CHECKING:
 
     def context_cleanup(
         base_name: str = "self", environment: Optional[Mapping[str, str]] = None
-    ) -> AsyncContextManager[DTPSContext]:
-        ...
+    ) -> AsyncContextManager[DTPSContext]: ...
 
 else:
 

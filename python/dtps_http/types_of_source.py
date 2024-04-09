@@ -81,8 +81,7 @@ class Source(ABC):
         raise NotImplementedError(f"Source.get_properties() for {self}")
 
     @abstractmethod
-    def get_inside_after(self, s: str) -> "Source":
-        ...
+    def get_inside_after(self, s: str) -> "Source": ...
 
     @abstractmethod
     def get_inside(self, s: str, /) -> "Source":
@@ -90,36 +89,30 @@ class Source(ABC):
         ...
 
     @abstractmethod
-    async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData":
-        ...
+    async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData": ...
 
     @abstractmethod
     async def get_meta_info(self, presented_as: str, server: "DTPSServer") -> "TopicsIndex":
         raise NotImplementedError(f"Source.get_meta_info() for {self}")
 
     @abstractmethod
-    async def patch(self, presented_as: str, server: "DTPSServer", patch: JsonPatch) -> "PostResult":
-        ...
+    async def patch(self, presented_as: str, server: "DTPSServer", patch: JsonPatch) -> "PostResult": ...
 
     @abstractmethod
-    async def publish(self, presented_as: str, server: "DTPSServer", rd: RawData) -> "PostResult":
-        ...
+    async def publish(self, presented_as: str, server: "DTPSServer", rd: RawData) -> "PostResult": ...
 
     @abstractmethod
     async def call(
         self, presented_as: str, server: "DTPSServer", rd: RawData
-    ) -> Union[RawData, TransformError]:
-        ...
+    ) -> Union[RawData, TransformError]: ...
 
     @abstractmethod
-    async def get_source_node_id(self, server: "DTPSServer") -> Optional[NodeID]:
-        ...
+    async def get_source_node_id(self, server: "DTPSServer") -> Optional[NodeID]: ...
 
 
 class Transform(ABC):
     @abstractmethod
-    def transform(self, data: "ResolvedData") -> "ResolvedData":
-        ...
+    def transform(self, data: "ResolvedData") -> "ResolvedData": ...
 
     def get_transform_inside(self, s: str) -> "Transform":
         raise NotImplementedError(f"Transform.get_transform_inside() for {self}")
@@ -375,15 +368,14 @@ async def load_datasaved_resp(
         url = join(base_url, location)
 
         rd = await client.get(url, accept=ds.content_type)
-        deadline = time.time() + 60.0
-        digest = server.blob_manager.save_blob_deadline(rd.content, deadline)
-        available_until = server.blob_manager.get_blob_deadline(digest)
+        availability_s = 60.0
+        available_until = time.time() + availability_s
 
-        from .server import encode_url
+        the_url = server.blob_manager.get_use_once_link_store(
+            dr.digest, rd.content, dr.content_type, availability_s
+        )
 
-        url = encode_url(digest, content_type=rd.content_type)
-
-        dr.availability.append(ResourceAvailability(url=url, available_until=available_until))
+        dr.availability.append(ResourceAvailability(url=the_url, available_until=available_until))
         break
     else:
         # TODO: how to deal with failure?

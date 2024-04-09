@@ -237,8 +237,7 @@ class ExposedSetup:
 
 if TYPE_CHECKING:
 
-    def get_exposed_topic(name: str) -> AsyncContextManager[ExposedSetup]:
-        ...
+    def get_exposed_topic(name: str) -> AsyncContextManager[ExposedSetup]: ...
 
 else:
 

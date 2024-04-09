@@ -56,11 +56,9 @@ FAsync = TypeVar("FAsync", bound=Callable[..., AsyncIterator[Any]])
 
 if TYPE_CHECKING:
 
-    def async_error_catcher(_: FA, /) -> FA:
-        ...
+    def async_error_catcher(_: FA, /) -> FA: ...
 
-    def async_error_catcher_iterator(_: FAsync, /) -> FAsync:
-        ...
+    def async_error_catcher_iterator(_: FAsync, /) -> FAsync: ...
 
 else:
 
@@ -100,8 +98,7 @@ else:
 
 if TYPE_CHECKING:
 
-    def method_lru_cache() -> Callable[[F], F]:
-        ...
+    def method_lru_cache() -> Callable[[F], F]: ...
 
 else:
     from methodtools import lru_cache as method_lru_cache

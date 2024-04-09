@@ -1,11 +1,11 @@
 import asyncio
 import time
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Tuple, Sequence
+from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Tuple
 
 import cbor2
 from aiohttp import ClientResponseError
-
+from typing import Sequence
 from dtps_http import (
     CONTENT_TYPE_PATCH_CBOR,
     ContentInfo,

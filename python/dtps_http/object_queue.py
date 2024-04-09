@@ -75,7 +75,7 @@ async def transform_identity(otc: ObjectTransformContext) -> RawData:
 
 
 # tolerance for removal of blobs after they are not needed anymore
-TOLERANCE_REMOVAL = 0.0
+# TOLERANCE_REMOVAL = 0.0
 
 
 class ObjectQueue:
@@ -171,7 +171,7 @@ class ObjectQueue:
         self._seq += 1
         # digest = obj.digest()
         clocks = self.current_clocks()
-        digest = self.blob_manager.save_blob(obj.content, (self.name_for_blob_manager, use_seq))
+        digest = self.blob_manager.save_blob_for_queue(obj.content, (self.name_for_blob_manager, use_seq))
         ds = DataSaved(
             origin_node=self.tr.origin_node,
             unique_id=self.tr.unique_id,
@@ -195,10 +195,10 @@ class ObjectQueue:
                 x_old: int = self.stored.pop(0)
                 if x_old in self.saved:  # should always be true
                     ds_old = self.saved.pop(x_old)
-                    if TOLERANCE_REMOVAL is not None and TOLERANCE_REMOVAL > 0:
-                        # extend deadline by an arbitrary 10 seconds
-                        # (should not be needed, but just in case)
-                        self.blob_manager.extend_deadline(ds_old.digest, TOLERANCE_REMOVAL)
+                    # if TOLERANCE_REMOVAL is not None and TOLERANCE_REMOVAL > 0:
+                    #     # extend deadline by an arbitrary 10 seconds
+                    #     # (should not be needed, but just in case)
+                    #     self.blob_manager.extend_deadline(ds_old.digest, TOLERANCE_REMOVAL)
                     self.blob_manager.release_blob(ds_old.digest, (self.name_for_blob_manager, x_old))
 
         inot = InsertNotification(ds, obj0)
@@ -260,15 +260,19 @@ class ObjectQueue:
             logger.error(f"Could not unsubscribe {sub_id}: {e}")
 
     def get_data_ready(self, ds: DataSaved, inline_data: bool) -> DataReady:
-        from .server import encode_url
 
         available_interval = 60
-        available_until = self.blob_manager.extend_deadline(ds.digest, available_interval)
+        available_until = time.time() + available_interval
+        content = self.blob_manager.get_blob(ds.digest)
+        actual_url = self.blob_manager.get_use_once_link_store(
+            ds.digest, content, ds.content_type, available_interval
+        )
+        # available_until = self.blob_manager.extend_deadline(ds.digest, available_interval)
 
         # who = (self.name_for_blob_manager + '-request', self.request_counter)
         # self.request_counter += 1
 
-        actual_url = encode_url(digest=ds.digest, content_type=ds.content_type)
+        # actual_url = encode_url(digest=ds.digest, content_type=ds.content_type)
         # rel_url = get_relative_url(actual_url, presented_as)
         if inline_data:
             nchunks = 1

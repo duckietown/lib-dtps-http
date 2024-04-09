@@ -16,6 +16,7 @@ __all__ = [
     "Bounds",
     "ChannelInfo",
     "ChannelInfoDesc",
+    "ChannelMsgs",
     "Chunk",
     "Clocks",
     "ConnectionEstablished",
@@ -42,8 +43,10 @@ __all__ = [
     "TopicRef",
     "TopicRefAdd",
     "TopicsIndex",
+    "TopicsIndexWire",
     "TransportData",
     "WarningMsg",
+    "is_image",
     "is_structure",
 ]
 

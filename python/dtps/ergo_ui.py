@@ -18,6 +18,7 @@ __all__ = [
     "HistoryInterface",
     "PatchType",
     "PublisherInterface",
+    "RPCFunction",
     "SubscriptionInterface",
 ]
 
@@ -86,14 +87,12 @@ class DTPSContext(ABC):
     # creation and deletion
 
     @abstractmethod
-    async def remove(self) -> None:
-        ...
+    async def remove(self) -> None: ...
 
     # getting
 
     @abstractmethod
-    async def data_get(self) -> RawData:
-        ...
+    async def data_get(self) -> RawData: ...
 
     @abstractmethod
     async def subscribe(
