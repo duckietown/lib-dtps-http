@@ -10,7 +10,7 @@ use dtps_http::cli_server;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    console_subscriber::init();
+    // console_subscriber::init();
     //
     // #[cfg(feature = "dhat-heap")]
     // let _profiler = dhat::Profiler::new_heap();
