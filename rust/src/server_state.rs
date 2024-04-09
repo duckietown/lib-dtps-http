@@ -318,7 +318,7 @@ impl ServerState {
                 patchable: true,
             },
             content_info: ContentInfo::simple(CONTENT_TYPE_DTPS_INDEX_CBOR, Some(schema_for!(TopicsIndexWire))),
-            bounds: Bounds::max_length(10),
+            bounds: Bounds::max_length(1),
         };
         oqs.insert(TopicName::root(), ObjectQueue::new(tr));
 
@@ -1012,7 +1012,7 @@ impl ServerState {
                 created: 0,
                 properties: prop,
                 content_info: ContentInfo::generic(),
-                bounds: Bounds::max_length(10),
+                bounds: Bounds::max_length(1),
             };
 
             tr.reachability.push(TopicReachabilityInternal {

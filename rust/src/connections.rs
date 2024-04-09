@@ -137,6 +137,7 @@ impl TypeOfConnection {
         }
     }
 }
+
 //
 impl Display for TypeOfConnection {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

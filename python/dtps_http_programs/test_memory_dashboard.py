@@ -26,7 +26,7 @@ async def async_main():
     every_once = EveryOnceInAWhile(2)
     nbytes = 0
     nmessages = 0
-    publish_period = 0.1
+    publish_period = 0.01
 
     length = 1024 * 1024
     # length = 256
@@ -39,11 +39,11 @@ async def async_main():
         f"DTPS_BASE_SWITCHBOARD": f"http+unix://%2Ftmp%2Fdashboard/",
         f"DTPS_BASE_NODE": f"http+unix://%2Ftmp%2Fnode/",
     }
-
+    nmax = 100000
     dts = []
     async with context_cleanup("node", environment) as node:
         async with context_cleanup("switchboard", environment) as context:
-            bounds = Bounds.max_length(3)
+            bounds = Bounds.max_length(1)
             topic_orig = await (node / "topic1").queue_create(bounds=bounds)
 
             topic = await (context / "topic2").expose(topic_orig, mask_origin=True)
@@ -63,15 +63,17 @@ async def async_main():
             async with topic.publisher_context() as publisher:
                 while True:
                     await asyncio.sleep(publish_period)
-                    # create random string and publish it
-                    random_string = random_string0 + f"{nmessages:10d}".encode("utf-8")
-                    nbytes += len(random_string)
-                    rd = RawData(content=random_string, content_type=MIME_OCTET)
-                    t0 = time.monotonic()
-                    await publisher.publish(rd)
-                    dt = time.monotonic() - t0
-                    dts.append(dt)
-                    nmessages += 1
+
+                    if nmessages <= nmax:
+                        # create random string and publish it
+                        random_string = random_string0 + f"{nmessages:10d}".encode("utf-8")
+                        nbytes += len(random_string)
+                        rd = RawData(content=random_string, content_type=MIME_OCTET)
+                        t0 = time.monotonic()
+                        await publisher.publish(rd)
+                        dt = time.monotonic() - t0
+                        dts.append(dt)
+                        nmessages += 1
 
                     if every_once.now():
                         print(f"Pushed {nmessages} with {nbytes / 1024 / 1024:.1f} MB")

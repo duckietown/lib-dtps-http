@@ -54,6 +54,11 @@ strip-ansi-escapes = "0.2.0"
 tempfile = "3.8.1"
 lazy_static = "1.4.0"
 uuid = { version = "0.8.2", features = ["v4"] }
+#cap = { version = "0.1.2", features = ["stats"] }
+console-subscriber = "0.2.0"
+#tikv-jemallocator = { version = "0.5.4", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
+#jemalloc_pprof = "0.1.0"
+
 
 [target.'cfg(target_os = "wasi")'.dependencies]
 js-sys = "0.3"
@@ -75,7 +80,9 @@ websocket = "0.27.0"
 [target.'cfg(target_os = "linux")'.dependencies]
 getaddrs = "0.1.0"
 
-
+#[features]
+#dhat-heap = []    # if you are doing heap profiling
+#dhat-ad-hoc = []  # if you are doing ad hoc profiling
 
 [[bin]]
 name = "dtps-rust"

@@ -128,7 +128,7 @@ function subscribeWebSocket(url, fieldId, data_field, data_field_image) {
             //     return;
             // }
 
-             let s = "Received this notification with " + diff_ms.toFixed(3) + " ms latency:\n\n";
+            let s = "Received this notification with " + diff_ms.toFixed(3) + " ms latency:\n\n";
             // console.log('Message from server: ', message);
 
             if (field) {
@@ -136,8 +136,8 @@ function subscribeWebSocket(url, fieldId, data_field, data_field_image) {
                 field.textContent = s + jsyaml.dump(message0);
             }
 
-                ndownloads_active += 1;
-                download(use_url).then(r => ndownloads_active -= 1);
+            ndownloads_active += 1;
+            download(use_url).then(r => ndownloads_active -= 1);
 
 
             i += 1;

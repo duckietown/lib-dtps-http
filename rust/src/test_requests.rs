@@ -17,6 +17,7 @@ pub mod tests {
         ConnectionJob, ResponseResult, ResponseUnobtained, ServiceMode, TopicName, TopicProperties, CONTENT_TYPE_CBOR,
         DTPSR,
     };
+
     // #[rstest]
     // #[tokio::test]
     // async fn unreachable_by_ip() -> DTPSR<()> {

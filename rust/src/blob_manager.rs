@@ -39,6 +39,7 @@ pub struct BlobManager {
     pub blobs: HashMap<String, SavedBlob>,
     pub blobs_forgotten: HashMap<String, i64>,
     pub forget_forgetting_interval_s: f32,
+    pub last_cleanup: i64,
 }
 
 impl BlobManager {
@@ -47,41 +48,48 @@ impl BlobManager {
             blobs: HashMap::new(),
             blobs_forgotten: HashMap::new(),
             forget_forgetting_interval_s,
+            last_cleanup: 0,
         }
     }
     pub fn summarize(&self) -> String {
         let mut s = String::new();
+        let now = time_nanos_i64();
+        s.push_str("BlobManager:\n");
+        let mut total_size = 0;
+        for sb in self.blobs.values() {
+            total_size += sb.content.len();
+        }
+        s.push_str(&format!("Total Blob size: {total_size}\n"));
         s.push_str("Blobs:\n");
-        for (digest, sb) in self.blobs.iter() {
+        // order blobs by size
+        let mut blobs_sorted = self.blobs.iter().collect::<Vec<_>>();
+        blobs_sorted.sort_by(|a, b| a.1.content.len().cmp(&b.1.content.len()));
+
+        for (digest, sb) in blobs_sorted.iter() {
             let mut s_needed = String::new();
             for (who, i) in sb.who_needs_it.iter() {
                 s_needed.push_str(&format!(" ['{who}'@{i}] "));
             }
             let outstanding = sb.outstanding_tokens.len();
-            s.push_str(&format!(
-                " {digest}: {} {} {}\n",
-                sb.content.len(),
-                s_needed,
-                outstanding
-            ));
+            let mut max_deadline = now;
+            for (_, deadline) in sb.outstanding_tokens.iter() {
+                max_deadline = max(max_deadline, *deadline);
+            }
+            s.push_str(&format!(" {digest}: {} {}", sb.content.len(), s_needed,));
+            if outstanding > 0 {
+                let delta = max_deadline - now;
+                let seconds = delta as f64 / 1_000_000_000.0;
+                s.push_str(&format!(" (outstanding: {outstanding} until {seconds}s)"));
+            }
+            s.push_str("\n");
         }
         s.push_str(&format!("Forgotten blobs: {}\n", self.blobs_forgotten.len()));
 
+        let delta = now - self.last_cleanup;
+        let seconds = delta as f64 / 1_000_000_000.0;
+        s.push_str(&format!("Last cleanup: {seconds}s ago\n"));
         s
     }
-    // pub fn guarantee_blob_exists(&mut self, digest: &str, seconds: f64) {
-    //     // debug_with_info!("Guarantee blob {digest} exists for {seconds} seconds more");
-    //     let now = time_nanos_i64();
-    //     let deadline = now + (seconds * 1_000_000_000.0) as i64;
-    //     match self.blobs.get_mut(digest) {
-    //         None => {
-    //             error_with_info!("Blob {digest} not found");
-    //         }
-    //         Some(sb) => {
-    //             sb.deadline = max(sb.deadline, deadline);
-    //         }
-    //     }
-    // }
     pub fn cleanup_blobs(&mut self) {
         let now = time_nanos_i64();
         let mut todrop = Vec::new();
@@ -108,6 +116,7 @@ impl BlobManager {
         for digest in todrop_memories {
             self.blobs_forgotten.remove(&digest);
         }
+        self.last_cleanup = now;
     }
 
     pub fn save_blob_for_queue(&mut self, digest: &str, content: &[u8], who: &str, i: usize, comment: &str) {
@@ -147,7 +156,7 @@ impl BlobManager {
         }
     }
 
-    pub fn _save_blob(&mut self, digest: &str, content: &[u8]) -> &mut SavedBlob {
+    fn _save_blob(&mut self, digest: &str, content: &[u8]) -> &mut SavedBlob {
         match self.blobs.get_mut(digest) {
             None => {
                 let sb = SavedBlob {
@@ -157,7 +166,7 @@ impl BlobManager {
                 };
                 self.blobs.insert(digest.to_string(), sb);
             }
-            Some(sb) => {
+            Some(_) => {
                 // sb.deadline = 0;
             }
         }

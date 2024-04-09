@@ -1,7 +1,7 @@
 use url::Url;
 
 use crate::{
-    info_with_info, normalize_path, DTPSError, FilePaths, TypeOfConnection,
+    normalize_path, DTPSError, FilePaths, TypeOfConnection,
     TypeOfConnection::{TCP, UNIX},
     UnixCon, DTPSR,
 };

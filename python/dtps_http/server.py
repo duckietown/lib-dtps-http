@@ -621,10 +621,10 @@ class DTPSServer:
             content_info=content_info,
             properties=TopicProperties.streamable_readonly(),
             created=time.time_ns(),
-            bounds=Bounds.max_length(10),
+            bounds=Bounds.max_length(1),
         )
         self._oqs[ROOT] = ObjectQueue(
-            self.hub, ROOT, tr, blob_manager=self.blob_manager, bounds=Bounds.max_length(10)
+            self.hub, ROOT, tr, blob_manager=self.blob_manager, bounds=Bounds.max_length(1)
         )
         index = self.create_root_index()
         wire = index.to_wire()
@@ -640,14 +640,14 @@ class DTPSServer:
             content_info=content_info,
             properties=TopicProperties.streamable_readonly(),
             created=time.time_ns(),
-            bounds=Bounds.max_length(10),
+            bounds=Bounds.max_length(1),
         )
         self._oqs[TOPIC_LIST] = ObjectQueue(
             self.hub,
             TOPIC_LIST,
             tr,
             blob_manager=self.blob_manager,
-            bounds=Bounds.max_length(10),
+            bounds=Bounds.max_length(1),
         )
 
         await self.create_oq(
@@ -658,26 +658,26 @@ class DTPSServer:
                 TOPIC_CLOCK,
                 content_info=ContentInfo.simple(MIME_JSON),
                 tp=None,
-                bounds=Bounds.max_length(10),
+                bounds=Bounds.max_length(1),
             )
         await self.create_oq(
             TOPIC_AVAILABILITY,
             content_info=ContentInfo.simple(MIME_JSON),
             tp=None,
-            bounds=Bounds.max_length(10),
+            bounds=Bounds.max_length(1),
         )
         await self.create_oq(
             TOPIC_STATE_SUMMARY,
             content_info=ContentInfo.simple(MIME_JSON),
             tp=None,
-            bounds=Bounds.max_length(10),
+            bounds=Bounds.max_length(1),
         )
 
         oq = await self.create_oq(
             TOPIC_PROXIED,
             content_info=ContentInfo.simple(MIME_JSON),
             tp=None,
-            bounds=Bounds.max_length(10),
+            bounds=Bounds.max_length(1),
         )
         rd = RawData(content=b"{}", content_type=MIME_JSON)
         await oq.publish(rd)
@@ -687,7 +687,7 @@ class DTPSServer:
             TOPIC_STATE_NOTIFICATION,
             content_info=ContentInfo.simple(MIME_CBOR),
             tp=None,
-            bounds=Bounds.max_length(10),
+            bounds=Bounds.max_length(1),
         )
 
         if self.enable_clock:

@@ -3,8 +3,8 @@ use std::fmt::Debug;
 use async_trait::async_trait;
 use base64::{
     self,
-    engine::general_purpose,
-    Engine as _, // keep
+    engine::general_purpose, // keep
+    Engine as _,
 };
 use futures::{
     stream::{SplitSink, SplitStream},

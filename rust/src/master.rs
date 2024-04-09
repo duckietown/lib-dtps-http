@@ -635,22 +635,24 @@ pub async fn handle_websocket_data_stream(
     max_frequency: Option<f32>,
     ssa: ServerStateAccess,
 ) -> DTPSR<()> {
-    let mut starting_messaging = vec![];
+    {
+        let mut starting_messaging = vec![];
 
-    starting_messaging.push(MsgServerToClient::ChannelInfo(data_stream.channel_info));
+        starting_messaging.push(MsgServerToClient::ChannelInfo(data_stream.channel_info));
 
-    if let Some(first) = data_stream.first {
-        let mut ss = ssa.lock().await;
-        let mut for_this =
-            get_series_of_messages_for_notification_(send_data, &first, DELTA_WEBSOCKET_AVAIL, &mut ss).await;
+        if let Some(first) = data_stream.first {
+            let mut ss = ssa.lock().await;
+            let mut for_this =
+                get_series_of_messages_for_notification_(send_data, &first, DELTA_WEBSOCKET_AVAIL, &mut ss).await;
 
-        starting_messaging.append(&mut for_this);
+            starting_messaging.append(&mut for_this);
+        }
+
+        send_as_ws_cbor(&starting_messaging, ws_tx).await?;
     }
-
     let period = max_frequency.map(|f| 1.0 / f).unwrap_or(0.0);
-    let mut when = EveryOnceInAWhile::new(period, true);
 
-    send_as_ws_cbor(&starting_messaging, ws_tx).await?;
+    let mut when = EveryOnceInAWhile::new(period, true);
 
     let mut stream = match data_stream.stream {
         None => {

@@ -175,12 +175,20 @@ impl DTPSServer {
                 }
             });
 
+        // listen to url /memory-profile
+        // let memory_profile = warp::path("memory-profile")
+        //     .and(warp::get())
+        //     .and(clone_access.clone())
+        //     .and(warp::header::headers_cloned())
+        //     .and_then(dump_malloc);
+
         let the_routes = topic_generic_events_route2
             .or(topic_event_s_push)
             .or(master_route_head)
             .or(master_route_get)
             .or(master_route_post)
             .or(master_route_patch)
+            // .or(memory_profile)
             .recover(handle_rejection);
 
         let mut handles = vec![];
@@ -195,11 +203,13 @@ impl DTPSServer {
         };
 
         let ssa2 = ssa.clone();
-        handles.push(spawn(show_errors(
+        let h = spawn(show_errors(
             Some(ssa.clone()),
             "collect_statuses".to_string(),
             collect_statuses(ssa2, rx),
-        )));
+        ));
+
+        handles.push(h);
 
         if let Some(address) = self.listen_address {
             let the_routes_cloned = the_routes.clone();
@@ -476,6 +486,31 @@ impl DTPSServer {
     }
 }
 
+// /// Checks whether jemalloc profiling is activated an returns an error response if not.
+// fn require_profiling_activated(prof_ctl: &jemalloc_pprof::JemallocProfCtl) -> DTPSR<()> {
+//     if prof_ctl.activated() {
+//         Ok(())
+//     } else {
+//         dtpserror_other!("heap profiling not activated")
+//     }
+// }
+//
+// pub async fn dump_malloc(ss_mutex: ServerStateAccess, headers: HeaderMap) -> HandlersResponse {
+//     let mut prof_ctl = jemalloc_pprof::PROF_CTL.as_ref().unwrap().lock().await;
+//     require_profiling_activated(&prof_ctl)?;
+//     let pprof = prof_ctl
+//         .dump_pprof()
+//         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+//
+//
+//     let res = http::Response::builder()
+//         .status(StatusCode::OK)
+//         .header(CONTENT_TYPE, CONTENT_TYPE_OCTET_STREAM)
+//         .body(Body::from(pprof))
+//         .unwrap();
+//
+//     Ok(res)
+// }
 pub async fn root_handler(ss_mutex: ServerStateAccess, headers: HeaderMap) -> HandlersResponse {
     let ss = ss_mutex.lock().await;
     let index_internal = ss.create_topic_index();
