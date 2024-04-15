@@ -10,10 +10,10 @@ use http::StatusCode;
 
 use crate::signals_logic::ForwardedQueue;
 use crate::{
-    context, debug_with_info, get_dataready, make_request2, not_implemented, putinside,
-    signals_logic_streams::transform, DataReady, GetMeta, OtherProxied, RawData, ResolveDataSingle, ResolvedData,
-    ResponseResult, ServerStateAccess, SourceComposition, TopicName, TopicProperties, TypeOFSource,
-    CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR,
+    context, debug_with_info, get_dataready, get_resolved, make_request2, not_implemented, putinside,
+    signals_logic_streams::transform, DataReady, FoundMetadata, GetMeta, OtherProxied, RawData, ResolveDataSingle,
+    ResolvedData, ResponseResult, RicherRawData, ServerStateAccess, SourceComposition, TopicName, TopicProperties,
+    TypeOFSource, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_TOPIC_HISTORY_CBOR, DTPSR,
 };
 use crate::{get_rawdata, get_rawdata_status};
 use crate::{DataSaved, ResponseUnobtained};
@@ -26,8 +26,12 @@ impl ResolveDataSingle for TypeOFSource {
                 let mut ss = ss_mutex.lock().await;
                 let data = ss.blob_manager.get_blob_once(digest, token)?;
 
-                let rd = RawData::new(data, content_type);
-                Ok(ResolvedData::RawData(rd))
+                let raw_data = RawData::new(data, content_type);
+                let rrd: RicherRawData = RicherRawData {
+                    raw_data,
+                    metadata: FoundMetadata::empty(),
+                };
+                Ok(ResolvedData::RicherRawData(rrd))
             }
             TypeOFSource::ForwardedQueue(q) => resolve_data_single_forwarded_queue(q, presented_as, ss_mutex).await,
             TypeOFSource::OurQueue(q, _) => resolve_our_queue(q, ss_mutex).await,
@@ -42,7 +46,8 @@ impl ResolveDataSingle for TypeOFSource {
                     content: Bytes::from(cbor_bytes),
                     content_type: CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(),
                 };
-                Ok(ResolvedData::RawData(raw_data))
+
+                Ok(ResolvedData::from_raw_data(raw_data))
             }
             TypeOFSource::Transformed(source, transforms) => {
                 let data = source.resolve_data_single(presented_as, ss_mutex.clone()).await?;
@@ -70,7 +75,7 @@ impl ResolveDataSingle for TypeOFSource {
                         content: Bytes::from(cbor_bytes),
                         content_type: CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(),
                     };
-                    return Ok(ResolvedData::RawData(raw_data));
+                    return Ok(ResolvedData::from_raw_data(raw_data));
                 }
                 not_implemented!("MountedDir:\n{self:#?}")
             }
@@ -81,7 +86,7 @@ impl ResolveDataSingle for TypeOFSource {
                     .unwrap_or(mime::APPLICATION_OCTET_STREAM);
                 let rd = RawData::new(data, content_type);
 
-                Ok(ResolvedData::RawData(rd))
+                Ok(ResolvedData::from_raw_data(rd))
             }
             TypeOFSource::Index(inside) => {
                 let x = inside.get_meta_index(presented_as, ss_mutex).await?;
@@ -92,7 +97,7 @@ impl ResolveDataSingle for TypeOFSource {
                     content: Bytes::from(cbor_bytes),
                     content_type: CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(),
                 };
-                return Ok(ResolvedData::RawData(raw_data));
+                return Ok(ResolvedData::from_raw_data(raw_data));
             }
             TypeOFSource::Aliased(_, _) => {
                 not_implemented!("resolve_data_single for:\n{self:#?}")
@@ -117,10 +122,8 @@ impl ResolveDataSingle for TypeOFSource {
                         }
                         let history = available;
                         let bytes = serde_cbor::to_vec(&history).unwrap();
-                        return Ok(ResolvedData::RawData(RawData::new(
-                            bytes,
-                            CONTENT_TYPE_TOPIC_HISTORY_CBOR,
-                        )));
+                        let raw_data = RawData::new(bytes, CONTENT_TYPE_TOPIC_HISTORY_CBOR);
+                        return Ok(ResolvedData::from_raw_data(raw_data));
                     }
                     TypeOFSource::Compose(sc) => {
                         if sc.topic_name.is_root() {
@@ -150,9 +153,11 @@ pub async fn resolve_proxied(op: &OtherProxied) -> DTPSR<ResolvedData> {
 
     debug_with_info!("Proxied: {:?} -> {:?}", con0, con);
 
-    let rd = get_rawdata(&con).await?;
-
-    Ok(ResolvedData::RawData(rd))
+    get_resolved(&con, None).await
+    //
+    // let rd = get_rawdata(&con).await?;
+    //
+    // Ok(ResolvedData::RawData(rd))
 }
 
 async fn resolve_our_queue(topic_name: &TopicName, ss_mutex: ServerStateAccess) -> DTPSR<ResolvedData> {
@@ -179,7 +184,7 @@ async fn resolve_our_queue(topic_name: &TopicName, ss_mutex: ServerStateAccess) 
             )?;
             let raw_data = RawData::new(content, &data_saved.content_type);
             // debug_with_info!(" {topic_name:?} -> {raw_data:?}");
-            Ok(ResolvedData::RawData(raw_data))
+            Ok(ResolvedData::from_raw_data(raw_data))
         }
     };
 }
@@ -201,7 +206,7 @@ async fn single_compose(
         putinside(&mut result_dict, prefix, value)?;
     }
 
-    Ok(ResolvedData::Regular(result_dict))
+    Ok(ResolvedData::from_cborvalue(result_dict))
 }
 
 async fn resolve_data_single_forwarded_queue(
@@ -210,10 +215,23 @@ async fn resolve_data_single_forwarded_queue(
     ss_mutex: ServerStateAccess,
 ) -> DTPSR<ResolvedData> {
     let ss = ss_mutex.lock().await;
-    let use_url = &ss.proxied_topics.get(&fq.my_topic_name).unwrap().data_url;
+    let pt = ss.proxied_topics.get(&fq.my_topic_name).unwrap();
+    let use_url = &pt.data_url;
 
-    let (status, rd) = get_rawdata_status(use_url).await?;
+    // let (status, rd) = get_rawdata_status(use_url).await?;
 
     let r2 = make_request2(use_url, hyper::Method::GET, b"", None, None).await?;
-    return r2.into();
+
+    let rd_res: DTPSR<ResolvedData> = r2.into();
+
+    let mut rd = rd_res?;
+    if pt.mask_origin {
+        if let ResolvedData::RicherRawData(rrd) = rd {
+            let mut rrd = rrd;
+            rrd.metadata = FoundMetadata::empty();
+            rd = ResolvedData::RicherRawData(rrd);
+        }
+    }
+
+    Ok(rd)
 }

@@ -75,7 +75,7 @@ async def async_main():
                         continue
                     try:
                         l = len(o)
-                    except:
+                    except:  # OK
                         pass
                     else:
                         if l > 500:

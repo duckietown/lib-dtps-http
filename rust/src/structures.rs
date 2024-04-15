@@ -183,14 +183,46 @@ impl DataReady {
 }
 
 #[derive(Debug, Clone)]
+pub struct RicherRawData {
+    pub raw_data: RawData,
+
+    pub metadata: FoundMetadata,
+}
+#[derive(Debug, Clone)]
+
+pub struct RicherCBORValue {
+    pub value: CBORValue,
+
+    pub metadata: FoundMetadata,
+}
+
+#[derive(Debug, Clone)]
 pub enum ResolvedData {
-    RawData(RawData),
-    Regular(CBORValue),
+    RicherRawData(RicherRawData),
+    RicherCBORValue(RicherCBORValue),
     NotAvailableYet(String),
     // equivalent to NoContent
     NotFound(String),
     // equivalent to 404
     NotReachable(String), // equivalent to 530 or connection refused
+}
+
+impl ResolvedData {
+    pub fn from_raw_data(rd: RawData) -> Self {
+        let rrd = RicherRawData {
+            raw_data: rd,
+            metadata: FoundMetadata::empty(),
+        };
+        ResolvedData::RicherRawData(rrd)
+    }
+
+    pub fn from_cborvalue(value: CBORValue) -> Self {
+        let rrd = RicherCBORValue {
+            value,
+            metadata: FoundMetadata::empty(),
+        };
+        ResolvedData::RicherCBORValue(rrd)
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -226,6 +258,23 @@ pub struct FoundMetadata {
 }
 
 impl FoundMetadata {
+    pub fn empty() -> Self {
+        FoundMetadata {
+            base_url: TypeOfConnection::Same(),
+            alternative_urls: HashSet::new(),
+            answering: None,
+            events_url: None,
+            events_data_inline_url: None,
+            meta_url: None,
+            history_url: None,
+            connections_url: None,
+            proxied_url: None,
+            stream_push_url: None,
+            latency_ns: 0,
+            content_type: "application/json".to_string(),
+            headers: HeaderMap::new(),
+        }
+    }
     pub fn get_answering(&self) -> DTPSR<String> {
         match &self.answering {
             None => {

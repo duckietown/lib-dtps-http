@@ -37,6 +37,7 @@ from aiohttp import (
 )
 from multidict import CIMultiDictProxy
 from tcp_latency import measure_latency
+from urllib3.exceptions import LocationParseError
 
 from . import logger, logger as logger0
 from .constants import (
@@ -105,6 +106,8 @@ from .utils import (
 
 __all__ = [
     "DTPSClient",
+    "FoundMetadata",
+    "ListenDataInterface",
     "StopContinuousLoop",
     "escape_json_pointer",
     "my_raise_for_status",
@@ -296,7 +299,7 @@ class DTPSClient:
             for a in alternatives0:
                 try:
                     x = parse_url_unescape(a)
-                except Exception:
+                except ValueError:
                     self.logger.exception(f"cannot parse {a}")
                     continue
                 else:
@@ -351,7 +354,7 @@ class DTPSClient:
         for a in alternatives0:
             try:
                 x = parse_url_unescape(a)
-            except Exception:
+            except ValueError:
                 self.logger.exception(f"cannot parse {a}")
                 continue
             else:
@@ -653,17 +656,17 @@ class DTPSClient:
         patch.append({"op": "add", "path": path, "value": asdict(proxy_job)})
         # compile patch
         as_json = json.dumps(patch).encode("utf-8")
-        # FIXME: need to use REL_PROXIED
+        # FIXME: DTSW-5454: need to use REL_PROXIED
         url = join(url0, TOPIC_PROXIED.as_relative_url())
-        res = await self.patch(url, CONTENT_TYPE_PATCH_JSON, as_json)
+        await self.patch(url, CONTENT_TYPE_PATCH_JSON, as_json)
         return True
 
     async def remove_proxy(self, url0: URLIndexer, topic_name: TopicNameV) -> None:
         patch = [{"op": "remove", "path": "/" + escape_json_pointer(topic_name.as_dash_sep())}]
         as_json = json.dumps(patch).encode("utf-8")
-        # FIXME: need to use REL_PROXIED
+        # FIXME: DTSW-5454: need to use REL_PROXIED
         url = join(url0, TOPIC_PROXIED.as_relative_url())
-        res = await self.patch(url, CONTENT_TYPE_PATCH_JSON, as_json)
+        await self.patch(url, CONTENT_TYPE_PATCH_JSON, as_json)
 
     async def add_topic(self, url0: URLIndexer, topic_name: TopicNameV, tra: TopicRefAdd) -> None:
         path = "/" + escape_json_pointer(topic_name.as_dash_sep())
@@ -674,7 +677,7 @@ class DTPSClient:
         )
         patch_json = patch.to_string().encode()
 
-        res = await self.patch(url0, CONTENT_TYPE_PATCH_JSON, patch_json)
+        await self.patch(url0, CONTENT_TYPE_PATCH_JSON, patch_json)
 
     async def patch(self, url0: URL, content_type: Optional[str], data: bytes) -> RawData:
         headers = {"content-type": content_type} if content_type is not None else {}
@@ -691,7 +694,7 @@ class DTPSClient:
                     if not resp.ok:
                         try:
                             message = res_bytes.decode("utf-8")
-                        except:
+                        except UnicodeDecodeError:
                             message = res_bytes
                         raise ValueError(f"cannot patch {url0=!r} {use_url=!r} {resp=!r}\n{message}")
 
@@ -720,7 +723,7 @@ class DTPSClient:
                     if not resp.ok:
                         try:
                             message = res_bytes.decode("utf-8")
-                        except:
+                        except UnicodeDecodeError:
                             message = res_bytes
                         resp: ClientResponse = resp
                         if resp.status == 404:
@@ -747,13 +750,13 @@ class DTPSClient:
             raise
 
     async def delete(self, url0: URL) -> None:
-        headers: dict[str, str] = {}
+        # headers: dict[str, str] = {}
 
         url = self._look_cache(url0)
-        use_url = None
+        # use_url = None
         async with self.my_session(url, conn_timeout=HTTP_TIMEOUT) as (session, use_url):
             async with session.delete(use_url) as resp:
-                res_bytes: bytes = await resp.read()
+                # res_bytes: bytes = await resp.read()
                 resp.raise_for_status()
 
     async def get_metadata(self, url0: URLTopic) -> FoundMetadata:
@@ -843,7 +846,7 @@ class DTPSClient:
         for r in reachability:
             try:
                 x = parse_url_unescape(r.url)
-            except Exception:
+            except ValueError:
                 self.logger.exception(f"cannot parse {r.url}")
                 continue
             else:
@@ -968,11 +971,12 @@ class DTPSClient:
 
                 connection_event.set()
             elif isinstance(lue, InsertNotification):
+                # noinspection PyBroadException
                 try:
                     await cb(lue.raw_data)
                 except CancelledError:
                     raise
-                except:
+                except Exception:  #
                     logger.error(f"error in handler: {traceback.format_exc()}")
                     return
             else:
@@ -1450,7 +1454,6 @@ class DTPSClient:
                     callback=callback,
                 )
 
-            should_break_outer = False
             try:
                 try:
                     finish = asyncio.create_task(listen_data.wait_for_done())
@@ -1463,7 +1466,6 @@ class DTPSClient:
 
                 except StopContinuousLoop as e:
                     self.logger.error(f"obtained {e}")
-                    should_break_outer = True
                     break
             except CancelledError:
                 raise
@@ -1475,8 +1477,6 @@ class DTPSClient:
                 await asyncio.sleep(1.0)
                 continue
 
-            if should_break_outer:
-                break
             await asyncio.sleep(1.0)
 
     @async_error_catcher
@@ -1554,7 +1554,7 @@ async def my_raise_for_status(resp: ClientResponse, url0: URL) -> None:
         msg = await resp.read()
         try:
             msg = msg.decode("utf-8")
-        except:
+        except UnicodeDecodeError:
             pass
 
         message = ""

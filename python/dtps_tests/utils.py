@@ -72,6 +72,5 @@ async def create_rust_server(testname: str) -> AsyncIterator[DTPSContext]:
             # p.terminate()
             try:
                 p.kill()
-            except:
+            except:  # OK
                 logger.warning("cannot kill rust process")
-                pass

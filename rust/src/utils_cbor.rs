@@ -5,12 +5,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_cbor::Value::{Null as CBORNull, Text as CBORText};
 
-use crate::ResolvedData::NotReachable;
-use crate::{
-    context, debug_with_info, dtpserror_other, ResolvedData,
-    ResolvedData::{NotAvailableYet, NotFound, Regular},
-    DTPSR,
-};
+use crate::{context, debug_with_info, dtpserror_other, ResolvedData, DTPSR};
 
 pub fn get_result_to_put(
     result_dict: &mut serde_cbor::value::Value,
@@ -44,20 +39,20 @@ pub fn putinside(result_dict: &mut serde_cbor::value::Value, prefix: &Vec<String
     let key_to_put2 = CBORText(format!("{}?", prefix.last().unwrap()));
 
     match what {
-        Regular(x) => {
-            where_to_put.insert(key_to_put, x);
+        ResolvedData::RicherCBORValue(x) => {
+            where_to_put.insert(key_to_put, x.value);
         }
-        NotAvailableYet(x) | NotReachable(x) => {
+        ResolvedData::NotAvailableYet(x) | ResolvedData::NotReachable(x) => {
             // TODO: do more here
             where_to_put.insert(key_to_put, CBORNull);
             where_to_put.insert(key_to_put2, CBORText(x));
         }
-        NotFound(_) => {}
-        ResolvedData::RawData(rd) => {
+        ResolvedData::NotFound(_) => {}
+        ResolvedData::RicherRawData(rrd) => {
             let prefix_str = prefix.join("/");
             let x = context!(
-                rd.get_as_cbor(),
-                "Cannot get data as cbor for component {prefix_str:#?}\n{rd:#?}"
+                rrd.raw_data.get_as_cbor(),
+                "Cannot get data as cbor for component {prefix_str:#?}\n{rrd:#?}"
             )?;
             where_to_put.insert(key_to_put, x);
         }

@@ -173,23 +173,23 @@ impl Transforms {
         }
     }
 }
-
-pub static DEFAULT_MASK_ORIGIN: bool = false;
-
-pub fn should_use_origin() -> bool {
-    // Retrieve the environment variable's value.
-    match env::var(ENV_MASK_ORIGIN) {
-        Ok(value) => {
-            // If the environment variable is set, check its truthiness.
-            is_truthy(&value).unwrap_or_else(|| DEFAULT_MASK_ORIGIN)
-        }
-        // If the environment variable is not set, return the default value.
-        Err(_) => DEFAULT_MASK_ORIGIN,
-    }
-}
-
-lazy_static! {
-    // Define a default value for mask origin that can be used throughout the program.
-    pub static  ref MASK_ORIGIN: bool = should_use_origin();
-
-}
+//
+// pub static DEFAULT_MASK_ORIGIN: bool = false;
+//
+// pub fn should_use_origin() -> bool {
+//     // Retrieve the environment variable's value.
+//     match env::var(ENV_MASK_ORIGIN) {
+//         Ok(value) => {
+//             // If the environment variable is set, check its truthiness.
+//             is_truthy(&value).unwrap_or_else(|| DEFAULT_MASK_ORIGIN)
+//         }
+//         // If the environment variable is not set, return the default value.
+//         Err(_) => DEFAULT_MASK_ORIGIN,
+//     }
+// }
+//
+// lazy_static! {
+//     // Define a default value for mask origin that can be used throughout the program.
+//     pub static  ref MASK_ORIGIN: bool = should_use_origin();
+//
+// }

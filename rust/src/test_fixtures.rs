@@ -39,11 +39,13 @@ pub struct TestFixture {
 }
 
 impl TestFixture {
+    #[cfg(test)]
     pub async fn finish(self) -> DTPSR<()> {
         self.cf.finish().await
     }
 }
 
+#[cfg(test)]
 pub async fn instance_python_test_fixture() -> DTPSR<ConnectionFixture> {
     init_logging();
     // generate a temp dir

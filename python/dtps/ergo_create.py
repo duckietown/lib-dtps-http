@@ -119,6 +119,7 @@ class ContextManagerCreateContext(DTPSContext):
         self.master = master
         self.components = components
         self._publisher = ContextManagerCreateContextPublisher(self)
+        self._topic = TopicNameV.from_components(components)
 
     async def aclose(self) -> None:
         await self.master.aclose()
@@ -127,7 +128,7 @@ class ContextManagerCreateContext(DTPSContext):
         server = self._get_server()
         urls = server.available_urls
 
-        rurl = self._get_components_as_topic().as_relative_url()
+        rurl = self._topic.as_relative_url()
         res = []
         for u in urls:
             u2 = parse_url_unescape(u)
@@ -140,7 +141,7 @@ class ContextManagerCreateContext(DTPSContext):
 
     async def get_node_id(self) -> Optional[NodeID]:
         server = self._get_server()
-        topic = self._get_components_as_topic()
+        topic = self._topic
         resolve = server._resolve_tn(topic, url0=topic.as_relative_url())
         # server.logger.info(f"get_node_id - resolve: {resolve}")
         return await resolve.get_source_node_id(server)
@@ -150,8 +151,8 @@ class ContextManagerCreateContext(DTPSContext):
             raise AssertionError("ContextManagerCreateContext: server not initialized")
         return self.master.dtps_server_wrap.server
 
-    def _get_components_as_topic(self) -> TopicNameV:
-        return TopicNameV.from_components(self.components)
+    # def _get_components_as_topic(self) -> TopicNameV:
+    #     return TopicNameV.from_components(self.components)
 
     def navigate(self, *components: str) -> "DTPSContext":
         c = []
@@ -164,7 +165,7 @@ class ContextManagerCreateContext(DTPSContext):
         raise NotImplementedError()
 
     async def remove(self) -> None:
-        topic = self._get_components_as_topic()
+        topic = self._topic
         server = self._get_server()
         try:
             source = server._resolve_tn(topic, url0=topic.as_relative_url())
@@ -184,7 +185,7 @@ class ContextManagerCreateContext(DTPSContext):
             raise NotImplementedError(msg)
 
     async def exists(self) -> bool:
-        topic = self._get_components_as_topic()
+        topic = self._topic
         server = self._get_server()
         try:
             server._resolve_tn(topic, url0=topic.as_relative_url())
@@ -194,7 +195,7 @@ class ContextManagerCreateContext(DTPSContext):
             return True
 
     async def data_get(self) -> RawData:
-        topic = self._get_components_as_topic()
+        topic = self._topic
         server = self._get_server()
         url0 = topic.as_relative_url()
         source = server._resolve_tn(topic, url0=url0)
@@ -217,7 +218,7 @@ class ContextManagerCreateContext(DTPSContext):
         max_frequency: Optional[float] = None,
         inline: bool = True,
     ) -> "SubscriptionInterface":
-        oq0 = self._get_server().get_oq(self._get_components_as_topic())
+        oq0 = self._get_server().get_oq(self._topic)
 
         when = EveryOnceInAWhile(1.0 / max_frequency if max_frequency is not None else 0)
 
@@ -240,7 +241,7 @@ class ContextManagerCreateContext(DTPSContext):
 
     async def publish(self, data: RawData, /) -> None:
         server = self._get_server()
-        topic = self._get_components_as_topic()
+        topic = self._topic
         queue = server.get_oq(topic)
         await queue.publish(data)
 
@@ -256,7 +257,7 @@ class ContextManagerCreateContext(DTPSContext):
 
     async def call(self, data: RawData, /) -> RawData:
         server = self._get_server()
-        topic = self._get_components_as_topic()
+        topic = self._topic
         url0 = topic.as_relative_url()
         resolve = server._resolve_tn(topic, url0=url0)
         res = await resolve.call(url0, server, data)
@@ -277,7 +278,7 @@ class ContextManagerCreateContext(DTPSContext):
             node_id = None
 
         server = self._get_server()
-        topic = self._get_components_as_topic()
+        topic = self._topic
         await server.expose(topic, node_id, urls, mask_origin=mask_origin)
         return self
 
@@ -291,7 +292,7 @@ class ContextManagerCreateContext(DTPSContext):
         if bounds is None:
             bounds = Bounds.default()
         server = self._get_server()
-        topic = self._get_components_as_topic()
+        topic = self._topic
         if parameters is None:
             parameters = TopicRefAdd(
                 content_info=ContentInfo.simple(MIME_OCTET),

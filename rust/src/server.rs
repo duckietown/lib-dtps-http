@@ -379,13 +379,10 @@ impl DTPSServer {
         ));
 
         if !self.initial_proxy.is_empty() {
-            // let s = ssa.lock().await;
-            // let mut i = 0;
             for (k, v) in self.initial_proxy.clone() {
                 let mounted_at = TopicName::from_relative_url(&k)?;
-                self.add_generic_proxied(&mounted_at, v.clone()).await?;
-
-                // i += 1;
+                let mask_origin = false;
+                self.add_generic_proxied(&mounted_at, v.clone(), mask_origin).await?;
             }
             info_with_info!("Proxies started");
         }
@@ -466,10 +463,11 @@ impl DTPSServer {
         &mut self,
         mounted_at: &TopicName,
         url: TypeOfConnection,
+        mask_origin: bool,
     ) -> DTPSR<JoinHandle<()>> {
         let ssa = self.get_lock();
 
-        let future = sniff_and_start_proxy(mounted_at.clone(), url, ssa.clone());
+        let future = sniff_and_start_proxy(mounted_at.clone(), url, ssa.clone(), mask_origin);
         let handle = spawn(show_errors(
             Some(ssa),
             format!("proxied/{mounted_at}", mounted_at = mounted_at.as_dash_sep()),

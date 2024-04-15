@@ -10,7 +10,6 @@ use serde_cbor::{Value as CBORValue, Value::Null as CBORNull};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver as BroadcastReceiver;
 
-use crate::get_events_stream_inline;
 use crate::get_metadata;
 use crate::get_rawdata_status;
 use crate::time_nanos_i64;
@@ -21,6 +20,7 @@ use crate::{
     SourceComposition, TopicName, TopicProperties, TopicsIndexInternal, TopicsIndexWire, Transforms, TypeOFSource,
     TypeOfConnection, WarningMsg, CONTENT_TYPE_DTPS_INDEX_CBOR, DTPSR,
 };
+use crate::{get_events_stream_inline, FoundMetadata, RicherCBORValue, RicherRawData};
 
 #[async_recursion]
 async fn get_stream_compose_data(
@@ -75,12 +75,19 @@ async fn get_stream_compose_data(
 
         match &cs.first {
             None => {
-                let value = ResolvedData::Regular(CBORNull);
+                let value = ResolvedData::RicherCBORValue(RicherCBORValue {
+                    value: CBORNull,
+                    metadata: FoundMetadata::empty(),
+                }); // XXX:
                 putinside(&mut first, k, value)?;
             }
             Some(sd) => {
                 time_inserted = max(time_inserted, sd.data_saved.time_inserted);
-                let resolved_data = ResolvedData::RawData(sd.raw_data.clone());
+
+                let resolved_data = ResolvedData::RicherRawData(RicherRawData {
+                    raw_data: sd.raw_data.clone(),
+                    metadata: FoundMetadata::empty(), // XXX:
+                });
                 putinside(&mut first, k, resolved_data)?;
             }
         }
@@ -193,9 +200,14 @@ async fn listen_to_updates(
                 let component = component.clone();
                 let msgs = match m {
                     ListenURLEvents::InsertNotification(m) => {
+                        let rrd = RicherRawData {
+                            raw_data: m.raw_data.clone(),
+                            metadata: FoundMetadata::empty(), // XXX:
+                        };
+
                         vec![SingleUpdates::Update(ActualUpdate {
                             component,
-                            data: ResolvedData::RawData(m.raw_data),
+                            data: ResolvedData::RicherRawData(rrd),
                             clocks: m.data_saved.clocks,
                         })]
                     }
@@ -590,13 +602,20 @@ fn filter_func_outer(
 
 pub fn transform(data: ResolvedData, transform: &Transforms) -> DTPSR<ResolvedData> {
     let d = match data {
-        ResolvedData::Regular(d) => d,
+        ResolvedData::RicherCBORValue(d) => d,
         ResolvedData::NotAvailableYet(s) => return Ok(ResolvedData::NotAvailableYet(s)),
         ResolvedData::NotFound(s) => return Ok(ResolvedData::NotFound(s)),
         ResolvedData::NotReachable(s) => return Ok(ResolvedData::NotReachable(s)),
-        ResolvedData::RawData(rd) => rd.get_as_cbor()?,
+        ResolvedData::RicherRawData(rd) => RicherCBORValue {
+            value: rd.raw_data.get_as_cbor()?,
+            metadata: rd.metadata,
+        },
     };
-    Ok(ResolvedData::Regular(transform.apply(d)?))
+    let rb = RicherCBORValue {
+        value: transform.apply(d.value)?,
+        metadata: d.metadata,
+    };
+    Ok(ResolvedData::RicherCBORValue(rb))
 }
 
 async fn get_data_stream_from_url(con: &TypeOfConnection) -> DTPSR<DataStream> {

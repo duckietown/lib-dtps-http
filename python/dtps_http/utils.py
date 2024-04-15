@@ -39,6 +39,7 @@ __all__ = [
     "check_is_unix_socket",
     "method_lru_cache",
     "multidict_update",
+    "parse_cbor_tagged",
     "parse_tagged",
     "pretty",
     "pydantic_parse",

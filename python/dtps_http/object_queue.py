@@ -35,7 +35,9 @@ __all__ = [
     "ObjectTransformContext",
     "ObjectTransformFunction",
     "ObjectTransformResult",
+    "PostResult",
     "TransformError",
+    "transform_identity",
 ]
 
 SUB_ID = int

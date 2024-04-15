@@ -29,6 +29,7 @@ import yaml
 from aiohttp import web, WSMsgType
 from aiohttp.web_exceptions import HTTPBadRequest
 from aiopubsub import Hub
+from cbor2 import CBORDecodeError
 from jsonpatch import (
     AddOperation,
     CopyOperation,
@@ -135,6 +136,7 @@ ROOT = TopicNameV.root()
 __all__ = [
     "DTPSServer",
     "ForwardedTopic",
+    "get_tagged_cbor",
 ]
 
 
@@ -1636,9 +1638,9 @@ pre {{
         if oq_.stored:
             last = oq_.last()
             last_data = oq_.last_data()
-            inot = InsertNotification(last, last_data)
+            inot2 = InsertNotification(last, last_data)
 
-            await send_message(oq_, inot)
+            await send_message(oq_, inot2)
 
         try:
             await exit_event.wait()
@@ -1684,7 +1686,7 @@ pre {{
                 # read cbor
                 try:
                     data = cbor2.loads(wm.data)
-                except:
+                except CBORDecodeError:
                     msg = f"Cannot decode {wm.data!r}"
                     self.logger.error(msg)
                     result = PushResult(False, msg)
@@ -1738,6 +1740,7 @@ pre {{
         while not self.shutdown_event.is_set():
             if ws.closed:
                 break
+            # noinspection PyBroadException
             try:
                 if inline_data:
                     if (url := fd.forward_url_events_inline_data) is not None:
@@ -1774,7 +1777,7 @@ pre {{
 
             except CancelledError:
                 raise
-            except:
+            except Exception:
                 self.logger.error(f"Exception in serve_events_forwarder_one: {traceback.format_exc()}")
                 await asyncio.sleep(1)
 

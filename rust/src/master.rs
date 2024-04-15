@@ -11,6 +11,7 @@ use tungstenite::{
 };
 use warp::{http::header, hyper::Body, reply::Response, ws::Message as WarpMessage};
 
+use crate::client_metadata::put_metadata_headers;
 use crate::utils_every_once::EveryOnceInAWhile;
 use crate::{
     clocks::Clocks, debug_with_info, display_printable, divide_in_components, error_with_info, get_accept_header,
@@ -330,10 +331,10 @@ pub async fn serve_master_get(
     path: warp::path::FullPath,
     query: HashMap<String, String>,
     ss_mutex: ServerStateAccess,
-    headers: HeaderMap,
+    request_headers: HeaderMap,
 ) -> HandlersResponse {
     // get referrer
-    let referrer = get_referrer(&headers);
+    let referrer = get_referrer(&request_headers);
     debug_with_info!("GET {} ", path.as_str());
     // debug_with_info!("Referrer {:?} ", referrer);
 
@@ -384,15 +385,22 @@ pub async fn serve_master_get(
             return s.into();
         }
     };
+    let mut response_headers = HeaderMap::new();
+
     let rd: RawData = match resd {
-        ResolvedData::RawData(rd) => rd,
-        ResolvedData::Regular(reg) => {
-            let cbor_bytes = serde_cbor::to_vec(&reg).unwrap();
+        ResolvedData::RicherRawData(rrd) => {
+            put_metadata_headers(&mut response_headers, &rrd.metadata);
+
+            rrd.raw_data
+        }
+        ResolvedData::RicherCBORValue(rcb) => {
+            put_metadata_headers(&mut response_headers, &rcb.metadata);
+            let cbor_bytes = serde_cbor::to_vec(&rcb.value).unwrap();
             let bytes = Bytes::from(cbor_bytes);
             RawData::cbor(bytes)
         }
         ResolvedData::NotAvailableYet(s) => {
-            let accept_headers: Vec<String> = get_accept_header(&headers);
+            let accept_headers: Vec<String> = get_accept_header(&request_headers);
 
             let use_content_type = if accept_headers.contains(&"text/html".to_string()) {
                 CONTENT_TYPE_TEXT_HTML
@@ -450,8 +458,9 @@ pub async fn serve_master_get(
         extra_html,
         &rd.content_type,
         &rd.content,
-        headers,
+        request_headers,
         ss_mutex,
+        response_headers,
     )
     .await
 }
@@ -532,6 +541,7 @@ pub async fn visualize_data(
     content: &[u8],
     headers: HeaderMap,
     ssa: ServerStateAccess,
+    response_headers: HeaderMap,
 ) -> HandlersResponse {
     let accept_headers: Vec<String> = get_accept_header(&headers);
 
@@ -543,6 +553,9 @@ pub async fn visualize_data(
     } else {
         let mut resp = Response::new(Body::from(content.to_vec()));
         let h = resp.headers_mut();
+        for (k, v) in response_headers.iter() {
+            h.insert(k, v.clone());
+        }
 
         // log::debug!("visualize_data: content_type: {content_type} {path}");
         if path == "/" {

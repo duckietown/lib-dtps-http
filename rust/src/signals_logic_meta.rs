@@ -7,7 +7,7 @@ use crate::structures_topicref::Bounds;
 use crate::{
     debug_with_info, not_implemented, urls::make_relative, ContentInfo, DTPSError, DataProps, ForwardingStep, GetMeta,
     LinkBenchmark, ServerStateAccess, SourceComposition, TopicName, TopicReachabilityInternal, TopicRefInternal,
-    TopicsIndexInternal, TypeOFSource, TypeOfConnection::Relative, DTPSR, MASK_ORIGIN,
+    TopicsIndexInternal, TypeOFSource, TypeOfConnection::Relative, DTPSR,
 };
 
 async fn get_sc_meta(
@@ -106,7 +106,7 @@ impl TypeOFSource {
                 let link_benchmark_total =
                     the_data.reachability_we_used.benchmark.clone() + the_data.link_benchmark_last.clone();
 
-                if *MASK_ORIGIN {
+                if the_data.mask_origin {
                     tr.reachability.clear();
                 }
                 tr.reachability.push(TopicReachabilityInternal {
@@ -161,7 +161,7 @@ impl TypeOFSource {
             TypeOFSource::Transformed(_, _) => {
                 Err(DTPSError::NotImplemented("get_meta_index for Transformed".to_string()))
             }
-            TypeOFSource::Digest(_, _, token) => {
+            TypeOFSource::Digest(_, _, _token) => {
                 Err(DTPSError::NotImplemented("get_meta_index for Digest".to_string()))
             }
             TypeOFSource::Deref(_) => Err(DTPSError::NotImplemented("get_meta_index for Deref".to_string())),

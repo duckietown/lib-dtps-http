@@ -1,8 +1,10 @@
 use std::collections::HashSet;
 
+use http::HeaderMap;
+use hyper::Body;
 use maplit::hashmap;
 
-use crate::utils_headers::{get_content_type, string_from_header_value, LinkHeader};
+use crate::utils_headers::{get_content_type, get_content_type_from_headers, string_from_header_value, LinkHeader};
 use crate::utils_time::time_nanos;
 use crate::TypeOfResource;
 use crate::{
@@ -102,6 +104,15 @@ pub async fn sniff_type_resource(con: &TypeOfConnection) -> DTPSR<TypeOfResource
     }
 }
 
+pub fn get_alternative_urls(headers: &HeaderMap) -> Vec<String> {
+    let alternatives0 = headers.get_all(HEADER_CONTENT_LOCATION);
+    // debug_with_info!("alternatives0: {:#?}", alternatives0);
+    // convert into a vector of strings
+    let alternative_urls: Vec<String> = alternatives0.iter().map(string_from_header_value).collect();
+
+    alternative_urls
+}
+
 pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     // current time in nano seconds
     let start = time_nanos();
@@ -121,15 +132,17 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     let end = time_nanos();
 
     let latency_ns = end - start;
+    get_metadata_from_response(conbase, resp.headers(), latency_ns)
+}
 
+pub fn get_metadata_from_response(
+    conbase: &TypeOfConnection,
+    headers: &HeaderMap,
+    latency_ns: u128,
+) -> DTPSR<FoundMetadata> {
     // get the headers from the response
-    let headers = resp.headers();
-
-    // get all the HEADER_CONTENT_LOCATION in the response
-    let alternatives0 = headers.get_all(HEADER_CONTENT_LOCATION);
-    // debug_with_info!("alternatives0: {:#?}", alternatives0);
-    // convert into a vector of strings
-    let alternative_urls: Vec<String> = alternatives0.iter().map(string_from_header_value).collect();
+    // let headers = resp.headers();
+    let alternative_urls: Vec<String> = get_alternative_urls(headers);
 
     // convert into a vector of URLs
     let mut alternative_urls: Vec<TypeOfConnection> =
@@ -161,7 +174,7 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
             None
         }
     };
-    let content_type = get_content_type(&resp);
+    let content_type = get_content_type_from_headers(headers);
     let events_url = get_if_exists(REL_EVENTS_NODATA);
     let events_data_inline_url = get_if_exists(REL_EVENTS_DATA);
     let meta_url = get_if_exists(REL_META);
@@ -187,4 +200,30 @@ pub async fn get_metadata(conbase: &TypeOfConnection) -> DTPSR<FoundMetadata> {
     };
 
     Ok(md)
+}
+
+// fn put_if_exists(headers: &mut HeaderMap, link_rel: &str, url: &Option<TypeOfConnection>) {
+//     if let Some(url) = url {
+//         headers.insert("link", format!("<{}>; rel=\"{}\"", url.to_url_repr(), link_rel).parse().unwrap());
+//     }
+// }
+
+pub fn put_metadata_headers(headers: &mut HeaderMap, md: &FoundMetadata) {
+    if let Some(x) = &md.answering {
+        headers.insert(HEADER_NODE_ID, x.parse().unwrap());
+        // headers.insert("content-type", content_type.parse().unwrap());
+    }
+
+    //
+    // put_if_exists(headers, REL_EVENTS_NODATA, &md.events_url);
+    // put_if_exists(headers, REL_EVENTS_DATA, &md.events_data_inline_url);
+    // put_if_exists(headers, REL_META, &md.meta_url);
+    // put_if_exists(headers, REL_HISTORY, &md.history_url);
+    // put_if_exists(headers, REL_CONNECTIONS, &md.connections_url);
+    // put_if_exists(headers, REL_PROXIED, &md.proxied_url);
+    // put_if_exists(headers, REL_STREAM_PUSH, &md.stream_push_url);
+    //
+    for x in &md.alternative_urls {
+        headers.insert(HEADER_CONTENT_LOCATION, x.to_url_repr().parse().unwrap());
+    }
 }

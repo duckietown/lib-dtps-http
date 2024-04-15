@@ -293,8 +293,8 @@ async fn patch_proxied(ss_mutex: ServerStateAccess, topic_name: &TopicName, p: &
                 }
 
                 debug_with_info!("adding proxy: topic_name = {topic_name:?} urls = {urls:?}",);
-
-                ss.add_proxy_connection(&topic_name, &urls, pj.node_id, ss_mutex.clone())?;
+                let mask_origin = pj.mask_origin;
+                ss.add_proxy_connection(&topic_name, &urls, pj.node_id, ss_mutex.clone(), mask_origin)?;
             }
             PatchOperation::Remove(ro) => {
                 let key = unescape_json_patch(&ro.path)[1..].to_string();

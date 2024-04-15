@@ -306,10 +306,10 @@ pub mod tests {
         let con_original = instance.cf.con.join(topic_name.as_relative_url())?;
 
         let mounted_at = TopicName::from_dash_sep("mounted/here")?;
-
+        let mask_origin = false;
         instance2
             .server
-            .add_generic_proxied(&mounted_at, con_original.clone())
+            .add_generic_proxied(&mounted_at, con_original.clone(), mask_origin)
             .await?;
 
         let con_proxied = instance2.cf.con.join(mounted_at.as_relative_url())?;
@@ -415,10 +415,11 @@ pub mod tests {
     async fn check_proxy_websocket(instance: TestFixture, mut instance2: TestFixture, path: &str) -> DTPSR<()> {
         init_logging();
 
+        let mask_origin = true;
         let mounted_at = TopicName::from_dash_sep("mounted")?;
         instance2
             .server
-            .add_generic_proxied(&mounted_at, instance.cf.con.clone())
+            .add_generic_proxied(&mounted_at, instance.cf.con.clone(), mask_origin)
             .await?;
         let url = instance2.cf.con.to_url_repr();
         let url = format!("{url}{path}");
@@ -667,7 +668,7 @@ pub mod tests {
 
         let node_id = instance.server.get_node_id().await;
         let urls = vec![instance.cf.con.clone()];
-        let mask_origin = false;
+        let mask_origin = true;
         add_proxy(
             &instance2.cf.con,
             &mounted_at,
@@ -873,6 +874,115 @@ pub mod tests {
     #[rstest]
     #[awt]
     #[tokio::test]
+    async fn check_proxied_hide_locations_rust_rust_hide_true(
+        #[future] instance: TestFixture,
+        #[future] instance2: TestFixture,
+    ) -> DTPSR<()> {
+        let x = check_proxied_hide_locations(instance.cf, instance2.cf, true).await;
+        match &x {
+            Ok(_) => {}
+            Err(e) => {
+                error_with_info!("check_proxied_hide_locations_rust_rust failed:\n{}", e.to_string());
+            }
+        }
+        x
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_proxied_hide_locations_rust_rust_hide_false(
+        #[future] instance: TestFixture,
+        #[future] instance2: TestFixture,
+    ) -> DTPSR<()> {
+        let x = check_proxied_hide_locations(instance.cf, instance2.cf, false).await;
+        match &x {
+            Ok(_) => {}
+            Err(e) => {
+                error_with_info!("check_proxied_hide_locations_rust_rust failed:\n{}", e.to_string());
+            }
+        }
+        x
+    }
+
+    async fn check_proxied_hide_locations(
+        switchboad: ConnectionFixture,
+        node: ConnectionFixture,
+        mask_origin: bool,
+    ) -> DTPSR<()> {
+        init_logging();
+
+        let topic = TopicName::from_dash_sep("topic")?;
+        DTPSLowLevel::create_topic(
+            &node.con,
+            &topic,
+            &TopicRefAdd {
+                app_data: Default::default(),
+                properties: TopicProperties::rw(),
+                content_info: ContentInfo::simple(CONTENT_TYPE_CBOR, None),
+                bounds: Bounds::unbounded(),
+            },
+        )
+        .await?;
+        let initial = hashmap! {"value" => "initial"};
+        DTPSLowLevel::publish_cbor(&node.con.join(topic.as_relative_url())?, &initial).await?;
+
+        let mountpoint = TopicName::from_dash_sep("mounted")?;
+
+        let urls = [node.con];
+        DTPSLowLevel::add_proxy(&switchboad.con, &mountpoint, None, &urls, mask_origin).await?;
+
+        let proxied_topic = switchboad
+            .con
+            .join(mountpoint.as_relative_url())?
+            .join(topic.as_relative_url())?;
+
+        // wait 1 second
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+
+        info!("proxied_topic: {}", proxied_topic.to_url_repr());
+
+        let rd = get_resolved(&proxied_topic, None).await?;
+        info!("mask_origin: {mask_origin} rrd:\n{rd:#?}");
+
+        let rrd = if let ResolvedData::RicherRawData(rrd) = rd {
+            rrd
+        } else {
+            return DTPSError::other("Expected ResolvedData::Resolved");
+        };
+
+        let locations = rrd.metadata.alternative_urls;
+        let expect_num = if mask_origin { 1 } else { 2 };
+        let obtained = locations.len();
+        if obtained != expect_num {
+            return DTPSError::other(format!("Expected {expect_num} locations, got {obtained}"));
+        }
+
+        //
+        // let patch = Patch(vec![PatchOperation::Add(AddOperation {
+        //     path: "/added".to_string(),
+        //     value: serde_json::Value::String("new".to_string()),
+        // })]);
+        //
+        // patch_data(&proxied_topic, &patch).await?;
+        // let h_expected = hashmap! {"value" => "initial", "added" => "new"};
+        // let h_expected_value = as_cbor_value(&h_expected)?;
+        // // let h = DTPSLowLevel::get_rawdata(&proxied_topic).await?.get_as_cbor()?;
+        // let rd = get_rawdata(&proxied_topic).await?;
+        //
+        // let h = rd.get_as_cbor()?;
+        // assert_eq!(h, h_expected_value);
+        //
+        // DTPSLowLevel::patch_data(&proxied_topic, &patch).await?;
+        //  let data = 53;
+        //  publish_cbor(&con_topic, &data).await?;
+
+        Ok(())
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
     async fn check_disappearance_rust_rust(
         #[future] instance: TestFixture,
         #[future] instance2: TestFixture,
@@ -904,7 +1014,7 @@ pub mod tests {
         let mountpoint = TopicName::from_dash_sep("mounted")?;
 
         let urls = [node_t.cf.con.clone()];
-        let mask_origin = false;
+        let mask_origin = true;
         DTPSLowLevel::add_proxy(&switchboard_t.cf.con, &mountpoint, None, &urls, mask_origin).await?;
 
         let proxied_topic = switchboard_t
@@ -970,7 +1080,7 @@ pub mod tests {
         node_t.server.finish().await?;
 
         let urls = [node_t.cf.con.clone()];
-        let mask_origin = false;
+        let mask_origin = true;
         DTPSLowLevel::add_proxy(&switchboard_t.cf.con, &mountpoint, None, &urls, mask_origin).await?;
 
         let proxied_topic = switchboard_t

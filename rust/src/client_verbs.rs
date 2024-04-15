@@ -11,12 +11,14 @@ use serde::Serialize;
 use warp::reply::Response;
 
 use crate::client_link_benchmark::check_unix_socket;
+use crate::client_metadata::get_metadata_from_response;
 use crate::connections::TypeOfConnection;
 use crate::utils_headers::{
     get_content_type, get_content_type_from_headers, put_header_accept, put_header_content_type,
 };
 use crate::{
-    context, debug_with_info, error_with_info, internal_assertion, not_available, not_implemented, ResolvedData,
+    context, debug_with_info, error_with_info, internal_assertion, not_available, not_implemented, time_nanos,
+    FoundMetadata, ResolvedData, RicherRawData,
 };
 use crate::{DTPSError, RawData, CONTENT_TYPE_PATCH_JSON, DTPSR};
 
@@ -141,9 +143,11 @@ impl Into<DTPSError> for ResponseUnobtained {
 
 #[derive(Debug)]
 pub struct ResponseObtained {
+    pub conbase: TypeOfConnection,
     pub status: hyper::StatusCode,
     pub headers: hyper::HeaderMap,
     pub raw_data: RawData,
+    pub latency_ns: u128,
 }
 
 #[derive(Debug)]
@@ -163,7 +167,13 @@ impl Into<DTPSR<ResolvedData>> for ResponseResult {
                     let msg = String::from_utf8_lossy(&ro.raw_data.content).to_string();
                     Ok(ResolvedData::NotFound(msg))
                 } else if ro.status == StatusCode::OK {
-                    Ok(ResolvedData::RawData(ro.raw_data))
+                    let metadata = get_metadata_from_response(&ro.conbase, &ro.headers, ro.latency_ns)?;
+                    let rrd = RicherRawData {
+                        raw_data: ro.raw_data,
+                        metadata,
+                    };
+
+                    Ok(ResolvedData::RicherRawData(rrd))
                 } else if (ro.status == StatusCode::BAD_GATEWAY)
                     || (ro.status == StatusCode::SERVICE_UNAVAILABLE)
                     || (ro.status == StatusCode::GATEWAY_TIMEOUT)
@@ -245,6 +255,7 @@ pub async fn make_request2(
         put_header_content_type(h, x);
     }
 
+    let start = time_nanos();
     let r0 = match conbase {
         TypeOfConnection::TCP(url) => {
             if url.scheme() == "https" {
@@ -276,6 +287,9 @@ pub async fn make_request2(
             return internal_assertion!("not supposed to reach here: {conbase}");
         }
     };
+    let end = time_nanos();
+
+    let latency_ns = end - start;
     // debug_with_info!("make_request: {r0:?}");
 
     let resp = match r0 {
@@ -319,9 +333,11 @@ pub async fn make_request2(
     // Err(DTPSError::FailedRequest(url, code, as_s, string))
 
     Ok(ResponseResult::ResponseObtained(ResponseObtained {
+        conbase: conbase.clone(),
         status,
         headers,
         raw_data,
+        latency_ns,
     }))
 }
 

@@ -36,6 +36,6 @@ def reapply_decorators(cls):
             if callable(attr_value):
                 base_method = getattr(b, attr_name, None)
                 if base_method and hasattr(base_method, "_allowed_exceptions"):
-                    allowed_exceptions = base_method._allowed_exceptions
+                    allowed_exceptions = base_method._allowed_exceptions  # type: ignore
                     setattr(cls, attr_name, allow_exceptions(*allowed_exceptions)(attr_value))
     return cls

@@ -46,8 +46,8 @@ use crate::{
     InsertNotification, LinkBenchmark, ListenURLEvents, NodeAppData, ObjectQueue, RawData, ServerStateAccess,
     TopicName, TopicProperties, TopicReachabilityInternal, TopicRefInternal, TopicsIndexInternal, TopicsIndexWire,
     TypeOfConnection, CONTENT_TYPE_CBOR, CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_JSON, CONTENT_TYPE_PLAIN,
-    CONTENT_TYPE_YAML, DTPSR, MASK_ORIGIN, TOPIC_CONNECTIONS, TOPIC_LIST_AVAILABILITY, TOPIC_LIST_CLOCK,
-    TOPIC_LIST_NAME, TOPIC_LOGS, TOPIC_PROXIED, TOPIC_STATE_NOTIFICATION, TOPIC_STATE_SUMMARY,
+    CONTENT_TYPE_YAML, DTPSR, TOPIC_CONNECTIONS, TOPIC_LIST_AVAILABILITY, TOPIC_LIST_CLOCK, TOPIC_LIST_NAME,
+    TOPIC_LOGS, TOPIC_PROXIED, TOPIC_STATE_NOTIFICATION, TOPIC_STATE_SUMMARY,
 };
 use crate::{get_metadata, sniff_type_resource};
 
@@ -188,6 +188,7 @@ pub struct ProxiedTopicInfo {
 
     pub reachability_we_used: TopicReachabilityInternal,
     pub link_benchmark_last: LinkBenchmark,
+    pub mask_origin: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -519,6 +520,7 @@ impl ServerState {
         cons: &Vec<TypeOfConnection>,
         expect_node_id: Option<String>,
         ssa: ServerStateAccess,
+        mask_origin: bool,
     ) -> DTPSR<()> {
         if self.proxied.contains_key(topic_name) {
             return Err(DTPSError::TopicAlreadyExists(topic_name.to_dash_sep()));
@@ -534,9 +536,16 @@ impl ServerState {
             let ssa = ssa.clone();
             let expect_node_id = expect_node_id.clone();
 
-            Box::pin(
-                async move { observe_node_proxy(topic_name.clone(), cons.clone(), expect_node_id, ssa.clone()).await },
-            )
+            Box::pin(async move {
+                observe_node_proxy(
+                    topic_name.clone(),
+                    cons.clone(),
+                    expect_node_id,
+                    ssa.clone(),
+                    mask_origin,
+                )
+                .await
+            })
         });
 
         self.job_manager
@@ -667,6 +676,7 @@ impl ServerState {
         tr_original: &TopicRefInternal,
         reachability_we_used: TopicReachabilityInternal,
         link_benchmark_last: LinkBenchmark,
+        mask_origin: bool,
     ) -> DTPSR<()> {
         if self.proxied_topics.contains_key(topic_name) {
             return Err(DTPSError::TopicAlreadyExists(topic_name.to_dash_sep()));
@@ -683,6 +693,7 @@ impl ServerState {
                 link_benchmark_last,
                 data_url,
                 reachability_we_used,
+                mask_origin,
             },
         );
         debug_with_info!("New proxy topic {:?} -> {:?}", topic_name, its_topic_name);
@@ -840,7 +851,7 @@ impl ServerState {
                 .release_blob_for_queue(&digest, topic_name.as_dash_sep(), i);
         }
         self.blob_manager.cleanup_blobs();
-        debug_with_info!("summary: {}", self.blob_manager.summarize());
+        // debug_with_info!("summary: {}", self.blob_manager.summarize());
         Ok(ds)
     }
 
@@ -939,7 +950,7 @@ impl ServerState {
 
             let total = oq.reachability_we_used.benchmark.clone() + oq.link_benchmark_last.clone();
 
-            if *MASK_ORIGIN {
+            if oq.mask_origin {
                 tr.reachability.clear();
             }
 
@@ -1173,6 +1184,7 @@ pub async fn sniff_and_start_proxy(
     mounted_at: TopicName,
     url: TypeOfConnection,
     ss_mutex: ServerStateAccess,
+    mask_origin: bool,
 ) -> DTPSR<()> {
     if let TypeOfConnection::File(_, fp) = url {
         let mut ss = ss_mutex.lock().await;
@@ -1200,7 +1212,7 @@ pub async fn sniff_and_start_proxy(
         TypeOfResource::DTPSIndex { node_id } => {
             let mut ss = ss_mutex.lock().await;
             let urls = vec![url.clone()];
-            ss.add_proxy_connection(&mounted_at, &urls, Some(node_id), ss_mutex.clone())?;
+            ss.add_proxy_connection(&mounted_at, &urls, Some(node_id), ss_mutex.clone(), mask_origin)?;
             Ok(())
             // not_implemented!("observe_proxy: TypeOfResource::DTPSIndex")
             // ss.add_proxy_connection(&subcription_name, &url, ss_mutex).await
@@ -1227,6 +1239,7 @@ pub async fn observe_node_proxy(
     cons: Vec<TypeOfConnection>,
     expect_node_id: Option<String>,
     ss_mutex: ServerStateAccess,
+    mask_origin: bool,
 ) -> DTPSR<()> {
     info_with_info!("observe_node_proxy: observing proxy at {}", mounted_at.as_dash_sep());
     let cons_set = HashSet::from_iter(cons.clone().into_iter());
@@ -1306,7 +1319,7 @@ pub async fn observe_node_proxy(
 
     {
         let mut ss = ss_mutex.lock().await;
-        add_from_response(&mut ss, &mounted_at, &index_internal_at_t0, link1.clone())?;
+        add_from_response(&mut ss, &mounted_at, &index_internal_at_t0, link1.clone(), mask_origin)?;
     }
 
     if md.content_type != CONTENT_TYPE_DTPS_INDEX_CBOR {
@@ -1345,7 +1358,7 @@ pub async fn observe_node_proxy(
 
         {
             let mut ss = ss_mutex.lock().await;
-            add_from_response(&mut ss, &mounted_at, &ti, link1.clone())?;
+            add_from_response(&mut ss, &mounted_at, &ti, link1.clone(), mask_origin)?;
         }
         Ok(())
     })
@@ -1387,6 +1400,7 @@ pub fn add_from_response(
     mounted_at: &TopicName,
     tii: &TopicsIndexInternal,
     link_benchmark1: LinkBenchmark,
+    mask_origin: bool,
 ) -> DTPSR<()> {
     // debug_with_info!("topics_index: tii: \n{:#?}", tii);
     let ntopics = tii.topics.len();
@@ -1418,6 +1432,7 @@ pub fn add_from_response(
             tr,
             reachability_we_used.clone(),
             link_benchmark1.clone(),
+            mask_origin,
         )?;
     }
     Ok(())
