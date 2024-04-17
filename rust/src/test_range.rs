@@ -215,7 +215,7 @@ pub mod tests {
         debug_with_info!("notification: {notification:#?}");
         match notification {
             ListenURLEvents::InsertNotification(s) => {
-                assert_eq!(rd, s.raw_data);
+                assert!(rd.same(&s.raw_data));
             }
             ListenURLEvents::WarningMsg(_) => {}
             ListenURLEvents::ErrorMsg(_) => {}

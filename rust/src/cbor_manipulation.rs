@@ -62,7 +62,7 @@ impl RawData {
                 return DTPSError::other(s);
             }
         };
-        Ok(RawData::new(bytes, target_content_type))
+        Ok(RawData::new(bytes, target_content_type, None))
     }
     pub fn encode_as_json<T>(value: &T) -> DTPSR<Self>
     where
@@ -89,7 +89,7 @@ impl RawData {
                 return not_implemented!("Cannot convert to {target_content_type}");
             }
         };
-        Ok(RawData::new(bytes, target_content_type))
+        Ok(RawData::new(bytes, target_content_type, None))
     }
 }
 

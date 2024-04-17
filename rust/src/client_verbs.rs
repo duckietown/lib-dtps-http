@@ -51,7 +51,11 @@ pub async fn interpret_resp(con: &TypeOfConnection, resp: Response) -> DTPSR<Raw
         let content_type = get_content_type(&resp);
         // Get the response body bytes.
         let content = hyper::body::to_bytes(resp.into_body()).await?;
-        Ok(RawData { content, content_type })
+        Ok(RawData {
+            content,
+            content_type,
+            digest: None,
+        })
     } else {
         let url = con.to_url_repr();
         let code = resp.status().as_u16();
@@ -108,7 +112,11 @@ pub async fn post_data(con: &TypeOfConnection, rd: &RawData) -> DTPSR<PostRespon
         return not_available!("Request is not a success: for {con}\n{as_string:?}\n{body_text}");
     }
 
-    let x0: RawData = RawData { content, content_type };
+    let x0: RawData = RawData {
+        content,
+        content_type,
+        digest: None,
+    };
 
     Ok(PostResponse { rd: x0, locations })
 }
@@ -324,13 +332,10 @@ pub async fn make_request2(
     };
 
     let status = resp.status().clone();
-    // let status_string = resp.status().as_str().to_string();
     let headers = resp.headers().clone();
     let content = hyper::body::to_bytes(resp.into_body()).await?;
     let content_type = get_content_type_from_headers(&headers);
-    let raw_data = RawData { content, content_type };
-    // let string = String::from_utf8(content.to_vec()).unwrap();
-    // Err(DTPSError::FailedRequest(url, code, as_s, string))
+    let raw_data = RawData::new(content, content_type, None);
 
     Ok(ResponseResult::ResponseObtained(ResponseObtained {
         conbase: conbase.clone(),

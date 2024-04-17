@@ -43,7 +43,7 @@ pub async fn serve_master_post(
 
     let content_type = get_header_with_default(&headers, CONTENT_TYPE, CONTENT_TYPE_OCTET_STREAM);
     let byte_vector: Vec<u8> = data.to_vec();
-    let rd = RawData::new(byte_vector, content_type);
+    let rd = RawData::new(byte_vector, content_type, None);
 
     let ds = match matched {
         Ok(ds) => ds,

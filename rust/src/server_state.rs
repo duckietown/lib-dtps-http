@@ -833,13 +833,14 @@ impl ServerState {
             return Err(DTPSError::TopicNotFound(topic_name.to_relative_url()));
         }
 
-        let data0 = RawData::new(content, content_type);
+        let data0 = RawData::new(content, content_type, None);
 
         let oq = self.oqs.get_mut(topic_name).unwrap();
         let (data, ds, dropped_digests) = oq.push(&data0, clocks)?;
         // debug_with_info!("Published to {:?} with digest {:?} dropped {:?}", topic_name, ds.digest, dropped_digests);
         // Note: we now transform the data (possibly) to the expected content type
         let new_digest = ds.digest.clone();
+
         let comment = format!("Index = {}", ds.index);
         if ds.digest != data.digest() {
             panic!("Internal inconsistency: digest mismatch");
@@ -1106,6 +1107,7 @@ impl ServerState {
                     raw_data: RawData {
                         content,
                         content_type: data_saved.content_type.clone(),
+                        digest: Some(digest.clone()),
                     },
                 }))
             }

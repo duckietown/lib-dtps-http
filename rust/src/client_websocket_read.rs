@@ -108,6 +108,7 @@ pub async fn listen_events_websocket(
         let rd = RawData {
             content: Bytes::from(content),
             content_type,
+            digest: Some(dr.digest.clone()),
         };
         let notification = ListenURLEvents::InsertNotification(InsertNotification {
             data_saved: dr.as_data_saved(),

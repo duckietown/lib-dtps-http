@@ -13,8 +13,14 @@ use crate::{divide_in_components, object_queues::InsertNotification, Clocks, Typ
 pub struct RawData {
     pub content: Bytes,
     pub content_type: String,
+    pub digest: Option<String>,
 }
 
+impl RawData {
+    pub fn same(&self, other: &RawData) -> bool {
+        self.content == other.content && self.content_type == other.content_type
+    }
+}
 impl AsRef<RawData> for RawData {
     fn as_ref(&self) -> &RawData {
         self

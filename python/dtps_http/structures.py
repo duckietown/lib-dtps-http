@@ -186,10 +186,23 @@ class TopicProperties:
 
 Digest = NewType("Digest", str)
 
+import xxhash
 
-def get_digest(s: bytes) -> Digest:
+
+def get_digest_xxh128(s: bytes) -> Digest:
+    x = xxhash.xxh128()
+    x.update(s)
+    d = x.hexdigest()
+    return cast(Digest, f"xxh128:{d}")
+
+
+def get_digest_sha256(s: bytes) -> Digest:
     d = hashlib.sha256(s).hexdigest()
     return cast(Digest, f"sha256:{d}")
+
+
+def get_digest(s: bytes) -> Digest:
+    return get_digest_xxh128(s)
 
 
 @dataclass

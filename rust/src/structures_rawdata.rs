@@ -1,38 +1,62 @@
 use bytes::Bytes;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha256::digest;
+use xxhash_rust::xxh64::xxh64;
 
 use crate::{
     identify_presentation, invalid_input, ContentPresentation, DTPSError, RawData, CONTENT_TYPE_CBOR,
     CONTENT_TYPE_JSON, CONTENT_TYPE_OCTET_STREAM, DTPSR,
 };
 
+fn compute_digest_sha256(content: &[u8]) -> String {
+    let d = digest(content);
+    format!("sha256:{}", d)
+}
+
+fn compute_digest_xxh64(content: &[u8]) -> String {
+    let x = xxh64(content, 0);
+    format!("xxh64:{}", x)
+}
+
+fn compute_digest(content: &[u8]) -> String {
+    compute_digest_xxh64(content)
+}
+
 impl RawData {
-    pub fn new<S: AsRef<[u8]>, T: AsRef<str>>(content: S, content_type: T) -> RawData {
+    pub fn new<S: AsRef<[u8]>, T: AsRef<str>>(content: S, content_type: T, digest: Option<String>) -> RawData {
         RawData {
             content: Bytes::from(content.as_ref().to_vec()),
             content_type: content_type.as_ref().to_string(),
+            digest,
         }
     }
     pub fn cbor<S: AsRef<[u8]>>(content: S) -> RawData {
-        Self::new(content, CONTENT_TYPE_CBOR)
+        Self::new(content, CONTENT_TYPE_CBOR, None)
     }
     pub fn json<S: AsRef<[u8]>>(content: S) -> RawData {
-        Self::new(content, CONTENT_TYPE_JSON)
+        Self::new(content, CONTENT_TYPE_JSON, None)
     }
+
     pub fn digest(&self) -> String {
-        let d = digest(self.content.as_ref());
-        format!("sha256:{}", d)
+        if self.digest.is_some() {
+            return self.digest.clone().unwrap();
+        }
+        return compute_digest(self.content.as_ref());
+    }
+
+    pub fn digest_save(&mut self) -> String {
+        if self.digest.is_none() {}
+        return self.digest.clone().unwrap();
     }
 
     pub fn represent_as_json<T: Serialize>(x: T) -> DTPSR<Self> {
-        Ok(RawData::new(serde_json::to_vec(&x)?, CONTENT_TYPE_JSON))
+        Ok(RawData::new(serde_json::to_vec(&x)?, CONTENT_TYPE_JSON, None))
     }
     pub fn represent_as_cbor<T: Serialize>(x: T) -> DTPSR<Self> {
-        Ok(RawData::new(serde_cbor::to_vec(&x)?, CONTENT_TYPE_CBOR))
+        Ok(RawData::new(serde_cbor::to_vec(&x)?, CONTENT_TYPE_CBOR, None))
     }
     pub fn represent_as_cbor_ct<T: Serialize>(x: T, ct: &str) -> DTPSR<Self> {
-        Ok(RawData::new(serde_cbor::to_vec(&x)?, ct))
+        Ok(RawData::new(serde_cbor::to_vec(&x)?, ct, None))
     }
     pub fn from_cbor_value(x: &serde_cbor::Value) -> DTPSR<Self> {
         Ok(RawData::cbor(serde_cbor::to_vec(x)?))
@@ -104,7 +128,7 @@ impl RawData {
             return Ok(self.clone());
         }
         if ct == CONTENT_TYPE_OCTET_STREAM {
-            return Ok(RawData::new(self.content.clone(), ct));
+            return Ok(RawData::new(self.content.clone(), ct, None));
         }
         let mine = identify_presentation(self.content_type.as_str());
         let desired = identify_presentation(ct);
@@ -121,6 +145,6 @@ impl RawData {
                 ));
             }
         };
-        Ok(RawData::new(bytes, ct))
+        Ok(RawData::new(bytes, ct, None))
     }
 }

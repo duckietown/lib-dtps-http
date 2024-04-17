@@ -54,6 +54,7 @@ strip-ansi-escapes = "0.2.0"
 tempfile = "3.8.1"
 lazy_static = "1.4.0"
 uuid = { version = "0.8.2", features = ["v4"] }
+xxhash-rust = { version = "0.8.10", features = ["xxh64"] }
 #cap = { version = "0.1.2", features = ["stats"] }
 #console-subscriber = "0.2.0"
 #tikv-jemallocator = { version = "0.5.4", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }

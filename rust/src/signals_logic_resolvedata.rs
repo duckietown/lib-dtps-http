@@ -26,7 +26,7 @@ impl ResolveDataSingle for TypeOFSource {
                 let mut ss = ss_mutex.lock().await;
                 let data = ss.blob_manager.get_blob_once(digest, token)?;
 
-                let raw_data = RawData::new(data, content_type);
+                let raw_data = RawData::new(data, content_type, Some(digest.clone()));
                 let rrd: RicherRawData = RicherRawData {
                     raw_data,
                     metadata: FoundMetadata::empty(),
@@ -45,6 +45,7 @@ impl ResolveDataSingle for TypeOFSource {
                 let raw_data = RawData {
                     content: Bytes::from(cbor_bytes),
                     content_type: CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(),
+                    digest: None,
                 };
 
                 Ok(ResolvedData::from_raw_data(raw_data))
@@ -74,6 +75,7 @@ impl ResolveDataSingle for TypeOFSource {
                     let raw_data = RawData {
                         content: Bytes::from(cbor_bytes),
                         content_type: CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(),
+                        digest: None,
                     };
                     return Ok(ResolvedData::from_raw_data(raw_data));
                 }
@@ -84,7 +86,7 @@ impl ResolveDataSingle for TypeOFSource {
                 let content_type = mime_guess::from_path(filename)
                     .first()
                     .unwrap_or(mime::APPLICATION_OCTET_STREAM);
-                let rd = RawData::new(data, content_type);
+                let rd = RawData::new(data, content_type, None);
 
                 Ok(ResolvedData::from_raw_data(rd))
             }
@@ -96,6 +98,7 @@ impl ResolveDataSingle for TypeOFSource {
                 let raw_data = RawData {
                     content: Bytes::from(cbor_bytes),
                     content_type: CONTENT_TYPE_DTPS_INDEX_CBOR.to_string(),
+                    digest: None,
                 };
                 return Ok(ResolvedData::from_raw_data(raw_data));
             }
@@ -122,7 +125,7 @@ impl ResolveDataSingle for TypeOFSource {
                         }
                         let history = available;
                         let bytes = serde_cbor::to_vec(&history).unwrap();
-                        let raw_data = RawData::new(bytes, CONTENT_TYPE_TOPIC_HISTORY_CBOR);
+                        let raw_data = RawData::new(bytes, CONTENT_TYPE_TOPIC_HISTORY_CBOR, None);
                         return Ok(ResolvedData::from_raw_data(raw_data));
                     }
                     TypeOFSource::Compose(sc) => {
@@ -182,7 +185,7 @@ async fn resolve_our_queue(topic_name: &TopicName, ss_mutex: ServerStateAccess) 
                 "Cannot get blob bytes for topic {:?}:\n {data_saved:#?}",
                 topic_name.as_dash_sep(),
             )?;
-            let raw_data = RawData::new(content, &data_saved.content_type);
+            let raw_data = RawData::new(content, &data_saved.content_type, Some(data_saved.digest.clone()));
             // debug_with_info!(" {topic_name:?} -> {raw_data:?}");
             Ok(ResolvedData::from_raw_data(raw_data))
         }
@@ -217,8 +220,6 @@ async fn resolve_data_single_forwarded_queue(
     let ss = ss_mutex.lock().await;
     let pt = ss.proxied_topics.get(&fq.my_topic_name).unwrap();
     let use_url = &pt.data_url;
-
-    // let (status, rd) = get_rawdata_status(use_url).await?;
 
     let r2 = make_request2(use_url, hyper::Method::GET, b"", None, None).await?;
 
