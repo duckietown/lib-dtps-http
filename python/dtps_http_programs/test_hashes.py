@@ -34,8 +34,8 @@ def compare_hashes_speed() -> None:
         get_digest_blake2s,
         get_digest_md5,
     ]
-    ns = [100, 10000, 1000000, 1000000]
-    repeats = [100000, 10000, 1000, 200]
+    ns = [100, 10000, 1000000, 10000000]
+    repeats = [100000, 10000, 1000, 100]
     datas = [generate_random_string(n).encode() for n in ns]
     for n, data, repeat in zip(ns, datas, repeats):
         print()
@@ -43,13 +43,21 @@ def compare_hashes_speed() -> None:
         for h in hf:
             t0 = time.monotonic()
             t0_ns = time.time_ns()
+            nbytes = 0
+            adigest = h(data)
+            _, _, adigest = adigest.partition(":")
+
+            hash_length = len(bytes.fromhex(adigest)) * 8
             for _ in range(repeat):
+                nbytes += len(data)
                 h(data)
             dt = time.monotonic() - t0
             dt_ns = time.time_ns() - t0_ns
-            per_byte = dt_ns / (n * repeat)
+            per_byte = dt_ns / (nbytes)
             hash_name = h.__name__.ljust(20).replace("get_digest_", "")
-            print(f"  {hash_name} {dt:10.5f} s total    {per_byte:10.3} ns/byte")
+            print(
+                f"  {hash_name} digest length {hash_length:4} bits |  time {dt:10.5f} s total    {per_byte:10.3} ns/byte"
+            )
 
 
 if __name__ == "__main__":
