@@ -196,9 +196,43 @@ def get_digest_xxh128(s: bytes) -> Digest:
     return cast(Digest, f"xxh128:{d}")
 
 
+def get_digest_xxh64(s: bytes) -> Digest:
+    x = xxhash.xxh64()
+    x.update(s)
+    d = x.hexdigest()
+    return cast(Digest, f"xxh64:{d}")
+
+
+def get_digest_xxh32(s: bytes) -> Digest:
+    x = xxhash.xxh32()
+    x.update(s)
+    d = x.hexdigest()
+    return cast(Digest, f"xxh32:{d}")
+
+
 def get_digest_sha256(s: bytes) -> Digest:
     d = hashlib.sha256(s).hexdigest()
     return cast(Digest, f"sha256:{d}")
+
+
+def get_digest_sha1(s: bytes) -> Digest:
+    d = hashlib.sha1(s).hexdigest()
+    return cast(Digest, f"sha1:{d}")
+
+
+def get_digest_blake2b(s: bytes) -> Digest:
+    d = hashlib.blake2b(s).hexdigest()
+    return cast(Digest, f"blake2b:{d}")
+
+
+def get_digest_blake2s(s: bytes) -> Digest:
+    d = hashlib.blake2b(s).hexdigest()
+    return cast(Digest, f"blake2s:{d}")
+
+
+def get_digest_md5(s: bytes) -> Digest:
+    d = hashlib.md5(s).hexdigest()
+    return cast(Digest, f"md5:{d}")
 
 
 def get_digest(s: bytes) -> Digest:
