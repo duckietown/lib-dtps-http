@@ -410,6 +410,7 @@ class DTPSClient:
             assert isinstance(a, URL), a
             if (score := await self.can_use_url(a, expects_answer_from)) is not None:
                 possible.append((score.complexity, score.latency_ns, -score.bandwidth, a))
+                # TODO: 60 is a magic number?
                 results.append(f"✓ {str(a):<60} -> {score}")
             else:
                 results.append(f"✗ {a} ")
