@@ -11,7 +11,7 @@ from aiohttp import ClientResponse, web
 from jsonpatch import JsonPatch
 
 from . import logger
-from .constants import CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_PATCH_CBOR
+from .constants import CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_PATCH_CBOR, DEFAULT_DATA_AVAILABILITY_TIMEOUT
 from .object_queue import PostResult, TransformError
 from .structures import (
     Bounds,
@@ -368,7 +368,7 @@ async def load_datasaved_resp(
         url = join(base_url, location)
 
         rd = await client.get(url, accept=ds.content_type)
-        availability_s = 60.0
+        availability_s = DEFAULT_DATA_AVAILABILITY_TIMEOUT
         available_until = time.time() + availability_s
 
         the_url = server.blob_manager.get_use_once_link_store(
