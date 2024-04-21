@@ -722,7 +722,7 @@ class DTPSServer:
         # self.logger.info("aclose: shutting down")
         self.shutdown_event.set()
         for t in self.tasks:
-            t.cancel("aclose")
+            t.cancel()
         for q in self._oqs.values():
             await q.aclose()
         # await asyncio.gather(*self.tasks, return_exceptions=True)
