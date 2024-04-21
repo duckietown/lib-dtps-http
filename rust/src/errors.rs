@@ -1,8 +1,9 @@
+use std::{fmt::Debug, net::AddrParseError};
+
 use anyhow::Result;
 use http::StatusCode;
 use hyper::Body;
 use indent::indent_all_with;
-use std::{fmt::Debug, net::AddrParseError};
 use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 use warp::{Rejection, Reply};
 

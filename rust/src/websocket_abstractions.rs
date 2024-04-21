@@ -1,11 +1,10 @@
 use std::fmt::Debug;
-use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use async_trait::async_trait;
 use base64::{
     self,
-    engine::general_purpose, // keep
-    Engine as _,
+    engine::general_purpose,
+    Engine as _, // keep
 };
 use futures::{
     stream::{SplitSink, SplitStream},
@@ -13,6 +12,7 @@ use futures::{
 };
 use rand::Rng;
 use tokio::sync::mpsc;
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 use tokio::{
     net::{TcpStream, UnixStream},
     sync::broadcast,

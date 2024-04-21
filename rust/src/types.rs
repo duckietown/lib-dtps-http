@@ -174,10 +174,6 @@ impl JsonSchema for TopicName {
 
 pub type ReaderID = String;
 
-pub fn unique_reader_id() -> ReaderID {
-    uuid::Uuid::new_v4().to_string()
-}
-
 pub type Digest = String;
 pub type ContentType = String;
 pub type Time = i64;

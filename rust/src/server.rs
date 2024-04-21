@@ -1,3 +1,5 @@
+use std::{collections::HashMap, env, net::SocketAddr, path::Path, string::ToString, sync::Arc as StdArc};
+
 use clap::Parser;
 use futures::{
     stream::{SplitSink, SplitStream},
@@ -7,7 +9,6 @@ use indent::indent_all_with;
 use maud::{html, PreEscaped, DOCTYPE};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_yaml;
-use std::{collections::HashMap, env, net::SocketAddr, path::Path, string::ToString, sync::Arc as StdArc};
 use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 use tokio::{
     net::{TcpListener, UnixListener},
@@ -23,7 +24,7 @@ use uuid::Uuid;
 use warp::{hyper::Body, reply::Response, Filter, Rejection};
 
 use crate::blob_manager::BlobManager;
-use crate::types::{unique_reader_id, ReaderID};
+use crate::types::ReaderID;
 use crate::utils_time::{epoch, format_nanos, time_nanos_i64};
 use crate::{
     cloudflare::open_cloudflare, constants::*, debug_with_info, divide_in_components, dtpserror_other, error_other,
@@ -721,8 +722,25 @@ pub async fn handle_websocket_queue(
     topic_name: TopicName,
     send_data: bool,
 ) -> DTPSR<()> {
-    let reader_id = unique_reader_id();
+    let reader_id = {
+        let mut ss = ssa.lock().await;
+        ss.blob_manager.unique_reader_id() // ok
+    };
+    let x = handle_websocket_queue_(ws_tx, ssa.clone(), topic_name, send_data, &reader_id).await;
+    {
+        let mut ss = ssa.lock().await;
+        ss.blob_manager.forget_reader(&reader_id);
+    }
+    x
+}
 
+pub async fn handle_websocket_queue_(
+    ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
+    ssa: ServerStateAccess,
+    topic_name: TopicName,
+    send_data: bool,
+    reader_id: &ReaderID,
+) -> DTPSR<()> {
     let mut rx2: tokio_broadcast::Receiver<ListenURLEvents> = {
         let mut starting_messaging = vec![];
 
@@ -804,6 +822,7 @@ pub async fn handle_websocket_queue(
         };
         send_as_ws_cbor(&for_this, ws_tx).await?;
     }
+
     Ok(())
 }
 
@@ -886,7 +905,10 @@ async fn handler_topic_html_summary(
         }
     }
 
-    let reader_id = unique_reader_id(); // FIXME: not sure about this
+    let reader_id = {
+        let mut ss = ss_mutex.lock().await;
+        ss.blob_manager.unique_reader_id() //ok: for one-time links
+    };
 
     let escaped = make_html(
         topic_name.as_relative_url(),
@@ -946,6 +968,7 @@ async fn handler_topic_html_summary(
 
         },
     );
+    ss.blob_manager.finish_for_reader(&reader_id);
     let markup = escaped.into_string();
 
     Ok(http::Response::builder()

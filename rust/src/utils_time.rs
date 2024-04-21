@@ -1,6 +1,6 @@
-use crate::types::Time;
 use std::time::SystemTime;
-use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
+
+use crate::types::Time;
 
 pub fn epoch() -> f64 {
     SystemTime::now()
@@ -18,6 +18,13 @@ pub fn format_delay(start: Time, stop: Time) -> String {
     let delta = stop - start;
     format_nanos(delta)
 }
+
+pub fn format_delay_s(start: Time, stop: Time) -> String {
+    let delta = stop - start;
+    let s = (delta as f64) / 1_000_000_000.0;
+    format!("{:.1}s", s)
+}
+
 pub fn time_nanos() -> u128 {
     SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -21,6 +21,7 @@ impl RawData {
         self.content == other.content && self.content_type == other.content_type
     }
 }
+
 impl AsRef<RawData> for RawData {
     fn as_ref(&self) -> &RawData {
         self
@@ -194,8 +195,8 @@ pub struct RicherRawData {
 
     pub metadata: FoundMetadata,
 }
-#[derive(Debug, Clone)]
 
+#[derive(Debug, Clone)]
 pub struct RicherCBORValue {
     pub value: CBORValue,
 

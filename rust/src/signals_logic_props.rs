@@ -1,5 +1,4 @@
 use crate::{DataProps, SourceComposition, TopicProperties, TypeOFSource};
-use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 impl DataProps for TypeOFSource {
     fn get_properties(&self) -> TopicProperties {

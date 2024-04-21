@@ -3,12 +3,13 @@ extern crate url;
 use std::error;
 
 use clap::Parser;
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use crate::get_events_stream_inline;
 use crate::get_metadata;
 use crate::wrap_recv;
 use crate::{debug_with_info, init_logging, parse_url_ext};
-use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
+
 /// Parameters for client
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

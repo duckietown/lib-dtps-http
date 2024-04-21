@@ -1,19 +1,18 @@
+use std::collections::HashMap;
+
+use tokio::sync::broadcast as tokio_broadcast;
+
 use crate::time_nanos_i64;
 use crate::{merge_clocks, Clocks, DataSaved, ListenURLEvents, MinMax, RawData, TopicRefInternal, DTPSR};
-use std::collections::HashMap;
-use tokio::sync::broadcast;
-use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 #[derive(Debug)]
 pub struct ObjectQueue {
     pub stored: Vec<usize>,
     pub saved: HashMap<usize, DataSaved>,
 
-    pub tx: tokio_broadcast::Sender<usize>, // ok
+    pub tx: tokio_broadcast::Sender<usize>,
     pub seq: usize,
     pub tr: TopicRefInternal,
-    // pub max_history: Option<usize>,
-    // pub bounds: Bounds,
     pub tx_notification: tokio_broadcast::Sender<ListenURLEvents>, // ok
 }
 
@@ -27,18 +26,14 @@ impl ObjectQueue {
     pub fn new(tr: TopicRefInternal) -> Self {
         let (tx, _rx) = tokio_broadcast::channel(1024); // ok
         let (tx_notification, _rx) = tokio_broadcast::channel(1024);
-        // if let Some(max_history) = max_history {
-        //     assert!(max_history > 0);
-        // }
+
         ObjectQueue {
             seq: 0,
             stored: Vec::new(),
             saved: HashMap::new(),
-            // data: HashMap::new(),
             tx,
             tr,
             tx_notification,
-            // bounds,
         }
     }
 

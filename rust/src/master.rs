@@ -1,7 +1,8 @@
+use std::{collections::HashMap, string::ToString};
+
 use bytes::Bytes;
 use futures::{stream::SplitSink, SinkExt, StreamExt};
 use maud::{html, PreEscaped};
-use std::{collections::HashMap, string::ToString};
 use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -12,7 +13,7 @@ use tungstenite::{
 use warp::{http::header, hyper::Body, reply::Response, ws::Message as WarpMessage};
 
 use crate::client_metadata::put_metadata_headers;
-use crate::types::unique_reader_id;
+use crate::types::ReaderID;
 use crate::utils_every_once::EveryOnceInAWhile;
 use crate::{
     clocks::Clocks, debug_with_info, display_printable, divide_in_components, error_with_info, get_accept_header,
@@ -336,7 +337,7 @@ pub async fn serve_master_get(
 ) -> HandlersResponse {
     // get referrer
     let referrer = get_referrer(&request_headers);
-    debug_with_info!("GET {} ", path.as_str());
+    // debug_with_info!("GET {} ", path.as_str());
     // debug_with_info!("Referrer {:?} ", referrer);
 
     let path_str = path_normalize(&path);
@@ -374,7 +375,7 @@ pub async fn serve_master_get(
         }
     };
 
-    debug_with_info!("serve_master: ds={:?} ", ds);
+    // debug_with_info!("serve_master: ds={:?} ", ds);
     let r = ds.resolve_data_single(&path_str, ss_mutex.clone()).await;
     // let resd0 = context!(r, "Cannot resolve_data_single for {path_str}");
 
@@ -649,8 +650,28 @@ pub async fn handle_websocket_data_stream(
     max_frequency: Option<f32>,
     ssa: ServerStateAccess,
 ) -> DTPSR<()> {
-    let reader_id = unique_reader_id();
+    let reader_id = {
+        let mut ss = ssa.lock().await;
+        ss.blob_manager.unique_reader_id() // ok
+    };
+    let x = handle_websocket_data_stream_(ws_tx, data_stream, send_data, max_frequency, ssa.clone(), &reader_id).await;
 
+    {
+        let mut ss = ssa.lock().await;
+        ss.blob_manager.forget_reader(&reader_id);
+    };
+
+    x
+}
+
+pub async fn handle_websocket_data_stream_(
+    ws_tx: &mut SplitSink<warp::ws::WebSocket, warp::ws::Message>,
+    data_stream: DataStream,
+    send_data: bool,
+    max_frequency: Option<f32>,
+    ssa: ServerStateAccess,
+    reader_id: &ReaderID,
+) -> DTPSR<()> {
     {
         let mut starting_messaging = vec![];
 
@@ -673,6 +694,10 @@ pub async fn handle_websocket_data_stream(
 
     let mut stream: mpsc::Receiver<ListenURLEvents> = match data_stream.stream {
         None => {
+            {
+                let mut ss = ssa.lock().await;
+                ss.blob_manager.forget_reader(&reader_id);
+            }
             return Ok(());
         }
         Some(x) => x,
@@ -733,6 +758,7 @@ pub async fn handle_websocket_data_stream(
         };
     }
     ws_tx.close().await?;
+
     Ok(())
 }
 

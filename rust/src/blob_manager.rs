@@ -5,9 +5,9 @@ use bytes::Bytes;
 use derive_more::Constructor;
 
 use crate::types::{Digest, ReaderID, Time};
-use crate::utils_time::{format_delay, time_nanos_i64};
+use crate::utils_time::{format_delay, format_delay_s, time_nanos_i64};
 use crate::websocket_abstractions::my_base64_encode_str;
-use crate::{debug_with_info, error_with_info, warn_with_info, DTPSError, DTPSR};
+use crate::{debug_with_info, error_with_info, warn_with_info, DTPSError, ServerStateAccess, DTPSR};
 
 #[derive(Debug, Clone, Constructor)]
 pub struct ReaderLast {
@@ -35,6 +35,8 @@ pub struct ReaderInfo {
     pub last_added: Option<ReaderLast>,
     pub last_cleanup: Option<Time>,
     pub debug_history: String,
+    pub last_activity: Time,
+    pub is_finished: bool,
 }
 
 impl ReaderInfo {
@@ -50,12 +52,34 @@ impl ReaderInfo {
             last_read: None,
             last_added: None,
             last_cleanup: None,
+            last_activity: now,
             debug_history,
+            is_finished: false,
         }
+    }
+    pub fn set_finished(&mut self) {
+        self.is_finished = true;
+    }
+    pub fn is_abandoned(&self, now: Time, max_idle_s: f32) -> bool {
+        let delta = now - self.last_activity;
+        let seconds = delta as f64 / 1_000_000_000.0;
+        seconds > max_idle_s as f64
+    }
+    pub fn can_be_removed(&self, now: Time, max_idle_s: f32) -> bool {
+        (self.is_finished && self.outstanding.len() == 0) || self.is_abandoned(now, max_idle_s)
+    }
+    pub fn still_outstanding(&self, i: &usize) -> bool {
+        if self.outstanding.len() == 0 {
+            return false;
+        }
+        let first = self.outstanding.front().unwrap();
+        let last = self.outstanding.back().unwrap();
+        first.seq <= *i && *i <= last.seq
     }
     pub fn _comment(&mut self, now: Time, msg: String) {
         let msg = format!("@{}: {}\n", now, msg);
-        self.debug_history.push_str(&msg);
+
+        // self.debug_history.push_str(&msg);
     }
     pub fn add(&mut self, now: Time, deadline: Time, digest: &Digest) -> usize {
         let i = self.count;
@@ -69,6 +93,7 @@ impl ReaderInfo {
         };
         self.outstanding.push_back(e);
         self.last_added = Some(ReaderLast::new(now, i));
+        self.last_activity = now;
         self.count += 1;
         i
     }
@@ -79,8 +104,9 @@ impl ReaderInfo {
             let first = self.outstanding.front().unwrap();
 
             if first.entry_deadline < now {
-                let msg = format!("Sequence item {} expired.", first.seq);
-                warn_with_info!("{}", msg);
+                // let msg = format!("Sequence item {} expired.", first.seq);
+                // warn_with_info!("{}", msg);
+                // self._comment(now, format!("seq {} -> {} is expired", first.seq, first.digest));
                 todrop.push((first.seq, first.digest.clone()));
                 self.outstanding.pop_front();
                 self.nexpired += 1;
@@ -162,7 +188,7 @@ impl ReaderInfo {
             self._comment(now, format!("reader asked {}: not found", seq));
         }
         self.last_cleanup = Some(now);
-
+        self.last_activity = now;
         AccessResult {
             history: self.debug_history.clone(),
             digest_to_read,
@@ -279,7 +305,7 @@ impl BlobManager {
             // for (_, deadline) in sb.outstanding_readers.iter() {
             //     max_deadline = max(max_deadline, *deadline);
             // }
-            s.push_str(&format!(" {digest}: {} {}", sb.content.len(), s_needed,));
+            s.push_str(&format!(" {digest:26}: {:8} {}", sb.content.len(), s_needed,));
             if outstanding > 0 {
                 // let delta = max_deadline - now;
                 // let seconds = delta as f64 / 1_000_000_000.0;
@@ -291,13 +317,30 @@ impl BlobManager {
 
         for (reader_id, info) in self.readers.iter() {
             s.push_str(&format!("Reader {reader_id}: "));
+            let since_last_activity = format_delay_s(info.last_activity, now);
+            let since_last_cleanup = format_delay_s(info.last_cleanup.unwrap_or(0), now);
+            let since_last_read = info
+                .last_read
+                .as_ref()
+                .map(|x| format_delay_s(x.at, now))
+                .unwrap_or("never".to_string());
+            let since_last_added = info
+                .last_added
+                .as_ref()
+                .map(|x| format_delay_s(x.at, now))
+                .unwrap_or("never".to_string());
             s.push_str(&format!(
-                "oustanding: {}  count: {}  (read: {}  skipped: {} expired: {}) \n",
-                info.outstanding.len(),
+                "  finished: {} count: {:5} (read: {:5}  skipped: {:5} expired: {:5} oustanding: {:5}) last activity: {:5} read: {:5} added: {:5} cleanup: {:5}\n",
+                info.is_finished,
                 info.count,
                 info.nread,
                 info.nskipped,
-                info.nexpired
+                info.nexpired,
+                info.outstanding.len(),
+                since_last_activity,
+                since_last_read,
+                since_last_added,
+                since_last_cleanup,
             ));
         }
         if self.readers.len() == 0 {
@@ -338,6 +381,40 @@ impl BlobManager {
                         error_with_info!("{}", msg);
                     }
                 }
+            }
+        }
+
+        let mut readers_to_drop = Vec::new();
+        for (reader_id, reader_info) in self.readers.iter_mut() {
+            if reader_info.can_be_removed(now, 60.0) {
+                readers_to_drop.push(reader_id.clone());
+            }
+        }
+        for reader_id in readers_to_drop {
+            self.forget_reader(&reader_id);
+        }
+
+        for (digest, sb) in self.blobs.iter_mut() {
+            let mut reservation_to_drop = Vec::new();
+
+            for (reader_id, i) in sb.outstanding_readers.iter() {
+                if !self.readers.contains_key(reader_id) {
+                    let msg = format!("Reader {reader_id} not found but reservation active");
+                    error_with_info!("{}", msg);
+                    reservation_to_drop.push((reader_id.clone(), *i));
+                    continue;
+                }
+                let reader = self.readers.get(reader_id).unwrap();
+                if !reader.still_outstanding(i) {
+                    // TODO: debug this case
+                    // let msg = format!("Blob {digest} was not still needed by {reader_id}:{i}");
+                    // error_with_info!("{}", msg);
+                    reservation_to_drop.push((reader_id.clone(), *i));
+                }
+            }
+            for (reader_id, i) in reservation_to_drop {
+                let k = (reader_id.clone(), i);
+                sb.outstanding_readers.remove(&k);
             }
         }
 
@@ -424,6 +501,9 @@ impl BlobManager {
 
     pub fn get_blob(&self, digest: &str) -> Option<&Vec<u8>> {
         return self.blobs.get(digest).map(|v| &v.content);
+    }
+    pub fn unique_reader_id(&mut self) -> ReaderID {
+        uuid::Uuid::new_v4().to_string()
     }
 
     pub fn get_blob_once(&mut self, digest: &Digest, reader_id: &ReaderID, reader_seq: usize) -> DTPSR<Bytes> {
@@ -567,6 +647,33 @@ impl BlobManager {
 
         Ok(format_digest_path(digest, content_type, reader_id, i))
     }
+
+    pub fn forget_reader(&mut self, reader_id: &ReaderID) {
+        if let Some(reader) = self.readers.get_mut(reader_id) {
+            let now = time_nanos_i64();
+            if reader.outstanding.len() > 0 {
+                let msg = format!("Reader {reader_id} is going to be forgotten with outstanding items");
+                warn_with_info!("{}", msg);
+                reader._comment(now, msg);
+            }
+            reader._comment(now, format!("Reader {reader_id} is going to be forgotten"));
+            for entry in reader.outstanding.iter() {
+                match self.blobs.get_mut(&entry.digest) {
+                    Some(sb) => {
+                        let ok = sb.release_for_reader(reader_id, entry.seq);
+                    }
+                    None => {}
+                }
+            }
+            self.readers.remove(reader_id);
+        }
+    }
+
+    pub fn finish_for_reader(&mut self, reader_id: &ReaderID) {
+        if let Some(reader) = self.readers.get_mut(reader_id) {
+            reader.set_finished();
+        }
+    }
 }
 
 pub fn format_digest_path(digest: &str, content_type: &str, reader_id: &ReaderID, i: usize) -> String {
@@ -574,3 +681,17 @@ pub fn format_digest_path(digest: &str, content_type: &str, reader_id: &ReaderID
 
     format!("!/:ipfs/{}/{}/{}/{}/", digest, content_type_b64, reader_id, i)
 }
+//
+// struct DroppableReaderRef {
+//     ssa: ServerStateAccess,
+//     name: ReaderID,
+// }
+//
+// impl Drop for DroppableReaderRef {
+//     fn drop(&mut self) {
+//         {
+//             let mut ss = self.ssa.lock();
+//             ss.blob_manager.forget_reader(&self.name);
+//         }
+//     }
+// }

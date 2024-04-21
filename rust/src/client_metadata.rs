@@ -1,7 +1,8 @@
+use std::collections::HashSet;
+
 use http::HeaderMap;
 use hyper::Body;
 use maplit::hashmap;
-use std::collections::HashSet;
 use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use crate::utils_headers::{get_content_type, get_content_type_from_headers, string_from_header_value, LinkHeader};

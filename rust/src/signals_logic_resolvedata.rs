@@ -2,15 +2,14 @@ use std::{
     collections::{BTreeMap, HashMap},
     path::PathBuf,
 };
-use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use anyhow::Context;
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::StatusCode;
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use crate::signals_logic::ForwardedQueue;
-use crate::types::unique_reader_id;
 use crate::{
     context, debug_with_info, get_dataready, get_resolved, make_request2, not_implemented, putinside,
     signals_logic_streams::transform, DataReady, FoundMetadata, GetMeta, OtherProxied, RawData, ResolveDataSingle,
@@ -122,13 +121,15 @@ impl ResolveDataSingle for TypeOFSource {
                             res
                         };
                         let mut available: HashMap<usize, DataReady> = HashMap::new();
-                        let reader_id = unique_reader_id();
+                        let reader_id = ss.blob_manager.unique_reader_id(); //ok for history
                         for s in dss {
                             available.insert(s.index, get_dataready(&mut ss.blob_manager, &s, &reader_id));
                         }
                         let history = available;
                         let bytes = serde_cbor::to_vec(&history).unwrap();
                         let raw_data = RawData::new(bytes, CONTENT_TYPE_TOPIC_HISTORY_CBOR, None);
+
+                        ss.blob_manager.finish_for_reader(&reader_id);
                         return Ok(ResolvedData::from_raw_data(raw_data));
                     }
                     TypeOFSource::Compose(sc) => {

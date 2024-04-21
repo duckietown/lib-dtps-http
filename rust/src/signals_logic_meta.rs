@@ -1,8 +1,8 @@
 use std::{collections::HashMap, path::PathBuf};
-use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use async_trait::async_trait;
 use maplit::hashmap;
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use crate::structures_topicref::Bounds;
 use crate::{
