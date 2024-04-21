@@ -1,9 +1,9 @@
-use std::{fmt::Debug, net::AddrParseError};
-
 use anyhow::Result;
 use http::StatusCode;
 use hyper::Body;
 use indent::indent_all_with;
+use std::{fmt::Debug, net::AddrParseError};
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 use warp::{Rejection, Reply};
 
 use crate::{debug_with_info, error_with_info, server::HandlersResponse};
@@ -80,7 +80,7 @@ pub enum DTPSError {
     FailedRequest(String, u16, String, String),
 
     #[error(transparent)]
-    TokioRecvError(#[from] tokio::sync::broadcast::error::RecvError),
+    TokioRecvError(#[from] tokio_broadcast::error::RecvError),
     #[error(transparent)]
     TokioJoinError(#[from] tokio::task::JoinError),
     // #[error(transparent)]
@@ -121,8 +121,8 @@ impl From<&str> for DTPSError {
     }
 }
 
-impl<T> From<tokio::sync::mpsc::error::SendError<T>> for DTPSError {
-    fn from(item: tokio::sync::mpsc::error::SendError<T>) -> Self {
+impl<T> From<tokio_mpsc::error::SendError<T>> for DTPSError {
+    fn from(item: tokio_mpsc::error::SendError<T>) -> Self {
         DTPSError::Other(item.to_string())
     }
 }

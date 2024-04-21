@@ -7,8 +7,7 @@ use std::{
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use serde_cbor::{Value as CBORValue, Value::Null as CBORNull};
-use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::broadcast::Receiver as BroadcastReceiver;
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use crate::get_metadata;
 use crate::get_rawdata_status;
@@ -38,8 +37,8 @@ async fn get_stream_compose_data(
 
     let mut components_active = HashSet::new();
     let mut components_inactive = HashSet::new();
-    let (tx, rx) = tokio::sync::broadcast::channel(1024);
-    let (out_stream_sender, out_stream_recv) = tokio::sync::broadcast::channel(1024);
+    let (tx, rx) = tokio_mpsc::channel(1024);
+    let (out_stream_sender, out_stream_recv) = tokio_mpsc::channel::<ListenURLEvents>(1024);
 
     for (k, v) in sc.compose.iter() {
         let ts: &TypeOFSource = v;
@@ -130,11 +129,42 @@ async fn get_stream_compose_data(
     Ok(data_stream)
 }
 
+async fn forward<T>(mut rx1: tokio_broadcast::Receiver<T>, tx: tokio_mpsc::Sender<T>) -> DTPSR<()>
+where
+    T: Send + Clone + 'static,
+{
+    loop {
+        match rx1.recv().await {
+            Ok(m) => {
+                if tx.send(m).await.is_err() {
+                    break;
+                }
+            }
+            Err(e) => {
+                warn_with_info!("Error in broadcast receiver: {e}");
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn convert_broadcast_to_mpsc<T>(
+    mut rx1: tokio_broadcast::Receiver<T>,
+) -> (tokio::task::JoinHandle<DTPSR<()>>, tokio_mpsc::Receiver<T>)
+where
+    T: Send + Clone + 'static,
+{
+    let (tx, rx) = tokio_mpsc::channel::<T>(1024);
+    let h = tokio::spawn(forward(rx1, tx));
+    (h, rx)
+}
+
 #[async_trait]
 impl GetStream for TypeOFSource {
     async fn get_data_stream(&self, presented_as: &str, ssa: ServerStateAccess) -> DTPSR<DataStream> {
         match self {
-            TypeOFSource::Digest(..) => {
+            TypeOFSource::SingleUse(..) => {
                 not_implemented!("get_stream for {self:#?} with {self:?}")
             }
             TypeOFSource::ForwardedQueue(q) => {
@@ -145,21 +175,24 @@ impl GetStream for TypeOFSource {
                 get_data_stream_from_url(&use_url).await
             }
             TypeOFSource::OurQueue(topic_name, ..) => {
-                let (rx, first, channel_info) = {
+                let (rx, first, channel_info, h) = {
                     let ss = ssa.lock().await;
 
-                    let rx = ss.subscribe_insert_notification(topic_name)?;
+                    let rx0: tokio_broadcast::Receiver<ListenURLEvents> =
+                        ss.subscribe_insert_notification(topic_name)?;
                     let first = ss.get_last_insert(topic_name)?;
                     let oq = ss.get_queue(topic_name)?;
                     let channel_info = get_channel_info_message(oq);
-                    (rx, first, channel_info)
+
+                    let (h, rx) = convert_broadcast_to_mpsc(rx0);
+                    (rx, first, channel_info, h)
                 };
                 // debug_with_info!("get_data_stream() for {topic_name:?} with {first:?}");
                 Ok(DataStream {
                     channel_info,
                     first,
                     stream: Some(rx),
-                    handles: vec![],
+                    handles: vec![h],
                 })
             }
 
@@ -191,12 +224,12 @@ impl GetStream for TypeOFSource {
 
 async fn listen_to_updates(
     component: Vec<String>,
-    mut rx: BroadcastReceiver<ListenURLEvents>,
-    tx: tokio::sync::broadcast::Sender<SingleUpdates>,
+    mut rx: tokio_mpsc::Receiver<ListenURLEvents>,
+    tx: tokio_mpsc::Sender<SingleUpdates>,
 ) -> DTPSR<()> {
     loop {
         match rx.recv().await {
-            Ok(m) => {
+            Some(m) => {
                 let component = component.clone();
                 let msgs = match m {
                     ListenURLEvents::InsertNotification(m) => {
@@ -225,29 +258,32 @@ async fn listen_to_updates(
                     }
                 };
                 for to_send in msgs {
-                    if tx.receiver_count() > 0 {
-                        tx.send(to_send).unwrap();
-                    }
+                    tx.send(to_send).await?;
+                    // if tx.receiver_count() > 0 {
+                    //     tx.send(to_send).unwrap();
+                    // }
                 }
             }
-
-            Err(e) => match e {
-                RecvError::Closed => {
-                    break;
-                }
-                RecvError::Lagged(e) => {
-                    warn_with_info!("Lagged: {e}");
-                }
-            },
+            None => {
+                break;
+            }
+            // Err(e) => match e {
+            //     RecvError::Closed => {
+            //         break;
+            //     }
+            //     RecvError::Lagged(e) => {
+            //         warn_with_info!("Lagged: {e}");
+            //     }
+            // },
         }
     }
-    tx.send(SingleUpdates::Finished(component)).unwrap();
+    tx.send(SingleUpdates::Finished(component)).await;
     Ok(())
 }
 
 async fn filter_stream<T, U, F, G>(
-    mut receiver: BroadcastReceiver<T>,
-    sender: tokio::sync::broadcast::Sender<U>,
+    mut receiver: tokio_mpsc::Receiver<T>,
+    sender: tokio_mpsc::Sender<U>,
     f: F,
     filter_same: bool,
     mut last: Option<U>,
@@ -261,7 +297,7 @@ where
 {
     loop {
         match receiver.recv().await {
-            Ok(m) => {
+            Some(m) => {
                 let u = f(m)?;
                 if filter_same {
                     if let Some(a) = &last {
@@ -271,23 +307,18 @@ where
                     }
                     last = Some(u.clone());
                 }
-                if sender.receiver_count() != 0 {
-                    match sender.send(u) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            warn_with_info!("Cannot send: {e:?}");
-                        }
+                // if sender.receiver_count() != 0 {
+                match sender.send(u).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn_with_info!("Cannot send: {e:?}");
                     }
                 }
+                // }
             }
-            Err(e) => match e {
-                RecvError::Closed => {
-                    break;
-                }
-                RecvError::Lagged(e) => {
-                    warn_with_info!("Lagged: {e}");
-                }
-            },
+            None => {
+                break;
+            }
         }
     }
     Ok(())
@@ -307,8 +338,8 @@ async fn put_together(
     mut first: CBORValue, // BTreeMap<CBORValue, CBORValue>,
     mut clocks0: Clocks,
     mut active_components: HashSet<Vec<String>>,
-    mut rx: BroadcastReceiver<SingleUpdates>,
-    tx_out: tokio::sync::broadcast::Sender<ListenURLEvents>,
+    mut rx: tokio_mpsc::Receiver<SingleUpdates>,
+    tx_out: tokio_mpsc::Sender<ListenURLEvents>,
 ) -> DTPSR<()> {
     if let CBORValue::Map(..) = first {
     } else {
@@ -316,7 +347,12 @@ async fn put_together(
     };
     let mut index = 1;
     loop {
-        let msg = rx.recv().await?;
+        let msg = match rx.recv().await {
+            Some(m) => m,
+            None => {
+                break;
+            }
+        };
         let to_send = match msg {
             SingleUpdates::Update(ActualUpdate {
                 component,
@@ -375,9 +411,9 @@ async fn put_together(
             }
         };
         for ts in to_send {
-            if tx_out.receiver_count() > 0 {
-                tx_out.send(ts).unwrap();
-            }
+            // if tx_out.receiver_count() > 0 {
+            tx_out.send(ts).await?;
+            // }
         }
     }
 
@@ -385,8 +421,8 @@ async fn put_together(
 }
 
 async fn transform_for(
-    receiver: BroadcastReceiver<ListenURLEvents>,
-    out_stream_sender: tokio::sync::broadcast::Sender<ListenURLEvents>,
+    receiver: tokio_mpsc::Receiver<ListenURLEvents>,
+    out_stream_sender: tokio_mpsc::Sender<ListenURLEvents>,
     prefix: TopicName,
     presented_as: String,
     unique_id: String,
@@ -408,7 +444,7 @@ async fn get_stream_compose_meta(
     let stream0 = ds0.get_data_stream(presented_as, ssa.clone()).await?;
     let mut handles = stream0.handles;
     let receiver = stream0.stream.unwrap();
-    let (out_stream_sender, out_stream_recv) = tokio::sync::broadcast::channel(1024);
+    let (out_stream_sender, out_stream_recv) = tokio_mpsc::channel::<ListenURLEvents>(1024);
 
     let unique_id = sc.unique_id.clone();
 
@@ -482,8 +518,8 @@ fn filter_transform_outer(in1: ListenURLEvents, t: &Transforms, unique_id: Strin
 }
 
 async fn apply_transformer(
-    receiver: BroadcastReceiver<ListenURLEvents>,
-    out_stream_sender: tokio::sync::broadcast::Sender<ListenURLEvents>,
+    receiver: tokio_mpsc::Receiver<ListenURLEvents>,
+    out_stream_sender: tokio_mpsc::Sender<ListenURLEvents>,
     transform: Transforms,
     unique_id: String,
     first: Option<ListenURLEvents>,
@@ -503,7 +539,7 @@ async fn get_stream_transform(
     let stream0 = ds0.get_data_stream(presented_as, ssa.clone()).await?;
     let mut handles = stream0.handles;
     let receiver = stream0.stream.unwrap();
-    let (out_stream_sender, out_stream_recv) = tokio::sync::broadcast::channel::<ListenURLEvents>(1024);
+    let (out_stream_sender, out_stream_recv) = tokio_mpsc::channel::<ListenURLEvents>(1024);
 
     let unique_id = "XXX".to_string();
 

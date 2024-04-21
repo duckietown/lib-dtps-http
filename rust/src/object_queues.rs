@@ -1,21 +1,20 @@
-use std::collections::HashMap;
-
-use tokio::sync::broadcast;
-
 use crate::time_nanos_i64;
 use crate::{merge_clocks, Clocks, DataSaved, ListenURLEvents, MinMax, RawData, TopicRefInternal, DTPSR};
+use std::collections::HashMap;
+use tokio::sync::broadcast;
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 #[derive(Debug)]
 pub struct ObjectQueue {
     pub stored: Vec<usize>,
     pub saved: HashMap<usize, DataSaved>,
 
-    pub tx: broadcast::Sender<usize>,
+    pub tx: tokio_broadcast::Sender<usize>, // ok
     pub seq: usize,
     pub tr: TopicRefInternal,
     // pub max_history: Option<usize>,
     // pub bounds: Bounds,
-    pub tx_notification: broadcast::Sender<ListenURLEvents>,
+    pub tx_notification: tokio_broadcast::Sender<ListenURLEvents>, // ok
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -26,8 +25,8 @@ pub struct InsertNotification {
 
 impl ObjectQueue {
     pub fn new(tr: TopicRefInternal) -> Self {
-        let (tx, _rx) = broadcast::channel(1024);
-        let (tx_notification, _rx) = broadcast::channel(1024);
+        let (tx, _rx) = tokio_broadcast::channel(1024); // ok
+        let (tx_notification, _rx) = tokio_broadcast::channel(1024);
         // if let Some(max_history) = max_history {
         //     assert!(max_history > 0);
         // }
@@ -124,7 +123,7 @@ impl ObjectQueue {
         Ok((data, saved_data, dropped))
     }
 
-    pub fn subscribe_insert_notification(&self) -> broadcast::Receiver<ListenURLEvents> {
+    pub fn subscribe_insert_notification(&self) -> tokio_broadcast::Receiver<ListenURLEvents> {
         self.tx_notification.subscribe()
     }
 

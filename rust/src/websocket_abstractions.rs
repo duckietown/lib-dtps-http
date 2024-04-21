@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use async_trait::async_trait;
 use base64::{
@@ -11,6 +12,7 @@ use futures::{
     SinkExt, StreamExt,
 };
 use rand::Rng;
+use tokio::sync::mpsc;
 use tokio::{
     net::{TcpStream, UnixStream},
     sync::broadcast,
@@ -22,24 +24,27 @@ use tokio_tungstenite::{
 use tungstenite::{error::ProtocolError, handshake::client::Request, Error, Message as TM};
 use url::Url;
 
+use crate::types::Base64String;
+use crate::utils_websocket::{receive_from_server, send_to_server};
 use crate::{
     debug_with_info, error_with_info, info_with_info, not_implemented, not_reachable, show_errors, DTPSError,
-    ServerStateAccess, TypeOfConnection,
+    MsgWebsocketPushClientToServer, MsgWebsocketPushServerToClient, PushResult, RawData, ServerStateAccess,
+    TypeOfConnection,
     TypeOfConnection::{Relative, Same, TCP, UNIX},
     UnixCon, DTPSR,
 };
 
-#[async_trait]
-pub trait GenericSocketConnection: Send + Sync {
-    fn get_received_headers(&self) -> Vec<(String, String)>;
+// #[async_trait]
+// pub trait GenericSocketConnection: Send + Sync {
+//     fn get_received_headers(&self) -> Vec<(String, String)>;
+//
+//     fn get_incoming(&mut self) -> &mut mpsc::Receiver<TM>;
+//     async fn send_outgoing(&self) -> mpsc::UnboundedSender<TM>;
+//
+//     fn get_handles(&self) -> &Vec<JoinHandle<()>>;
+// }
 
-    async fn get_incoming(&self) -> broadcast::Receiver<TM>;
-    async fn send_outgoing(&self) -> futures::channel::mpsc::UnboundedSender<TM>;
-
-    fn get_handles(&self) -> &Vec<JoinHandle<()>>;
-}
-
-pub async fn open_websocket_connection(con: &TypeOfConnection) -> DTPSR<Box<dyn GenericSocketConnection>> {
+pub async fn open_websocket_connection(con: &TypeOfConnection) -> DTPSR<AnySocketConnection> {
     info_with_info!("open_websocket_connection: {:#?}", con.to_url_repr());
     match con {
         TCP(url) => open_websocket_connection_tcp(url).await,
@@ -56,15 +61,15 @@ pub async fn open_websocket_connection(con: &TypeOfConnection) -> DTPSR<Box<dyn 
     }
 }
 
-struct MPMC<T> {
+pub struct MPMC<T> {
     // we actually need it to send
-    incoming_sender: broadcast::Sender<T>,
-    incoming_receiver: broadcast::Receiver<T>,
-    outgoing_sender: futures::channel::mpsc::UnboundedSender<T>,
-    handles: Vec<JoinHandle<()>>,
+    pub incoming_sender: mpsc::Sender<T>,
+    pub incoming_receiver: mpsc::Receiver<T>,
+    pub outgoing_sender: mpsc::UnboundedSender<T>,
+    pub handles: Vec<JoinHandle<()>>,
 }
 
-struct AnySocketConnection {
+pub struct AnySocketConnection {
     pub response: tungstenite::handshake::client::Response,
 
     pub mmpc: MPMC<TM>,
@@ -76,10 +81,10 @@ impl AnySocketConnection {
         response: tungstenite::handshake::client::Response,
     ) -> Self {
         // single producer multiple consumer
-        let (incoming_sender, incoming_receiver) = broadcast::channel::<TM>(1280);
+        let (incoming_sender, incoming_receiver) = tokio_mpsc::channel::<TM>(1280);
 
         // mpsc
-        let (outgoing_sender, outgoing_receiver) = futures::channel::mpsc::unbounded::<TM>();
+        let (outgoing_sender, outgoing_receiver) = mpsc::unbounded_channel::<TM>();
         //
         let (sink, stream) = ws_stream.split();
 
@@ -115,10 +120,10 @@ impl AnySocketConnection {
         response: tungstenite::handshake::client::Response,
     ) -> Self {
         // single producer multiple consumer
-        let (incoming_sender, incoming_receiver) = broadcast::channel::<TM>(1280);
+        let (incoming_sender, incoming_receiver) = tokio_mpsc::channel::<TM>(1280);
 
         // mpsc
-        let (outgoing_sender, outgoing_receiver) = futures::channel::mpsc::unbounded::<TM>();
+        let (outgoing_sender, outgoing_receiver) = mpsc::unbounded_channel::<TM>();
 
         let (sink, stream) = ws_stream.split();
 
@@ -146,11 +151,43 @@ impl AnySocketConnection {
             },
         }
     }
+
+    pub async fn push(&mut self, raw_data: &RawData) -> DTPSR<()> {
+        let m = MsgWebsocketPushClientToServer::RawData(raw_data.clone());
+        // self.mmpc.send_to_server(&m).await?;
+        // let mut tx = self.mmpc.outgoing_sender.clone();
+        send_to_server(&mut self.mmpc.outgoing_sender, &m).await?;
+
+        let rx = &mut self.mmpc.incoming_receiver;
+        let back: Option<MsgWebsocketPushServerToClient> = receive_from_server(rx).await?;
+        match back {
+            None => {
+                return Err(DTPSError::Other("Push failed: no message received".to_string()));
+            }
+            Some(MsgWebsocketPushServerToClient::PushResult(PushResult { result, message })) => {
+                if result {
+                    Ok(())
+                } else {
+                    Err(DTPSError::Other(format!("Push failed: {message}")))
+                }
+            }
+        }
+    }
+
+    pub async fn stop(&mut self) -> DTPSR<()> {
+        let handles = &self.mmpc.handles;
+        // close all handles
+        for h in handles {
+            h.abort();
+            // h.abort().await?;
+        }
+        Ok(())
+    }
 }
 
 async fn read_websocket_stream<S: Debug, T: StreamExt<Item = Result<S, tungstenite::Error>>>(
     mut source: SplitStream<T>,
-    incoming_sender: broadcast::Sender<S>,
+    incoming_sender: mpsc::Sender<S>,
 ) -> DTPSR<()> {
     loop {
         match source.next().await {
@@ -158,15 +195,10 @@ async fn read_websocket_stream<S: Debug, T: StreamExt<Item = Result<S, tungsteni
                 // info_with_info!("received message: {:?}", msg);
                 match msgr {
                     Ok(msg) => {
-                        if incoming_sender.receiver_count() > 0 {
-                            match incoming_sender.send(msg) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    error_with_info!("error in incoming_sender: {e}");
-                                    break;
-                                }
-                            }
-                        }
+                        // if incoming_sender.receiver_count() > 0 {
+                        incoming_sender.send(msg).await?;
+
+                        // }
                     }
                     Err(e) => {
                         match &e {
@@ -230,12 +262,11 @@ async fn read_websocket_stream<S: Debug, T: StreamExt<Item = Result<S, tungsteni
 }
 
 async fn write_websocket_stream<S: Debug, E: Debug, T: SinkExt<S, Error = E>>(
-    mut outgoing_receiver: futures::channel::mpsc::UnboundedReceiver<S>,
+    mut outgoing_receiver: mpsc::UnboundedReceiver<S>,
     mut sink: SplitSink<T, S>,
 ) -> DTPSR<()> {
     loop {
-        let m = outgoing_receiver.next().await;
-        match m {
+        match outgoing_receiver.recv().await {
             None => break,
             Some(x) => match sink.send(x).await {
                 Ok(_) => {}
@@ -249,8 +280,8 @@ async fn write_websocket_stream<S: Debug, E: Debug, T: SinkExt<S, Error = E>>(
     Ok(())
 }
 
-#[async_trait]
-impl GenericSocketConnection for AnySocketConnection {
+// #[async_trait]
+impl AnySocketConnection {
     fn get_received_headers(&self) -> Vec<(String, String)> {
         self.response
             .headers()
@@ -259,11 +290,11 @@ impl GenericSocketConnection for AnySocketConnection {
             .collect()
     }
 
-    async fn get_incoming(&self) -> broadcast::Receiver<TM> {
-        self.mmpc.incoming_sender.subscribe()
+    fn get_incoming(&mut self) -> &mut mpsc::Receiver<TM> {
+        &mut self.mmpc.incoming_receiver
     }
 
-    async fn send_outgoing(&self) -> futures::channel::mpsc::UnboundedSender<TM> {
+    async fn send_outgoing(&self) -> mpsc::UnboundedSender<TM> {
         self.mmpc.outgoing_sender.clone()
     }
 
@@ -272,7 +303,7 @@ impl GenericSocketConnection for AnySocketConnection {
     }
 }
 
-pub async fn open_websocket_connection_tcp(url: &Url) -> DTPSR<Box<dyn GenericSocketConnection>> {
+pub async fn open_websocket_connection_tcp(url: &Url) -> DTPSR<AnySocketConnection> {
     // replace https with wss, and http with ws
     let mut url = url.clone();
     if url.scheme() == "https" {
@@ -293,10 +324,10 @@ pub async fn open_websocket_connection_tcp(url: &Url) -> DTPSR<Box<dyn GenericSo
 
     let tcp = AnySocketConnection::from_tcp(ws_stream, response);
 
-    Ok(Box::new(tcp))
+    Ok(tcp)
 }
 
-pub async fn open_websocket_connection_unix(uc: &UnixCon) -> DTPSR<Box<dyn GenericSocketConnection>> {
+pub async fn open_websocket_connection_unix(uc: &UnixCon) -> DTPSR<AnySocketConnection> {
     let stream_res = UnixStream::connect(uc.socket_name.clone()).await;
     let stream = match stream_res {
         Ok(s) => s,
@@ -349,7 +380,7 @@ pub async fn open_websocket_connection_unix(uc: &UnixCon) -> DTPSR<Box<dyn Gener
     // debug_with_info!("WS response: {:#?}", response);
     // use_stream = EitherStream::UnixStream(socket_stream);
     let res = AnySocketConnection::from_unix(None, socket_stream, response);
-    Ok(Box::new(res))
+    Ok(res)
 }
 
 fn generate_websocket_key() -> String {
@@ -360,4 +391,15 @@ fn generate_websocket_key() -> String {
     let y = general_purpose::STANDARD.decode(&x).unwrap();
     assert_eq!(y, random_bytes);
     x
+}
+
+pub fn my_base64_encode_str(data: &str) -> Base64String {
+    let x = general_purpose::STANDARD.encode(data);
+
+    x
+}
+
+pub fn my_base64_decode_str(data: &Base64String) -> String {
+    let x = general_purpose::STANDARD.decode(data).unwrap();
+    String::from_utf8(x).unwrap()
 }

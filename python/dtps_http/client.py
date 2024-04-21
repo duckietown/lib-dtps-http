@@ -172,9 +172,9 @@ class ListenDataInterface(ABC):
         wait2 = asyncio.create_task(self.wait_for_done())
         done, pending = await asyncio.wait([wait1, wait2], return_when=asyncio.FIRST_COMPLETED)
         for f in pending:
-            f.cancel()
+            f.cancel("wait_for_done_or_stop_on_event")
         if shutdown_event.is_set():
-            wait2.cancel()
+            wait2.cancel("shutdown_event")
             await self.stop()
         else:
             return
@@ -194,7 +194,7 @@ class ListenDataImpl(ListenDataInterface):
         except asyncio.TimeoutError:
             msg = f"ListenDataImpl: stop: timeout waiting for {self.task}"
             logger0.error(msg)
-            self.task.cancel()
+            self.task.cancel("timeout error")
             return
 
     async def wait_for_done(self):
@@ -272,7 +272,7 @@ class DTPSClient:
         # self.logger.debug(f"DTPSClient: aclose: setting shutdown event")
         self.shutdown_event.set()
         for t in self.tasks:
-            t.cancel()
+            t.cancel("DTPSClient::aclose")
         # self.logger.debug(f"DTPSClient: aclose: gathering")
         # await asyncio.gather(*self.tasks, return_exceptions=True)
         # self.logger.debug(f"DTPSClient: aclose: closing S")

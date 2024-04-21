@@ -8,7 +8,7 @@ use crate::get_events_stream_inline;
 use crate::get_metadata;
 use crate::wrap_recv;
 use crate::{debug_with_info, init_logging, parse_url_ext};
-
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 /// Parameters for client
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -45,7 +45,7 @@ pub async fn cli_listen() -> Result<(), Box<dyn error::Error>> {
 
     let (_handle, mut stream) = get_events_stream_inline(&inline_url).await;
 
-    while let Some(msg) = wrap_recv(&mut stream).await {
+    while let Some(msg) = stream.recv().await {
         debug_with_info!("msg: {:#?}", msg);
     }
 

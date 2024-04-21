@@ -1,9 +1,9 @@
 use serde::Serialize;
 
-use crate::client_websocket_push::WebsocketPushInterface;
 use crate::connections::TypeOfConnection;
 use crate::server_state::ConnectionJob;
 use crate::structures_topicref::{TopicRefAdd, TopicsIndexInternal};
+use crate::websocket_abstractions::AnySocketConnection;
 use crate::{CompositeName, DataSaved, FoundMetadata, History, RawData, TopicName, DTPSR};
 
 pub struct DTPSLowLevel {}
@@ -33,7 +33,7 @@ impl DTPSLowLevel {
         crate::client_metadata::get_metadata(con).await
     }
 
-    pub async fn websocket_push(con: TypeOfConnection) -> DTPSR<Box<dyn WebsocketPushInterface>> {
+    pub async fn websocket_push(con: TypeOfConnection) -> DTPSR<AnySocketConnection> {
         crate::client_websocket_push::websocket_push(con).await
     }
     pub async fn create_topic(

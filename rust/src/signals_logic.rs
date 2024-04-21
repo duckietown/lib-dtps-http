@@ -1,16 +1,27 @@
 use std::{collections::HashMap, env, fmt::Debug};
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use async_trait::async_trait;
 use json_patch::Patch;
 use lazy_static::lazy_static;
 use serde_cbor::Value as CBORValue;
-use tokio::{sync::broadcast::Receiver as BroadcastReceiver, task::JoinHandle};
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
+use crate::types::{ContentType, Digest, ReaderID};
 use crate::{
     dtpserror_context, get_inside, utils::is_truthy, ChannelInfo, Clocks, DataSaved, InsertNotification,
     ListenURLEvents, OtherProxyInfo, RawData, ResolvedData, ServerStateAccess, TopicName, TopicProperties,
     TopicsIndexInternal, DTPSR, ENV_MASK_ORIGIN,
 };
+
+#[derive(Debug, Clone)]
+pub struct SingleUseLink {
+    pub digest: Digest,
+    pub content_type: ContentType,
+    pub reader: ReaderID,
+    pub seq: usize,
+}
 
 #[derive(Debug, Clone)]
 pub enum TypeOFSource {
@@ -27,7 +38,7 @@ pub enum TypeOFSource {
     },
     Compose(SourceComposition),
     Transformed(Box<TypeOFSource>, Transforms),
-    Digest(String, String, String),
+    SingleUse(SingleUseLink),
     Deref(SourceComposition),
     Index(Box<TypeOFSource>),
     Aliased(TopicName, Option<Box<TypeOFSource>>),
@@ -149,7 +160,7 @@ pub struct DataStream {
     pub first: Option<InsertNotification>,
 
     /// The stream (or none if no more data is coming through)
-    pub stream: Option<BroadcastReceiver<ListenURLEvents>>,
+    pub stream: Option<mpsc::Receiver<ListenURLEvents>>,
 
     /// handles of couroutines needed for making this happen
     pub handles: Vec<JoinHandle<DTPSR<()>>>,

@@ -1,7 +1,7 @@
 import hashlib
 import json
 from dataclasses import asdict
-from typing import Any, cast, Dict, List, Literal, NewType, Optional, Sequence, Union
+from typing import Any, Dict, List, Literal, NewType, Optional, Sequence, Union, cast
 
 import cbor2
 from multidict import CIMultiDict
@@ -9,7 +9,7 @@ from pydantic.dataclasses import dataclass
 
 from .constants import DEFAULT_MAX_HISTORY, HEADER_LINK_BENCHMARK, MIME_CBOR, MIME_JSON, MIME_TEXT
 from .types import ContentType, NodeID, SourceID, TopicNameS, TopicNameV, URLString
-from .urls import join, parse_url_unescape, URL, url_to_string, URLIndexer
+from .urls import URL, URLIndexer, join, parse_url_unescape, url_to_string
 from .utils import pydantic_parse
 
 __all__ = [

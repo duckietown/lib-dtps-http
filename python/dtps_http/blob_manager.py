@@ -9,12 +9,11 @@ from .structures import (
     get_digest,
 )
 from .types import URLString
+from .utils_every_once_in_a_while import EveryOnceInAWhile
 
 __all__ = [
     "BlobManager",
 ]
-
-from .utils_every_once_in_a_while import EveryOnceInAWhile
 
 
 @dataclass

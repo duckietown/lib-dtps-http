@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use json_patch::{patch, Patch, PatchOperation};
 use log::info;
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use crate::utils_patch::unescape_json_patch;
 use crate::{
@@ -61,7 +62,7 @@ impl Patchable for TypeOFSource {
             TypeOFSource::Transformed(ts_inside, transform) => {
                 patch_transformed(ssa, presented_as, patch, ts_inside, transform).await
             }
-            TypeOFSource::Digest(..) => {
+            TypeOFSource::SingleUse(..) => {
                 not_implemented!("patch for {self:#?} with {self:?}")
             }
             TypeOFSource::Deref(..) => {

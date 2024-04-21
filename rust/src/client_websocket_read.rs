@@ -1,35 +1,33 @@
 use bytes::Bytes;
-use tokio::sync::broadcast::Receiver as BroadcastReceiver;
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 use tokio::task::JoinHandle;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::connections::TypeOfConnection;
 use crate::error_with_info;
 use crate::object_queues::InsertNotification;
-use crate::websocket_abstractions::{open_websocket_connection, GenericSocketConnection};
+use crate::websocket_abstractions::open_websocket_connection;
 use crate::{client_verbs, utils_websocket, DTPSError, ListenURLEvents, MsgServerToClient, RawData, DTPSR};
 
 /// Note: need to have use futures::{StreamExt} in scope to use this
 pub async fn get_events_stream_inline(
     url: &TypeOfConnection,
-) -> (JoinHandle<DTPSR<()>>, BroadcastReceiver<ListenURLEvents>) {
-    let (tx, rx) = tokio::sync::broadcast::channel(1024);
+) -> (JoinHandle<DTPSR<()>>, tokio_mpsc::Receiver<ListenURLEvents>) {
+    let (tx, rx) = tokio_mpsc::channel::<ListenURLEvents>(1024);
     let inline_url = url.clone();
     let handle = tokio::spawn(listen_events_websocket(inline_url, tx));
     // let stream = UnboundedReceiverStream::new(rx);
     (handle, rx)
 }
 
-pub async fn listen_events_websocket(
-    con: TypeOfConnection,
-    tx: tokio::sync::broadcast::Sender<ListenURLEvents>,
-) -> DTPSR<()> {
-    let wsc = open_websocket_connection(&con).await?;
+pub async fn listen_events_websocket(con: TypeOfConnection, tx: tokio_mpsc::Sender<ListenURLEvents>) -> DTPSR<()> {
+    let mut wsc = open_websocket_connection(&con).await?;
     let prefix = format!("listen_events_websocket({con})");
     // debug_with_info!("starting to listen to events for {} on {:?}", con, read);
     let mut index: u32 = 0;
-    let mut rx = wsc.get_incoming().await;
-
-    let first = utils_websocket::receive_from_server(&mut rx).await?;
+    // let mut rx = wsc.get_incoming().await;
+    let rx = &mut wsc.mmpc.incoming_receiver;
+    let first = utils_websocket::receive_from_server(rx).await?;
     match first {
         Some(MsgServerToClient::ChannelInfo(..)) => {}
         _ => {
@@ -40,7 +38,7 @@ pub async fn listen_events_websocket(
     }
 
     loop {
-        let msg_from_server = utils_websocket::receive_from_server(&mut rx).await?;
+        let msg_from_server = utils_websocket::receive_from_server(rx).await?;
         let dr = match msg_from_server {
             None => {
                 break;
@@ -67,7 +65,7 @@ pub async fn listen_events_websocket(
         } else {
             let mut content: Vec<u8> = Vec::with_capacity(dr.content_length);
             for _ in 0..dr.chunks_arriving {
-                let msg_from_server = utils_websocket::receive_from_server(&mut rx).await?;
+                let msg_from_server = utils_websocket::receive_from_server(rx).await?;
 
                 let chunk = match msg_from_server {
                     None => break,
@@ -115,7 +113,7 @@ pub async fn listen_events_websocket(
             raw_data: rd,
         });
 
-        if tx.send(notification).is_err() {
+        if tx.send(notification).await.is_err() {
             break;
         }
     }

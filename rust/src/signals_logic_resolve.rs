@@ -1,9 +1,12 @@
 use std::{collections::HashMap, path::PathBuf};
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use anyhow::Context;
 use async_recursion::async_recursion;
 use maplit::hashmap;
 
+use crate::signals_logic::SingleUseLink;
+use crate::websocket_abstractions::my_base64_decode_str;
 use crate::{
     context, divide_in_components, error_with_info, is_prefix_of, not_implemented, utils, DTPSError, ForwardedQueue,
     OtherProxied, ServerState, SourceComposition, TopicName, TopicProperties, Transforms, TypeOFSource, DTPSR,
@@ -82,18 +85,23 @@ pub async fn interpret_path(
     }
 
     if path_components.len() > 1 && path_components.first().unwrap() == ":ipfs" {
-        return if path_components.len() != 4 {
+        return if path_components.len() != 5 {
             DTPSError::other(format!("Wrong number of components: {:?}; expected 4", path_components))
         } else {
             let digest = path_components.get(1).unwrap();
-            let content_type = path_components.get(2).unwrap();
-            let content_type = content_type.replace('_', "/");
-            let token = path_components.get(3).unwrap();
-            Ok(TypeOFSource::Digest(
-                digest.to_string(),
+            let content_type_b64 = path_components.get(2).unwrap();
+            let content_type = my_base64_decode_str(content_type_b64);
+            let reader = path_components.get(3).unwrap();
+            let reader_seq = path_components.get(4).unwrap();
+            // convert to usize
+            let reader_seq = reader_seq.parse::<usize>().context("reader_seq")?;
+
+            Ok(TypeOFSource::SingleUse(SingleUseLink {
+                digest: digest.to_string(),
                 content_type,
-                token.to_string(),
-            ))
+                reader: reader.to_string(),
+                seq: reader_seq,
+            }))
         };
     }
 
@@ -364,7 +372,7 @@ impl TypeOFSource {
             TypeOFSource::Index(_) => {
                 not_implemented!("get_inside for {self:#?} with {s:?}")
             }
-            TypeOFSource::Digest(_, _, token) => {
+            TypeOFSource::SingleUse(_) => {
                 not_implemented!("get_inside for {self:#?} with {s:?}")
             }
             TypeOFSource::Deref(_c) => Ok(TypeOFSource::Transformed(

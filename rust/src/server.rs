@@ -1,5 +1,3 @@
-use std::{collections::HashMap, env, net::SocketAddr, path::Path, string::ToString, sync::Arc as StdArc};
-
 use clap::Parser;
 use futures::{
     stream::{SplitSink, SplitStream},
@@ -9,16 +7,13 @@ use indent::indent_all_with;
 use maud::{html, PreEscaped, DOCTYPE};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_yaml;
+use std::{collections::HashMap, env, net::SocketAddr, path::Path, string::ToString, sync::Arc as StdArc};
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 use tokio::{
     net::{TcpListener, UnixListener},
     signal::unix::SignalKind,
     spawn,
-    sync::{
-        broadcast::{error::RecvError, Receiver},
-        mpsc,
-        mpsc::UnboundedSender,
-        Mutex as TokioMutex,
-    },
+    sync::{broadcast, mpsc, mpsc::UnboundedSender, Mutex as TokioMutex},
     task::JoinHandle,
     time::{interval, Duration},
 };
@@ -28,6 +23,7 @@ use uuid::Uuid;
 use warp::{hyper::Body, reply::Response, Filter, Rejection};
 
 use crate::blob_manager::BlobManager;
+use crate::types::{unique_reader_id, ReaderID};
 use crate::utils_time::{epoch, format_nanos, time_nanos_i64};
 use crate::{
     cloudflare::open_cloudflare, constants::*, debug_with_info, divide_in_components, dtpserror_other, error_other,
@@ -630,11 +626,17 @@ pub fn get_channel_info_message(oq: &ObjectQueue) -> ChannelInfo {
     }
 }
 
-pub fn get_dataready(bm: &mut BlobManager, this_one: &DataSaved) -> DataReady {
+pub fn get_dataready(bm: &mut BlobManager, this_one: &DataSaved, reader_id: &ReaderID) -> DataReady {
     let max_availability: f32 = 10.0;
 
     let url = bm
-        .get_use_once_link(&this_one.digest, None, &this_one.content_type, max_availability)
+        .get_use_once_link(
+            &this_one.digest,
+            None,
+            &this_one.content_type,
+            max_availability,
+            reader_id,
+        )
         .unwrap();
     let available_until = epoch() + max_availability as f64;
     let availability = vec![ResourceAvailabilityWire { url, available_until }];
@@ -659,6 +661,7 @@ pub async fn get_series_of_messages_for_notification_(
     insert_notification: &InsertNotification,
     delta_availability: f64,
     ss: &mut ServerState,
+    reader_id: &ReaderID,
 ) -> Vec<MsgServerToClient> {
     let this_one = &insert_notification.data_saved;
     let mut out = vec![];
@@ -670,6 +673,7 @@ pub async fn get_series_of_messages_for_notification_(
             insert_notification.raw_data.content.as_ref(),
             insert_notification.raw_data.content_type.as_str(),
             delta_availability as f32,
+            reader_id,
         );
         // ss.blob_manager.cleanup_blobs();
 
@@ -717,7 +721,9 @@ pub async fn handle_websocket_queue(
     topic_name: TopicName,
     send_data: bool,
 ) -> DTPSR<()> {
-    let mut rx2 = {
+    let reader_id = unique_reader_id();
+
+    let mut rx2: tokio_broadcast::Receiver<ListenURLEvents> = {
         let mut starting_messaging = vec![];
 
         // important: release the lock
@@ -738,8 +744,14 @@ pub async fn handle_websocket_queue(
             if let Some(x) = &inot {
                 let mut ss0 = ssa.lock().await;
 
-                let mut for_this =
-                    get_series_of_messages_for_notification_(send_data, x, AVAILABILITY_LENGTH_SEC, &mut ss0).await;
+                let mut for_this = get_series_of_messages_for_notification_(
+                    send_data,
+                    x,
+                    AVAILABILITY_LENGTH_SEC,
+                    &mut ss0,
+                    &reader_id,
+                )
+                .await;
                 starting_messaging.append(&mut for_this);
             }
 
@@ -753,10 +765,10 @@ pub async fn handle_websocket_queue(
         let r = match rx2.recv().await {
             Ok(x) => x,
             Err(e) => match e {
-                RecvError::Closed => {
+                tokio_broadcast::error::RecvError::Closed => {
                     break;
                 }
-                RecvError::Lagged(_) => {
+                tokio_broadcast::error::RecvError::Lagged(_) => {
                     warn_with_info!("Lagged");
                     continue;
                 }
@@ -767,7 +779,14 @@ pub async fn handle_websocket_queue(
                 ListenURLEvents::InsertNotification(not) => {
                     let mut ss = ssa.lock().await;
 
-                    get_series_of_messages_for_notification_(send_data, &not, AVAILABILITY_LENGTH_SEC, &mut ss).await
+                    get_series_of_messages_for_notification_(
+                        send_data,
+                        &not,
+                        AVAILABILITY_LENGTH_SEC,
+                        &mut ss,
+                        &reader_id,
+                    )
+                    .await
                 }
                 ListenURLEvents::WarningMsg(m) => {
                     vec![MsgServerToClient::WarningMsg(m)]
@@ -867,6 +886,8 @@ async fn handler_topic_html_summary(
         }
     }
 
+    let reader_id = unique_reader_id(); // FIXME: not sure about this
+
     let escaped = make_html(
         topic_name.as_relative_url(),
         html! {
@@ -916,7 +937,7 @@ async fn handler_topic_html_summary(
                             td { (format_nanos(latencies[i]))}
                             td { code {(data.content_type)} }
                             td { (data.content_length) }
-                            td { code { (data_or_digest(&mut ss.blob_manager, data)) } }
+                            td { code { (data_or_digest(&mut ss.blob_manager, data, &reader_id)) } }
                         }
                     }
                 }
@@ -933,13 +954,13 @@ async fn handler_topic_html_summary(
         .unwrap())
 }
 
-pub fn data_or_digest(blob_manager: &mut BlobManager, data: &DataSaved) -> PreEscaped<String> {
+pub fn data_or_digest(blob_manager: &mut BlobManager, data: &DataSaved, reader_id: &ReaderID) -> PreEscaped<String> {
     let printable = matches!(
         data.content_type.as_str(),
         "application/yaml" | "application/x-yaml" | "text/yaml" | "text/vnd.yaml" | "application/json"
     );
     let url = blob_manager
-        .get_use_once_link(&data.digest, None, &data.content_type, 2.0)
+        .get_use_once_link(&data.digest, None, &data.content_type, 2.0, reader_id)
         .unwrap(); // FIXME: graceful
                    //
                    // let url = format_digest_path(&data.digest, &data.content_type, "none"); // TODO: verify
@@ -1171,7 +1192,7 @@ pub async fn pull_<T: DeserializeOwned + Clone + Send>(
     Ok(())
 }
 
-pub async fn collect_statuses(ssa: ServerStateAccess, mut rx: Receiver<ListenURLEvents>) -> DTPSR<()> {
+pub async fn collect_statuses(ssa: ServerStateAccess, mut rx: tokio_broadcast::Receiver<ListenURLEvents>) -> DTPSR<()> {
     let mut cur = StatusSummary {
         components: Default::default(),
         comments: Default::default(),
@@ -1187,11 +1208,11 @@ pub async fn collect_statuses(ssa: ServerStateAccess, mut rx: Receiver<ListenURL
         let lue = match rx.recv().await {
             Ok(lue) => lue,
             Err(e) => match e {
-                RecvError::Closed => {
+                tokio_broadcast::error::RecvError::Closed => {
                     debug_with_info!("collect_statuses: finished collecting");
                     break;
                 }
-                RecvError::Lagged(_) => {
+                tokio_broadcast::error::RecvError::Lagged(_) => {
                     error_with_info!("collect_statuses: lagged");
                     continue;
                 }

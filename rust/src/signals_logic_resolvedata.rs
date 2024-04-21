@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     path::PathBuf,
 };
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -9,6 +10,7 @@ use bytes::Bytes;
 use http::StatusCode;
 
 use crate::signals_logic::ForwardedQueue;
+use crate::types::unique_reader_id;
 use crate::{
     context, debug_with_info, get_dataready, get_resolved, make_request2, not_implemented, putinside,
     signals_logic_streams::transform, DataReady, FoundMetadata, GetMeta, OtherProxied, RawData, ResolveDataSingle,
@@ -22,11 +24,11 @@ use crate::{DataSaved, ResponseUnobtained};
 impl ResolveDataSingle for TypeOFSource {
     async fn resolve_data_single(&self, presented_as: &str, ss_mutex: ServerStateAccess) -> DTPSR<ResolvedData> {
         match self {
-            TypeOFSource::Digest(digest, content_type, token) => {
+            TypeOFSource::SingleUse(su) => {
                 let mut ss = ss_mutex.lock().await;
-                let data = ss.blob_manager.get_blob_once(digest, token)?;
+                let data = ss.blob_manager.get_blob_once(&su.digest, &su.reader, su.seq)?;
 
-                let raw_data = RawData::new(data, content_type, Some(digest.clone()));
+                let raw_data = RawData::new(data, &su.content_type, Some(su.digest.clone()));
                 let rrd: RicherRawData = RicherRawData {
                     raw_data,
                     metadata: FoundMetadata::empty(),
@@ -120,8 +122,9 @@ impl ResolveDataSingle for TypeOFSource {
                             res
                         };
                         let mut available: HashMap<usize, DataReady> = HashMap::new();
+                        let reader_id = unique_reader_id();
                         for s in dss {
-                            available.insert(s.index, get_dataready(&mut ss.blob_manager, &s));
+                            available.insert(s.index, get_dataready(&mut ss.blob_manager, &s, &reader_id));
                         }
                         let history = available;
                         let bytes = serde_cbor::to_vec(&history).unwrap();

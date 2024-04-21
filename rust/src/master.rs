@@ -1,9 +1,9 @@
-use std::{collections::HashMap, string::ToString};
-
 use bytes::Bytes;
 use futures::{stream::SplitSink, SinkExt, StreamExt};
 use maud::{html, PreEscaped};
-use tokio::sync::broadcast::error::RecvError;
+use std::{collections::HashMap, string::ToString};
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
+use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tungstenite::{
     http::{HeaderMap, StatusCode},
@@ -12,6 +12,7 @@ use tungstenite::{
 use warp::{http::header, hyper::Body, reply::Response, ws::Message as WarpMessage};
 
 use crate::client_metadata::put_metadata_headers;
+use crate::types::unique_reader_id;
 use crate::utils_every_once::EveryOnceInAWhile;
 use crate::{
     clocks::Clocks, debug_with_info, display_printable, divide_in_components, error_with_info, get_accept_header,
@@ -268,7 +269,7 @@ pub async fn serve_master_head(
             // }
         }
         TypeOFSource::Transformed(..) => {}
-        TypeOFSource::Digest(..) => {}
+        TypeOFSource::SingleUse(..) => {}
         TypeOFSource::Deref(..) => {}
         TypeOFSource::OtherProxied(_) => {}
         TypeOFSource::Index(..) => {}
@@ -648,6 +649,8 @@ pub async fn handle_websocket_data_stream(
     max_frequency: Option<f32>,
     ssa: ServerStateAccess,
 ) -> DTPSR<()> {
+    let reader_id = unique_reader_id();
+
     {
         let mut starting_messaging = vec![];
 
@@ -656,7 +659,8 @@ pub async fn handle_websocket_data_stream(
         if let Some(first) = data_stream.first {
             let mut ss = ssa.lock().await;
             let mut for_this =
-                get_series_of_messages_for_notification_(send_data, &first, DELTA_WEBSOCKET_AVAIL, &mut ss).await;
+                get_series_of_messages_for_notification_(send_data, &first, DELTA_WEBSOCKET_AVAIL, &mut ss, &reader_id)
+                    .await;
 
             starting_messaging.append(&mut for_this);
         }
@@ -667,7 +671,7 @@ pub async fn handle_websocket_data_stream(
 
     let mut when = EveryOnceInAWhile::new(period, true);
 
-    let mut stream = match data_stream.stream {
+    let mut stream: mpsc::Receiver<ListenURLEvents> = match data_stream.stream {
         None => {
             return Ok(());
         }
@@ -675,14 +679,20 @@ pub async fn handle_websocket_data_stream(
     };
     loop {
         match stream.recv().await {
-            Ok(r) => {
+            Some(r) => {
                 let for_this = match r {
                     ListenURLEvents::InsertNotification(r) => {
                         let mut ss = ssa.lock().await;
 
                         if when.now() {
-                            get_series_of_messages_for_notification_(send_data, &r, DELTA_WEBSOCKET_AVAIL, &mut ss)
-                                .await
+                            get_series_of_messages_for_notification_(
+                                send_data,
+                                &r,
+                                DELTA_WEBSOCKET_AVAIL,
+                                &mut ss,
+                                &reader_id,
+                            )
+                            .await
                         } else {
                             vec![]
                         }
@@ -704,22 +714,22 @@ pub async fn handle_websocket_data_stream(
 
                 send_as_ws_cbor(&for_this, ws_tx).await?;
             }
-            Err(e) => match e {
-                RecvError::Closed => {
-                    let msgs = vec![MsgServerToClient::FinishedMsg(FinishedMsg {
-                        comment: "finished".to_string(),
-                    })];
-                    send_as_ws_cbor(&msgs, ws_tx).await?;
-                    break;
-                }
-                RecvError::Lagged(n) => {
-                    let msgs = vec![MsgServerToClient::WarningMsg(WarningMsg {
-                        comment: format!("Skipped {n} messages."),
-                    })];
-                    send_as_ws_cbor(&msgs, ws_tx).await?;
-                    continue;
-                }
-            },
+            None => {
+                // RecvError::Closed => {
+                let msgs = vec![MsgServerToClient::FinishedMsg(FinishedMsg {
+                    comment: "finished".to_string(),
+                })];
+                send_as_ws_cbor(&msgs, ws_tx).await?;
+                break;
+                // }
+                // RecvError::Lagged(n) => {
+                //     let msgs = vec![MsgServerToClient::WarningMsg(WarningMsg {
+                //         comment: format!("Skipped {n} messages."),
+                //     })];
+                //     send_as_ws_cbor(&msgs, ws_tx).await?;
+                //     continue;
+                // }
+            }
         };
     }
     ws_tx.close().await?;

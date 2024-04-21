@@ -1,6 +1,7 @@
 use anyhow::Context;
 use async_trait::async_trait;
 use json_patch::{Patch, PatchOperation, ReplaceOperation};
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use crate::{
     clocks::Clocks, dtpserror_other, invalid_input, not_implemented, publish, signals_logic::Pushable, DataSaved,
@@ -102,7 +103,7 @@ impl Pushable for TypeOFSource {
             // These are not valid for push
             TypeOFSource::Compose(..)
             // | TypeOFSource::Transformed(..)
-            | TypeOFSource::Digest(..)
+            | TypeOFSource::SingleUse(..)
             | TypeOFSource::Deref(..)
             | TypeOFSource::Index(..)
             | TypeOFSource::Aliased(..)

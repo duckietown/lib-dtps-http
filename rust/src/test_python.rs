@@ -1,8 +1,6 @@
 use futures::{SinkExt, StreamExt};
-use tokio::{
-    sync::broadcast::{error::RecvError, Receiver as BroadcastReceiver},
-    task::JoinHandle,
-};
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
+use tokio::task::JoinHandle;
 
 use crate::get_events_stream_inline;
 use crate::get_history;
@@ -75,27 +73,18 @@ pub async fn check_server(con: &TypeOfConnection) -> DTPSR<()> {
 
 async fn read_notifications(
     handle: JoinHandle<DTPSR<()>>,
-    mut rx: BroadcastReceiver<ListenURLEvents>,
+    mut rx: tokio_mpsc::Receiver<ListenURLEvents>,
     nmin: usize,
 ) -> DTPSR<()> {
     let mut i = 0;
     loop {
         match rx.recv().await {
-            Ok(x) => {
+            Some(x) => {
                 debug_with_info!("clock notification: {:#?}", x);
 
                 i += 1;
             }
-            Err(e) => {
-                match e {
-                    RecvError::Closed => {
-                        debug_with_info!("finished stream");
-
-                        break;
-                    }
-                    RecvError::Lagged(_) => continue, // TODO: warning
-                }
-            }
+            None => break,
         };
 
         if i >= nmin {

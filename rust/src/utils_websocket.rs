@@ -1,42 +1,37 @@
 use std::any::Any;
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use futures::SinkExt;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::broadcast::Receiver;
+use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 use tungstenite::Message as TM;
 
 use crate::error_with_info;
 use crate::{DTPSError, DTPSR};
 
-pub async fn send_to_server<T>(tx: &mut futures::channel::mpsc::UnboundedSender<TM>, m: &T) -> DTPSR<()>
+pub async fn send_to_server<T>(tx: &mut mpsc::UnboundedSender<TM>, m: &T) -> DTPSR<()>
 where
     T: Serialize,
 {
     let ascbor = serde_cbor::to_vec(m)?;
     let msg = TM::binary(ascbor);
-    return match tx.send(msg).await {
+    return match tx.send(msg) {
         Ok(_) => Ok(()),
         Err(e) => Err(DTPSError::Other(e.to_string())),
     };
 }
 
 // returns None if closed
-pub async fn receive_from_server<T>(rx: &mut Receiver<TM>) -> DTPSR<Option<T>>
+pub async fn receive_from_server<T>(rx: &mut mpsc::Receiver<TM>) -> DTPSR<Option<T>>
 where
     T: DeserializeOwned,
 {
     let msg = match rx.recv().await {
-        Ok(msg) => msg,
-        Err(e) => {
-            return match e {
-                RecvError::Closed => Ok(None),
-                RecvError::Lagged(_) => {
-                    let s = "lagged".to_string();
-                    DTPSError::other(s)
-                }
-            };
+        Some(msg) => msg,
+        None => {
+            return Ok(None);
         }
     };
     if !msg.is_binary() {

@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
 };
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use anyhow::Context;
 use bytes::Bytes;
@@ -17,13 +18,7 @@ use path_clean::PathClean;
 use schemars::{schema::RootSchema, schema_for, JsonSchema};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use strum_macros::{Display, EnumString};
-use tokio::{
-    sync::{
-        broadcast::{error::RecvError, Receiver, Receiver as BroadcastReceiver},
-        mpsc,
-    },
-    time::sleep,
-};
+use tokio::{sync::broadcast, sync::mpsc, time::sleep};
 
 use crate::blob_manager::BlobManager;
 use crate::client_link_benchmark::{compute_best_alternative, get_stats, incompatible, UrlResult};
@@ -31,7 +26,7 @@ use crate::get_events_stream_inline;
 use crate::get_index;
 use crate::structures_topicref::Bounds;
 use crate::time_nanos_i64;
-use crate::wrap_recv;
+use crate::utils_every_once::EveryOnceInAWhile;
 use crate::TypeOfResource;
 use crate::{
     context, debug_with_info, dtpserror_context, dtpserror_other, error_with_info, get_queue_id, get_random_node_id,
@@ -223,7 +218,7 @@ pub struct ServerState {
     pub proxied_other: HashMap<TopicName, OtherProxyInfo>,
 
     pub blob_manager: BlobManager,
-
+    pub blob_manager_debug_message: EveryOnceInAWhile,
     advertise_urls: Vec<String>,
 
     status_tx: mpsc::UnboundedSender<ComponentStatusNotification>,
@@ -342,6 +337,7 @@ impl ServerState {
             status_rx,
             aliases: HashMap::new(),
             job_manager: InternalJobManager::new(),
+            blob_manager_debug_message: EveryOnceInAWhile::new(5.0, true),
         };
 
         let p = TopicProperties {
@@ -829,6 +825,8 @@ impl ServerState {
         content_type: C,
         clocks: Option<Clocks>,
     ) -> DTPSR<DataSaved> {
+        let now = time_nanos_i64();
+
         if !self.oqs.contains_key(topic_name) {
             return Err(DTPSError::TopicNotFound(topic_name.to_relative_url()));
         }
@@ -851,8 +849,12 @@ impl ServerState {
             self.blob_manager
                 .release_blob_for_queue(&digest, topic_name.as_dash_sep(), i);
         }
-        self.blob_manager.cleanup_blobs();
-        // debug_with_info!("summary: {}", self.blob_manager.summarize());
+
+        self.blob_manager.cleanup_blobs(now);
+        /// XXX: we can be more efficeint here
+        if self.blob_manager_debug_message.now() {
+            debug_with_info!("summary: {}", self.blob_manager.summarize());
+        }
         Ok(ds)
     }
 
@@ -1070,7 +1072,7 @@ impl ServerState {
         TopicsIndexInternal { topics }
     }
 
-    pub fn subscribe_insert_notification(&self, tn: &TopicName) -> DTPSR<Receiver<ListenURLEvents>> {
+    pub fn subscribe_insert_notification(&self, tn: &TopicName) -> DTPSR<tokio_broadcast::Receiver<ListenURLEvents>> {
         let q = match self.oqs.get(tn) {
             None => {
                 let s = format!("Could not find topic {}", tn.as_dash_sep());
@@ -1332,7 +1334,7 @@ pub async fn observe_node_proxy(
     let inline_url = md.events_data_inline_url.unwrap().clone();
     let (_handle, rx) = get_events_stream_inline(&inline_url).await;
 
-    for_each_from_stream(rx, |lue| async {
+    for_each_from_stream2(rx, |lue| async {
         // debug_with_info!("observe_node_proxy: obained a notification {:?}", lue);
         let notification = match lue {
             ListenURLEvents::InsertNotification(not) => not,
@@ -1373,7 +1375,31 @@ pub async fn observe_node_proxy(
     // Ok(())
 }
 
-pub async fn for_each_from_stream<T, F, Fut>(mut rx: BroadcastReceiver<T>, f: F) -> DTPSR<()>
+//
+// pub async fn for_each_from_stream<T, F, Fut>(mut rx: tokio_mpsc::Receiver<T>, f: F) -> DTPSR<()>
+//     where
+//         T: Clone,
+//         F: Fn(T) -> Fut,
+//         Fut: Future<Output=DTPSR<()>>,
+// {
+//     loop {
+//         match rx.recv().await {
+//             Ok(msg) => f(msg).await?,
+//             Err(e) => {
+//                 match e {
+//                     RecvError::Closed => break,
+//                     RecvError::Lagged(_) => {
+//                         debug_with_info!("lagged");
+//                         continue;
+//                     }
+//                 };
+//             }
+//         };
+//     }
+//
+//     Ok(())
+// }
+pub async fn for_each_from_stream2<T, F, Fut>(mut rx: tokio_mpsc::Receiver<T>, f: F) -> DTPSR<()>
 where
     T: Clone,
     F: Fn(T) -> Fut,
@@ -1381,15 +1407,16 @@ where
 {
     loop {
         match rx.recv().await {
-            Ok(msg) => f(msg).await?,
-            Err(e) => {
-                match e {
-                    RecvError::Closed => break,
-                    RecvError::Lagged(_) => {
-                        debug_with_info!("lagged");
-                        continue;
-                    }
-                };
+            Some(msg) => f(msg).await?,
+            None => {
+                break;
+                // match e {
+                //     RecvError::Closed => break,
+                //     RecvError::Lagged(_) => {
+                //         debug_with_info!("lagged");
+                //         continue;
+                //     }
+                // };
             }
         };
     }
@@ -1495,7 +1522,7 @@ async fn run_connection_job(
     };
 
     // tx.notify(true, "found source and target").await?;
-    while let Some(x) = wrap_recv(&mut stream1).await {
+    while let Some(x) = stream1.recv().await {
         debug_with_info!(
             "Connection job: {}: Got data {:?} from source {source:?} with {target:?}",
             connection_name.as_dash_sep(),

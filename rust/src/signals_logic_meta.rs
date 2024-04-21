@@ -1,4 +1,5 @@
 use std::{collections::HashMap, path::PathBuf};
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use async_trait::async_trait;
 use maplit::hashmap;
@@ -161,9 +162,7 @@ impl TypeOFSource {
             TypeOFSource::Transformed(_, _) => {
                 Err(DTPSError::NotImplemented("get_meta_index for Transformed".to_string()))
             }
-            TypeOFSource::Digest(_, _, _token) => {
-                Err(DTPSError::NotImplemented("get_meta_index for Digest".to_string()))
-            }
+            TypeOFSource::SingleUse(_) => Err(DTPSError::NotImplemented("get_meta_index for Digest".to_string())),
             TypeOFSource::Deref(_) => Err(DTPSError::NotImplemented("get_meta_index for Deref".to_string())),
             TypeOFSource::OtherProxied(_) => {
                 not_implemented!("OtherProxied: {self:?}")

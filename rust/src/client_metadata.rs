@@ -1,8 +1,8 @@
-use std::collections::HashSet;
-
 use http::HeaderMap;
 use hyper::Body;
 use maplit::hashmap;
+use std::collections::HashSet;
+use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 
 use crate::utils_headers::{get_content_type, get_content_type_from_headers, string_from_header_value, LinkHeader};
 use crate::utils_time::time_nanos;
@@ -25,7 +25,7 @@ pub async fn estimate_latencies(which: TopicName, md: FoundMetadata) {
     let mut latencies_ns = Vec::new();
     let mut index = 0;
 
-    while let Some(lue) = utils_queues::wrap_recv(&mut rx).await {
+    while let Some(lue) = rx.recv().await {
         // convert a string to integer
         match lue {
             ListenURLEvents::InsertNotification(notification) => {

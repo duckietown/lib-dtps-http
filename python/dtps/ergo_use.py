@@ -106,7 +106,7 @@ class ContextManagerUseContextPublisher(PublisherInterface):
             raise Exception(f"Could not push {rd.short_description()}")
 
     async def terminate(self) -> None:
-        self.task_push.cancel()
+        self.task_push.cancel("terminate")
 
 
 class ContextManagerUseSubscription(SubscriptionInterface):

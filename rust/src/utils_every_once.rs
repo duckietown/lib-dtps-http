@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+#[derive(Debug)]
 pub struct EveryOnceInAWhile {
     interval: Duration,
     last: Instant,
