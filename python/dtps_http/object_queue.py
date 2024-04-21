@@ -14,6 +14,7 @@ from .constants import (
     MIME_JSON,
     MIME_TEXT,
     MIME_YAML,
+    DEFAULT_DATA_AVAILABILITY_TIMEOUT,
 )
 from .structures import (
     Bounds,
@@ -262,8 +263,7 @@ class ObjectQueue:
             logger.error(f"Could not unsubscribe {sub_id}: {e}")
 
     def get_data_ready(self, ds: DataSaved, inline_data: bool) -> DataReady:
-
-        available_interval = 60
+        available_interval = DEFAULT_DATA_AVAILABILITY_TIMEOUT
         available_until = time.time() + available_interval
         content = self.blob_manager.get_blob(ds.digest)
         actual_url = self.blob_manager.get_use_once_link_store(
