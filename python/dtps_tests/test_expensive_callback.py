@@ -39,3 +39,10 @@ class TestExpensiveCallback(IsolatedAsyncioTestCase):
                 await sub.unsubscribe()
 
             await asyncio.sleep(1)
+
+
+#  Expected output:
+# DEBUG Final statistics:
+#  Total received:     20
+#  Total processed:     3 (15.00%)
+#  Total skipped:      17 (85.00%)
