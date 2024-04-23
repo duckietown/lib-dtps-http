@@ -1,4 +1,5 @@
 import asyncio
+import time
 from unittest import IsolatedAsyncioTestCase
 
 from dtps import DTPSContext, process_lowdatasize_last_recent
@@ -17,13 +18,13 @@ class TestExpensiveCallback(IsolatedAsyncioTestCase):
         async with create_use_pair("call1") as (create, _use):
             topic: DTPSContext = await (create / "my_topic").queue_create()
 
-            ntotal = 0
-
             async def expensive_callback(_: RawData) -> None:
                 # simulate expensive callback
-                nonlocal ntotal
-                ntotal += 1
                 await asyncio.sleep(1)
+
+                # note that if the IO is blocking then things should
+                # be done in a different process/thread!
+                # time.sleep(1)
 
             sub = await process_lowdatasize_last_recent(topic, expensive_callback)
 
