@@ -37,7 +37,6 @@ from aiohttp import (
 )
 from multidict import CIMultiDictProxy
 from tcp_latency import measure_latency
-from urllib3.exceptions import LocationParseError
 
 from . import logger, logger as logger0
 from .constants import (
