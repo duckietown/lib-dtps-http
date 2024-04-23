@@ -51,7 +51,7 @@ async def queue_get_multiple(q: "Queue[X]") -> List[X]:
 
 
 class ExpensiveCallbackSubscription(SubscriptionInterface):
-    q: Queue[RawData]
+    q: "Queue[RawData]"
     sub: Optional[SubscriptionInterface]
     task: Optional[asyncio.Task]
 
