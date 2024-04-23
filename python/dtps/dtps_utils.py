@@ -16,7 +16,7 @@ async def process_lowdatasize_last_recent(
     expensive_callback: Callable[[RawData], Awaitable[None]],
 ) -> "ExpensiveCallbackSubscription":
     """
-    Calls the callback for the
+    Make sure we are not a slow reader even for an expensive callback.
 
     Suitable for this case:
 
