@@ -253,7 +253,11 @@ class ContextManagerCreateContext(DTPSContext):
         yield self._publisher
 
     async def patch(self, patch_data: List[Dict[str, Any]], /) -> None:
-        raise NotImplementedError
+        server = self._get_server()
+        topic = self._topic
+        url0 = topic.as_relative_url()
+        resolve = server._resolve_tn(topic, url0=url0)
+        await resolve.patch(url0, server, JsonPatch(patch_data))
 
     async def call(self, data: RawData, /) -> RawData:
         server = self._get_server()
