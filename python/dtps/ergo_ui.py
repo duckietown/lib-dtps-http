@@ -10,7 +10,8 @@ from typing import (
     Sequence,
 )
 
-from dtps_http import Bounds, DataSaved, NodeID, ObjectTransformResult, RawData, TopicRefAdd, URLString
+from dtps_http import (Bounds, DataSaved, NodeID, ObjectTransformResult, RawData, TopicRefAdd, URLString,
+                       ObjectServeResult, HTTPRequest)
 
 __all__ = [
     "ConnectionInterface",
@@ -20,10 +21,12 @@ __all__ = [
     "PublisherInterface",
     "RPCFunction",
     "SubscriptionInterface",
+    "ServeFunction"
 ]
 
 _ = Sequence
 RPCFunction = Callable[[RawData], Awaitable[ObjectTransformResult]]
+ServeFunction = Callable[[HTTPRequest], Awaitable[ObjectServeResult]]
 
 PatchType = List[Dict[str, Any]]
 
@@ -200,6 +203,7 @@ class DTPSContext(ABC):
         *,
         parameters: Optional[TopicRefAdd] = None,
         transform: Optional[RPCFunction] = None,
+        serve: Optional[ServeFunction] = None,
         bounds: Optional[Bounds] = None,
     ) -> "DTPSContext":
         """

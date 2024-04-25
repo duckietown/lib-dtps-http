@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import NewType, Optional, Sequence, Tuple
 
+from aiohttp import web
 from typing_extensions import Self
 
 __all__ = [
@@ -10,6 +11,8 @@ __all__ = [
     "TopicNameS",
     "TopicNameV",
     "URLString",
+    "HTTPRequest",
+    "HTTPResponse",
 ]
 
 URLString = NewType("URLString", str)
@@ -20,6 +23,10 @@ TopicNameS = NewType("TopicNameS", str)
 
 # ContentType = NewType("ContentType", str)
 ContentType = str
+
+
+HTTPRequest = web.Request
+HTTPResponse = web.Response
 
 
 @dataclass(frozen=True)
