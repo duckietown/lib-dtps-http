@@ -41,6 +41,7 @@ from .ergo_ui import (
     PublisherInterface,
     RPCFunction,
     SubscriptionInterface,
+    ServeFunction,
 )
 
 __all__ = [
@@ -199,7 +200,7 @@ class ContextManagerCreateContext(DTPSContext):
         server = self._get_server()
         url0 = topic.as_relative_url()
         source = server._resolve_tn(topic, url0=url0)
-        res = await source.get_resolved_data(url0, server)
+        res = await source.get_resolved_data(url0, server, None)
         if isinstance(res, RawData):
             return res
         elif isinstance(res, NotFound):
@@ -287,6 +288,7 @@ class ContextManagerCreateContext(DTPSContext):
         *,
         parameters: Optional[TopicRefAdd] = None,
         transform: Optional[RPCFunction] = None,
+        serve: Optional[ServeFunction] = None,
         bounds: Optional[Bounds] = None,
     ) -> "DTPSContext":
         if bounds is None:
@@ -312,6 +314,7 @@ class ContextManagerCreateContext(DTPSContext):
             content_info=parameters.content_info,
             tp=parameters.properties,
             transform=transform_use,
+            serve=serve,
             bounds=bounds,
         )
 

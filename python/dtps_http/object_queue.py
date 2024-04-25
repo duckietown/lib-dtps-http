@@ -29,13 +29,16 @@ from .structures import (
     ResourceAvailability,
     TopicRef,
 )
-from .types import ContentType, TopicNameV
+from .types import ContentType, TopicNameV, HTTPRequest, HTTPResponse
 
 __all__ = [
     "ObjectQueue",
     "ObjectTransformContext",
     "ObjectTransformFunction",
     "ObjectTransformResult",
+    "ObjectServeContext",
+    "ObjectServeFunction",
+    "ObjectServeResult",
     "PostResult",
     "TransformError",
     "transform_identity",
@@ -59,6 +62,8 @@ class TransformError:
 
 
 ObjectTransformResult = Union[RawData, TransformError]
+ObjectServeContext = HTTPRequest
+ObjectServeResult = Union[RawData, HTTPResponse]
 
 
 @dataclass
@@ -67,10 +72,12 @@ class SuccessPostResult:
 
 
 PostResult = Union[DataReady, TransformError]
+GetResult = Union[DataReady, HTTPResponse]
 
 # PublishResult = Union[DataSaved, TransformError]
 
 ObjectTransformFunction = Callable[[ObjectTransformContext], Awaitable[ObjectTransformResult]]
+ObjectServeFunction = Callable[[ObjectServeContext], Awaitable[ObjectServeResult]]
 
 
 async def transform_identity(otc: ObjectTransformContext) -> RawData:
@@ -94,6 +101,7 @@ class ObjectQueue:
     bounds: Bounds
     transform: ObjectTransformFunction
     blob_manager: BlobManager
+    serve: ObjectServeFunction
 
     def __init__(
         self,
@@ -103,6 +111,7 @@ class ObjectQueue:
         bounds: Bounds,
         blob_manager: BlobManager,
         transform: ObjectTransformFunction = transform_identity,
+        serve: ObjectServeFunction = None
     ):
         self.bounds = bounds
         self._hub = hub
@@ -115,6 +124,7 @@ class ObjectQueue:
         self.stored = []
         self.saved = {}
         self._transform = transform
+        self.serve = serve
         self.listeners = {}
         self.nlisteners = 0
         self.blob_manager = blob_manager
