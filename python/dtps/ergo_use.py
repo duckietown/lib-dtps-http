@@ -37,6 +37,7 @@ from .ergo_ui import (
     PublisherInterface,
     RPCFunction,
     SubscriptionInterface,
+    ServeFunction,
 )
 
 __all__ = [
@@ -270,6 +271,7 @@ class ContextManagerUseContext(DTPSContext):
         *,
         parameters: Optional[TopicRefAdd] = None,
         transform: Optional[RPCFunction] = None,
+        serve: Optional[ServeFunction] = None,
         bounds: Optional[Bounds] = None,
     ) -> "DTPSContext":
         if bounds is None:
@@ -280,6 +282,10 @@ class ContextManagerUseContext(DTPSContext):
 
         if transform is not None:
             msg = "transform is not supported for remote queues"
+            raise ValueError(msg)
+
+        if serve is not None:
+            msg = "serve is not supported for remote queues"
             raise ValueError(msg)
 
         try:
