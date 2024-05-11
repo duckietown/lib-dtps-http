@@ -87,6 +87,7 @@ from .object_queue import (
     PostResult,
     transform_identity,
     TransformError,
+    ObjectServeFunction,
 )
 from .structures import (
     Bounds,
@@ -116,7 +117,7 @@ from .structures import (
     TopicsIndexWire,
     WarningMsg,
 )
-from .types import ContentType, NodeID, SourceID, TopicNameV, URLString
+from .types import ContentType, NodeID, SourceID, TopicNameV, URLString, HTTPRequest, HTTPResponse
 from .types_of_source import (
     ForwardedQueue,
     Native,
@@ -571,6 +572,7 @@ class DTPSServer:
         tp: Optional[TopicProperties],
         bounds: Optional[Bounds],
         transform: ObjectTransformFunction = transform_identity,
+        serve: Optional[ObjectServeFunction] = None,
     ) -> ObjectQueue:
         # self.logger.info(f"Creating {name} tp = {tp} bounds = {bounds}")
         if bounds is None:
@@ -604,7 +606,7 @@ class DTPSServer:
         )
 
         self._oqs[name] = ObjectQueue(
-            self.hub, name, tr, bounds=bounds, blob_manager=self.blob_manager, transform=transform
+            self.hub, name, tr, bounds=bounds, blob_manager=self.blob_manager, transform=transform, serve=serve,
         )
         await self._update_lists()
         return self._oqs[name]
@@ -1115,10 +1117,13 @@ class DTPSServer:
             url = topic_name_s
             # logger.info(f"url: {topic_name_s!r} source: {source!r}")
             try:
-                rs = await source.get_resolved_data(url, self)
+                rs = await source.get_resolved_data(url, self, request)
             except KeyError as e:
                 self.logger.error(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {e}")
                 raise web.HTTPNotFound(text=f"404\n{e}", headers=headers) from e
+
+            if isinstance(rs, HTTPResponse):
+                return rs
 
             rd: Union[RawData, NotAvailableYet]
             if isinstance(rs, RawData):
