@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING, Un
 import aiohttp
 import cbor2
 import jsonpatch
+import jsonpointer
 from aiohttp import ClientResponse, web
 from jsonpatch import JsonPatch
 
@@ -237,7 +238,7 @@ class OurQueue(Source):
         try:
             # noinspection PyTypeChecker
             ob2 = patch.apply(ob)  # type: ignore
-        except jsonpatch.JsonPatchException as e:
+        except (jsonpatch.JsonPatchException, jsonpointer.JsonPointerException) as e:
             msg = f"Cannot apply patch {patch} to {ob}"
             logger.error(msg + f": {e}")
             raise web.HTTPBadRequest(reason=msg) from e
