@@ -3,7 +3,7 @@ import json
 import os
 import tempfile
 import unittest
-from typing import List, cast, Literal
+from typing import cast, List, Literal
 
 import cbor2
 import yaml

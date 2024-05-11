@@ -24,7 +24,7 @@ from .structures import (
     ResourceAvailability,
     TopicRef,
 )
-from .types import ContentType, TopicNameV, HTTPRequest, HTTPResponse
+from .types import ContentType, HTTPRequest, HTTPResponse, TopicNameV
 
 __all__ = [
     "ObjectQueue",

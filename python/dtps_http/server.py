@@ -83,11 +83,11 @@ from .constants import (
 from .link_headers import put_link_header
 from .object_queue import (
     ObjectQueue,
+    ObjectServeFunction,
     ObjectTransformFunction,
     PostResult,
     transform_identity,
     TransformError,
-    ObjectServeFunction,
 )
 from .structures import (
     Bounds,
@@ -117,7 +117,7 @@ from .structures import (
     TopicsIndexWire,
     WarningMsg,
 )
-from .types import ContentType, NodeID, SourceID, TopicNameV, URLString, HTTPRequest, HTTPResponse
+from .types import ContentType, HTTPResponse, NodeID, SourceID, TopicNameV, URLString
 from .types_of_source import (
     ForwardedQueue,
     Native,

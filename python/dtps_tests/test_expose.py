@@ -3,7 +3,7 @@ import os
 import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import AsyncContextManager, AsyncIterator, TYPE_CHECKING, List
+from typing import AsyncContextManager, AsyncIterator, List, TYPE_CHECKING
 from unittest import IsolatedAsyncioTestCase
 
 from dtps import context_cleanup, DTPSContext

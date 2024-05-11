@@ -2,7 +2,7 @@ import copy
 import time
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, replace
-from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING, Union, cast
+from typing import Any, cast, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING, Union
 
 import aiohttp
 import cbor2
@@ -32,7 +32,7 @@ from .structures import (
     TopicRef,
     TopicsIndex,
 )
-from .types import ContentType, NodeID, SourceID, TopicNameV, HTTPRequest
+from .types import ContentType, HTTPRequest, NodeID, SourceID, TopicNameV
 from .urls import get_relative_url, join, parse_url_unescape, URL
 from .utils import pydantic_parse
 

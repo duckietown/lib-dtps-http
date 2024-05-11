@@ -24,7 +24,6 @@ TopicNameS = NewType("TopicNameS", str)
 # ContentType = NewType("ContentType", str)
 ContentType = str
 
-
 HTTPRequest = web.Request
 HTTPResponse = web.Response
 
