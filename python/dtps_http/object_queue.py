@@ -1,11 +1,11 @@
 import json
 import time
 from dataclasses import dataclass, dataclass as original_dataclass
-from typing import Awaitable, Callable, Dict, Union
+from typing import Awaitable, Callable, Dict, NewType, Optional, Union
 
 import cbor2
 import yaml
-from aiopubsub import Hub, Key, Publisher, Subscriber
+from aiopubsub import Hub, Key, Publisher, Subscriber  # type: ignore
 from typing_extensions import Deque
 
 from . import logger
@@ -28,18 +28,19 @@ from .types import ContentType, TopicNameV, HTTPRequest, HTTPResponse
 
 __all__ = [
     "ObjectQueue",
-    "ObjectTransformContext",
-    "ObjectTransformFunction",
-    "ObjectTransformResult",
     "ObjectServeContext",
     "ObjectServeFunction",
     "ObjectServeResult",
+    "ObjectTransformContext",
+    "ObjectTransformFunction",
+    "ObjectTransformResult",
     "PostResult",
+    "SUB_ID",
     "TransformError",
     "transform_identity",
 ]
 
-SUB_ID = int
+SUB_ID = NewType("SUB_ID", int)
 K_INDEX = "index"
 
 
@@ -97,7 +98,8 @@ class ObjectQueue:
     bounds: Bounds
     transform: ObjectTransformFunction
     blob_manager: BlobManager
-    serve: ObjectServeFunction
+    serve: Optional[ObjectServeFunction]
+    listeners: " Dict[SUB_ID,  tuple[Key, Wrapper]]"
 
     def __init__(
         self,
@@ -107,7 +109,7 @@ class ObjectQueue:
         bounds: Bounds,
         blob_manager: BlobManager,
         transform: ObjectTransformFunction = transform_identity,
-        serve: ObjectServeFunction = None
+        serve: Optional[ObjectServeFunction] = None,
     ):
         self.bounds = bounds
         self._hub = hub

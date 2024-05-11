@@ -17,7 +17,7 @@ __all__ = [
 
 async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> None:
     url = cast(URLIndexer, parse_url_unescape(urlbase0))
-    last = []
+    last: List[float] = []
     i = 0
 
     async def new_observation(topic_name: TopicNameV, data: RawData) -> None:

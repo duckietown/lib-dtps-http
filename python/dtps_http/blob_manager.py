@@ -58,7 +58,7 @@ class BlobManager:
 
     def cleanup_blobs(self) -> None:
         now = time.time()
-        todrop = []
+        todrop: list[Digest] = []
 
         for digest, sb in list(self.blobs.items()):
             sb.clean_old(now)

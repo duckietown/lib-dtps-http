@@ -466,7 +466,7 @@ class TopicRefWire:
     bounds: Bounds
 
     def to_internal(self, where_available: List[URL], /) -> "TopicRef":
-        reachability = []
+        reachability: list[TopicReachability] = []
         for r in self.reachability:
             for w in where_available:
                 reachability.append(r.to_internal(w))
@@ -494,7 +494,7 @@ class TopicRef:
     bounds: Bounds
 
     def to_wire(self) -> "TopicRefWire":
-        reachability = []
+        reachability: list[TopicReachabilityWire] = []
         for r in self.reachability:
             reachability.append(r.to_wire())
         return TopicRefWire(
@@ -532,7 +532,7 @@ class TopicsIndex:
                 raise AssertionError(msg)
 
     def to_wire(self) -> "TopicsIndexWire":
-        topics = {}
+        topics: Dict[TopicNameS, TopicRefWire] = {}
         for k, v in self.topics.items():
             topics[k.as_dash_sep()] = v.to_wire()
 

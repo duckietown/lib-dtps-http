@@ -1,5 +1,6 @@
 import asyncio
 import time
+from typing import List
 from unittest import IsolatedAsyncioTestCase
 
 from dtps import DTPSContext
@@ -37,7 +38,7 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
         effective_frequency = 3 * max_frequency
         period_s = 4
 
-        found = []
+        found: List[RawData] = []
 
         async def collect(rd: RawData) -> None:
             found.append(rd)

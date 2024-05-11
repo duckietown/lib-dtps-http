@@ -6,7 +6,7 @@ import socket
 import sys
 import tempfile
 from socket import AddressFamily
-from typing import cast, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, cast, Iterator, List, Optional, Sequence, Tuple
 
 import psutil
 from aiohttp import web
@@ -61,7 +61,7 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[List
         logger.error(msg)
         sys.exit(msg)
 
-    tcps = []
+    tcps: List[Tuple[str, int]] = []
     if parsed.tcp_port is not None:
         tcps.append((parsed.tcp_host, parsed.tcp_port))
 
@@ -118,7 +118,7 @@ class ServerWrapped:
         await self.server.started.wait()
         return self.server
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         await self.aclose()
 
     async def aclose(self) -> None:

@@ -5,33 +5,34 @@ from jsonpatch import JsonPatch
 
 from dtps_http import (
     app_start,
+    Bounds,
     check_is_unix_socket,
     ContentInfo,
     DTPSServer,
+    EveryOnceInAWhile,
+    ForwardedQueue,
+    InsertNotification,
     join,
     MIME_OCTET,
+    Native,
     NodeID,
+    NotAvailableYet,
+    NotFound,
     ObjectQueue,
+    ObjectTransformContext,
+    OurQueue,
     parse_url_unescape,
     RawData,
     ServerWrapped,
+    SourceComposition,
+    SUB_ID,
     TopicNameV,
     TopicProperties,
-    TopicRefAdd,
+    transform_identity,
+    TransformError,
     url_to_string,
     URLString,
 )
-from dtps_http.object_queue import ObjectTransformContext, transform_identity, TransformError
-from dtps_http.structures import Bounds, InsertNotification
-from dtps_http.types_of_source import (
-    ForwardedQueue,
-    Native,
-    NotAvailableYet,
-    NotFound,
-    OurQueue,
-    SourceComposition,
-)
-from dtps_http.utils_every_once_in_a_while import EveryOnceInAWhile
 from .config import ContextInfo, ContextManager
 from .ergo_ui import (
     ConnectionInterface,
@@ -40,8 +41,8 @@ from .ergo_ui import (
     PatchType,
     PublisherInterface,
     RPCFunction,
-    SubscriptionInterface,
     ServeFunction,
+    SubscriptionInterface,
 )
 
 __all__ = [
@@ -51,6 +52,7 @@ __all__ = [
 
 class ContextManagerCreate(ContextManager):
     dtps_server_wrap: Optional[ServerWrapped]
+    contexts: "Dict[Tuple[str, ...], ContextManagerCreateContext]"
 
     def __init__(self, base_name: str, context_info: "ContextInfo"):
         self.base_name = base_name
@@ -105,7 +107,7 @@ class ContextManagerCreateContextPublisher(PublisherInterface):
 
 
 class ContextManagerCreateContextSubscriber(SubscriptionInterface):
-    def __init__(self, sub_id, oq0: ObjectQueue) -> None:
+    def __init__(self, sub_id: SUB_ID, oq0: ObjectQueue) -> None:
         self.sub_id = sub_id
         self.oq0 = oq0
 
@@ -130,7 +132,7 @@ class ContextManagerCreateContext(DTPSContext):
         urls = server.available_urls
 
         rurl = self._topic.as_relative_url()
-        res = []
+        res: list[URLString] = []
         for u in urls:
             u2 = parse_url_unescape(u)
             um = join(u2, rurl)
@@ -155,8 +157,11 @@ class ContextManagerCreateContext(DTPSContext):
     # def _get_components_as_topic(self) -> TopicNameV:
     #     return TopicNameV.from_components(self.components)
 
+    def meta(self) -> "DTPSContext":
+        return self / ":meta"  # TODO: actually we can do some error checks here
+
     def navigate(self, *components: str) -> "DTPSContext":
-        c = []
+        c: list[str] = []
         for comp in components:
             c.extend([_ for _ in comp.split("/") if _])
         return self.master.get_context_by_components(self.components + tuple(c))
@@ -258,7 +263,9 @@ class ContextManagerCreateContext(DTPSContext):
         topic = self._topic
         url0 = topic.as_relative_url()
         resolve = server._resolve_tn(topic, url0=url0)
-        await resolve.patch(url0, server, JsonPatch(patch_data))
+        pdata: JsonPatch
+        pdata = JsonPatch(patch_data)  # type: ignore
+        await resolve.patch(url0, server, pdata)
 
     async def call(self, data: RawData, /) -> RawData:
         server = self._get_server()
@@ -290,22 +297,19 @@ class ContextManagerCreateContext(DTPSContext):
     async def queue_create(
         self,
         *,
-        parameters: Optional[TopicRefAdd] = None,
         transform: Optional[RPCFunction] = None,
         serve: Optional[ServeFunction] = None,
+        #
+        content_info: Optional[ContentInfo] = None,
+        topic_properties: Optional[TopicProperties] = None,
+        app_data: Optional[dict[str, Any]] = None,
         bounds: Optional[Bounds] = None,
     ) -> "DTPSContext":
         if bounds is None:
             bounds = Bounds.default()
         server = self._get_server()
         topic = self._topic
-        if parameters is None:
-            parameters = TopicRefAdd(
-                content_info=ContentInfo.simple(MIME_OCTET),
-                properties=TopicProperties.rw_pushable(),
-                app_data={},
-                bounds=bounds,
-            )
+
         if transform is None:
             transform_use = transform_identity
         else:
@@ -313,13 +317,26 @@ class ContextManagerCreateContext(DTPSContext):
             async def transform_use(otc: ObjectTransformContext) -> Union[RawData, TransformError]:
                 return await transform(otc.raw_data)
 
+        if bounds is None:
+            bounds = Bounds.default()
+
+        if content_info is None:
+            content_info = ContentInfo.simple(MIME_OCTET)
+
+        if topic_properties is None:
+            topic_properties = TopicProperties.rw_pushable()
+
+        if app_data is None:
+            app_data = {}
+
         await server.create_oq(
             topic,
-            content_info=parameters.content_info,
-            tp=parameters.properties,
+            content_info=content_info,
+            tp=topic_properties,
             transform=transform_use,
             serve=serve,
             bounds=bounds,
+            app_data=app_data,
         )
 
         return self
