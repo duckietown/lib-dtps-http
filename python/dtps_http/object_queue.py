@@ -1,21 +1,16 @@
 import json
 import time
 from dataclasses import dataclass, dataclass as original_dataclass
-from typing import Awaitable, Callable, Dict, List, Union
+from typing import Awaitable, Callable, Dict, Union
 
 import cbor2
 import yaml
 from aiopubsub import Hub, Key, Publisher, Subscriber
+from typing_extensions import Deque
 
 from . import logger
 from .blob_manager import BlobManager
-from .constants import (
-    MIME_CBOR,
-    MIME_JSON,
-    MIME_TEXT,
-    MIME_YAML,
-    DEFAULT_DATA_AVAILABILITY_TIMEOUT,
-)
+from .constants import DEFAULT_DATA_AVAILABILITY_TIMEOUT, MIME_CBOR, MIME_JSON, MIME_TEXT, MIME_YAML
 from .structures import (
     Bounds,
     ChannelInfo,
@@ -79,10 +74,11 @@ async def transform_identity(otc: ObjectTransformContext) -> RawData:
 
 # tolerance for removal of blobs after they are not needed anymore
 # TOLERANCE_REMOVAL = 0.0
+from collections import deque
 
 
 class ObjectQueue:
-    stored: List[int]
+    stored: Deque[int]
     saved: Dict[int, DataSaved]
     # _data: Dict[str, RawData]
     _seq: int
@@ -112,7 +108,7 @@ class ObjectQueue:
         # self._data = {}
         self._name = name
         self.tr = tr
-        self.stored = []
+        self.stored = deque()
         self.saved = {}
         self._transform = transform
         self.listeners = {}
@@ -195,7 +191,7 @@ class ObjectQueue:
         #    f'blobs={len(self.blob_manager.blobs)}')
         if self.bounds.max_size is not None:  # TODO: implement the semantics for others
             while len(self.stored) > self.bounds.max_size:
-                x_old: int = self.stored.pop(0)
+                x_old: int = self.stored.popleft()
                 if x_old in self.saved:  # should always be true
                     ds_old = self.saved.pop(x_old)
                     # if TOLERANCE_REMOVAL is not None and TOLERANCE_REMOVAL > 0:
