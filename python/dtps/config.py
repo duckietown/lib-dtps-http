@@ -16,9 +16,7 @@ from typing import (
 
 from dtps_http import parse_url_unescape, ServerWrapped, URLString
 from . import logger
-from .ergo_ui import (
-    DTPSContext,
-)
+from .ergo_ui import DTPSContext
 
 __all__ = [
     "context",
@@ -26,7 +24,9 @@ __all__ = [
 ]
 
 
-async def context(base_name: str = "self", environment: Optional[Mapping[str, str]] = None) -> "DTPSContext":
+async def context(
+    base_name: str = "self", environment: Optional[Mapping[str, str]] = None, urls: Optional[List[str]] = None
+) -> "DTPSContext":
     """
     Initialize a DTPS interface from the environment from a given base name.
 
@@ -57,6 +57,13 @@ async def context(base_name: str = "self", environment: Optional[Mapping[str, st
 
     """
     base_name = base_name.lower()
+
+    if environment is not None and urls is not None:
+        raise ValueError("You cannot create a context while passing both 'environment' and 'urls'")
+
+    if urls:
+        environment = environment_from_urls(base_name, urls)
+
     if environment is None:
         if base_name in ContextManager.instances:
             return ContextManager.instances[base_name].get_context()
@@ -189,7 +196,7 @@ def get_context_info(environment: Optional[Mapping[str, str]]) -> ContextsInfo:
     if environment is None:
         environment = dict(os.environ)
 
-    contexts = {}
+    contexts: Dict[str, ContextInfo] = {}
     for k, v in environment.items():
         if not k.startswith(BASE):
             continue
@@ -222,3 +229,7 @@ def get_context_info(environment: Optional[Mapping[str, str]]) -> ContextsInfo:
             msg = f'Invalid context "{name}". All urls must be either "create:" or not.'
             raise ValueError(msg)
     return ContextsInfo(contexts=contexts)
+
+
+def environment_from_urls(name: str, urls: List[str]):
+    return {f"{BASE}{name}_{i}": url for i, url in enumerate(urls)}

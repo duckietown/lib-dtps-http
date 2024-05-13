@@ -2,16 +2,22 @@ import copy
 import time
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, replace
-from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING, Union
+from typing import Any, cast, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING, Union
 
 import aiohttp
 import cbor2
 import jsonpatch
+import jsonpointer  # type: ignore
 from aiohttp import ClientResponse, web
+from aiohttp.web_response import Response
 from jsonpatch import JsonPatch
 
 from . import logger
-from .constants import CONTENT_TYPE_DTPS_INDEX_CBOR, CONTENT_TYPE_PATCH_CBOR, DEFAULT_DATA_AVAILABILITY_TIMEOUT
+from .constants import (
+    CONTENT_TYPE_DTPS_INDEX_CBOR,
+    CONTENT_TYPE_PATCH_CBOR,
+    DEFAULT_DATA_AVAILABILITY_TIMEOUT,
+)
 from .object_queue import PostResult, TransformError
 from .structures import (
     Bounds,
@@ -26,7 +32,7 @@ from .structures import (
     TopicRef,
     TopicsIndex,
 )
-from .types import ContentType, NodeID, SourceID, TopicNameV
+from .types import ContentType, HTTPRequest, NodeID, SourceID, TopicNameV
 from .urls import get_relative_url, join, parse_url_unescape, URL
 from .utils import pydantic_parse
 
@@ -58,7 +64,7 @@ class NotFound:
     comment: str
 
 
-ResolvedData = Union[RawData, Native, NotAvailableYet, NotFound]
+ResolvedData = Union[RawData, Native, NotAvailableYet, NotFound, Response]
 
 if TYPE_CHECKING:
     from .server import DTPSServer
@@ -89,7 +95,9 @@ class Source(ABC):
         ...
 
     @abstractmethod
-    async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData": ...
+    async def get_resolved_data(
+        self, presented_as: str, server: "DTPSServer", request: Optional[HTTPRequest]
+    ) -> "ResolvedData": ...
 
     @abstractmethod
     async def get_meta_info(self, presented_as: str, server: "DTPSServer") -> "TopicsIndex":
@@ -152,8 +160,9 @@ def get_inside(
     first, *rest = components
 
     if isinstance(ob, dict):
+        ob = cast(Dict[str, Any], ob)
         if first not in ob:
-            keys: List[Any] = list(ob.keys())
+            keys: List[Any] = list(ob.keys())  # type: ignore
             raise KeyError(
                 f"cannot get_inside({components!r}) of dict with keys {keys!r}\ncontext: "
                 f"{context!r}\noriginal:\n{original_ob!r}"
@@ -161,6 +170,7 @@ def get_inside(
         v: Any = ob[first]
         return get_inside(original_ob, context + (first,), v, rest)
     elif isinstance(ob, (list, tuple)):
+        ob = cast(List[Any] | Tuple[Any, ...], ob)
         try:
             i = int(first)
         except ValueError:
@@ -206,8 +216,12 @@ class OurQueue(Source):
     def get_inside(self, s: str, /) -> "Source":
         return Transformed(self, GetInside((s,)))
 
-    async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData":
+    async def get_resolved_data(
+        self, presented_as: str, server: "DTPSServer", request: Optional[HTTPRequest]
+    ) -> "ResolvedData":
         oq = server.get_oq(self.topic_name)
+        if oq.serve is not None and request is not None:
+            return await oq.serve(request)
         if not oq.stored:
             return NotAvailableYet(f"no data yet for {self.topic_name.as_dash_sep()}")
         return oq.last_data()
@@ -237,11 +251,16 @@ class OurQueue(Source):
         try:
             # noinspection PyTypeChecker
             ob2 = patch.apply(ob)  # type: ignore
-        except jsonpatch.JsonPatchException as e:
+        except (jsonpatch.JsonPatchException, jsonpointer.JsonPointerException) as e:
             msg = f"Cannot apply patch {patch} to {ob}"
             logger.error(msg + f": {e}")
             raise web.HTTPBadRequest(reason=msg) from e
 
+        if not isinstance(ob2, dict):
+            msg = f"Patch {patch} applied to {ob} gives {ob2} which is not a dict"
+            logger.error(msg)
+            raise web.HTTPBadRequest(reason=msg)
+        ob2 = cast(Dict[str, Any], ob2)
         rd = RawData.json_from_native_object(ob2)
         otr = await oq.publish(rd)
         return otr
@@ -267,7 +286,9 @@ class ForwardedQueue(Source):
         fd = server._forwarded[self.topic_name]
         return fd.properties
 
-    async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData":
+    async def get_resolved_data(
+        self, presented_as: str, server: "DTPSServer", request: Optional[HTTPRequest]
+    ) -> "ResolvedData":
         url_data = server._forwarded[self.topic_name].forward_url_data
         from dtps_http import my_raise_for_status
 
@@ -395,7 +416,7 @@ class SourceComposition(Source):
         return self.origin_node
 
     async def get_meta_info(self, presented_as: str, server: "DTPSServer") -> "TopicsIndex":
-        topics = {}
+        topics: Dict[TopicNameV, TopicRef] = {}
         for prefix, source in self.sources.items():
             x = await source.get_meta_info(presented_as, server)
 
@@ -449,7 +470,9 @@ class SourceComposition(Source):
     def get_inside(self, s: str, /) -> "Source":
         raise KeyError(f"get_inside({s!r}) not implemented for {self!r}")
 
-    async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData":
+    async def get_resolved_data(
+        self, presented_as: str, server: "DTPSServer", request: Optional[HTTPRequest]
+    ) -> "ResolvedData":
         data = await self.get_meta_info(presented_as, server)
         as_cbor = cbor2.dumps(asdict(data.to_wire()))
         return RawData(content_type=CONTENT_TYPE_DTPS_INDEX_CBOR, content=as_cbor)
@@ -483,8 +506,10 @@ class Transformed(Source):
     def get_inside(self, s: str, /) -> "Source":
         return Transformed(self.source, self.transform.get_transform_inside(s))
 
-    async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData":
-        data = await self.source.get_resolved_data(presented_as, server)
+    async def get_resolved_data(
+        self, presented_as: str, server: "DTPSServer", request: Optional[HTTPRequest]
+    ) -> "ResolvedData":
+        data = await self.source.get_resolved_data(presented_as, server, request)
         return self.transform.transform(data)
 
     def get_properties(self, server: "DTPSServer") -> TopicProperties:
@@ -533,7 +558,7 @@ class MetaInfo(Source):
         return await self.source.get_source_node_id(server)
 
     async def get_meta_info(self, presented_as: str, server: "DTPSServer") -> "TopicsIndex":
-        raise NotImplementedError(f"OurQueue.get_meta_info() for {self}")  # TODO: DTSW-4789
+        raise KeyError(f"OurQueue.get_meta_info() for a meta info")
 
     def get_properties(self, server: "DTPSServer") -> TopicProperties:
         return TopicProperties.readonly()
@@ -544,8 +569,13 @@ class MetaInfo(Source):
     def get_inside(self, s: str, /) -> "Source":
         raise KeyError(f"get_inside({s!r}) not implemented for {self!r}")
 
-    async def get_resolved_data(self, presented_as: str, server: "DTPSServer") -> "ResolvedData":
-        raise NotImplementedError("MetaInfo.get_resolved_data()")  # TODO: DTSW-4789
+    async def get_resolved_data(
+        self, presented_as: str, server: "DTPSServer", request: Optional[HTTPRequest]
+    ) -> "ResolvedData":
+        res = await self.source.get_meta_info(presented_as, server)
+        w = res.to_wire()
+        rd = RawData.json_from_native_object(asdict(w))
+        return rd
 
     async def patch(self, presented_as: str, server: "DTPSServer", patch: JsonPatch) -> "PostResult":
         return TransformError(400, "Cannot PATCH MetaInfo")

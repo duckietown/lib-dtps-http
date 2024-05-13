@@ -1,11 +1,11 @@
 import json
 import time
 from dataclasses import dataclass, dataclass as original_dataclass
-from typing import Awaitable, Callable, Dict, Union
+from typing import Awaitable, Callable, cast, Dict, NewType, Optional, Union
 
 import cbor2
 import yaml
-from aiopubsub import Hub, Key, Publisher, Subscriber
+from aiopubsub import Hub, Key, Publisher, Subscriber  # type: ignore
 from typing_extensions import Deque
 
 from . import logger
@@ -24,19 +24,23 @@ from .structures import (
     ResourceAvailability,
     TopicRef,
 )
-from .types import ContentType, TopicNameV
+from .types import ContentType, HTTPRequest, HTTPResponse, TopicNameV
 
 __all__ = [
     "ObjectQueue",
+    "ObjectServeContext",
+    "ObjectServeFunction",
+    "ObjectServeResult",
     "ObjectTransformContext",
     "ObjectTransformFunction",
     "ObjectTransformResult",
     "PostResult",
+    "SUB_ID",
     "TransformError",
     "transform_identity",
 ]
 
-SUB_ID = int
+SUB_ID = NewType("SUB_ID", int)
 K_INDEX = "index"
 
 
@@ -54,6 +58,8 @@ class TransformError:
 
 
 ObjectTransformResult = Union[RawData, TransformError]
+ObjectServeContext = HTTPRequest
+ObjectServeResult = Union[RawData, HTTPResponse]
 
 
 @dataclass
@@ -62,10 +68,12 @@ class SuccessPostResult:
 
 
 PostResult = Union[DataReady, TransformError]
+GetResult = Union[DataReady, HTTPResponse]
 
 # PublishResult = Union[DataSaved, TransformError]
 
 ObjectTransformFunction = Callable[[ObjectTransformContext], Awaitable[ObjectTransformResult]]
+ObjectServeFunction = Callable[[ObjectServeContext], Awaitable[ObjectServeResult]]
 
 
 async def transform_identity(otc: ObjectTransformContext) -> RawData:
@@ -90,6 +98,8 @@ class ObjectQueue:
     bounds: Bounds
     transform: ObjectTransformFunction
     blob_manager: BlobManager
+    serve: Optional[ObjectServeFunction]
+    listeners: "Dict[SUB_ID,  tuple[Key, Wrapper]]"
 
     def __init__(
         self,
@@ -99,6 +109,7 @@ class ObjectQueue:
         bounds: Bounds,
         blob_manager: BlobManager,
         transform: ObjectTransformFunction = transform_identity,
+        serve: Optional[ObjectServeFunction] = None,
     ):
         self.bounds = bounds
         self._hub = hub
@@ -111,6 +122,7 @@ class ObjectQueue:
         self.stored = deque()
         self.saved = {}
         self._transform = transform
+        self.serve = serve
         self.listeners = {}
         self.nlisteners = 0
         self.blob_manager = blob_manager
@@ -231,7 +243,7 @@ class ObjectQueue:
         return RawData(content=data, content_type=last.content_type)
 
     def subscribe(self, callback: "Callable[[ObjectQueue, InsertNotification], Awaitable[None]]") -> SUB_ID:
-        listener_id = self.nlisteners
+        listener_id = cast(SUB_ID, self.nlisteners)
         self.nlisteners += 1
 
         wrap_callback = Wrapper(callback, self, listener_id)

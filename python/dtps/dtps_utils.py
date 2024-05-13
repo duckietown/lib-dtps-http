@@ -1,10 +1,10 @@
 import asyncio
 from asyncio import CancelledError, Queue
-from typing import Awaitable, Callable, List, Optional, TypeVar
+from typing import Any, Awaitable, Callable, List, Optional, TypeVar
 
-from dtps import DTPSContext, SubscriptionInterface
 from dtps_http import RawData
 from . import logger
+from .ergo_ui import DTPSContext, SubscriptionInterface
 
 __all__ = [
     "process_lowdatasize_last_recent",
@@ -53,7 +53,7 @@ async def queue_get_multiple(q: "Queue[X]") -> List[X]:
 class ExpensiveCallbackSubscription(SubscriptionInterface):
     q: "Queue[RawData]"
     sub: Optional[SubscriptionInterface]
-    task: Optional[asyncio.Task]
+    task: "Optional[asyncio.Task[Any]]"
 
     def __init__(self, expensive_callback: Callable[[RawData], Awaitable[None]]):
         self.expensive_callback = expensive_callback

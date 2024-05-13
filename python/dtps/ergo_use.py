@@ -5,18 +5,22 @@ from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Op
 
 import cbor2
 from aiohttp import ClientResponseError
-from typing import Sequence
+
 from dtps_http import (
+    Bounds,
+    ConnectionJob,
     CONTENT_TYPE_PATCH_CBOR,
     ContentInfo,
     DTPSClient,
     join,
+    ListenDataInterface,
     MIME_OCTET,
     NodeID,
     NoSuchTopic,
     parse_url_unescape,
     RawData,
     TopicNameV,
+    TopicOriginUnavailable,
     TopicProperties,
     TopicRefAdd,
     URL,
@@ -24,9 +28,6 @@ from dtps_http import (
     URLIndexer,
     URLString,
 )
-from dtps_http.client import ListenDataInterface
-from dtps_http.exceptions import TopicOriginUnavailable
-from dtps_http.structures import Bounds, ConnectionJob
 from . import logger
 from .config import ContextInfo, ContextManager
 from .ergo_ui import (
@@ -36,6 +37,7 @@ from .ergo_ui import (
     PatchType,
     PublisherInterface,
     RPCFunction,
+    ServeFunction,
     SubscriptionInterface,
 )
 
@@ -49,6 +51,7 @@ class ContextManagerUse(ContextManager):
     all_urls: List[URL]
 
     client: DTPSClient
+    contexts: "Dict[Tuple[str, ...], ContextManagerUseContext]"
 
     def __init__(self, base_name: str, context_info: "ContextInfo"):
         self.client = DTPSClient(nickname=base_name, shutdown_event=None)
@@ -85,7 +88,7 @@ class ContextManagerUse(ContextManager):
 class ContextManagerUseContextPublisher(PublisherInterface):
     queue_in: "asyncio.Queue[RawData]"
     queue_out: "asyncio.Queue[bool]"
-    task_push: asyncio.Task
+    task_push: "asyncio.Task[Any]"
 
     def __init__(self, master: "ContextManagerUseContext"):
         self.master = master
@@ -124,6 +127,10 @@ WARN_USE_PUBLISH_CONTEXT_N_MIN = 4
 
 
 class ContextManagerUseContext(DTPSContext):
+    master: ContextManagerUse
+    components: Tuple[str, ...]
+    last_published: List[float]
+
     def __init__(self, master: ContextManagerUse, components: Tuple[str, ...]):
         self.master = master
         self.components = components
@@ -177,10 +184,13 @@ class ContextManagerUseContext(DTPSContext):
         return TopicNameV.from_components(self.components)
 
     def navigate(self, *components: str) -> "DTPSContext":
-        c = []
+        c: list[str] = []
         for comp in components:
             c.extend([_ for _ in comp.split("/") if _])
         return self.master.get_context_by_components(self.components + tuple(c))
+
+    def meta(self) -> "DTPSContext":
+        return self / ":meta"  # TODO: actually we can do some error checks here
 
     async def list(self) -> List[str]:
         # TODO: DTSW-4801: implement list()
@@ -268,18 +278,23 @@ class ContextManagerUseContext(DTPSContext):
     async def queue_create(
         self,
         *,
-        parameters: Optional[TopicRefAdd] = None,
         transform: Optional[RPCFunction] = None,
+        serve: Optional[ServeFunction] = None,
         bounds: Optional[Bounds] = None,
+        content_info: Optional[ContentInfo] = None,
+        topic_properties: Optional[TopicProperties] = None,
+        app_data: Optional[Dict[str, Any]] = None,
     ) -> "DTPSContext":
-        if bounds is None:
-            bounds = Bounds.default()
         topic = self._get_components_as_topic()
 
         url = await self._get_best_url()
 
         if transform is not None:
             msg = "transform is not supported for remote queues"
+            raise ValueError(msg)
+
+        if serve is not None:
+            msg = "serve is not supported for remote queues"
             raise ValueError(msg)
 
         try:
@@ -292,13 +307,24 @@ class ContextManagerUseContext(DTPSContext):
             logger.debug(f"queue_create: already exists: {url}")
             return self
 
-        if parameters is None:
-            parameters = TopicRefAdd(
-                content_info=ContentInfo.simple(MIME_OCTET),
-                properties=TopicProperties.rw_pushable(),
-                app_data={},
-                bounds=bounds,
-            )
+        if bounds is None:
+            bounds = Bounds.default()
+
+        if content_info is None:
+            content_info = ContentInfo.simple(MIME_OCTET)
+
+        if topic_properties is None:
+            topic_properties = TopicProperties.rw_pushable()
+
+        if app_data is None:
+            app_data = {}
+
+        parameters = TopicRefAdd(
+            content_info=content_info,
+            properties=topic_properties,
+            app_data=app_data,
+            bounds=bounds,
+        )
 
         await self.master.client.add_topic(self.master.best_url, topic, parameters)
         return self

@@ -37,7 +37,7 @@ async def dtps_listen_main_f(
     logger.info("Listening to %s", url)
     t0 = time.time()
     nmessages = 0
-    error_msgs = []
+    error_msgs: List[ErrorMsg] = []
     async with DTPSClient.create(shutdown_event=None) as client:
         ld: ListenDataInterface
 
