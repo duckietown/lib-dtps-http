@@ -558,7 +558,7 @@ class MetaInfo(Source):
         return await self.source.get_source_node_id(server)
 
     async def get_meta_info(self, presented_as: str, server: "DTPSServer") -> "TopicsIndex":
-        raise NotImplementedError(f"OurQueue.get_meta_info() for {self}")  # TODO: DTSW-4789
+        raise KeyError(f"OurQueue.get_meta_info() for a meta info")
 
     def get_properties(self, server: "DTPSServer") -> TopicProperties:
         return TopicProperties.readonly()
@@ -572,7 +572,10 @@ class MetaInfo(Source):
     async def get_resolved_data(
         self, presented_as: str, server: "DTPSServer", request: Optional[HTTPRequest]
     ) -> "ResolvedData":
-        raise NotImplementedError("MetaInfo.get_resolved_data()")  # TODO: DTSW-4789
+        res = await self.source.get_meta_info(presented_as, server)
+        w = res.to_wire()
+        rd = RawData.json_from_native_object(asdict(w))
+        return rd
 
     async def patch(self, presented_as: str, server: "DTPSServer", patch: JsonPatch) -> "PostResult":
         return TransformError(400, "Cannot PATCH MetaInfo")
