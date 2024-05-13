@@ -6,6 +6,8 @@ WORKDIR /wd
 COPY rust rust
 COPY rustfmt.toml .
 COPY Cargo.toml .
+# temporary
+COPY Cargo.lock .
 COPY static static
 RUN find .
 
@@ -23,7 +25,7 @@ RUN rm -rf /wd/target/$DEST/bin/dtps-http-rs-server-stress-test
 RUN rm -rf /wd/target/$DEST/bin/dtps-http-rs-subscribe
 RUN rm -rf /wd/target/$DEST/bin/dtps-http-rs-client-stats
 RUN rm -rf /wd/target/$DEST/bin/dtps-http-rs-listen
- 
+
 # get cloudflare executable
 
 FROM alpine/curl as builder2
