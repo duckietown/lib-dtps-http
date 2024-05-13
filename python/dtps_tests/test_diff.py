@@ -1,6 +1,6 @@
 import asyncio
 import copy
-from typing import List
+from typing import Any, Dict, List
 from unittest import IsolatedAsyncioTestCase
 
 from jsonpatch import JsonPatch
@@ -22,8 +22,8 @@ class TestDiff(IsolatedAsyncioTestCase):
         async with create_use_pair("call1") as (create, _use):
             topic: DTPSContext = await (create / "my_topic").queue_create()
 
-            real: list[dict] = [{"a": 1}]
-            patches: list[PatchType] = []
+            real: List[Dict[str, Any]] = [{"a": 1}]
+            patches: List[PatchType] = []
 
             async def listen_diff(otc: PatchType) -> None:
                 patches.append(otc)
@@ -60,7 +60,7 @@ def reconstruct(patches: List[PatchType], initial: object) -> List[object]:
     all_states = [initial]
     for patch in patches:
         p = JsonPatch.from_string(patch, loads=lambda f: f)  # type: ignore
-        current = p.apply(all_states[-1])
-        all_states.append(current)
+        current = p.apply(all_states[-1])  # type: ignore
+        all_states.append(current)  # type: ignore
 
     return all_states

@@ -36,7 +36,7 @@ from aiohttp import (
     WSCloseCode,
 )
 from multidict import CIMultiDictProxy
-from tcp_latency import measure_latency
+from tcp_latency import measure_latency  # type: ignore
 
 from . import logger, logger as logger0
 from .constants import (
@@ -253,7 +253,7 @@ class DTPSClient:
         self.logger = logger0.getChild(nickname)
         self.shutdown_event = asyncio.Event()
 
-    def remember_task(self, task: asyncio.Task) -> None:
+    def remember_task(self, task: "asyncio.Task[Any]") -> None:
         self.tasks.append(task)
 
     tasks: "List[asyncio.Task[Any]]"
@@ -293,7 +293,8 @@ class DTPSClient:
                 res_bytes: bytes = await resp.read()
                 res = cbor2.loads(res_bytes)
 
-            alternatives0 = cast(List[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION, []))
+            raw = resp.headers.getall(HEADER_CONTENT_LOCATION, [])  # type: ignore
+            alternatives0 = cast(List[URLString], raw)
             where_this_available: List[URL] = [url]
             for a in alternatives0:
                 try:
@@ -970,7 +971,7 @@ class DTPSClient:
                 logger.debug(f"connection established in {url_events}")
 
                 connection_event.set()
-            elif isinstance(lue, InsertNotification):
+            elif isinstance(lue, InsertNotification):  # type: ignore
                 # noinspection PyBroadException
                 try:
                     await cb(lue.raw_data)
@@ -1528,23 +1529,25 @@ def unescape_json_pointer(s: str) -> str:
     return s.replace("~1", "/").replace("~0", "~")
 
 
-@async_error_catcher
-async def _listen_and_callback(
-    desc: str, it: AsyncIterator[ListenURLEvents], cb: Callable[[RawData], Awaitable[None]]
-) -> None:
-    try:
-        # logger.debug(f"_listen_and_callback ({desc}): starting")
-        i = 0
-        async for lue in it:
-            i += 1
-            # logger.debug(f"_listen_and_callback ({desc}): {i} {lue}")
-            if isinstance(lue, InsertNotification):
-                await cb(lue.raw_data)
+if False:
+    # unused now
+    @async_error_catcher
+    async def _listen_and_callback(
+        desc: str, it: AsyncIterator[ListenURLEvents], cb: Callable[[RawData], Awaitable[None]]
+    ) -> None:
+        try:
+            # logger.debug(f"_listen_and_callback ({desc}): starting")
+            i = 0
+            async for lue in it:
+                i += 1
+                # logger.debug(f"_listen_and_callback ({desc}): {i} {lue}")
+                if isinstance(lue, InsertNotification):
+                    await cb(lue.raw_data)
 
-    except CancelledError:
-        # logger.debug(f"_listen_and_callback ({desc}): cancelled")
-        raise
-    # logger.debug(f"_listen_and_callback ({desc}): finished")
+        except CancelledError:
+            # logger.debug(f"_listen_and_callback ({desc}): cancelled")
+            raise
+        # logger.debug(f"_listen_and_callback ({desc}): finished")
 
 
 async def my_raise_for_status(resp: ClientResponse, url0: URL) -> None:

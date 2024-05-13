@@ -6,11 +6,11 @@ import traceback
 from asyncio import CancelledError
 from io import StringIO
 
-import prettyprinter as pp
+import prettyprinter as pp  # type: ignore
 from aiohttp.web_exceptions import HTTPNotFound
 
 exclude = frozenset(filter(len, os.environ.get("PRETTYPRINT_EXTRAS_EXCLUDE", "").split(",")))
-pp.install_extras(exclude=exclude)
+pp.install_extras(exclude=exclude)  # type: ignore
 
 from typing import (
     Any,
@@ -23,6 +23,7 @@ from typing import (
     TYPE_CHECKING,
     TypeVar,
     Union,
+    cast,
 )
 
 import cbor2
@@ -193,12 +194,11 @@ def parse_cbor_tagged(b: bytes, *Ts: Type[X]) -> X:
     as_struct = cbor2.loads(b)
     if not isinstance(as_struct, dict):
         raise ValueError(f"parse_cbor_tagged: {as_struct!r} is not a dict")
+    as_struct = cast(Dict[str, Any], as_struct)
     return parse_tagged(as_struct, *Ts)
 
 
 def parse_tagged(d: Dict[str, Any], *Ts: Type[X]) -> X:
-    if not isinstance(d, dict):
-        raise ValueError(f"parse_tagged: {d!r} is not a dict")
     if not Ts:
         raise ValueError(f"parse_tagged: no types given")
     for T in Ts:

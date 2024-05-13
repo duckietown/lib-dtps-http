@@ -16,9 +16,7 @@ from typing import (
 
 from dtps_http import parse_url_unescape, ServerWrapped, URLString
 from . import logger
-from .ergo_ui import (
-    DTPSContext,
-)
+from .ergo_ui import DTPSContext
 
 __all__ = [
     "context",
@@ -26,8 +24,9 @@ __all__ = [
 ]
 
 
-async def context(base_name: str = "self", environment: Optional[Mapping[str, str]] = None,
-                  urls: Optional[List[str]] = None) -> "DTPSContext":
+async def context(
+    base_name: str = "self", environment: Optional[Mapping[str, str]] = None, urls: Optional[List[str]] = None
+) -> "DTPSContext":
     """
     Initialize a DTPS interface from the environment from a given base name.
 
@@ -197,11 +196,11 @@ def get_context_info(environment: Optional[Mapping[str, str]]) -> ContextsInfo:
     if environment is None:
         environment = dict(os.environ)
 
-    contexts = {}
+    contexts: Dict[str, ContextInfo] = {}
     for k, v in environment.items():
         if not k.startswith(BASE):
             continue
-        rest = k[len(BASE):]
+        rest = k[len(BASE) :]
 
         name, _, rest = rest.partition("_")
 
@@ -233,6 +232,4 @@ def get_context_info(environment: Optional[Mapping[str, str]]) -> ContextsInfo:
 
 
 def environment_from_urls(name: str, urls: List[str]):
-    return {
-        f"{BASE}{name}_{i}": url for i, url in enumerate(urls)
-    }
+    return {f"{BASE}{name}_{i}": url for i, url in enumerate(urls)}

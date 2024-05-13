@@ -1,21 +1,16 @@
 import json
 import time
 from dataclasses import dataclass, dataclass as original_dataclass
-from typing import Awaitable, Callable, Dict, List, Union
+from typing import Awaitable, Callable, Dict, NewType, Optional, Union
 
 import cbor2
 import yaml
-from aiopubsub import Hub, Key, Publisher, Subscriber
+from aiopubsub import Hub, Key, Publisher, Subscriber  # type: ignore
+from typing_extensions import Deque
 
 from . import logger
 from .blob_manager import BlobManager
-from .constants import (
-    MIME_CBOR,
-    MIME_JSON,
-    MIME_TEXT,
-    MIME_YAML,
-    DEFAULT_DATA_AVAILABILITY_TIMEOUT,
-)
+from .constants import DEFAULT_DATA_AVAILABILITY_TIMEOUT, MIME_CBOR, MIME_JSON, MIME_TEXT, MIME_YAML
 from .structures import (
     Bounds,
     ChannelInfo,
@@ -29,22 +24,23 @@ from .structures import (
     ResourceAvailability,
     TopicRef,
 )
-from .types import ContentType, TopicNameV, HTTPRequest, HTTPResponse
+from .types import ContentType, HTTPRequest, HTTPResponse, TopicNameV
 
 __all__ = [
     "ObjectQueue",
-    "ObjectTransformContext",
-    "ObjectTransformFunction",
-    "ObjectTransformResult",
     "ObjectServeContext",
     "ObjectServeFunction",
     "ObjectServeResult",
+    "ObjectTransformContext",
+    "ObjectTransformFunction",
+    "ObjectTransformResult",
     "PostResult",
+    "SUB_ID",
     "TransformError",
     "transform_identity",
 ]
 
-SUB_ID = int
+SUB_ID = NewType("SUB_ID", int)
 K_INDEX = "index"
 
 
@@ -86,10 +82,11 @@ async def transform_identity(otc: ObjectTransformContext) -> RawData:
 
 # tolerance for removal of blobs after they are not needed anymore
 # TOLERANCE_REMOVAL = 0.0
+from collections import deque
 
 
 class ObjectQueue:
-    stored: List[int]
+    stored: Deque[int]
     saved: Dict[int, DataSaved]
     # _data: Dict[str, RawData]
     _seq: int
@@ -101,7 +98,8 @@ class ObjectQueue:
     bounds: Bounds
     transform: ObjectTransformFunction
     blob_manager: BlobManager
-    serve: ObjectServeFunction
+    serve: Optional[ObjectServeFunction]
+    listeners: " Dict[SUB_ID,  tuple[Key, Wrapper]]"
 
     def __init__(
         self,
@@ -111,7 +109,7 @@ class ObjectQueue:
         bounds: Bounds,
         blob_manager: BlobManager,
         transform: ObjectTransformFunction = transform_identity,
-        serve: ObjectServeFunction = None
+        serve: Optional[ObjectServeFunction] = None,
     ):
         self.bounds = bounds
         self._hub = hub
@@ -121,7 +119,7 @@ class ObjectQueue:
         # self._data = {}
         self._name = name
         self.tr = tr
-        self.stored = []
+        self.stored = deque()
         self.saved = {}
         self._transform = transform
         self.serve = serve
@@ -205,7 +203,7 @@ class ObjectQueue:
         #    f'blobs={len(self.blob_manager.blobs)}')
         if self.bounds.max_size is not None:  # TODO: implement the semantics for others
             while len(self.stored) > self.bounds.max_size:
-                x_old: int = self.stored.pop(0)
+                x_old: int = self.stored.popleft()
                 if x_old in self.saved:  # should always be true
                     ds_old = self.saved.pop(x_old)
                     # if TOLERANCE_REMOVAL is not None and TOLERANCE_REMOVAL > 0:

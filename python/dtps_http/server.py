@@ -28,7 +28,7 @@ import cbor2
 import yaml
 from aiohttp import web, WSMsgType
 from aiohttp.web_exceptions import HTTPBadRequest
-from aiopubsub import Hub
+from aiopubsub import Hub  # type: ignore
 from cbor2 import CBORDecodeError
 from jsonpatch import (
     AddOperation,
@@ -83,11 +83,11 @@ from .constants import (
 from .link_headers import put_link_header
 from .object_queue import (
     ObjectQueue,
+    ObjectServeFunction,
     ObjectTransformFunction,
     PostResult,
     transform_identity,
     TransformError,
-    ObjectServeFunction,
 )
 from .structures import (
     Bounds,
@@ -117,7 +117,7 @@ from .structures import (
     TopicsIndexWire,
     WarningMsg,
 )
-from .types import ContentType, NodeID, SourceID, TopicNameV, URLString, HTTPRequest, HTTPResponse
+from .types import ContentType, HTTPResponse, NodeID, SourceID, TopicNameV, URLString
 from .types_of_source import (
     ForwardedQueue,
     Native,
@@ -291,7 +291,7 @@ class DTPSServer:
 
         # noinspection PyProtectedMember
         sock = request.transport._sock  # type: ignore
-        sockname = sock.getsockname()
+        sockname = sock.getsockname()  # type: ignore
         if isinstance(sockname, str):
             path = sockname.replace("/", "%2F")
             use_url = original_url.replace("http://", "http+unix://").replace("localhost", path)
@@ -537,7 +537,7 @@ class DTPSServer:
     ) -> None:
         oq = self.get_oq(TOPIC_PROXIED)
         x = oq.last_data()
-        d = cast(dict, x.get_as_native_object())
+        d = cast(Dict[str, Any], x.get_as_native_object())
         urls = sorted(list(urls))
         p = ProxyJob(node_id=expect_node_id, urls=urls, mask_origin=mask_origin)
         d[name.as_dash_sep()] = asdict(p)
@@ -573,7 +573,10 @@ class DTPSServer:
         bounds: Optional[Bounds],
         transform: ObjectTransformFunction = transform_identity,
         serve: Optional[ObjectServeFunction] = None,
+        app_data: Optional[Dict[str, Any]] = None,
     ) -> ObjectQueue:
+        if app_data is None:
+            app_data = {}
         # self.logger.info(f"Creating {name} tp = {tp} bounds = {bounds}")
         if bounds is None:
             bounds = Bounds.default()
@@ -597,7 +600,7 @@ class DTPSServer:
         tr = TopicRef(
             unique_id=unique_id,
             origin_node=self.node_id,
-            app_data={},
+            app_data=app_data,
             reachability=reachability,
             created=time.time_ns(),
             properties=tp,
@@ -606,7 +609,13 @@ class DTPSServer:
         )
 
         self._oqs[name] = ObjectQueue(
-            self.hub, name, tr, bounds=bounds, blob_manager=self.blob_manager, transform=transform, serve=serve,
+            self.hub,
+            name,
+            tr,
+            bounds=bounds,
+            blob_manager=self.blob_manager,
+            transform=transform,
+            serve=serve,
         )
         await self._update_lists()
         return self._oqs[name]
@@ -707,7 +716,7 @@ class DTPSServer:
     async def on_proxied_changed(self, _: ObjectQueue, inot: InsertNotification) -> None:
         # x = cast(dict, oq.last_data().get_as_native_object())
         current = list(self._forwarded)
-        x = cast(dict, inot.raw_data.get_as_native_object())
+        x = cast(Dict[str, Any], inot.raw_data.get_as_native_object())
         topics = list(TopicNameV.from_dash_sep(_) for _ in x)
 
         added = set(topics) - set(current)
@@ -845,8 +854,9 @@ class DTPSServer:
         headers.add(HEADER_DATA_ORIGIN_NODE_ID, self.node_id)
 
         # get all the accept headers
-        accept = []
-        for _ in request.headers.getall("accept", []):
+        accept: list[str] = []
+        default_empty: list[str] = []
+        for _ in request.headers.getall("accept", default_empty):
             accept.extend(_.split(","))
 
         if "application/cbor" not in accept and CONTENT_TYPE_DTPS_INDEX_CBOR not in accept:
@@ -918,7 +928,7 @@ class DTPSServer:
 
         oq = self.get_oq(source.topic_name)
         # presented_as = request.url.path
-        history = {}
+        history: Dict[int, Any] = {}
         for i in oq.stored:
             ds = oq.saved[i]
             a = oq.get_data_ready(ds, inline_data=False)
@@ -1020,7 +1030,7 @@ class DTPSServer:
             #     raise KeyError(f"Mount point {tn} is not established yet")
 
         unique_id = get_unique_id(origin_node, tn)
-        subsources = {}
+        subsources: Dict[TopicNameV, Source] = {}
         for _, _, rest, source in subtopics:
             subsources[TopicNameV.from_components(rest)] = source
 
@@ -1133,7 +1143,7 @@ class DTPSServer:
                 rd = RawData.cbor_from_native_object(rs.ob)
             elif isinstance(rs, NotAvailableYet):
                 rd = rs
-            elif isinstance(rs, NotFound):
+            elif isinstance(rs, NotFound):  # type: ignore
                 raise NotImplementedError(f"Cannot handle {rs!r}")
             else:
                 raise AssertionError
@@ -1252,7 +1262,7 @@ class DTPSServer:
                 )
             else:
                 return web.Response(body=rd.content, content_type=rd.content_type, headers=headers)
-        elif isinstance(rd, NotAvailableYet):
+        elif isinstance(rd, NotAvailableYet):  # type: ignore
             if accepts_html:
                 # language=html
                 html_index = f"""
@@ -1297,8 +1307,9 @@ pre {{
                     # forwarding all the headers
                     headers: CIMultiDict[str] = CIMultiDict()
                     multidict_update(headers, resp.headers)
-                    headers.popall(HEADER_NO_AVAIL, [])
-                    headers.popall(HEADER_CONTENT_LOCATION, [])
+                    default_empty: list[str] = []
+                    headers.popall(HEADER_NO_AVAIL, default_empty)
+                    headers.popall(HEADER_CONTENT_LOCATION, default_empty)
 
                     headers.add(HEADER_DATA_ORIGIN_NODE_ID, fd.origin_node)
 
@@ -1374,7 +1385,7 @@ pre {{
 
             if isinstance(pr, TransformError):
                 return web.Response(status=pr.http_code, text=pr.message, headers=headers)
-            elif isinstance(pr, DataReady):
+            elif isinstance(pr, DataReady):  # type: ignore
                 data = get_simple_cbor(pr.as_data_saved())
                 for r in pr.availability:
                     headers.add("Location", r.url)
@@ -1438,7 +1449,7 @@ pre {{
 
             if isinstance(otr, TransformError):
                 return web.Response(status=otr.http_code, text=otr.message, headers=headers)
-            elif isinstance(otr, DataReady):
+            elif isinstance(otr, DataReady):  # type: ignore
                 data = get_simple_cbor(otr.as_data_saved())
                 for r in otr.availability:
                     headers.add("Location", r.url)
@@ -1482,7 +1493,7 @@ pre {{
                     topic = topic_name_from_json_pointer(operation.location)
 
                     if topic.is_root():
-                        raise ValueError(f"Cannot create root topic (path = {operation.path!r})")
+                        raise ValueError(f"Cannot create root topic (path = {operation.path!r})")  # type: ignore
 
                     value = operation.operation["value"]  # type: ignore
                     trf = TopicRefAdd.from_json(value)
@@ -1707,8 +1718,9 @@ pre {{
                     continue
 
                 if RawData.__name__ in data:
-                    inside = data[RawData.__name__]
-                    rd = RawData(inside["content"], inside["content_type"])
+                    inside: Dict[str, Any]
+                    inside = data[RawData.__name__]  # type: ignore
+                    rd = RawData(inside["content"], inside["content_type"])  # type: ignore
                     await oq_.publish(rd)
 
                     result = PushResult(True, "")
@@ -1887,7 +1899,7 @@ pre {{
                         FinishedMsg,
                         SilenceMsg,
                     ),
-                ):
+                ):  # type: ignore
                     await send(lue)
                 else:
                     self.logger.warning(f"Unknown message type {lue}")
@@ -1967,7 +1979,7 @@ def removeprefix(s: str, prefix: str) -> str:
 def topic_name_from_json_pointer(path: str) -> TopicNameV:
     path = unescape_json_pointer(path)
 
-    components = []
+    components: List[str] = []
     for p in path.split("/"):
         if not p:
             continue

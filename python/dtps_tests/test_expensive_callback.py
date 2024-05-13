@@ -1,5 +1,4 @@
 import asyncio
-import time
 from unittest import IsolatedAsyncioTestCase
 
 from dtps import DTPSContext, process_lowdatasize_last_recent
