@@ -32,8 +32,10 @@ from . import logger
 from .config import ContextInfo, ContextManager
 from .ergo_ui import (
     ConnectionInterface,
+    ContextConfig,
     DTPSContext,
     HistoryInterface,
+    ListenerInfo,
     PatchType,
     PublisherInterface,
     RPCFunction,
@@ -51,13 +53,14 @@ class ContextManagerUse(ContextManager):
     all_urls: List[URL]
 
     client: DTPSClient
-    contexts: "Dict[Tuple[str, ...], ContextManagerUseContext]"
+    contexts: "Dict[Tuple[Tuple[str, ...], ContextConfig], ContextManagerUseContext]"
 
     def __init__(self, base_name: str, context_info: "ContextInfo"):
         self.client = DTPSClient(nickname=base_name, shutdown_event=None)
         self.context_info = context_info
         self.contexts = {}
         self.base_name = base_name
+        self.base_config = ContextConfig.default()
         assert not self.context_info.is_create()
 
     async def init(self) -> None:
@@ -75,17 +78,20 @@ class ContextManagerUse(ContextManager):
     async def aclose(self) -> None:
         await self.client.aclose()
 
-    def get_context_by_components(self, components: Tuple[str, ...]) -> "DTPSContext":
-        if components not in self.contexts:
-            self.contexts[components] = ContextManagerUseContext(self, components)
+    def get_context_by_components(self, components: Tuple[str, ...], config: ContextConfig) -> "DTPSContext":
+        key = (components, config)
+        if key not in self.contexts:
+            merged = self.base_config.specialize(config)
+            self.contexts[key] = ContextManagerUseContext(self, components, merged)
 
-        return self.contexts[components]
+        return self.contexts[key]
 
     def get_context(self) -> "DTPSContext":
-        return self.get_context_by_components(())
+        return self.get_context_by_components((), self.base_config)
 
 
 class ContextManagerUseContextPublisher(PublisherInterface):
+
     queue_in: "asyncio.Queue[RawData]"
     queue_out: "asyncio.Queue[bool]"
     task_push: "asyncio.Task[Any]"
@@ -111,6 +117,10 @@ class ContextManagerUseContextPublisher(PublisherInterface):
     async def terminate(self) -> None:
         self.task_push.cancel()
 
+    async def get_listener_info(self) -> Optional[ListenerInfo]:
+        # Not available for remote contexts
+        return None
+
 
 class ContextManagerUseSubscription(SubscriptionInterface):
     def __init__(self, ldi: ListenDataInterface):
@@ -128,14 +138,26 @@ WARN_USE_PUBLISH_CONTEXT_N_MIN = 4
 
 class ContextManagerUseContext(DTPSContext):
     master: ContextManagerUse
+    config: ContextConfig
     components: Tuple[str, ...]
     last_published: List[float]
 
-    def __init__(self, master: ContextManagerUse, components: Tuple[str, ...]):
+    def __init__(self, master: ContextManagerUse, components: Tuple[str, ...], config: ContextConfig):
         self.master = master
         self.components = components
 
         self.last_published = []
+        self.config = config
+
+    def __repr__(self) -> str:
+        return f"DTPSContext({self.components!r}, {self.config!r})"
+
+    def get_config(self) -> ContextConfig:
+        return self.config
+
+    def configure(self, cc: ContextConfig, /) -> "DTPSContext":
+        merged = self.config.specialize(cc)
+        return self.master.get_context_by_components(self.components, merged)
 
     def _get_frequency_publishing(self) -> float:
         now = time.time()
@@ -187,7 +209,7 @@ class ContextManagerUseContext(DTPSContext):
         c: list[str] = []
         for comp in components:
             c.extend([_ for _ in comp.split("/") if _])
-        return self.master.get_context_by_components(self.components + tuple(c))
+        return self.master.get_context_by_components(self.components + tuple(c), self.config)
 
     def meta(self) -> "DTPSContext":
         return self / ":meta"  # TODO: actually we can do some error checks here

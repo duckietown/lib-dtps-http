@@ -79,3 +79,90 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
         if too_few:
             msg = f"Too few messages found: {len(found)}"
             raise Exception(msg)
+
+    @test_timeout(20)
+    @async_error_catcher
+    async def test_max_freq_publisher_local(self):
+        async with create_use_pair("use") as (create, _):
+
+            topic: DTPSContext = await (create / "my_topic").queue_create()
+            max_frequency1 = 3.0
+            max_frequency2 = 13.0
+
+            async def collect(rd: RawData) -> None:
+                pass
+
+            async with topic.publisher_context() as publisher:
+                listener_info = await publisher.get_listener_info()
+                logger.info(f"{listener_info=}")
+                self.assertEqual(listener_info.num_listeners, 0)
+
+                self.assertEqual(listener_info.max_frequency, None)
+
+                sub1 = await topic.subscribe(collect, max_frequency=max_frequency1)
+                sub2 = await topic.subscribe(collect, max_frequency=max_frequency2)
+
+                listener_info = await publisher.get_listener_info()
+                logger.info(f"{listener_info=}")
+                self.assertEqual(listener_info.num_listeners, 2)
+                self.assertEqual(listener_info.max_frequency, max(max_frequency1, max_frequency2))
+
+                await sub2.unsubscribe()
+
+                listener_info = await publisher.get_listener_info()
+                logger.info(f"{listener_info=}")
+                self.assertEqual(listener_info.num_listeners, 1)
+                self.assertEqual(listener_info.max_frequency, max_frequency1)
+
+                await sub1.unsubscribe()
+
+                listener_info = await publisher.get_listener_info()
+                logger.info(f"{listener_info=}")
+                self.assertEqual(listener_info.num_listeners, 0)
+
+                self.assertEqual(listener_info.max_frequency, None)
+
+    @test_timeout(20)
+    @async_error_catcher
+    async def test_max_freq_publisher_remote(self):
+        async with create_use_pair("use") as (create, use):
+            topic: DTPSContext = await (create / "my_topic").queue_create()
+            topic_use: DTPSContext = use / "my_topic"
+            max_frequency1 = 3.0
+            max_frequency2 = 13.0
+            delay = 0.2
+
+            async def collect(rd: RawData) -> None:
+                pass
+
+            async with topic.publisher_context() as publisher:
+                listener_info = await publisher.get_listener_info()
+                logger.info(f"{listener_info=}")
+                self.assertEqual(listener_info.num_listeners, 0)
+
+                self.assertEqual(listener_info.max_frequency, None)
+
+                sub1 = await topic_use.subscribe(collect, max_frequency=max_frequency1)
+                sub2 = await topic_use.subscribe(collect, max_frequency=max_frequency2)
+                await asyncio.sleep(delay)
+                listener_info = await publisher.get_listener_info()
+                logger.info(f"after sub1, sub2 subscribed: {listener_info=}")
+                self.assertEqual(listener_info.num_listeners, 2)
+                self.assertEqual(listener_info.max_frequency, max(max_frequency1, max_frequency2))
+
+                await sub2.unsubscribe()
+                await asyncio.sleep(delay)
+
+                listener_info = await publisher.get_listener_info()
+                logger.info(f"after sub2 unsubscribed: {listener_info=}")
+                self.assertEqual(listener_info.num_listeners, 1)
+                self.assertEqual(listener_info.max_frequency, max_frequency1)
+
+                await sub1.unsubscribe()
+                await asyncio.sleep(delay)
+
+                listener_info = await publisher.get_listener_info()
+                logger.info(f"after sub2 unsubscribed as well: {listener_info=}")
+                self.assertEqual(listener_info.num_listeners, 0)
+
+                self.assertEqual(listener_info.max_frequency, None)

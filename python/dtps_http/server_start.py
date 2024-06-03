@@ -12,6 +12,7 @@ import psutil
 from aiohttp import web
 
 from . import logger
+from .client import DTPSClient
 from .server import DTPSServer
 from .structures import Registration
 from .types import TopicNameV, URLString
@@ -265,6 +266,26 @@ async def app_start(
             raise Exception(msg)
 
         the_url = make_http_unix_url(up)
+
+        if os.path.exists(up):
+            try:
+                async with DTPSClient.create(nickname=base_name, shutdown_event=None) as client:
+
+                    try:
+                        await client.get_metadata(the_url)
+                    except ClientResponseError:
+                        # logger.debug("OK: nobody answers: does not exist: %s", url)
+                        # TODO: check 404
+                        pass
+                    else:
+                        msg = f"There is already a node listening at the path {up}"
+                        logger.error(msg)
+                        sys.exit(1)
+
+                # try connecting
+            except:
+                pass
+            os.unlink(up)
 
         logger.info(f"starting Unix server on path {up!r} - the URL is {the_url!r}")
 

@@ -33,6 +33,7 @@ __all__ = [
     "InsertNotification",
     "LinkBenchmark",
     "ListenURLEvents",
+    "ListenerInfo",
     "Metadata",
     "MinMax",
     "ProxyJob",
@@ -707,3 +708,9 @@ class ConnectionJobWire:
     source: TopicNameS
     target: TopicNameS
     service_mode: ServiceMode
+
+
+@dataclass
+class ListenerInfo:
+    num_listeners: int
+    max_frequency: Optional[float]

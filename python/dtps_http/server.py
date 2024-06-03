@@ -23,7 +23,7 @@ from typing import (
     TYPE_CHECKING,
     Union,
 )
-
+from . import logger
 import cbor2
 import yaml
 from aiohttp import web, WSMsgType
@@ -1649,20 +1649,30 @@ pre {{
                         exit_event.set()
                         pass
 
-        s = oq_.subscribe(send_message)
+        async def read_message() -> None:
+            while True:
+                wm = await ws.receive()
+                # logger.info(f"serve_events: received {wm}")
+                if wm.type == WSMsgType.CLOSE:
+                    exit_event.set()
+                    break
 
-        if oq_.stored:
-            last = oq_.last()
-            last_data = oq_.last_data()
-            inot2 = InsertNotification(last, last_data)
-
-            await send_message(oq_, inot2)
-
+        t1 = asyncio.create_task(read_message())
         try:
-            await exit_event.wait()
-            await ws.close()
+
+            async with oq_.subscribe_context(send_message, max_frequency=max_frequency):
+
+                if oq_.stored:
+                    last = oq_.last()
+                    last_data = oq_.last_data()
+                    inot2 = InsertNotification(last, last_data)
+
+                    await send_message(oq_, inot2)
+
+                await exit_event.wait()
+                await ws.close()
         finally:
-            await oq_.unsubscribe(s)
+            t1.cancel()
 
         return ws
 

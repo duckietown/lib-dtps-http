@@ -47,6 +47,7 @@ dtps-http-py-client-stats = 'dtps_http_programs:dtps_stats_main'
 dtps-http-py-proxy = 'dtps_http_programs:dtps_proxy_main'
 dtps-http-py-send-continuous = 'dtps_http_programs:dtps_send_continuous_main'
 dtps-http-py-listen= 'dtps_http_programs:dtps_listen_main'
+dtps-http-py= 'dtps_http_programs:dtps_main'
 
 
 [tool.poetry-dynamic-versioning]
