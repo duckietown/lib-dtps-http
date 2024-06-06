@@ -13,8 +13,6 @@ __all__ = [
     "TopicNameS",
     "TopicNameV",
     "URLString",
-    "HTTPRequest",
-    "HTTPResponse",
 ]
 
 URLString = NewType("URLString", str)
@@ -25,10 +23,6 @@ TopicNameS = NewType("TopicNameS", str)
 
 # ContentType = NewType("ContentType", str)
 ContentType = str
-
-HTTPRequest = web.Request
-HTTPResponse = web.Response
-
 
 HTTPRequest = web.Request
 HTTPResponse = web.Response
