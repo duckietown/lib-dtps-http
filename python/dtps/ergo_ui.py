@@ -10,8 +10,18 @@ from typing import (
     Sequence,
 )
 
-from dtps_http import (Bounds, DataSaved, NodeID, ObjectTransformResult, RawData, TopicRefAdd, URLString,
-                       ObjectServeResult, HTTPRequest)
+from dtps_http import (
+    Bounds,
+    ContentInfo,
+    DataSaved,
+    HTTPRequest,
+    NodeID,
+    ObjectServeResult,
+    ObjectTransformResult,
+    RawData,
+    TopicProperties,
+    URLString,
+)
 
 __all__ = [
     "ConnectionInterface",
@@ -20,8 +30,8 @@ __all__ = [
     "PatchType",
     "PublisherInterface",
     "RPCFunction",
+    "ServeFunction",
     "SubscriptionInterface",
-    "ServeFunction"
 ]
 
 _ = Sequence
@@ -201,14 +211,39 @@ class DTPSContext(ABC):
     async def queue_create(
         self,
         *,
-        parameters: Optional[TopicRefAdd] = None,
         transform: Optional[RPCFunction] = None,
         serve: Optional[ServeFunction] = None,
+        content_info: Optional[ContentInfo] = None,
+        topic_properties: Optional[TopicProperties] = None,
+        app_data: Optional[Dict[str, Any]] = None,
         bounds: Optional[Bounds] = None,
     ) -> "DTPSContext":
         """
-        Creates this resource (if it doesn't exist).
+        Creates this resource as a queue (if it doesn't exist).
         Returns self.
+
+        You can specify the parameters of the queue, such as the content type, the bounds, etc.
+
+        content_info: the content type of the data
+          default= ContentInfo.simple(MIME_OCTET)
+
+        topic_properties: the properties of the topic
+            default= TopicProperties.rw_pushable()
+
+        bounds: the bounds of the topic
+            default= Bounds.default() (max length = 10)
+
+        app_data: a dictionary with additional information for the application
+
+
+
+        """
+
+    @abstractmethod
+    def meta(self) -> "DTPSContext":
+        """
+        Returns the metadata of the resource.
+
         """
 
     @abstractmethod

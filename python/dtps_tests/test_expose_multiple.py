@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import AsyncExitStack
+from typing import List
 from unittest import IsolatedAsyncioTestCase
 
 from dtps import DTPSContext
@@ -36,6 +37,7 @@ class TestExposeMultiple(IsolatedAsyncioTestCase):
 
             data = await switchboard.data_get()
             data = data.get_as_native_object()
+            topics: List[str]
             topics = list(data["topics"])  # type: ignore
             expected = [
                 "nodes/camera/out/jpeg",

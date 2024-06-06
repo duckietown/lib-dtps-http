@@ -6,6 +6,8 @@ from typing_extensions import Self
 
 __all__ = [
     "ContentType",
+    "HTTPRequest",
+    "HTTPResponse",
     "NodeID",
     "SourceID",
     "TopicNameS",
@@ -23,6 +25,9 @@ TopicNameS = NewType("TopicNameS", str)
 
 # ContentType = NewType("ContentType", str)
 ContentType = str
+
+HTTPRequest = web.Request
+HTTPResponse = web.Response
 
 
 HTTPRequest = web.Request
@@ -119,14 +124,14 @@ class TopicNameV:
     def nontrivial_prefixes(self) -> "Sequence[TopicNameV]":
         return [TopicNameV(self.components[:i]) for i in range(1, len(self.components))]
 
-    def __lt__(self, other):
+    def __lt__(self, other: "TopicNameV") -> bool:
         return self.components < other.components
 
-    def __le__(self, other):
+    def __le__(self, other: "TopicNameV") -> bool:
         return self.components <= other.components
 
-    def __gt__(self, other):
+    def __gt__(self, other: "TopicNameV") -> bool:
         return self.components > other.components
 
-    def __ge__(self, other):
+    def __ge__(self, other: "TopicNameV") -> bool:
         return self.components >= other.components

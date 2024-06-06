@@ -3,7 +3,7 @@ import os
 import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import AsyncContextManager, AsyncIterator, TYPE_CHECKING
+from typing import AsyncContextManager, AsyncIterator, List, TYPE_CHECKING
 from unittest import IsolatedAsyncioTestCase
 
 from dtps import context_cleanup, DTPSContext
@@ -114,9 +114,9 @@ class TestExpose(IsolatedAsyncioTestCase):
                 await asyncio.sleep(2)
 
                 b_topic_mounted = b_mounted / topic
-                received_proxy = []
-                received_direct = []
-                sent = []
+                received_proxy: List[RawData] = []
+                received_direct: List[RawData] = []
+                sent: List[RawData] = []
 
                 async def on_received_proxy(rec: RawData):
                     logger.info(f"proxy: {rec}")
@@ -154,8 +154,8 @@ class TestExpose(IsolatedAsyncioTestCase):
     async def check_forwarded_websocket_(self, inline: bool):
         async with get_exposed_topic("expose3") as exposed:
             # subscribe to the topic
-            received = []
-            sent = []
+            received: List[RawData] = []
+            sent: List[RawData] = []
 
             async def on_received(rec: RawData) -> None:
                 logger.info(f"direct: {rec}")

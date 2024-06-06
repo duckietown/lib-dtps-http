@@ -1,7 +1,7 @@
 import hashlib
 import json
 from dataclasses import asdict
-from typing import Any, Dict, List, Literal, NewType, Optional, Sequence, Union, cast
+from typing import Any, cast, Dict, List, Literal, NewType, Optional, Sequence, Union
 
 import cbor2
 from multidict import CIMultiDict
@@ -9,7 +9,7 @@ from pydantic.dataclasses import dataclass
 
 from .constants import DEFAULT_MAX_HISTORY, HEADER_LINK_BENCHMARK, MIME_CBOR, MIME_JSON, MIME_TEXT
 from .types import ContentType, NodeID, SourceID, TopicNameS, TopicNameV, URLString
-from .urls import URL, URLIndexer, join, parse_url_unescape, url_to_string
+from .urls import join, parse_url_unescape, URL, url_to_string, URLIndexer
 from .utils import pydantic_parse
 
 __all__ = [
@@ -466,7 +466,7 @@ class TopicRefWire:
     bounds: Bounds
 
     def to_internal(self, where_available: List[URL], /) -> "TopicRef":
-        reachability = []
+        reachability: list[TopicReachability] = []
         for r in self.reachability:
             for w in where_available:
                 reachability.append(r.to_internal(w))
@@ -494,7 +494,7 @@ class TopicRef:
     bounds: Bounds
 
     def to_wire(self) -> "TopicRefWire":
-        reachability = []
+        reachability: list[TopicReachabilityWire] = []
         for r in self.reachability:
             reachability.append(r.to_wire())
         return TopicRefWire(
@@ -532,7 +532,7 @@ class TopicsIndex:
                 raise AssertionError(msg)
 
     def to_wire(self) -> "TopicsIndexWire":
-        topics = {}
+        topics: Dict[TopicNameS, TopicRefWire] = {}
         for k, v in self.topics.items():
             topics[k.as_dash_sep()] = v.to_wire()
 

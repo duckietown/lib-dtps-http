@@ -3,7 +3,7 @@ import json
 import os
 import tempfile
 import unittest
-from typing import cast, Literal
+from typing import cast, List, Literal
 
 import cbor2
 import yaml
@@ -62,10 +62,10 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
                     await client.add_topic(cast(URLIndexer, url0), topic, parameters)
 
                     queue_in: "asyncio.Queue[RawData]" = asyncio.Queue()
-                    queue_out = asyncio.Queue()
+                    queue_out: "asyncio.Queue[bool]" = asyncio.Queue()
                     url_topic = join(url0, topic.as_relative_url())
 
-                    received = []
+                    received: List[RawData] = []
 
                     async def found(rd_: RawData) -> None:
                         logger.info(f"found {rd!r}")
@@ -78,7 +78,7 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
                         url_topic, queue_in=queue_in, queue_out=queue_out
                     )
                     N = 5
-                    sent = []
+                    sent: List[RawData] = []
                     for i in range(N):
                         rd = RawData.json_from_native_object(i)
                         sent.append(rd)
