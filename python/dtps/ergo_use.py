@@ -37,8 +37,8 @@ from .ergo_ui import (
     PatchType,
     PublisherInterface,
     RPCFunction,
-    SubscriptionInterface,
     ServeFunction,
+    SubscriptionInterface,
 )
 
 __all__ = [
