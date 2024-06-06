@@ -37,7 +37,6 @@ from .ergo_ui import (
     PatchType,
     PublisherInterface,
     RPCFunction,
-    ServeFunction,
     SubscriptionInterface,
     ServeFunction,
 )
