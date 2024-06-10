@@ -43,7 +43,7 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
         async def collect(rd: RawData) -> None:
             found.append(rd)
 
-        await topic.subscribe(collect, max_frequency=max_frequency)
+        sub = await topic.subscribe(collect, max_frequency=max_frequency)
 
         publish_dt = 1.0 / effective_frequency
         when = EveryOnceInAWhile(publish_dt)
@@ -67,17 +67,21 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
         await asyncio.sleep(3)
 
         expected_n = int(period_s * max_frequency)
-
+        nfound = len(found)
         too_many = len(found) > expected_n + 3  # allow for some slop
         too_few = len(found) < expected_n - 2
         logger.info(f"nsent: {nsent}")
         logger.info(f"expected: {expected_n}")
         logger.info(f"nfound: {len(found)}")
+        stats = f" {max_frequency=} {effective_frequency=} {period_s} {nsent=} {nfound=} {expected_n=} expected={period_s * max_frequency}"
+
         if too_many:
             msg = f"Too many messages found: {len(found)}, expected around {expected_n}"
+            msg += f"\n{stats}"
             raise Exception(msg)
         if too_few:
             msg = f"Too few messages found: {len(found)}, expected around {expected_n}"
+            msg += f"\n{stats}"
             raise Exception(msg)
 
     @test_timeout(20)
