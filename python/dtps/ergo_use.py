@@ -1,17 +1,23 @@
 import asyncio
 import time
+from asyncio import Event
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Tuple, TypeVar
 
 import cbor2
 from aiohttp import ClientResponseError
+from typing_extensions import ParamSpec
 
 from dtps_http import (
+    async_error_catcher,
     Bounds,
     ConnectionJob,
     CONTENT_TYPE_PATCH_CBOR,
     ContentInfo,
     DTPSClient,
+    FinishedMsg,
+    FoundMetadata,
     join,
     ListenDataInterface,
     MIME_OCTET,
@@ -43,15 +49,29 @@ from .ergo_ui import (
     SubscriptionInterface,
 )
 
+PS = ParamSpec("PS")
+
+X = TypeVar("X")
+
 __all__ = [
     "ContextManagerUse",
 ]
 
 
-class ContextManagerUse(ContextManager):
-    best_url: URLIndexer
-    all_urls: List[URL]
+class CannotConnectToAnyURL(Exception):
+    pass
 
+
+@dataclass
+class CurrentConnection:
+    url: URLIndexer
+    metadata: FoundMetadata
+
+
+class ContextManagerUse(ContextManager):
+    # best_url: URLIndexer
+    # all_urls: List[URL]
+    last_connection: Optional[CurrentConnection]
     client: DTPSClient
     contexts: "Dict[Tuple[Tuple[str, ...], ContextConfig], ContextManagerUseContext]"
 
@@ -62,21 +82,86 @@ class ContextManagerUse(ContextManager):
         self.base_name = base_name
         self.base_config = ContextConfig.default()
         assert not self.context_info.is_create()
+        self.last_connection = None
+        self.tasks = []
+
+    def remember_task(self, task: asyncio.Task) -> None:
+        self.tasks.append(task)
 
     async def init(self) -> None:
         await self.client.init()
+        # alternatives = [(cast(URLIndexer, parse_url_unescape(_.url)), None) for _ in self.context_info.urls]
+        # best_url = await self.client.find_best_alternative(alternatives)
+        #
+        # self.all_urls = [u for (u, _) in alternatives]
+        # if best_url is None:
+        #     msg = f"Could not connect to any of {alternatives}"
+        #     raise ValueError(msg)
+        #
+        # self.best_url = best_url
+
+    async def get_current_connection(self) -> CurrentConnection:
+        if self.last_connection is not None:
+            try:
+                md = await self.client.get_metadata(self.last_connection.url)
+
+            except ClientResponseError:
+                pass
+            else:
+                self.last_connection.metadata = md
+
+                return self.last_connection
+
         alternatives = [(cast(URLIndexer, parse_url_unescape(_.url)), None) for _ in self.context_info.urls]
         best_url = await self.client.find_best_alternative(alternatives)
-
-        self.all_urls = [u for (u, _) in alternatives]
         if best_url is None:
             msg = f"Could not connect to any of {alternatives}"
-            raise ValueError(msg)
+            raise CannotConnectToAnyURL(msg)
+        metadata = await self.client.get_metadata(best_url)
+        self.last_connection = CurrentConnection(url=best_url, metadata=metadata)
+        return self.last_connection
 
-        self.best_url = best_url
+    async def get_all_urls(self) -> List[URLIndexer]:
+        urls: List[URLIndexer] = []
+        if self.last_connection is not None:
+            urls.append(self.last_connection.url)
+            urls.extend(cast(List[URLIndexer], self.last_connection.metadata.alternative_urls))
+        urls.extend([cast(URLIndexer, parse_url_unescape(_.url)) for _ in self.context_info.urls])
+        return sorted(set(urls))
+
+    async def get_best_url(self) -> URLIndexer:
+        """
+        Get the best url to which to reach this,
+        or raises CannotConnectToAnyURL.
+
+        It first tries to use the best_url if it is already set.
+        Otherwise, it tries to find the best url among the alternatives.
+
+        """
+        connection = await self.get_current_connection()
+        return connection.url
+        #
+        # if self.best_url is not None:
+        #     # check if it still works
+        #     try:
+        #         await self.client.get_metadata(self.best_url)
+        #         return self.best_url
+        #     except ClientResponseError:
+        #         pass
+        #
+        # alternatives = [(cast(URLIndexer, parse_url_unescape(_.url)), None) for _ in self.context_info.urls]
+        # best_url = await self.client.find_best_alternative(alternatives)
+        # if best_url is None:
+        #     msg = f"Could not connect to any of {alternatives}"
+        #     raise CannotConnectToAnyURL(msg)
+        # self.best_url = best_url
+        # metadata = await self.client.get_metadata(best_url)
+        # return best_url
 
     async def aclose(self) -> None:
         await self.client.aclose()
+        for t in self.tasks:
+            t.cancel()
 
     def get_context_by_components(self, components: Tuple[str, ...], config: ContextConfig) -> "DTPSContext":
         key = (components, config)
@@ -91,7 +176,6 @@ class ContextManagerUse(ContextManager):
 
 
 class ContextManagerUseContextPublisher(PublisherInterface):
-
     queue_in: "asyncio.Queue[RawData]"
     queue_out: "asyncio.Queue[bool]"
     task_push: "asyncio.Task[Any]"
@@ -136,6 +220,19 @@ WARN_USE_PUBLISH_CONTEXT_HORIZON_S = 10.0
 WARN_USE_PUBLISH_CONTEXT_N_MIN = 4
 
 
+class FakeSubscriptionInterface(SubscriptionInterface):
+    real: Optional[SubscriptionInterface]
+
+    def __init__(self, event: Event):
+        self.real = None
+        self.unsubscribe_event = event
+
+    async def unsubscribe(self) -> None:
+        self.unsubscribe_event.set()
+        if self.real is not None:
+            await self.real.unsubscribe()
+
+
 class ContextManagerUseContext(DTPSContext):
     master: ContextManagerUse
     config: ContextConfig
@@ -175,16 +272,22 @@ class ContextManagerUseContext(DTPSContext):
         await self.master.aclose()
 
     async def get_urls(self) -> List[URLString]:
-        all_urls = self.master.all_urls
+        all_urls = await self.master.get_all_urls()
         rurl = self._get_components_as_topic().as_relative_url()
         return [url_to_string(join(u, rurl)) for u in all_urls]
 
     async def get_node_id(self) -> Optional[NodeID]:
+        return await self.patient(self.get_node_id_)
+
+    async def get_node_id_(self) -> Optional[NodeID]:
         url = await self._get_best_url()
         md = await self.master.client.get_metadata(url)
         return md.origin_node
 
     async def exists(self) -> bool:
+        return await self.patient(self.exists_)
+
+    async def exists_(self) -> bool:
         url = await self._get_best_url()
         client = self.master.client
         try:
@@ -198,6 +301,9 @@ class ContextManagerUseContext(DTPSContext):
                 raise
 
     async def patch(self, patch_data: List[Dict[str, Any]], /) -> None:
+        return await self.patient(self.patch_, patch_data)
+
+    async def patch_(self, patch_data: List[Dict[str, Any]], /) -> None:
         url = await self._get_best_url()
         data = cbor2.dumps(patch_data)
         res = await self.master.client.patch(url, CONTENT_TYPE_PATCH_CBOR, data)
@@ -219,10 +325,16 @@ class ContextManagerUseContext(DTPSContext):
         raise NotImplementedError()
 
     async def remove(self) -> None:
+        return await self.patient(self.remove_)
+
+    async def remove_(self) -> None:
         url = await self._get_best_url()
         return await self.master.client.delete(url)
 
     async def data_get(self) -> RawData:
+        return await self.patient(self.data_get_)
+
+    async def data_get_(self) -> RawData:
         url = await self._get_best_url()
         return await self.master.client.get(url, None)
 
@@ -233,9 +345,75 @@ class ContextManagerUseContext(DTPSContext):
         max_frequency: Optional[float] = None,
         inline: bool = True,
     ) -> "SubscriptionInterface":
+        if not self.config.patient:
+            return await self.subscribe_once(on_data, max_frequency, inline)
+
+        # first let's get the data once
+
+        stop_event = Event()
+        fldi = FakeSubscriptionInterface(stop_event)
+
+        task = asyncio.create_task(self._subscribe_patient_task(fldi, on_data, max_frequency, inline))
+        self.master.remember_task(task)
+        return fldi
+
+    @async_error_catcher
+    async def _subscribe_patient_task(
+        self,
+        fldi: FakeSubscriptionInterface,
+        on_data: Callable[[RawData], Awaitable[None]],
+        /,
+        max_frequency: Optional[float] = None,
+        inline: bool = True,
+    ) -> None:
+
+        logger.debug(f"subscribe _subscribe_patient_task: starting")
+        ntries = 0
+        nsuccess = 0
+        while True:
+            logger.debug(f"_subscribe_patient_task patient: loop {ntries=} {nsuccess=}")
+            try:
+                finished_event = Event()
+
+                async def on_finished(finished: FinishedMsg) -> None:
+                    logger.debug(f"_subscribe_patient_task: {finished}")
+                    finished_event.set()
+
+                ntries += 1
+                si = await self.subscribe_once(on_data, max_frequency, inline, on_finished=on_finished)
+                nsuccess += 1
+                fldi.real = si
+                logger.debug(f"_subscribe_patient_task: wait for finished_event")
+                await finished_event.wait()
+                await asyncio.sleep(1)
+                if fldi.unsubscribe_event.is_set():
+                    break
+                # await fldi.unsubscribe_event.wait()
+            except asyncio.CancelledError:
+                raise
+            except CannotConnectToAnyURL:
+                logger.debug(f"_subscribe_patient_task: cannot connect yet, retrying")
+                await asyncio.sleep(1)
+            except Exception as e:  # ok but which error?
+                logger.error(f"_subscribe_patient_task: Error in subscribe: {e}")
+                await asyncio.sleep(1)
+
+    async def subscribe_once(
+        self,
+        on_data: Callable[[RawData], Awaitable[None]],
+        /,
+        max_frequency: Optional[float] = None,
+        inline: bool = True,
+        on_finished: Optional[Callable[[FinishedMsg], Awaitable[None]]] = None,
+    ) -> "SubscriptionInterface":
         url = await self._get_best_url()
         ldi = await self.master.client.listen_url(
-            url, on_data, inline_data=inline, raise_on_error=True, max_frequency=max_frequency
+            url,
+            on_data,
+            inline_data=inline,
+            raise_on_error=True,
+            max_frequency=max_frequency,
+            on_finished=on_finished,
         )
         # logger.debug(f"subscribed to {url} -> {t}")
         return ContextManagerUseSubscription(ldi)
@@ -245,8 +423,10 @@ class ContextManagerUseContext(DTPSContext):
         raise NotImplementedError()
 
     async def _get_best_url(self) -> URL:
+        """Raises CannotConnectToAnyURL"""
         topic = self._get_components_as_topic()
-        url = join(self.master.best_url, topic.as_relative_url())
+        best_url = await self.master.get_best_url()
+        url = join(best_url, topic.as_relative_url())
         return url
 
     async def publish(self, data: RawData) -> None:
@@ -276,16 +456,38 @@ class ContextManagerUseContext(DTPSContext):
         finally:
             await publisher.terminate()
 
+    async def patient(self, f: Callable[PS, Awaitable[X]], *args: PS.args, **kwargs: PS.kwargs) -> X:
+        if self.get_config().patient:
+            return await self.patient_(f, *args, **kwargs)
+        else:
+            return await f(*args, **kwargs)
+
+    async def patient_(self, f: Callable[PS, Awaitable[X]], *args: PS.args, **kwargs: PS.kwargs) -> X:
+        while True:
+            try:
+                return await f(*args, **kwargs)
+            except CannotConnectToAnyURL as e:
+                await asyncio.sleep(1)
+                continue
+
     async def call(self, data: RawData) -> RawData:
+        return await self.patient(self.call_, data)
+
+    async def call_(self, data: RawData) -> RawData:
         client = self.master.client
         url = await self._get_best_url()
         return await client.call(url, data)
 
     async def expose(
+        self, urls: "Sequence[str] | DTPSContext", /, *, mask_origin: bool = False
+    ) -> "DTPSContext":
+        return await self.patient(self.expose_, urls, mask_origin=mask_origin)
+
+    async def expose_(
         self, c: "DTPSContext | Sequence[str]", /, *, mask_origin: bool = False
     ) -> "DTPSContext":
         topic = self._get_components_as_topic()
-        url0 = self.master.best_url
+        url0 = await self.master.get_best_url()
         if isinstance(c, DTPSContext):
             urls = await c.get_urls()
             node_id = await c.get_node_id()
@@ -298,6 +500,26 @@ class ContextManagerUseContext(DTPSContext):
         return self
 
     async def queue_create(
+        self,
+        *,
+        transform: Optional[RPCFunction] = None,
+        serve: Optional[ServeFunction] = None,
+        bounds: Optional[Bounds] = None,
+        content_info: Optional[ContentInfo] = None,
+        topic_properties: Optional[TopicProperties] = None,
+        app_data: Optional[Dict[str, Any]] = None,
+    ) -> "DTPSContext":
+        return await self.patient(
+            self.queue_create_,
+            transform=transform,
+            serve=serve,
+            bounds=bounds,
+            content_info=content_info,
+            topic_properties=topic_properties,
+            app_data=app_data,
+        )
+
+    async def queue_create_(
         self,
         *,
         transform: Optional[RPCFunction] = None,
@@ -347,8 +569,8 @@ class ContextManagerUseContext(DTPSContext):
             app_data=app_data,
             bounds=bounds,
         )
-
-        await self.master.client.add_topic(self.master.best_url, topic, parameters)
+        best_url = await self.master.get_best_url()
+        await self.master.client.add_topic(best_url, topic, parameters)
         return self
 
     async def until_ready(
@@ -388,7 +610,10 @@ class ContextManagerUseContext(DTPSContext):
                 continue
         return self
 
-    async def connect_to(self, c: "DTPSContext", /) -> "ConnectionInterface":
+    async def connect_to(self, context: "DTPSContext", /) -> "ConnectionInterface":
+        return await self.patient(self.connect_to_, context)
+
+    async def connect_to_(self, c: "DTPSContext", /) -> "ConnectionInterface":
         # TODO: DTSW-4805: [use] implement connect_to
 
         if not isinstance(c, ContextManagerUseContext):
@@ -397,7 +622,7 @@ class ContextManagerUseContext(DTPSContext):
         topic1 = self._get_components_as_topic()
         topic2 = c._get_components_as_topic()
 
-        url = self.master.best_url
+        url = await self.master.get_best_url()
 
         connection_job = ConnectionJob(source=topic1, target=topic2, service_mode="AllMessages")
         name = topic1 + topic2

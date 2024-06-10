@@ -109,11 +109,16 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[List
 
 class ServerWrapped:
     def __init__(
-        self, server: DTPSServer, runner: web.AppRunner, tunnel_process: Optional[asyncio.subprocess.Process]
+        self,
+        server: DTPSServer,
+        runner: web.AppRunner,
+        tunnel_process: Optional[asyncio.subprocess.Process],
+        unix_paths_to_cleanup: List[str],
     ) -> None:
         self.server = server
         self.runner = runner
         self.tunnel_process = tunnel_process
+        self.unix_paths_to_cleanup = unix_paths_to_cleanup
 
     async def __aenter__(self) -> DTPSServer:
         await self.server.started.wait()
@@ -124,6 +129,9 @@ class ServerWrapped:
 
     async def aclose(self) -> None:
         await self.server.aclose()
+        for up in self.unix_paths_to_cleanup:
+            if os.path.exists(up):
+                os.unlink(up)
 
         if self.tunnel_process is not None:
             logger.info("terminating cloudflared tunnel")
@@ -287,7 +295,7 @@ async def app_start(
                 pass
             os.unlink(up)
 
-        logger.info(f"starting Unix server on path {up!r} - the URL is {the_url!r}")
+        logger.info(f"starting Unix server on path {up}")
 
         dn = os.path.dirname(up)
         os.makedirs(dn, exist_ok=True)
@@ -311,4 +319,4 @@ async def app_start(
         logger.info("available URLs\n" + "".join("* " + _ + "\n" for _ in available_urls))
 
     await s.started.wait()
-    return ServerWrapped(s, runner, tunnel_process)
+    return ServerWrapped(s, runner, tunnel_process, unix_paths_to_cleanup=unix_paths)
