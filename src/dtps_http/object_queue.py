@@ -2,7 +2,7 @@ import json
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, dataclass as original_dataclass
-from typing import Awaitable, Callable, cast, Dict, Iterator, NewType, Optional, Union
+from typing import AsyncIterator, Awaitable, Callable, cast, Dict, Iterator, NewType, Optional, Union
 
 import cbor2
 import yaml
@@ -258,7 +258,7 @@ class ObjectQueue:
         self,
         callback: "Callable[[ObjectQueue, InsertNotification], Awaitable[None]]",
         max_frequency: Optional[float] = None,
-    ) -> Iterator[None]:
+    ) -> AsyncIterator[None]:
         sub_id = self.subscribe(callback, max_frequency)
         try:
             yield
@@ -294,7 +294,8 @@ class ObjectQueue:
             if any(x is None for x in max_frequencies):
                 max_frequency = None
             else:
-                max_frequency = max(max_frequencies)
+                non_none = [x for x in max_frequencies if x is not None]
+                max_frequency = max(non_none)
 
         return ListenerInfo(nlisteners, max_frequency)
 

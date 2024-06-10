@@ -4,7 +4,7 @@ from functools import wraps
 __all__ = ["test_timeout"]
 
 
-def test_timeout(seconds: float):
+def test_timeout(seconds: float):  # type: ignore
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):

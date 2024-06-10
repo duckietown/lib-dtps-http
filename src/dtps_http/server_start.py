@@ -9,7 +9,7 @@ from socket import AddressFamily
 from typing import Any, cast, Iterator, List, Optional, Sequence, Tuple
 
 import psutil
-from aiohttp import web
+from aiohttp import ClientResponseError, web
 
 from . import logger
 from .client import DTPSClient
@@ -224,16 +224,16 @@ async def app_start(
                 the_url = cast(URLString, f"http://[{address}]:{port}/")
 
                 available_urls.append(the_url)
-
-            if False:
-                for interface, family, address in get_ip_addresses():
-                    if family != socket.AF_LINK:
-                        continue
-
-                    address = address.replace(":", "%3A")
-                    the_url = f"http+ether://{address}:{port}"
-
-                    available_urls.append(the_url)
+            #
+            # if False:
+            #     for interface, family, address in get_ip_addresses():
+            #         if family != socket.AF_LINK:
+            #             continue
+            #
+            #         address = address.replace(":", "%3A")
+            #         the_url = f"http+ether://{address}:{port}"
+            #
+            #         available_urls.append(the_url)
 
         if tunnel is not None:
             # run the cloudflare tunnel
@@ -277,7 +277,7 @@ async def app_start(
 
         if os.path.exists(up):
             try:
-                async with DTPSClient.create(nickname=base_name, shutdown_event=None) as client:
+                async with DTPSClient.create(nickname="none", shutdown_event=None) as client:
 
                     try:
                         await client.get_metadata(the_url)

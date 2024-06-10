@@ -10,9 +10,9 @@ version = "1.3.7"
 description = ""
 authors = ["Andrea Censi <AndreaCensi@users.noreply.github.com>"]
 packages = [
-    { from = "python", include = "dtps" },
-    { from = "python", include = "dtps_http" },
-    { from = "python", include = "dtps_http_programs" },
+    { from = "src", include = "dtps" },
+    { from = "src", include = "dtps_http" },
+    { from = "src", include = "dtps_http_programs" },
 ]
 
 include = ["static/*"]

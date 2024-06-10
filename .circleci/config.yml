@@ -19,8 +19,7 @@ jobs:
         command: cargo build
     - run: python3 -m pip install nose2
     - run: python3 -m pip install .
-    - run: rm -rf python/dtps_http && find .
-    - run: rm -f src
+    - run: rm -rf src/dtps_http && find .
     - run: python3 -m nose2 python
   "python39":
     <<: *template
@@ -58,7 +57,7 @@ jobs:
     - run: apt-get update && apt-get install -y python3-pip python3-venv
     - run: python3 -m venv .
     - run: ./bin/pip install  .
-    - run: rm -rf python/dtps_http && find .
+    - run: rm -rf src/dtps_http && find .
     - run:
         name: Run Tests
         command: "PATH=$PATH:./bin cargo test test_python1"

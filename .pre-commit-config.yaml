@@ -1,5 +1,5 @@
 exclude: .pre-commit-config.yaml
-files: (^python/.*py)|(.*yaml)|(.*\.rs)$
+files: (^src/.*py)|(.*yaml)|(.*\.rs)$
 repos:
 - hooks:
   - {id: check-added-large-files}
@@ -37,5 +37,5 @@ repos:
 #     language: system
 #     # types: [python]
 #     args:
-#       - "--verbose" 
+#       - "--verbose"
 #       - "python"

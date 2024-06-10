@@ -3,7 +3,19 @@ import time
 from asyncio import Event
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Tuple, TypeVar
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Sequence,
+    cast,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    TypeVar,
+)
 
 import cbor2
 from aiohttp import ClientResponseError
@@ -74,6 +86,7 @@ class ContextManagerUse(ContextManager):
     last_connection: Optional[CurrentConnection]
     client: DTPSClient
     contexts: "Dict[Tuple[Tuple[str, ...], ContextConfig], ContextManagerUseContext]"
+    tasks: List["asyncio.Task[Any]"]
 
     def __init__(self, base_name: str, context_info: "ContextInfo"):
         self.client = DTPSClient(nickname=base_name, shutdown_event=None)
@@ -85,7 +98,7 @@ class ContextManagerUse(ContextManager):
         self.last_connection = None
         self.tasks = []
 
-    def remember_task(self, task: asyncio.Task) -> None:
+    def remember_task(self, task: "asyncio.Task[Any]") -> None:
         self.tasks.append(task)
 
     async def init(self) -> None:
