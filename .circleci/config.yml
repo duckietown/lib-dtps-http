@@ -20,7 +20,7 @@ jobs:
     - run: python3 -m pip install nose2
     - run: python3 -m pip install .
     - run: rm -rf src/dtps_http && find .
-    - run: python3 -m nose2 python
+    - run: python3 -m nose2 src
   "python39":
     <<: *template
     docker:

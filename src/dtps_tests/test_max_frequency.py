@@ -84,7 +84,6 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
     @async_error_catcher
     async def test_max_freq_publisher_local(self):
         async with create_use_pair("use") as (create, _):
-
             topic: DTPSContext = await (create / "my_topic").queue_create()
             max_frequency1 = 3.0
             max_frequency2 = 13.0
