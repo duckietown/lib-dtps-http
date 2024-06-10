@@ -1,7 +1,8 @@
 import json
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, dataclass as original_dataclass
-from typing import Awaitable, Callable, Dict, NewType, Optional, Union
+from typing import AsyncIterator, Awaitable, Callable, cast, Dict, Iterator, NewType, Optional, Union
 
 import cbor2
 import yaml
@@ -19,6 +20,7 @@ from .structures import (
     DataReady,
     DataSaved,
     InsertNotification,
+    ListenerInfo,
     MinMax,
     RawData,
     ResourceAvailability,
@@ -85,6 +87,13 @@ async def transform_identity(otc: ObjectTransformContext) -> RawData:
 from collections import deque
 
 
+@dataclass
+class ListenerData:
+    key: Key
+    wrapper: "Wrapper"
+    max_frequency: Optional[float]
+
+
 class ObjectQueue:
     stored: Deque[int]
     saved: Dict[int, DataSaved]
@@ -99,7 +108,7 @@ class ObjectQueue:
     transform: ObjectTransformFunction
     blob_manager: BlobManager
     serve: Optional[ObjectServeFunction]
-    listeners: " Dict[SUB_ID,  tuple[Key, Wrapper]]"
+    listeners: "Dict[SUB_ID,  ListenerData]"
 
     def __init__(
         self,
@@ -129,6 +138,8 @@ class ObjectQueue:
         self.name_for_blob_manager = name.as_relative_url()
 
         self.request_counter = 0
+        self.aclosing = False
+        # self.subscribe_lock = asyncio.Lock()
 
     def get_channel_info(self) -> ChannelInfo:
         if not self.stored:
@@ -242,8 +253,24 @@ class ObjectQueue:
         data = self.blob_manager.get_blob(self.last().digest)
         return RawData(content=data, content_type=last.content_type)
 
-    def subscribe(self, callback: "Callable[[ObjectQueue, InsertNotification], Awaitable[None]]") -> SUB_ID:
-        listener_id = self.nlisteners
+    @asynccontextmanager
+    async def subscribe_context(
+        self,
+        callback: "Callable[[ObjectQueue, InsertNotification], Awaitable[None]]",
+        max_frequency: Optional[float] = None,
+    ) -> AsyncIterator[None]:
+        sub_id = self.subscribe(callback, max_frequency)
+        try:
+            yield
+        finally:
+            await self.unsubscribe(sub_id)
+
+    def subscribe(
+        self,
+        callback: "Callable[[ObjectQueue, InsertNotification], Awaitable[None]]",
+        max_frequency: Optional[float] = None,
+    ) -> SUB_ID:
+        listener_id = cast(SUB_ID, self.nlisteners)
         self.nlisteners += 1
 
         wrap_callback = Wrapper(callback, self, listener_id)
@@ -251,22 +278,47 @@ class ObjectQueue:
         key = Key(self._name.as_relative_url(), K_INDEX)
 
         self._sub.add_async_listener(key, wrap_callback)
-        self.listeners[listener_id] = (key, wrap_callback)
+        self.listeners[listener_id] = ListenerData(
+            key=key, wrapper=wrap_callback, max_frequency=max_frequency
+        )
 
         return listener_id
 
+    def get_listener_info(self) -> ListenerInfo:
+        nlisteners = len(self.listeners)
+        if nlisteners == 0:
+            max_frequency = None
+        else:
+
+            max_frequencies = [v.max_frequency for v in self.listeners.values()]
+            if any(x is None for x in max_frequencies):
+                max_frequency = None
+            else:
+                non_none = [x for x in max_frequencies if x is not None]
+                max_frequency = max(non_none)
+
+        return ListenerInfo(nlisteners, max_frequency)
+
     async def aclose(self) -> None:
-        for sub_id in list(self.listeners):
-            await self.unsubscribe(sub_id)
+        self.aclosing = True
+        # async with self.subscribe_lock:
+
+        while self.listeners:
+            sub_id = list(self.listeners)[0]
+            await self.unsubscribe(sub_id, error_if_not_exists=False)
+        #
+        # for sub_id in list(self.listeners):
+        #     await self.unsubscribe(sub_id, error_if_not_exists=False)
         # await self._sub.remove_all_listeners()
 
-    async def unsubscribe(self, sub_id: SUB_ID) -> None:
+    async def unsubscribe(self, sub_id: SUB_ID, error_if_not_exists: bool = True) -> None:
         if sub_id not in self.listeners:
-            logger.warning(f"Subscription {sub_id} not found")
+            msg = f"Subscription {sub_id} not found (closing = {self.aclosing})"
+            logger.warning(msg)
             return
-        key, callback = self.listeners.pop(sub_id)
+        li = self.listeners.pop(sub_id)
         try:
-            await self._sub.remove_listener(key, callback)
+            await self._sub.remove_listener(li.key, li.wrapper)
         except Exception as e:
             logger.error(f"Could not unsubscribe {sub_id}: {e}")
 

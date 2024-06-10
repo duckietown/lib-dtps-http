@@ -1,4 +1,4 @@
-__version__ = "1.3.7"
+__version__ = "1.3.8"
 
 from logging import DEBUG, getLogger
 
@@ -10,3 +10,4 @@ from .dtps_stats import *
 from .dtps_proxy import *
 from .dtps_send_continuous import *
 from .dtps_listen import *
+from .together import *

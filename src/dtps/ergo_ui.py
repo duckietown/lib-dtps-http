@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import (
     Any,
     AsyncContextManager,
@@ -15,6 +16,7 @@ from dtps_http import (
     ContentInfo,
     DataSaved,
     HTTPRequest,
+    ListenerInfo,
     NodeID,
     ObjectServeResult,
     ObjectTransformResult,
@@ -25,6 +27,7 @@ from dtps_http import (
 
 __all__ = [
     "ConnectionInterface",
+    "ContextConfig",
     "DTPSContext",
     "HistoryInterface",
     "PatchType",
@@ -39,6 +42,27 @@ RPCFunction = Callable[[RawData], Awaitable[ObjectTransformResult]]
 ServeFunction = Callable[[HTTPRequest], Awaitable[ObjectServeResult]]
 
 PatchType = List[Dict[str, Any]]
+
+
+@dataclass(frozen=True, eq=True, order=True, unsafe_hash=True)
+class ContextConfig:
+    """
+    None means to use the default value.
+
+
+
+    """
+
+    patient: Optional[bool] = None
+
+    @classmethod
+    def default(cls) -> "ContextConfig":
+        return cls()
+
+    def specialize(self, other: "ContextConfig") -> "ContextConfig":
+        return ContextConfig(
+            patient=other.patient if other.patient is not None else self.patient,
+        )
 
 
 class DTPSContext(ABC):
@@ -72,6 +96,21 @@ class DTPSContext(ABC):
         """
         components = other.split("/")
         return self.navigate(*components)
+
+    @abstractmethod
+    def get_config(self) -> ContextConfig:
+        """
+        Returns the configuration of the context.
+
+        """
+
+    @abstractmethod
+    def configure(self, cc: ContextConfig, /) -> "DTPSContext":
+        """
+        Configures the context (recursively).
+        Returns a different context (representing the same resource) with the given configuration.
+
+        """
 
     @abstractmethod
     async def exists(self) -> bool:
@@ -293,6 +332,7 @@ class ConnectionInterface(ABC):
         ...
 
 
+@dataclass
 class PublisherInterface(ABC):
     @abstractmethod
     async def publish(self, rd: RawData, /) -> None:
@@ -303,13 +343,10 @@ class PublisherInterface(ABC):
     async def terminate(self) -> None:
         """Stops the publisher"""
 
-    # TODO: DTSW-4880: add function to get number of connections
-    # TODO: DTSW-4879: should we pass back the desired frequency? (max of all frequencies) or bandwidth
-    #  constraints?
-    # @abstractmethod
-    # async def num_connections(self) -> RawData:
-    #     """Publishes data to the resource and waits for the response"""
-    #     ...
+    @abstractmethod
+    async def get_listener_info(self) -> Optional[ListenerInfo]:
+        """Returns information about the listener"""
+        ...
 
 
 class SubscriptionInterface(ABC):

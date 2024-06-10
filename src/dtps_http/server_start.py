@@ -9,9 +9,10 @@ from socket import AddressFamily
 from typing import Any, cast, Iterator, List, Optional, Sequence, Tuple
 
 import psutil
-from aiohttp import web
+from aiohttp import ClientResponseError, web
 
 from . import logger
+from .client import DTPSClient
 from .server import DTPSServer
 from .structures import Registration
 from .types import TopicNameV, URLString
@@ -108,11 +109,16 @@ async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[List
 
 class ServerWrapped:
     def __init__(
-        self, server: DTPSServer, runner: web.AppRunner, tunnel_process: Optional[asyncio.subprocess.Process]
+        self,
+        server: DTPSServer,
+        runner: web.AppRunner,
+        tunnel_process: Optional[asyncio.subprocess.Process],
+        unix_paths_to_cleanup: List[str],
     ) -> None:
         self.server = server
         self.runner = runner
         self.tunnel_process = tunnel_process
+        self.unix_paths_to_cleanup = unix_paths_to_cleanup
 
     async def __aenter__(self) -> DTPSServer:
         await self.server.started.wait()
@@ -123,6 +129,9 @@ class ServerWrapped:
 
     async def aclose(self) -> None:
         await self.server.aclose()
+        for up in self.unix_paths_to_cleanup:
+            if os.path.exists(up):
+                os.unlink(up)
 
         if self.tunnel_process is not None:
             logger.info("terminating cloudflared tunnel")
@@ -215,16 +224,16 @@ async def app_start(
                 the_url = cast(URLString, f"http://[{address}]:{port}/")
 
                 available_urls.append(the_url)
-
-            if False:
-                for interface, family, address in get_ip_addresses():
-                    if family != socket.AF_LINK:
-                        continue
-
-                    address = address.replace(":", "%3A")
-                    the_url = f"http+ether://{address}:{port}"
-
-                    available_urls.append(the_url)
+            #
+            # if False:
+            #     for interface, family, address in get_ip_addresses():
+            #         if family != socket.AF_LINK:
+            #             continue
+            #
+            #         address = address.replace(":", "%3A")
+            #         the_url = f"http+ether://{address}:{port}"
+            #
+            #         available_urls.append(the_url)
 
         if tunnel is not None:
             # run the cloudflare tunnel
@@ -266,7 +275,27 @@ async def app_start(
 
         the_url = make_http_unix_url(up)
 
-        logger.info(f"starting Unix server on path {up!r} - the URL is {the_url!r}")
+        if os.path.exists(up):
+            try:
+                async with DTPSClient.create(nickname="none", shutdown_event=None) as client:
+
+                    try:
+                        await client.get_metadata(the_url)
+                    except ClientResponseError:
+                        # logger.debug("OK: nobody answers: does not exist: %s", url)
+                        # TODO: check 404
+                        pass
+                    else:
+                        msg = f"There is already a node listening at the path {up}"
+                        logger.error(msg)
+                        sys.exit(1)
+
+                # try connecting
+            except:
+                pass
+            os.unlink(up)
+
+        logger.info(f"starting Unix server on path {up}")
 
         dn = os.path.dirname(up)
         os.makedirs(dn, exist_ok=True)
@@ -290,4 +319,4 @@ async def app_start(
         logger.info("available URLs\n" + "".join("* " + _ + "\n" for _ in available_urls))
 
     await s.started.wait()
-    return ServerWrapped(s, runner, tunnel_process)
+    return ServerWrapped(s, runner, tunnel_process, unix_paths_to_cleanup=unix_paths)

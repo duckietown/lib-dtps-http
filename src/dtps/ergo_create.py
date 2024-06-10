@@ -36,8 +36,10 @@ from dtps_http import (
 from .config import ContextInfo, ContextManager
 from .ergo_ui import (
     ConnectionInterface,
+    ContextConfig,
     DTPSContext,
     HistoryInterface,
+    ListenerInfo,
     PatchType,
     PublisherInterface,
     RPCFunction,
@@ -52,13 +54,14 @@ __all__ = [
 
 class ContextManagerCreate(ContextManager):
     dtps_server_wrap: Optional[ServerWrapped]
-    contexts: "Dict[Tuple[str, ...], ContextManagerCreateContext]"
+    contexts: "Dict[Tuple[Tuple[str, ...], ContextConfig], ContextManagerCreateContext]"
 
     def __init__(self, base_name: str, context_info: "ContextInfo"):
         self.base_name = base_name
         self.context_info = context_info
         self.dtps_server_wrap = None
         self.contexts = {}
+        self.base_config = ContextConfig.default()
         assert self.context_info.is_create()
 
     async def init(self) -> None:
@@ -80,14 +83,15 @@ class ContextManagerCreate(ContextManager):
         if self.dtps_server_wrap is not None:
             await self.dtps_server_wrap.aclose()
 
-    def get_context_by_components(self, components: Tuple[str, ...]) -> "DTPSContext":
-        if components not in self.contexts:
-            self.contexts[components] = ContextManagerCreateContext(self, components)
+    def get_context_by_components(self, components: Tuple[str, ...], config: ContextConfig) -> "DTPSContext":
+        key = components, config
+        if key not in self.contexts:
+            self.contexts[key] = ContextManagerCreateContext(self, components, config)
 
-        return self.contexts[components]
+        return self.contexts[key]
 
     def get_context(self) -> "DTPSContext":
-        return self.get_context_by_components(())
+        return self.get_context_by_components((), self.base_config)
 
     def __repr__(self) -> str:
         return f"ContextManagerCreate({self.base_name!r})"
@@ -105,6 +109,9 @@ class ContextManagerCreateContextPublisher(PublisherInterface):
         # nothing more to do for this
         pass
 
+    async def get_listener_info(self) -> Optional[ListenerInfo]:
+        return self.master.get_listener_info()
+
 
 class ContextManagerCreateContextSubscriber(SubscriptionInterface):
     def __init__(self, sub_id: SUB_ID, oq0: ObjectQueue) -> None:
@@ -118,11 +125,12 @@ class ContextManagerCreateContextSubscriber(SubscriptionInterface):
 class ContextManagerCreateContext(DTPSContext):
     _publisher: ContextManagerCreateContextPublisher
 
-    def __init__(self, master: ContextManagerCreate, components: Tuple[str, ...]):
+    def __init__(self, master: ContextManagerCreate, components: Tuple[str, ...], config: ContextConfig):
         self.master = master
         self.components = components
         self._publisher = ContextManagerCreateContextPublisher(self)
         self._topic = TopicNameV.from_components(components)
+        self.config = config
 
     async def aclose(self) -> None:
         await self.master.aclose()
@@ -164,7 +172,14 @@ class ContextManagerCreateContext(DTPSContext):
         c: list[str] = []
         for comp in components:
             c.extend([_ for _ in comp.split("/") if _])
-        return self.master.get_context_by_components(self.components + tuple(c))
+        return self.master.get_context_by_components(self.components + tuple(c), self.config)
+
+    def get_config(self) -> ContextConfig:
+        return self.config
+
+    def configure(self, cc: ContextConfig, /) -> "DTPSContext":
+        merged = self.config.specialize(cc)
+        return self.master.get_context_by_components(self.components, merged)
 
     async def list(self) -> List[str]:
         # TODO: DTSW-4798: implement list
@@ -237,7 +252,7 @@ class ContextManagerCreateContext(DTPSContext):
             # data2: RawData = oq0.get(oq0.last().digest)
             await on_data(last)
         _ = inline
-        sub_id = oq0.subscribe(wrap)
+        sub_id = oq0.subscribe(wrap, max_frequency=max_frequency)
 
         return ContextManagerCreateContextSubscriber(sub_id, oq0)
 
@@ -340,6 +355,15 @@ class ContextManagerCreateContext(DTPSContext):
         )
 
         return self
+
+    def get_listener_info(self) -> Optional[ListenerInfo]:
+        server = self._get_server()
+        topic = self._topic
+        if topic in server._oqs:
+            oq = server._oqs[topic]
+            return oq.get_listener_info()
+        # not available if not queues
+        return None
 
     async def until_ready(
         self,

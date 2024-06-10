@@ -498,7 +498,7 @@ class DTPSServer:
             url_to_use = parse_url_unescape(r.url)
             assert isinstance(url_to_use, URL), url_to_use
 
-            self.logger.info(f"Proxying {new_topic} through {url_to_use} with benchmark info {r.benchmark}")
+            self.logger.debug(f"Proxying {new_topic} through {url_to_use} with benchmark info {r.benchmark}")
 
             metadata = await dtpsclient.get_metadata(url_to_use)
 
@@ -1571,7 +1571,7 @@ pre {{
             raise web.HTTPNotFound(text=msg, headers=headers)
 
         headers = request.headers  # type: ignore
-        self.logger.info(f"serve_events: {headers=}")
+        # self.logger.debug(f"serve_events: {headers=}")
         if HEADER_MAX_FREQUENCY in headers:
             s = headers[HEADER_MAX_FREQUENCY]
             try:
@@ -1581,7 +1581,7 @@ pre {{
                 raise HTTPBadRequest(text=msg)
         else:
             max_frequency = None
-        self.logger.info(f"serve_events: {max_frequency=}")
+        self.logger.debug(f"serve_events: {max_frequency=}")
 
         ws = web.WebSocketResponse()
         multidict_update(ws.headers, self.get_headers_alternatives(request))
@@ -1649,20 +1649,53 @@ pre {{
                         exit_event.set()
                         pass
 
-        s = oq_.subscribe(send_message)
+        @async_error_catcher
+        async def read_message() -> None:
+            self.logger.debug(f"serve_events: start of read_message()")
+            try:
+                while True:
+                    if ws.closed:
+                        break
 
-        if oq_.stored:
-            last = oq_.last()
-            last_data = oq_.last_data()
-            inot2 = InsertNotification(last, last_data)
+                    wm = await ws.receive()
+                    # logger.info(f"serve_events: received {wm}")
+                    if wm.type == WSMsgType.CLOSE:
+                        exit_event.set()
+                        break
+            finally:
+                self.logger.debug(f"serve_events: end of read_message()")
 
-            await send_message(oq_, inot2)
+        t1 = asyncio.create_task(read_message())
+        self.tasks.append(t1)
 
-        try:
-            await exit_event.wait()
-            await ws.close()
-        finally:
-            await oq_.unsubscribe(s)
+        @async_error_catcher
+        async def serve() -> None:
+
+            try:
+
+                async with oq_.subscribe_context(send_message, max_frequency=max_frequency):
+
+                    if oq_.stored:
+                        last = oq_.last()
+                        last_data = oq_.last_data()
+                        inot2 = InsertNotification(last, last_data)
+
+                        await send_message(oq_, inot2)
+
+                    await exit_event.wait()
+
+            finally:
+                self.logger.debug(f"serve_events: closing websocket {request.url}")
+                try:
+                    await ws.close()
+                except:
+                    pass
+                t1.cancel()
+
+        t2 = asyncio.create_task(serve())
+        self.tasks.append(t2)
+
+        await t2
 
         return ws
 
