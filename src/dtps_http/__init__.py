@@ -4,10 +4,10 @@ import coloredlogs  # type: ignore
 
 coloredlogs.install(level="DEBUG")  # type: ignore
 
-from logging import getLogger, INFO, WARNING, DEBUG
+from logging import getLogger, INFO, WARNING
 
 logger = getLogger(__name__)
-logger.setLevel(DEBUG)
+logger.setLevel(INFO)
 
 from .client import *
 from .constants import *
