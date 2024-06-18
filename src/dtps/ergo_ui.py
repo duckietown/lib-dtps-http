@@ -9,6 +9,7 @@ from typing import (
     List,
     Optional,
     Sequence,
+    Tuple,
 )
 
 from dtps_http import (
@@ -135,6 +136,10 @@ class DTPSContext(ABC):
     @abstractmethod
     async def get_node_id(self) -> Optional[NodeID]:
         """Returns the node_id if this is a DTPS node."""
+
+    @abstractmethod
+    def get_path_components(self) -> Tuple[str, ...]:
+        """Returns the path of this context as a tuple of strings."""
 
     # creation and deletion
 

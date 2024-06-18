@@ -292,6 +292,9 @@ class ContextManagerUseContext(DTPSContext):
     async def get_node_id(self) -> Optional[NodeID]:
         return await self.patient(self.get_node_id_)
 
+    def get_path_components(self) -> Tuple[str, ...]:
+        return self.components
+
     async def get_node_id_(self) -> Optional[NodeID]:
         url = await self._get_best_url()
         md = await self.master.client.get_metadata(url)

@@ -157,6 +157,9 @@ class ContextManagerCreateContext(DTPSContext):
         # server.logger.info(f"get_node_id - resolve: {resolve}")
         return await resolve.get_source_node_id(server)
 
+    def get_path_components(self) -> Tuple[str, ...]:
+        return self.components
+
     def _get_server(self) -> DTPSServer:
         if self.master.dtps_server_wrap is None:
             raise AssertionError("ContextManagerCreateContext: server not initialized")
