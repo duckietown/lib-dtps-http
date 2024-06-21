@@ -145,6 +145,7 @@ __all__ = [
 class ForwardedTopic:
     unique_id: SourceID  # unique id for the stream
     origin_node: NodeID  # unique id of the node that created the stream
+    # TODO: is this correct? shouldn't it be Dict[str, Any]?
     app_data: Dict[str, bytes]
     forward_url_data: URL
     forward_url_events: Optional[URLWS]
@@ -202,6 +203,7 @@ class DTPSServer:
 
     tasks: "List[asyncio.Task[Any]]"
     # digest_to_urls: Dict[str, List[URL]]
+    # TODO: is this correct? shouldn't it be Dict[str, Any]?
     node_app_data: Dict[str, bytes]
     registrations: List[Registration]
     available_urls: "List[URLString]"
