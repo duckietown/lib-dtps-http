@@ -1162,6 +1162,11 @@ class DTPSServer:
             else:
                 raise AssertionError
 
+            accept_headers = request.headers.get("accept", "")
+
+            if accept_headers and isinstance(rd, RawData) and not "html" in accept_headers:
+                rd = rd.get_as(accept_headers)
+
             # pprint(properties)
             return self.visualize_data(
                 request,

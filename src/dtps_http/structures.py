@@ -7,7 +7,7 @@ import cbor2
 from multidict import CIMultiDict
 from pydantic.dataclasses import dataclass
 
-from .constants import DEFAULT_MAX_HISTORY, HEADER_LINK_BENCHMARK, MIME_CBOR, MIME_JSON, MIME_TEXT
+from .constants import DEFAULT_MAX_HISTORY, HEADER_LINK_BENCHMARK, MIME_CBOR, MIME_JSON, MIME_TEXT, MIME_YAML
 from .types import ContentType, NodeID, SourceID, TopicNameS, TopicNameV, URLString
 from .urls import join, parse_url_unescape, URL, url_to_string, URLIndexer
 from .utils import pydantic_parse
@@ -290,6 +290,14 @@ class RawData:
     def json_from_native_object(cls, ob: object) -> "RawData":
         return cls(content=json.dumps(ob).encode(), content_type=MIME_JSON)
 
+    @classmethod
+    def yaml_from_native_object(cls, ob: object) -> "RawData":
+        import yaml
+
+        data = yaml.safe_dump(ob)
+
+        return cls(content=data.encode(), content_type=MIME_YAML)
+
     def digest(self) -> Digest:
         return get_digest(self.content)
 
@@ -324,6 +332,30 @@ class RawData:
 
             return cbor2.loads(self.content)
         raise ValueError(f"cannot convert {self.content_type!r} to native object")
+
+    def as_cbor(self) -> "RawData":
+        no = self.get_as_native_object()
+        return RawData.cbor_from_native_object(no)
+
+    def as_json(self) -> "RawData":
+        no = self.get_as_native_object()
+        return RawData.json_from_native_object(no)
+
+    def as_yaml(self) -> "RawData":
+        no = self.get_as_native_object()
+
+        return RawData.yaml_from_native_object(no)
+
+    def get_as(self, content_type: str) -> "RawData":
+        if content_type == "*/*":
+            return self
+        if content_type == MIME_JSON:
+            return self.as_json()
+        if content_type == MIME_CBOR:
+            return self.as_cbor()
+        if content_type == MIME_YAML:
+            return self.as_yaml()
+        raise ValueError(f"Cannot convert to {content_type!r}")
 
 
 def is_structure(content_type: str) -> bool:

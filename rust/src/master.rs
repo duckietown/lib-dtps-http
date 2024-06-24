@@ -451,15 +451,13 @@ pub async fn serve_master_get(
             html! {}
         }
     };
-
     let ds_props = ds.get_properties();
     visualize_data(
         &path_str,
         &ds_props,
         path_str.to_string(),
         extra_html,
-        &rd.content_type,
-        &rd.content,
+        rd,
         request_headers,
         ss_mutex,
         response_headers,
@@ -539,21 +537,24 @@ pub async fn visualize_data(
     properties: &TopicProperties,
     title: String,
     extra_html: PreEscaped<String>,
-    content_type: &str,
-    content: &[u8],
+    rd: RawData,
+    // content_type: &str,
+    // content: &[u8],
     headers: HeaderMap,
     ssa: ServerStateAccess,
     response_headers: HeaderMap,
 ) -> HandlersResponse {
     let accept_headers: Vec<String> = get_accept_header(&headers);
 
-    if !utils_mime::is_html(content_type)
-        && !utils_mime::is_image(content_type)
+    if !utils_mime::is_html(&rd.content_type)
+        && !utils_mime::is_image(&rd.content_type)
         && accept_headers.contains(&"text/html".to_string())
     {
-        make_friendly_visualization(properties, title, extra_html, content_type, content)
+        make_friendly_visualization(properties, title, extra_html, &rd.content_type, &rd.content)
     } else {
-        let mut resp = Response::new(Body::from(content.to_vec()));
+        let rd = rd.convert_to(&accept_headers)?;
+        let content = rd.content.to_vec();
+        let mut resp = Response::new(Body::from(content));
         let h = resp.headers_mut();
         for (k, v) in response_headers.iter() {
             h.insert(k, v.clone());
@@ -563,7 +564,7 @@ pub async fn visualize_data(
         if path == "/" {
             put_patchable_headers(h)?;
         }
-        utils_headers::put_header_content_type(h, content_type);
+        utils_headers::put_header_content_type(h, &rd.content_type);
         utils_headers::put_meta_headers(h, properties);
         {
             let ss = ssa.lock().await;
