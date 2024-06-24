@@ -110,6 +110,9 @@ class Source(ABC):
     async def publish(self, presented_as: str, server: "DTPSServer", rd: RawData) -> "PostResult": ...
 
     @abstractmethod
+    async def delete(self, presented_as: str, server: "DTPSServer") -> "Optional[TransformError]": ...
+
+    @abstractmethod
     async def call(
         self, presented_as: str, server: "DTPSServer", rd: RawData
     ) -> Union[RawData, TransformError]: ...
@@ -129,6 +132,10 @@ class Transform(ABC):
 @dataclass
 class GetInside(Transform):
     components: Tuple[str, ...]
+
+    def __post_init__(self):
+        if ":meta" in self.components:
+            raise ValueError(f"should have resolved :meta")
 
     def get_transform_inside(self, s: str) -> "Transform":
         return GetInside(self.components + (s,))
@@ -214,6 +221,8 @@ class OurQueue(Source):
         raise KeyError(f"get_inside_after({s!r}) not implemented for {self!r}")
 
     def get_inside(self, s: str, /) -> "Source":
+        if s == ":meta":
+            return MetaInfo(self)
         return Transformed(self, GetInside((s,)))
 
     async def get_resolved_data(
@@ -246,10 +255,16 @@ class OurQueue(Source):
 
     async def patch(self, presented_as: str, server: "DTPSServer", patch: JsonPatch) -> "PostResult":
         oq = server.get_oq(self.topic_name)
+        tr = oq.tr.properties
+        if not tr.patchable:
+            msg = f"Cannot patch {self.topic_name.as_dash_sep()}"
+            logger.error(msg)
+            raise web.HTTPBadRequest(reason=msg)
+
         last_data = oq.last_data()
         ob = last_data.get_as_native_object()
         try:
-            # noinspection PyTypeChecker
+            # noinspection PyTypeChecker,PydanticTypeChecker
             ob2 = patch.apply(ob)  # type: ignore
         except (jsonpatch.JsonPatchException, jsonpointer.JsonPointerException) as e:
             msg = f"Cannot apply patch {patch} to {ob}"
@@ -264,6 +279,16 @@ class OurQueue(Source):
         rd = RawData.json_from_native_object(ob2)
         otr = await oq.publish(rd)
         return otr
+
+    async def delete(self, presented_as: str, server: "DTPSServer") -> "Optional[TransformError]":
+        oq = server.get_oq(self.topic_name)
+        tr = oq.tr.properties
+        if not tr.droppable:
+            msg = f"Cannot patch {self.topic_name.as_dash_sep()}"
+            logger.error(msg)
+            return TransformError(401, msg)
+        await server.remove_oq(self.topic_name)
+        return None
 
 
 @dataclass
@@ -317,28 +342,16 @@ class ForwardedQueue(Source):
                             server, url_post, dtpsclient, resp_data, presented_as
                         )
 
-                        #
-                        # data = await resp_data.read()
-                        # content_type = ContentType(resp_data.content_type)
-                        # data = RawData(content_type=content_type, content=data)
-                        #
-                        # s: Any = data.get_as_native_object()
-                        # # FIXME: we need to download the data and re-expose it
-                        # ds = pydantic_parse(DataSaved, s)
-                        # locations = resp_data.headers.getall('location')
-                        #
-                        # dr = DataReady.from_data_saved(ds)
-                        # for location in locations:
-                        #     url = join(use_url2, location)
-                        #     rd = await dtpsclient.get(url, accept=ds.content_type)
-                        #     available_for = 60.0
-                        #     urlref, avail = server._store_data(rd, available_for, presented_as)
-                        #
-                        #     dr.availability.append(
-                        #         ResourceAvailability(url=urlref, available_until=avail)
-                        #     )
-                        #
-                        # return dr
+    async def delete(self, presented_as: str, server: "DTPSServer") -> "Optional[TransformError]":
+        url_post = server._forwarded[self.topic_name].forward_url_data
+
+        async with server._client() as dtpsclient:
+            session2: aiohttp.ClientSession
+            async with dtpsclient.my_session(url_post) as (session2, use_url2):
+                async with session2.delete(use_url2) as resp_data:
+                    if not resp_data.ok:
+                        body = await resp_data.read()
+                        return TransformError(resp_data.status, body)
 
     async def publish(self, presented_as: str, server: "DTPSServer", rd: RawData) -> "PostResult":
         url_post = server._forwarded[self.topic_name].forward_url_data
@@ -442,6 +455,9 @@ class SourceComposition(Source):
         )
         return TopicsIndex(topics=topics)
 
+    async def delete(self, presented_as: str, server: "DTPSServer") -> "None":
+        raise NotImplementedError(f"delete() for {self}")
+
     def get_properties(self, server: "DTPSServer") -> TopicProperties:
         immutable = True
         streamable = False
@@ -462,6 +478,7 @@ class SourceComposition(Source):
             immutable=immutable,
             has_history=False,
             patchable=False,
+            droppable=False,
         )
 
     def get_inside_after(self, s: str) -> "Source":
@@ -493,6 +510,9 @@ class SourceComposition(Source):
 class Transformed(Source):
     source: Source
     transform: Transform
+
+    async def delete(self, presented_as: str, server: "DTPSServer") -> "Optional[TransformError]":
+        raise NotImplementedError(f"delete() for {self}")
 
     async def get_source_node_id(self, server: "DTPSServer") -> Optional[NodeID]:
         return await self.source.get_source_node_id(server)
@@ -553,6 +573,9 @@ def add_prefix_to_patch(prefix: Tuple[str, ...], patch: JsonPatch) -> JsonPatch:
 @dataclass
 class MetaInfo(Source):
     source: Source
+
+    async def delete(self, presented_as: str, server: "DTPSServer") -> "Optional[TransformError]":
+        return TransformError(400, "Cannot delete MetaInfo")
 
     async def get_source_node_id(self, server: "DTPSServer") -> Optional[NodeID]:
         return await self.source.get_source_node_id(server)

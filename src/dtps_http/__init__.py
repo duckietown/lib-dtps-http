@@ -1,13 +1,13 @@
 __version__ = "1.3.8"
 
-import coloredlogs  # type: ignore
-
-coloredlogs.install(level="DEBUG")  # type: ignore
-
-from logging import getLogger, INFO, WARNING, DEBUG
+from logging import DEBUG, getLogger, INFO, WARNING
 
 logger = getLogger(__name__)
 logger.setLevel(DEBUG)
+
+import coloredlogs
+
+coloredlogs.install(logger=logger)
 
 from .client import *
 from .constants import *

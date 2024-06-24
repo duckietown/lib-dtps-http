@@ -595,7 +595,7 @@ class DTPSServer:
         )
         reachability: List[TopicReachability] = [treach]
         if tp is None:
-            tp = TopicProperties.streamable_readonly()
+            tp = TopicProperties.default()
 
         tr = TopicRef(
             unique_id=unique_id,
@@ -684,11 +684,10 @@ class DTPSServer:
             tp=None,
             bounds=Bounds.max_length(1),
         )
-
         oq = await self.create_oq(
             TOPIC_PROXIED,
             content_info=ContentInfo.simple(MIME_JSON),
-            tp=None,
+            tp=TopicProperties.patchable_only(),
             bounds=Bounds.max_length(1),
         )
         rd = RawData(content=b"{}", content_type=MIME_JSON)
@@ -1074,13 +1073,26 @@ class DTPSServer:
             # text = f'404: Cannot find topic "{topic_name_s}"'
             return web.HTTPNotFound(text=msg, headers=headers)
 
-        if isinstance(source, OurQueue):
-            await self.remove_oq(source.topic_name)
-            msg = f"{request.url!r}\nDeletd topic '{topic_name_s}'."
-            return web.Response(text=msg, headers=headers, status=200)
+        otr = await source.delete(presented_as=request.url.path, server=self)
+        if isinstance(otr, TransformError):
+            return web.Response(status=otr.http_code, text=otr.message, headers=headers)
         else:
-            msg = f"{request.url!r}\nCannot delete topic '{topic_name_s}'."
-            return web.HTTPServerError(text=msg, headers=headers)
+
+            return web.Response(body="", headers=headers)
+        #
+        # if isinstance(source, OurQueue):
+        #     properties = source.get_properties(self)
+        #     if not properties.droppable:
+        #         msg = f"{request.url!r}\nCannot delete queue '{topic_name_s}' because it is marked as non-droppable."
+        #         return web.HTTPForbidden(text=msg, headers=headers)
+        #
+        #     await self.remove_oq(source.topic_name)
+        #     msg = f"{request.url!r}\nDeleted queue '{topic_name_s}'."
+        #     return web.Response(text=msg, headers=headers, status=200)
+        # else:
+        #     # TODO: delete for forwarded
+        #     msg = f"{request.url!r}\nCannot delete topic '{topic_name_s}'."
+        #     return web.HTTPServerError(text=msg, headers=headers)
 
     @async_error_catcher
     async def serve_get(self, request: web.Request) -> web.StreamResponse:
@@ -1141,6 +1153,8 @@ class DTPSServer:
             elif isinstance(rs, Native):
                 # logger.info(f"Native: {rs}")
                 rd = RawData.cbor_from_native_object(rs.ob)
+
+                # TODO: implement
             elif isinstance(rs, NotAvailableYet):
                 rd = rs
             elif isinstance(rs, NotFound):  # type: ignore
@@ -1485,9 +1499,15 @@ pre {{
 
             for operation in patch._ops:  # type: ignore
                 if isinstance(operation, RemoveOperation):
-                    raise NotImplementedError(
-                        f"Cannot handle {operation!r}"
-                    )  # TODO: remove topics not supported
+                    topic = topic_name_from_json_pointer(operation.location)
+
+                    if topic.is_root():
+                        raise ValueError(f"Cannot create root topic (path = {operation.path!r})")  # type: ignore
+
+                    self.logger.info(f"deleting topic: '{topic.as_dash_sep()}'")
+
+                    await self.remove_oq(topic)
+
                 elif isinstance(operation, AddOperation):
                     # logger.info(f"op: {operation.__dict__}, {operation.pointer.parts}")
                     topic = topic_name_from_json_pointer(operation.location)
@@ -1757,7 +1777,11 @@ pre {{
                     await oq_.publish(rd)
 
                     result = PushResult(True, "")
-                    await ws.send_bytes(get_tagged_cbor(result))
+                    try:
+                        await ws.send_bytes(get_tagged_cbor(result))
+                    except ConnectionResetError:
+                        self.logger.info("Client terminated connection")
+                        break
 
                 else:
                     msg = f"Cannot handle {data!r}"

@@ -571,7 +571,7 @@ class ContextManagerUseContext(DTPSContext):
             content_info = ContentInfo.simple(MIME_OCTET)
 
         if topic_properties is None:
-            topic_properties = TopicProperties.rw_pushable()
+            topic_properties = TopicProperties.default()
 
         if app_data is None:
             app_data = {}

@@ -135,6 +135,7 @@ mod client_verbs;
 mod client_websocket_read;
 mod interface;
 mod signals_logic_call;
+mod signals_logic_delete;
 mod test_requests;
 mod utils_every_once;
 mod utils_queues;

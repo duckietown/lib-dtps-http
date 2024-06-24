@@ -53,6 +53,11 @@ pub trait Patchable {
 }
 
 #[async_trait]
+pub trait Deletable {
+    async fn delete(&self, presented_as: &str, ss_mutex: ServerStateAccess) -> DTPSR<()>;
+}
+
+#[async_trait]
 pub trait Pushable {
     async fn push(
         &self,

@@ -10,6 +10,7 @@ impl DataProps for TypeOFSource {
                 immutable: true,
                 has_history: false,
                 patchable: false,
+                droppable: false,
             },
             TypeOFSource::ForwardedQueue(q) => q.properties.clone(),
             TypeOFSource::OurQueue(_, props) => props.clone(),
@@ -25,6 +26,7 @@ impl DataProps for TypeOFSource {
                     immutable: false, // maybe we can say it true sometime
                     has_history: false,
                     patchable: false,
+                    droppable: false,
                 }
             }
             TypeOFSource::MountedDir(_, _, props) => props.clone(),
@@ -41,6 +43,7 @@ impl DataProps for TypeOFSource {
                     immutable: false, // maybe we can say it true sometime
                     has_history: false,
                     patchable: false,
+                    droppable: false,
                 }
             }
         }
@@ -77,6 +80,7 @@ impl DataProps for SourceComposition {
             immutable,
             has_history,
             patchable,
+            droppable: false,
         }
     }
 }

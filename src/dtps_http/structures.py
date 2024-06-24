@@ -160,12 +160,23 @@ class TopicProperties:
     has_history: bool
 
     patchable: bool
+    droppable: bool
 
     @classmethod
     def streamable_readonly(cls) -> "TopicProperties":
         return TopicProperties(
-            streamable=True, pushable=False, readable=True, immutable=False, has_history=True, patchable=False
+            streamable=True,
+            pushable=False,
+            readable=True,
+            immutable=False,
+            has_history=True,
+            patchable=False,
+            droppable=False,
         )
+
+    @classmethod
+    def default(cls) -> "TopicProperties":
+        return TopicProperties.rw_pushable()
 
     @classmethod
     def readonly(cls) -> "TopicProperties":
@@ -176,12 +187,31 @@ class TopicProperties:
             immutable=False,
             has_history=False,
             patchable=False,
+            droppable=False,
         )
 
     @classmethod
     def rw_pushable(cls) -> "TopicProperties":
         return TopicProperties(
-            streamable=True, pushable=True, readable=True, immutable=False, has_history=True, patchable=False
+            streamable=True,
+            pushable=True,
+            readable=True,
+            immutable=False,
+            has_history=True,
+            patchable=True,
+            droppable=True,
+        )
+
+    @classmethod
+    def patchable_only(cls) -> "TopicProperties":
+        return TopicProperties(
+            streamable=True,
+            pushable=False,
+            readable=True,
+            immutable=False,
+            has_history=True,
+            patchable=True,
+            droppable=False,
         )
 
 
