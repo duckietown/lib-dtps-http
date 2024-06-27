@@ -1660,8 +1660,8 @@ pre {{
                         break
 
                     wm = await ws.receive()
-                    # logger.info(f"serve_events: received {wm}")
-                    if wm.type == WSMsgType.CLOSE:
+                    self.logger.debug(f"serve_events: received {wm}")
+                    if wm.type in [WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.CLOSING]:
                         exit_event.set()
                         break
             finally:
