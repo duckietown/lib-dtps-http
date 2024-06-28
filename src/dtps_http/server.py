@@ -1755,7 +1755,7 @@ pre {{
             wm = await ws.receive()
             # self.logger.debug(f"serve_push_stream_oq: received {msg}")
 
-            if wm.type == WSMsgType.CLOSE:
+            if wm.type in [WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.CLOSING]:
                 break
 
             elif wm.type == WSMsgType.BINARY:
@@ -1882,7 +1882,7 @@ pre {{
                 async with session.ws_connect(use_url) as ws:
                     # logger.debug(f"websocket to {use_url} ready")
                     async for msg in ws:
-                        if msg.type == WSMsgType.CLOSE:
+                        if msg.type in [WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.CLOSING]:
                             break
                         if msg.type == WSMsgType.TEXT:
                             # self.logger.warning(f"serve_events_forward_simple: forwarding text {msg}")

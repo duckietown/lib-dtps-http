@@ -1191,7 +1191,7 @@ class DTPSClient:
                                 await callback_wrap(FinishedMsg(comment="closed"))
                                 break
 
-                            if wm.type == aiohttp.WSMsgType.CLOSED:
+                            elif wm.type == aiohttp.WSMsgType.CLOSED:
                                 await callback_wrap(FinishedMsg(comment="closed"))
                                 break
                             elif wm.type == aiohttp.WSMsgType.CLOSING:  # aiohttp-specific
