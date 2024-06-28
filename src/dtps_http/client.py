@@ -1359,11 +1359,12 @@ class DTPSClient:
                         await ws.send_bytes(get_tagged_cbor(rd))
                         while True:
                             response = await ws.receive()
-                            if response.type == aiohttp.WSMsgType.CLOSE:
+                            if response.type in [
+                                aiohttp.WSMsgType.CLOSE,
+                                aiohttp.WSMsgType.CLOSED,
+                                aiohttp.WSMsgType.CLOSING,
+                            ]:
                                 return False
-                            if response.type == aiohttp.WSMsgType.CLOSED:
-                                return False
-
                             elif response.type == aiohttp.WSMsgType.BINARY:
                                 pr = parse_cbor_tagged(response.data, PushResult)
                                 return pr.result
