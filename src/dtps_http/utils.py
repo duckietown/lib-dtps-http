@@ -9,7 +9,10 @@ from io import StringIO
 import prettyprinter as pp  # type: ignore
 from aiohttp.web_exceptions import HTTPNotFound
 
-exclude = frozenset(filter(len, os.environ.get("PRETTYPRINT_EXTRAS_EXCLUDE", "").split(",")))
+exclude = frozenset(
+    ["ipython_repr_pretty", "ipython", "django"] +
+    list(filter(len, os.environ.get("PRETTYPRINT_EXTRAS_EXCLUDE", "").split(",")))
+)
 pp.install_extras(exclude=exclude)  # type: ignore
 
 from typing import (
