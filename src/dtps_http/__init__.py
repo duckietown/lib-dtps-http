@@ -5,9 +5,6 @@ from logging import getLogger, INFO, WARNING
 logger = getLogger(__name__)
 logger.setLevel(INFO)
 
-import coloredlogs  # type: ignore
-coloredlogs.install()  # type: ignore
-
 from .client import *
 from .constants import *
 from .exceptions import *

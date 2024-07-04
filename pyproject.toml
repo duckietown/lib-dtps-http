@@ -19,7 +19,6 @@ include = ["static/*"]
 
 [tool.poetry.dependencies]
 python = "^3.8"
-coloredlogs = "^15"
 aiohttp = "^3"
 cbor2 = "^5"
 tcp_latency = "0.0.12"
