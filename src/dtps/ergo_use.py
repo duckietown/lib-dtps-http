@@ -523,7 +523,7 @@ class ContextManagerUseContext(DTPSContext):
         bounds: Optional[Bounds] = None,
         content_info: Optional[ContentInfo] = None,
         topic_properties: Optional[TopicProperties] = None,
-        app_data: Optional[Dict[str, Any]] = None,
+        app_data: Optional[Dict[str, bytes]] = None,
     ) -> "DTPSContext":
         return await self.patient(
             self.queue_create_,
@@ -543,7 +543,7 @@ class ContextManagerUseContext(DTPSContext):
         bounds: Optional[Bounds] = None,
         content_info: Optional[ContentInfo] = None,
         topic_properties: Optional[TopicProperties] = None,
-        app_data: Optional[Dict[str, Any]] = None,
+        app_data: Optional[Dict[str, bytes]] = None,
     ) -> "DTPSContext":
         topic = self._get_components_as_topic()
 

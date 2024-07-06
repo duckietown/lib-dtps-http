@@ -145,7 +145,6 @@ __all__ = [
 class ForwardedTopic:
     unique_id: SourceID  # unique id for the stream
     origin_node: NodeID  # unique id of the node that created the stream
-    # TODO: is this correct? shouldn't it be Dict[str, Any]?
     app_data: Dict[str, bytes]
     forward_url_data: URL
     forward_url_events: Optional[URLWS]
@@ -575,7 +574,7 @@ class DTPSServer:
         bounds: Optional[Bounds],
         transform: ObjectTransformFunction = transform_identity,
         serve: Optional[ObjectServeFunction] = None,
-        app_data: Optional[Dict[str, Any]] = None,
+        app_data: Optional[Dict[str, bytes]] = None,
     ) -> ObjectQueue:
         if app_data is None:
             app_data = {}
