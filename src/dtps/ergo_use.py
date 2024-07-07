@@ -61,8 +61,6 @@ from .ergo_ui import (
     SubscriptionInterface,
 )
 
-JSONSerializable = Union[dict, list, str, int, float, bool, None]
-
 PS = ParamSpec("PS")
 
 X = TypeVar("X")
@@ -525,7 +523,7 @@ class ContextManagerUseContext(DTPSContext):
         bounds: Optional[Bounds] = None,
         content_info: Optional[ContentInfo] = None,
         topic_properties: Optional[TopicProperties] = None,
-        app_data: Optional[Dict[str, JSONSerializable]] = None,
+        app_data: Optional[Dict[str, Any]] = None,
     ) -> "DTPSContext":
         return await self.patient(
             self.queue_create_,
@@ -545,7 +543,7 @@ class ContextManagerUseContext(DTPSContext):
         bounds: Optional[Bounds] = None,
         content_info: Optional[ContentInfo] = None,
         topic_properties: Optional[TopicProperties] = None,
-        app_data: Optional[Dict[str, JSONSerializable]] = None,
+        app_data: Optional[Dict[str, Any]] = None,
     ) -> "DTPSContext":
         topic = self._get_components_as_topic()
 
