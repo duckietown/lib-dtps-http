@@ -214,6 +214,8 @@ class OurQueue(Source):
         raise KeyError(f"get_inside_after({s!r}) not implemented for {self!r}")
 
     def get_inside(self, s: str, /) -> "Source":
+        if s == ":meta":
+            return MetaInfo(self)
         return Transformed(self, GetInside((s,)))
 
     async def get_resolved_data(
