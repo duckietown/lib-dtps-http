@@ -47,6 +47,8 @@ from .ergo_ui import (
     SubscriptionInterface,
 )
 
+JSONSerializable = Union[dict, list, str, int, float, bool, None]
+
 __all__ = [
     "ContextManagerCreate",
 ]
@@ -320,7 +322,7 @@ class ContextManagerCreateContext(DTPSContext):
         #
         content_info: Optional[ContentInfo] = None,
         topic_properties: Optional[TopicProperties] = None,
-        app_data: Optional[Dict[str, bytes]] = None,
+        app_data: Optional[Dict[str, JSONSerializable]] = None,
         bounds: Optional[Bounds] = None,
     ) -> "DTPSContext":
         if bounds is None:

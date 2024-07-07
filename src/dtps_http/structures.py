@@ -12,6 +12,8 @@ from .types import ContentType, NodeID, SourceID, TopicNameS, TopicNameV, URLStr
 from .urls import join, parse_url_unescape, URL, url_to_string, URLIndexer
 from .utils import pydantic_parse
 
+JSONSerializable = Union[dict, list, str, int, float, bool, None]
+
 __all__ = [
     "Bounds",
     "ChannelInfo",
@@ -459,7 +461,7 @@ class ContentInfo:
 class TopicRefWire:
     unique_id: SourceID  # unique id for the stream
     origin_node: NodeID  # unique id of the node that created the stream
-    app_data: Dict[str, bytes]
+    app_data: Dict[str, JSONSerializable]
     reachability: List[TopicReachabilityWire]
     created: int
     properties: TopicProperties
@@ -487,7 +489,7 @@ class TopicRefWire:
 class TopicRef:
     unique_id: SourceID  # unique id for the stream
     origin_node: NodeID  # unique id of the node that created the stream
-    app_data: Dict[str, bytes]
+    app_data: Dict[str, JSONSerializable]
     reachability: List[TopicReachability]
     created: int
     properties: TopicProperties
@@ -512,7 +514,7 @@ class TopicRef:
 
 @dataclass
 class TopicRefAdd:
-    app_data: Dict[str, bytes]
+    app_data: Dict[str, JSONSerializable]
     properties: TopicProperties
     content_info: ContentInfo
     bounds: Bounds

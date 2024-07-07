@@ -8,13 +8,13 @@ from typing import (
     AsyncIterator,
     Awaitable,
     Callable,
-    Sequence,
     cast,
     Dict,
     List,
     Optional,
     Tuple,
     TypeVar,
+    Union,
 )
 
 import cbor2
@@ -60,6 +60,8 @@ from .ergo_ui import (
     ServeFunction,
     SubscriptionInterface,
 )
+
+JSONSerializable = Union[dict, list, str, int, float, bool, None]
 
 PS = ParamSpec("PS")
 
@@ -523,7 +525,7 @@ class ContextManagerUseContext(DTPSContext):
         bounds: Optional[Bounds] = None,
         content_info: Optional[ContentInfo] = None,
         topic_properties: Optional[TopicProperties] = None,
-        app_data: Optional[Dict[str, bytes]] = None,
+        app_data: Optional[Dict[str, JSONSerializable]] = None,
     ) -> "DTPSContext":
         return await self.patient(
             self.queue_create_,
@@ -543,7 +545,7 @@ class ContextManagerUseContext(DTPSContext):
         bounds: Optional[Bounds] = None,
         content_info: Optional[ContentInfo] = None,
         topic_properties: Optional[TopicProperties] = None,
-        app_data: Optional[Dict[str, bytes]] = None,
+        app_data: Optional[Dict[str, JSONSerializable]] = None,
     ) -> "DTPSContext":
         topic = self._get_components_as_topic()
 

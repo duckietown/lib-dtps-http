@@ -134,6 +134,8 @@ from .utils_every_once_in_a_while import EveryOnceInAWhile
 SEND_DATA_ARGNAME = "send_data"
 ROOT = TopicNameV.root()
 
+JSONSerializable = Union[dict, list, str, int, float, bool, None]
+
 __all__ = [
     "DTPSServer",
     "ForwardedTopic",
@@ -145,7 +147,7 @@ __all__ = [
 class ForwardedTopic:
     unique_id: SourceID  # unique id for the stream
     origin_node: NodeID  # unique id of the node that created the stream
-    app_data: Dict[str, bytes]
+    app_data: Dict[str, JSONSerializable]
     forward_url_data: URL
     forward_url_events: Optional[URLWS]
     forward_url_events_inline_data: Optional[URLWS]
@@ -202,8 +204,7 @@ class DTPSServer:
 
     tasks: "List[asyncio.Task[Any]]"
     # digest_to_urls: Dict[str, List[URL]]
-    # TODO: is this correct? shouldn't it be Dict[str, Any]?
-    node_app_data: Dict[str, bytes]
+    node_app_data: Dict[str, JSONSerializable]
     registrations: List[Registration]
     available_urls: "List[URLString]"
     nickname: str
@@ -574,7 +575,7 @@ class DTPSServer:
         bounds: Optional[Bounds],
         transform: ObjectTransformFunction = transform_identity,
         serve: Optional[ObjectServeFunction] = None,
-        app_data: Optional[Dict[str, bytes]] = None,
+        app_data: Optional[Dict[str, JSONSerializable]] = None,
     ) -> ObjectQueue:
         if app_data is None:
             app_data = {}
@@ -1498,7 +1499,8 @@ pre {{
 
                     value = operation.operation["value"]  # type: ignore
                     trf = TopicRefAdd.from_json(value)
-                    await self.create_oq(topic, trf.content_info, tp=trf.properties, bounds=trf.bounds)
+                    await self.create_oq(topic, trf.content_info, tp=trf.properties, bounds=trf.bounds,
+                                         app_data=trf.app_data)
                     self.logger.info(f"created new topic: '{topic.as_dash_sep()}'")
 
                 elif isinstance(operation, (ReplaceOperation, MoveOperation, TestOperation, CopyOperation)):

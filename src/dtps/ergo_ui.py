@@ -10,6 +10,7 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
+    Union,
 )
 
 from dtps_http import (
@@ -25,6 +26,8 @@ from dtps_http import (
     TopicProperties,
     URLString,
 )
+
+JSONSerializable = Union[dict, list, str, int, float, bool, None]
 
 __all__ = [
     "ConnectionInterface",
@@ -259,7 +262,7 @@ class DTPSContext(ABC):
         serve: Optional[ServeFunction] = None,
         content_info: Optional[ContentInfo] = None,
         topic_properties: Optional[TopicProperties] = None,
-        app_data: Optional[Dict[str, bytes]] = None,
+        app_data: Optional[Dict[str, JSONSerializable]] = None,
         bounds: Optional[Bounds] = None,
     ) -> "DTPSContext":
         """
