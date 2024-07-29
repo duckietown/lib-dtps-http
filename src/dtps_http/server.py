@@ -145,8 +145,7 @@ __all__ = [
 class ForwardedTopic:
     unique_id: SourceID  # unique id for the stream
     origin_node: NodeID  # unique id of the node that created the stream
-    # TODO: is this correct? shouldn't it be Dict[str, Any]?
-    app_data: Dict[str, bytes]
+    app_data: Dict[str, Any]
     forward_url_data: URL
     forward_url_events: Optional[URLWS]
     forward_url_events_inline_data: Optional[URLWS]
@@ -203,8 +202,7 @@ class DTPSServer:
 
     tasks: "List[asyncio.Task[Any]]"
     # digest_to_urls: Dict[str, List[URL]]
-    # TODO: is this correct? shouldn't it be Dict[str, Any]?
-    node_app_data: Dict[str, bytes]
+    node_app_data: Dict[str, Any]
     registrations: List[Registration]
     available_urls: "List[URLString]"
     nickname: str
@@ -1524,7 +1522,9 @@ pre {{
 
                     value = operation.operation["value"]  # type: ignore
                     trf = TopicRefAdd.from_json(value)
-                    await self.create_oq(topic, trf.content_info, tp=trf.properties, bounds=trf.bounds)
+                    await self.create_oq(
+                        topic, trf.content_info, tp=trf.properties, bounds=trf.bounds, app_data=trf.app_data
+                    )
                     self.logger.info(f"created new topic: '{topic.as_dash_sep()}'")
 
                 elif isinstance(operation, (ReplaceOperation, MoveOperation, TestOperation, CopyOperation)):

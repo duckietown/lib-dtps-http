@@ -677,7 +677,6 @@ class DTPSClient:
             ]
         )
         patch_json = patch.to_string().encode()
-
         await self.patch(url0, CONTENT_TYPE_PATCH_JSON, patch_json)
 
     async def patch(self, url0: URL, content_type: Optional[str], data: bytes) -> RawData:

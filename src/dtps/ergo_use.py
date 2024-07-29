@@ -8,12 +8,14 @@ from typing import (
     AsyncIterator,
     Awaitable,
     Callable,
+    Sequence,
     cast,
     Dict,
     List,
     Optional,
     Tuple,
     TypeVar,
+    Union,
 )
 
 import cbor2

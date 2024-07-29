@@ -1,16 +1,9 @@
-__version__ = "1.3.12"
+__version__ = "1.3.15"
 
 from logging import DEBUG, getLogger, INFO, WARNING
 
 logger = getLogger(__name__)
 logger.setLevel(INFO)
-
-import coloredlogs  # type: ignore
-
-coloredlogs.install()  # type: ignore
-
-# import coloredlogs
-# coloredlogs.install(logger=logger)
 
 from .client import *
 from .constants import *
