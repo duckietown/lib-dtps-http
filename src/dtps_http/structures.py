@@ -521,7 +521,6 @@ class ContentInfo:
 class TopicRefWire:
     unique_id: SourceID  # unique id for the stream
     origin_node: NodeID  # unique id of the node that created the stream
-    # TODO: is this correct? shouldn't it be Dict[str, Any]?
     app_data: Dict[str, bytes]
     reachability: List[TopicReachabilityWire]
     created: int
@@ -550,7 +549,6 @@ class TopicRefWire:
 class TopicRef:
     unique_id: SourceID  # unique id for the stream
     origin_node: NodeID  # unique id of the node that created the stream
-    # TODO: is this correct? shouldn't it be Dict[str, Any]?
     app_data: Dict[str, bytes]
     reachability: List[TopicReachability]
     created: int
@@ -576,8 +574,7 @@ class TopicRef:
 
 @dataclass
 class TopicRefAdd:
-    # TODO: is this correct? shouldn't it be Dict[str, Any]?
-    app_data: Dict[str, str]
+    app_data: Dict[str, bytes]
     properties: TopicProperties
     content_info: ContentInfo
     bounds: Bounds

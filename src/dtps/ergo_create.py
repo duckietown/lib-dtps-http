@@ -320,7 +320,7 @@ class ContextManagerCreateContext(DTPSContext):
         #
         content_info: Optional[ContentInfo] = None,
         topic_properties: Optional[TopicProperties] = None,
-        app_data: Optional[Dict[str, Any]] = None,
+        app_data: Optional[Dict[str, bytes]] = None,
         bounds: Optional[Bounds] = None,
     ) -> "DTPSContext":
         if bounds is None:

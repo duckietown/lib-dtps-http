@@ -575,7 +575,7 @@ class DTPSServer:
         bounds: Optional[Bounds],
         transform: ObjectTransformFunction = transform_identity,
         serve: Optional[ObjectServeFunction] = None,
-        app_data: Optional[Dict[str, Any]] = None,
+        app_data: Optional[Dict[str, bytes]] = None,
     ) -> ObjectQueue:
         if app_data is None:
             app_data = {}
