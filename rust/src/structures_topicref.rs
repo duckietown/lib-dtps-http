@@ -16,6 +16,7 @@ pub struct TopicProperties {
     pub immutable: bool,
     pub has_history: bool,
     pub patchable: bool,
+    pub droppable: bool,
 }
 
 impl TopicProperties {
@@ -27,6 +28,18 @@ impl TopicProperties {
             immutable: false,
             has_history: true,
             patchable: true, // XXX
+            droppable: true,
+        }
+    }
+    pub fn rw_not_droppable() -> Self {
+        TopicProperties {
+            streamable: true,
+            pushable: true,
+            readable: true,
+            immutable: false,
+            has_history: true,
+            patchable: true, // XXX
+            droppable: false,
         }
     }
     pub fn ro() -> Self {
@@ -37,6 +50,7 @@ impl TopicProperties {
             immutable: false,
             has_history: false,
             patchable: false,
+            droppable: false,
         }
     }
 }

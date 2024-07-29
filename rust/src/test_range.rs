@@ -16,7 +16,7 @@ pub mod tests {
 
     use crate::structures_topicref::Bounds;
     use crate::utils_cbor::as_cbor_value;
-    use crate::{add_proxy, get_resolved, remove_proxy, ResolvedData};
+    use crate::{add_proxy, get_rawdata_accept, get_resolved, remove_proxy, ResolvedData, CONTENT_TYPE_YAML};
     use crate::{client_verbs, get_metadata, DTPSLowLevel};
     use crate::{create_topic, delete_topic};
     use crate::{
@@ -593,6 +593,7 @@ pub mod tests {
             immutable: false,
             has_history: true,
             patchable: true,
+            droppable: true,
         };
 
         let content_info = ContentInfo::simple(CONTENT_TYPE_JSON, Some(schema_for!(ExampleData)));
@@ -789,6 +790,15 @@ pub mod tests {
 
         let data = 53;
         publish_cbor(&con_topic, &data).await?;
+
+        let rd = get_rawdata_accept(&con_topic, Some(CONTENT_TYPE_CBOR)).await?;
+        assert_eq!(rd.content_type, CONTENT_TYPE_CBOR);
+
+        let rd = get_rawdata_accept(&con_topic, Some(CONTENT_TYPE_JSON)).await?;
+        assert_eq!(rd.content_type, CONTENT_TYPE_JSON);
+
+        let rd = get_rawdata_accept(&con_topic, Some(CONTENT_TYPE_YAML)).await?;
+        assert_eq!(rd.content_type, CONTENT_TYPE_YAML);
 
         Ok(())
     }
@@ -1099,5 +1109,50 @@ pub mod tests {
             ResolvedData::NotReachable(_) => Ok(()),
             _ => DTPSError::other("Expected NotReachable"),
         };
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_proxied_delete_rust(#[future] instance: TestFixture, #[future] instance2: TestFixture) -> DTPSR<()> {
+        crate::test_range::tests::check_proxied_delete(instance.cf, instance2.cf).await
+    }
+
+    #[rstest]
+    #[awt]
+    #[tokio::test]
+    async fn check_proxied_delete_python(
+        #[future] instance_python: ConnectionFixture,
+        #[future] instance_python2: ConnectionFixture,
+    ) -> DTPSR<()> {
+        let x = crate::test_range::tests::check_proxied_delete(instance_python, instance_python2).await;
+        match &x {
+            Ok(_) => {}
+            Err(e) => {
+                error_with_info!("check_proxied_delete failed:\n{}", e.to_string());
+            }
+        }
+        x
+    }
+
+    async fn check_proxied_delete(switchboad: ConnectionFixture, node: ConnectionFixture) -> DTPSR<()> {
+        init_logging();
+
+        let topic = TopicName::from_dash_sep("topic")?;
+        DTPSLowLevel::create_topic(
+            &node.con,
+            &topic,
+            &TopicRefAdd {
+                app_data: Default::default(),
+                properties: TopicProperties::rw(),
+                content_info: ContentInfo::simple(CONTENT_TYPE_CBOR, None),
+                bounds: Bounds::unbounded(),
+            },
+        )
+        .await?;
+
+        DTPSLowLevel::delete_topic(&node.con, &topic).await?;
+
+        Ok(())
     }
 }

@@ -276,6 +276,7 @@ pub fn iterate_type_of_sources(s: &ServerState, add_aliases: bool) -> Vec<(Topic
             immutable: false,
             has_history: false,
             patchable: false,
+            droppable: false,
         };
         res.push((
             topic_name.clone(),

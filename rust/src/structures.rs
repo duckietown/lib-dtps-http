@@ -7,7 +7,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_cbor::Value as CBORValue;
 
-use crate::{divide_in_components, object_queues::InsertNotification, Clocks, TypeOfConnection, DTPSR};
+use crate::{
+    divide_in_components, dtpserror_other, object_queues::InsertNotification, Clocks, TypeOfConnection,
+    CONTENT_TYPE_CBOR, CONTENT_TYPE_JSON, CONTENT_TYPE_YAML, DTPSR,
+};
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, PartialEq)]
 pub struct RawData {
@@ -19,6 +22,27 @@ pub struct RawData {
 impl RawData {
     pub fn same(&self, other: &RawData) -> bool {
         self.content == other.content && self.content_type == other.content_type
+    }
+}
+
+impl RawData {
+    pub fn convert_to(&self, other: &Vec<String>) -> DTPSR<RawData> {
+        if other.is_empty() {
+            return Ok(self.clone());
+        }
+        if other.contains(&self.content_type) {
+            return Ok(self.clone());
+        }
+        for ct in other {
+            if ct == "*/*" {
+                return Ok(self.clone());
+            }
+
+            let v = self.get_as_cbor()?;
+            return RawData::encode_as(&v, ct);
+        }
+
+        return dtpserror_other!("Cannot convert to any of the requested content types");
     }
 }
 

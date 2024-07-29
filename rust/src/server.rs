@@ -24,6 +24,7 @@ use uuid::Uuid;
 use warp::{hyper::Body, reply::Response, Filter, Rejection};
 
 use crate::blob_manager::BlobManager;
+use crate::master::serve_master_delete;
 use crate::types::ReaderID;
 use crate::utils_time::{epoch, format_nanos, time_nanos_i64};
 use crate::{
@@ -120,6 +121,13 @@ impl DTPSServer {
             .and(warp::header::headers_cloned())
             .and(warp::body::bytes())
             .and_then(serve_master_patch);
+        let master_route_delete = warp::path::full()
+            .and(warp::query::<HashMap<String, String>>())
+            .and(warp::delete())
+            .and(clone_access.clone())
+            .and(warp::header::headers_cloned())
+            // .and(warp::body::bytes())
+            .and_then(serve_master_delete);
 
         let topic_generic_events_route2 = warp::path::full()
             .and_then(|path: warp::path::FullPath| async move {
@@ -185,6 +193,7 @@ impl DTPSServer {
             .or(master_route_get)
             .or(master_route_post)
             .or(master_route_patch)
+            .or(master_route_delete)
             // .or(memory_profile)
             .recover(handle_rejection);
 

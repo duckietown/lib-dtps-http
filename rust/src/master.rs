@@ -19,10 +19,10 @@ use crate::{
     clocks::Clocks, debug_with_info, display_printable, divide_in_components, error_with_info, get_accept_header,
     get_header_with_default, get_series_of_messages_for_notification_, interpret_path, make_html,
     put_alternative_locations, receive_from_websocket, send_as_ws_cbor, serve_static_file_path,
-    signals_logic::Pushable, utils_headers, utils_headers::put_patchable_headers, utils_mime, DTPSError, DataProps,
-    DataStream, ErrorMsg, FinishedMsg, GetMeta, GetStream, HandlersResponse, ListenURLEvents, MsgClientToServer,
-    MsgServerToClient, MsgWebsocketPushClientToServer, MsgWebsocketPushServerToClient, ObjectQueue, Patchable,
-    PushResult, RawData, ResolveDataSingle, ResolvedData, ServerStateAccess, TopicName, TopicProperties,
+    signals_logic::Deletable, signals_logic::Pushable, utils_headers, utils_headers::put_patchable_headers, utils_mime,
+    DTPSError, DataProps, DataStream, ErrorMsg, FinishedMsg, GetMeta, GetStream, HandlersResponse, ListenURLEvents,
+    MsgClientToServer, MsgServerToClient, MsgWebsocketPushClientToServer, MsgWebsocketPushServerToClient, ObjectQueue,
+    Patchable, PushResult, RawData, ResolveDataSingle, ResolvedData, ServerStateAccess, TopicName, TopicProperties,
     TopicsIndexInternal, TypeOFSource, WarningMsg, CONTENT_TYPE, CONTENT_TYPE_DTPS_DATAREADY_CBOR,
     CONTENT_TYPE_OCTET_STREAM, CONTENT_TYPE_PATCH_CBOR, CONTENT_TYPE_PATCH_JSON, CONTENT_TYPE_TEXT_HTML,
     CONTENT_TYPE_TEXT_PLAIN, CONTENT_TYPE_YAML, DTPSR, HEADER_MAX_FREQUENCY, JAVASCRIPT_SEND,
@@ -451,15 +451,13 @@ pub async fn serve_master_get(
             html! {}
         }
     };
-
     let ds_props = ds.get_properties();
     visualize_data(
         &path_str,
         &ds_props,
         path_str.to_string(),
         extra_html,
-        &rd.content_type,
-        &rd.content,
+        rd,
         request_headers,
         ss_mutex,
         response_headers,
@@ -539,21 +537,24 @@ pub async fn visualize_data(
     properties: &TopicProperties,
     title: String,
     extra_html: PreEscaped<String>,
-    content_type: &str,
-    content: &[u8],
+    rd: RawData,
+    // content_type: &str,
+    // content: &[u8],
     headers: HeaderMap,
     ssa: ServerStateAccess,
     response_headers: HeaderMap,
 ) -> HandlersResponse {
     let accept_headers: Vec<String> = get_accept_header(&headers);
 
-    if !utils_mime::is_html(content_type)
-        && !utils_mime::is_image(content_type)
+    if !utils_mime::is_html(&rd.content_type)
+        && !utils_mime::is_image(&rd.content_type)
         && accept_headers.contains(&"text/html".to_string())
     {
-        make_friendly_visualization(properties, title, extra_html, content_type, content)
+        make_friendly_visualization(properties, title, extra_html, &rd.content_type, &rd.content)
     } else {
-        let mut resp = Response::new(Body::from(content.to_vec()));
+        let rd = rd.convert_to(&accept_headers)?;
+        let content = rd.content.to_vec();
+        let mut resp = Response::new(Body::from(content));
         let h = resp.headers_mut();
         for (k, v) in response_headers.iter() {
             h.insert(k, v.clone());
@@ -563,7 +564,7 @@ pub async fn visualize_data(
         if path == "/" {
             put_patchable_headers(h)?;
         }
-        utils_headers::put_header_content_type(h, content_type);
+        utils_headers::put_header_content_type(h, &rd.content_type);
         utils_headers::put_meta_headers(h, properties);
         {
             let ss = ssa.lock().await;
@@ -977,4 +978,52 @@ pub fn make_index_html(index: &TopicsIndexInternal) -> PreEscaped<String> {
 
         },
     )
+}
+
+pub async fn serve_master_delete(
+    path: warp::path::FullPath,
+    query: HashMap<String, String>,
+    ss_mutex: ServerStateAccess,
+    headers: HeaderMap,
+) -> HandlersResponse {
+    let path_str = path_normalize(&path);
+    let referrer = get_referrer(&headers);
+
+    let matched: DTPSR<TypeOFSource> = {
+        let ss = ss_mutex.lock().await;
+        interpret_path(&path_str, &query, &referrer, &ss).await
+    };
+
+    let ds = match matched {
+        Ok(ds) => ds,
+        Err(s) => return s.into(),
+    };
+
+    let p = ds.get_properties();
+    if !p.droppable {
+        let s = format!("Cannot delete {path_str:?} because the topic is not deletable:\n{ds:#?}");
+        error_with_info!(" {s}");
+        let res = http::Response::builder()
+            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .body(Body::from(s))
+            .unwrap();
+        return Ok(res);
+    }
+
+    let x = ds.delete(&path_str, ss_mutex.clone()).await;
+    match x {
+        Ok(ds) => {
+            let body = "OK";
+            let res = http::Response::builder()
+                .status(StatusCode::OK)
+                // .header(header::CONTENT_TYPE, CONTENT_TYPE_DTPS_DATAREADY_CBOR)
+                .body(Body::from(body))
+                .unwrap();
+            Ok(res)
+        }
+        Err(e) => {
+            error_with_info!("Patch not ok: {}", e);
+            e.as_handler_response()
+        }
+    }
 }

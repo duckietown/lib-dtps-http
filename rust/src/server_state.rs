@@ -312,6 +312,7 @@ impl ServerState {
                 immutable: false,
                 has_history: true,
                 patchable: true,
+                droppable: false,
             },
             content_info: ContentInfo::simple(CONTENT_TYPE_DTPS_INDEX_CBOR, Some(schema_for!(TopicsIndexWire))),
             bounds: Bounds::max_length(1),
@@ -347,6 +348,7 @@ impl ServerState {
             immutable: false,
             has_history: true,
             patchable: false,
+            droppable: false,
         };
 
         ss.new_topic(
@@ -408,6 +410,7 @@ impl ServerState {
             immutable: false,
             has_history: true,
             patchable: true,
+            droppable: false,
         };
 
         ss.new_topic(
@@ -427,6 +430,7 @@ impl ServerState {
             immutable: false,
             has_history: true,
             patchable: true,
+            droppable: false,
         };
 
         ss.new_topic(
@@ -982,6 +986,7 @@ impl ServerState {
                 immutable: false,
                 has_history: false,
                 patchable: false,
+                droppable: false,
             };
 
             let mut tr = TopicRefInternal {
@@ -1013,6 +1018,7 @@ impl ServerState {
                 immutable: true,
                 has_history: false,
                 patchable: false,
+                droppable: false,
             };
 
             let app_data = hashmap! {
@@ -1061,6 +1067,7 @@ impl ServerState {
                         immutable: false,
                         has_history: false,
                         patchable: false,
+                        droppable: false,
                     },
                     content_info: ContentInfo::generic(),
                     bounds: Bounds::max_length(1), // XXX

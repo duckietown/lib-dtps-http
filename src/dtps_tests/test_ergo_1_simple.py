@@ -41,6 +41,8 @@ async def check_ergo_simple(base: DTPSContext, inline: bool, send_before: bool) 
 
     assert rd2 == rd
 
+    meta = await node_input.meta().data_get()
+
 
 class TestErgoSimple(IsolatedAsyncioTestCase):
     @test_timeout(5)

@@ -1,6 +1,6 @@
-__version__ = "1.3.15"
+__version__ = "1.3.16"
 
-from logging import getLogger, INFO, WARNING
+from logging import DEBUG, getLogger, INFO, WARNING
 
 logger = getLogger(__name__)
 logger.setLevel(INFO)

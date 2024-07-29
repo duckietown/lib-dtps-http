@@ -1190,7 +1190,7 @@ class DTPSClient:
                                 await callback_wrap(FinishedMsg(comment="closed"))
                                 break
 
-                            if wm.type == aiohttp.WSMsgType.CLOSED:
+                            elif wm.type == aiohttp.WSMsgType.CLOSED:
                                 await callback_wrap(FinishedMsg(comment="closed"))
                                 break
                             elif wm.type == aiohttp.WSMsgType.CLOSING:  # aiohttp-specific
@@ -1358,11 +1358,12 @@ class DTPSClient:
                         await ws.send_bytes(get_tagged_cbor(rd))
                         while True:
                             response = await ws.receive()
-                            if response.type == aiohttp.WSMsgType.CLOSE:
+                            if response.type in [
+                                aiohttp.WSMsgType.CLOSE,
+                                aiohttp.WSMsgType.CLOSED,
+                                aiohttp.WSMsgType.CLOSING,
+                            ]:
                                 return False
-                            if response.type == aiohttp.WSMsgType.CLOSED:
-                                return False
-
                             elif response.type == aiohttp.WSMsgType.BINARY:
                                 pr = parse_cbor_tagged(response.data, PushResult)
                                 return pr.result
