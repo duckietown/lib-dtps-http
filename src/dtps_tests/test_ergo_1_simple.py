@@ -4,12 +4,12 @@ from unittest import IsolatedAsyncioTestCase
 from dtps import DTPSContext
 from dtps_http import async_error_catcher, MIME_TEXT, RawData
 from dtps_http_tests.utils import test_timeout
-from dtps_tests import logger
-from dtps_tests.utils import create_use_pair
+from . import logger
+from .utils import create_use_pair, TEST_APP_DATA
 
 
 async def check_ergo_simple(base: DTPSContext, inline: bool, send_before: bool) -> None:
-    node_input = await (base / "dtps" / "node" / "in").queue_create()
+    node_input = await (base / "dtps" / "node" / "in").queue_create(app_data=TEST_APP_DATA)
     node_input = base.navigate("dtps/node/in")
 
     rd = RawData(content=b"hello", content_type=MIME_TEXT)

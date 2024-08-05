@@ -121,6 +121,7 @@ impl DTPSServer {
             .and(warp::header::headers_cloned())
             .and(warp::body::bytes())
             .and_then(serve_master_patch);
+
         let master_route_delete = warp::path::full()
             .and(warp::query::<HashMap<String, String>>())
             .and(warp::delete())

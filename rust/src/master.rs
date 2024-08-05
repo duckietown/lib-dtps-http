@@ -281,7 +281,7 @@ pub async fn serve_master_head(
             // not_supported
         }
     }
-    debug_with_info!("HEAD not supported for path = {path_str}, ds = {ds:?}");
+    // debug_with_info!("HEAD not supported for path = {path_str}, ds = {ds:?}");
     let x = serve_master_get(path, query, ss_mutex, headers).await;
     // debug_with_info!("response: {x:?}");
     // match x {

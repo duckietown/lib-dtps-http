@@ -165,7 +165,7 @@ class ObjectQueue:
 
     async def publish_json(self, obj: object, content_type: ContentType = MIME_JSON) -> PostResult:
         """Publish a python object as a JSON encoded object."""
-        data = json.dumps(obj)
+        data = json.dumps(obj)  # OK
         return await self.publish(RawData(content=data.encode(), content_type=content_type))
 
     async def publish_yaml(self, obj: object, content_type: ContentType = MIME_YAML) -> PostResult:

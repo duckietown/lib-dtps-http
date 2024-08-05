@@ -238,7 +238,7 @@ async def app_start(
         if tunnel is not None:
             # run the cloudflare tunnel
             with open(tunnel) as f:
-                data = json.load(f)
+                data = json.load(f)  # ok, loading cloudflare
 
             tunnel_name = data["TunnelName"]
             cmd = [

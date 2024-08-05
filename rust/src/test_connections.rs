@@ -214,13 +214,13 @@ pub mod tests {
             service_mode: ServiceMode::BestEffort,
         };
         add_tpt_connection(&switchboard.cf.con, &connection_name, &cn).await?;
-        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        tokio::time::sleep(Duration::from_millis(1000)).await;
 
         let topic1_url = node1.cf.con.join(topic1.as_relative_url())?;
         let n: usize = 5;
         for i in 0..n {
             post_json(&topic1_url, &i).await?;
-            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+            tokio::time::sleep(Duration::from_millis(1000)).await;
         }
 
         {
