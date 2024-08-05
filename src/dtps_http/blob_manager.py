@@ -76,6 +76,9 @@ class BlobManager:
             if now - ts > self.forget_forgetting_interval:
                 self.blobs_forgotten.pop(digest, None)
 
+    def has_blob(self, digest: Digest) -> bool:
+        return digest in self.blobs
+
     def get_blob(self, digest: Digest) -> bytes:
         if digest not in self.blobs:
             if digest in self.blobs_forgotten:

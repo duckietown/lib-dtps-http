@@ -1651,6 +1651,11 @@ pre {{
             ds = inot.data_saved
             digest = ds.digest
 
+            if not self.blob_manager.has_blob(digest):
+                msg = f"Blob {digest} not found, skipping"
+                self.logger.error(msg)
+                return
+
             # presented_as = request.url.path
             data = oq_.get_data_ready(ds, inline_data=send_data)
 
