@@ -95,7 +95,7 @@ class LinkBenchmark:
         mbs = self.bandwidth / (1024.0 * 1024.0)
         headers["Downlink"] = f"{mbs:.3f}"
         # everything as a json object
-        headers[HEADER_LINK_BENCHMARK] = json.dumps(asdict(self))
+        headers[HEADER_LINK_BENCHMARK] = json.dumps(asdict(self))  # ok
 
 
 @dataclass
@@ -288,7 +288,7 @@ class RawData:
 
     @classmethod
     def json_from_native_object(cls, ob: object) -> "RawData":
-        return cls(content=json.dumps(ob).encode(), content_type=MIME_JSON)
+        return cls(content=json.dumps(ob).encode(), content_type=MIME_JSON)  # ok
 
     @classmethod
     def yaml_from_native_object(cls, ob: object) -> "RawData":

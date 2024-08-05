@@ -597,7 +597,7 @@ class MetaInfo(Source):
     ) -> "ResolvedData":
         res = await self.source.get_meta_info(presented_as, server)
         w = res.to_wire()
-        rd = RawData.json_from_native_object(asdict(w))
+        rd = RawData.cbor_from_native_object(asdict(w))
         return rd
 
     async def patch(self, presented_as: str, server: "DTPSServer", patch: JsonPatch) -> "PostResult":

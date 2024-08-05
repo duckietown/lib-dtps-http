@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{join_con, join_ext, LinkBenchmark, RawData, TopicName, TypeOfConnection};
 
-pub type NodeAppData = String;
+pub type NodeAppData = bytes::Bytes;
+
+pub type AppData = HashMap<String, NodeAppData>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TopicProperties {
@@ -124,7 +126,7 @@ pub struct ContentInfo {
 pub struct TopicRefWire {
     pub unique_id: String,
     pub origin_node: String,
-    pub app_data: HashMap<String, NodeAppData>,
+    pub app_data: AppData,
     pub reachability: Vec<TopicReachabilityWire>,
     pub created: i64,
     pub properties: TopicProperties,
@@ -136,7 +138,7 @@ pub struct TopicRefWire {
 pub struct TopicRefInternal {
     pub unique_id: String,
     pub origin_node: String,
-    pub app_data: HashMap<String, NodeAppData>,
+    pub app_data: AppData,
     pub reachability: Vec<TopicReachabilityInternal>,
     pub created: i64,
     pub properties: TopicProperties,
@@ -146,7 +148,7 @@ pub struct TopicRefInternal {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TopicRefAdd {
-    pub app_data: HashMap<String, NodeAppData>,
+    pub app_data: AppData,
     pub properties: TopicProperties,
     pub content_info: ContentInfo,
     pub bounds: Bounds,

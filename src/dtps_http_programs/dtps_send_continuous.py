@@ -15,7 +15,7 @@ __all__ = [
 async def send_continuous(urlbase0: URL) -> None:
     async with DTPSClient.create() as dtpsclient:
         md = await dtpsclient.get_metadata(urlbase0)
-        logger.info(f"Metadata for {urlbase0!r}:\n" + json.dumps(asdict(md), indent=2))
+        # logger.info(f"Metadata for {urlbase0!r}:\n" + t.dumps(asdict(md), indent=2))
         if md.events_url is None:
             raise Exception("No events URL")
 

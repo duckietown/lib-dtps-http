@@ -14,7 +14,7 @@ pub mod tests {
     use serde_json::json;
     use tokio::process::Command;
 
-    use crate::structures_topicref::Bounds;
+    use crate::structures_topicref::{AppData, Bounds, NodeAppData};
     use crate::utils_cbor::as_cbor_value;
     use crate::{add_proxy, get_rawdata_accept, get_resolved, remove_proxy, ResolvedData, CONTENT_TYPE_YAML};
     use crate::{client_verbs, get_metadata, DTPSLowLevel};
@@ -28,6 +28,13 @@ pub mod tests {
     };
     use crate::{get_events_stream_inline, publish_cbor};
     use crate::{get_rawdata, make_request, patch_data, post_cbor, post_data, post_json};
+
+    fn get_test_app_data() -> AppData {
+        let example_bytes = "example".as_bytes();
+        hashmap! {
+            "app_name".to_string() => example_bytes.into()
+        }
+    }
 
     #[fixture]
     pub async fn instance() -> TestFixture {
@@ -63,7 +70,7 @@ pub mod tests {
         let mut ss = ssa.lock().await;
         ss.new_topic(
             &node1_topic1,
-            None,
+            Some(get_test_app_data()),
             CONTENT_TYPE_JSON,
             &TopicProperties::rw(),
             None,
@@ -83,7 +90,7 @@ pub mod tests {
         let mut ss = ssa.lock().await;
         ss.new_topic(
             &node2_topic2,
-            None,
+            Some(get_test_app_data()),
             CONTENT_TYPE_JSON,
             &TopicProperties::rw(),
             None,
@@ -116,7 +123,7 @@ pub mod tests {
             let topic_name = TopicName::from_dash_sep("a/b")?;
             ss.new_topic(
                 &topic_name,
-                None,
+                Some(get_test_app_data()),
                 CONTENT_TYPE_CBOR,
                 &TopicProperties::rw(),
                 None,
@@ -142,7 +149,7 @@ pub mod tests {
             let topic_name = TopicName::from_dash_sep("a/b")?;
             ss.new_topic(
                 &topic_name,
-                None,
+                Some(get_test_app_data()),
                 CONTENT_TYPE_CBOR,
                 &TopicProperties::rw(),
                 None,
@@ -192,7 +199,7 @@ pub mod tests {
             let topic_name = TopicName::from_dash_sep("a/b")?;
             ss.new_topic(
                 &topic_name,
-                None,
+                Some(get_test_app_data()),
                 CONTENT_TYPE_CBOR,
                 &TopicProperties::rw(),
                 None,
@@ -240,7 +247,7 @@ pub mod tests {
             let mut ss = instance.ssa.lock().await;
             ss.new_topic(
                 &topic_name,
-                None,
+                Some(get_test_app_data()),
                 CONTENT_TYPE_CBOR,
                 &TopicProperties::rw(),
                 None,
@@ -289,7 +296,7 @@ pub mod tests {
             let mut ss = instance.ssa.lock().await;
             ss.new_topic(
                 &topic_name,
-                None,
+                Some(get_test_app_data()),
                 CONTENT_TYPE_CBOR,
                 &TopicProperties::rw(),
                 None,
@@ -653,7 +660,7 @@ pub mod tests {
             let mut ss = instance.ssa.lock().await;
             ss.new_topic(
                 &topic_name,
-                None,
+                Some(get_test_app_data()),
                 CONTENT_TYPE_CBOR,
                 &TopicProperties::rw(),
                 None,
@@ -1115,7 +1122,7 @@ pub mod tests {
     #[awt]
     #[tokio::test]
     async fn check_proxied_delete_rust(#[future] instance: TestFixture, #[future] instance2: TestFixture) -> DTPSR<()> {
-        crate::test_range::tests::check_proxied_delete(instance.cf, instance2.cf).await
+        check_proxied_delete(instance.cf, instance2.cf).await
     }
 
     #[rstest]
@@ -1125,7 +1132,7 @@ pub mod tests {
         #[future] instance_python: ConnectionFixture,
         #[future] instance_python2: ConnectionFixture,
     ) -> DTPSR<()> {
-        let x = crate::test_range::tests::check_proxied_delete(instance_python, instance_python2).await;
+        let x = check_proxied_delete(instance_python, instance_python2).await;
         match &x {
             Ok(_) => {}
             Err(e) => {

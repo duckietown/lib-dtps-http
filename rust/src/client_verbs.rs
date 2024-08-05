@@ -18,9 +18,9 @@ use crate::utils_headers::{
 };
 use crate::{
     context, debug_with_info, error_with_info, internal_assertion, not_available, not_implemented, time_nanos,
-    FoundMetadata, ResolvedData, RicherRawData,
+    FoundMetadata, ResolvedData, RicherRawData, CONTENT_TYPE_PATCH_CBOR,
 };
-use crate::{DTPSError, RawData, CONTENT_TYPE_PATCH_JSON, DTPSR};
+use crate::{DTPSError, RawData, DTPSR};
 
 pub async fn get_rawdata_status(con: &TypeOfConnection) -> DTPSR<(http::StatusCode, RawData)> {
     let method = hyper::Method::GET;
@@ -461,13 +461,15 @@ pub async fn make_request(
 }
 
 pub async fn patch_data(conbase: &TypeOfConnection, patch: &JsonPatch) -> DTPSR<RawData> {
-    let json_data = serde_json::to_vec(patch)?;
+    // let json_data = serde_json::to_vec(patch)?;
+    let cbor_data = serde_cbor::to_vec(patch)?;
+
     // debug_with_info!("patch_data out: {:#?}", String::from_utf8(json_data.clone()));
     let resp = make_request(
         conbase,
         hyper::Method::PATCH,
-        &json_data,
-        Some(CONTENT_TYPE_PATCH_JSON),
+        &cbor_data,
+        Some(CONTENT_TYPE_PATCH_CBOR),
         None,
     )
     .await?;

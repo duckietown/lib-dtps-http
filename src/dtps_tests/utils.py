@@ -2,6 +2,7 @@ import asyncio.subprocess
 import os
 import tempfile
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import AsyncIterator, Tuple
 
 from dtps import context_cleanup
@@ -14,10 +15,12 @@ from dtps_http import (
 )
 from dtps_tests import logger
 
-__all__ = [
-    "create_rust_server",
-    "create_use_pair",
-]
+__all__ = ["TEST_APP_DATA", "create_rust_server", "create_use_pair"]
+
+
+TEST_APP_DATA = {
+    "bytes": b"hello",
+}
 
 
 @asynccontextmanager

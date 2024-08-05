@@ -1,13 +1,20 @@
 import argparse
 import asyncio
 import functools
-import json
 import sys
 import time
-from dataclasses import asdict
 from typing import cast, List, Optional
 
-from dtps_http import DTPSClient, parse_url_unescape, RawData, TopicNameV, URLIndexer, URLString, URLTopic
+from dtps_http import (
+    DTPSClient,
+    parse_url_unescape,
+    pretty,
+    RawData,
+    TopicNameV,
+    URLIndexer,
+    URLString,
+    URLTopic,
+)
 from . import logger
 
 __all__ = [
@@ -28,7 +35,6 @@ async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> Non
             return
 
         j = int(data.content.decode())
-        # j = json.loads(data.content.decode())
 
         diff = current - j
         # convert nanoseconds to milliseconds
@@ -56,7 +62,7 @@ async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> Non
             # list_urls = "".join(f"\t{u} \n" for u in desc.urls)
             logger.info(
                 f"Found topic {name!r}:\n"
-                + json.dumps(asdict(desc), indent=2)
+                + pretty(desc)
                 + "\n"
                 # + f"unique_id: {desc.unique_id}\n"
                 # + f"origin_node: {desc.origin_node}\n"

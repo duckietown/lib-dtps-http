@@ -541,7 +541,7 @@ class DTPSServer:
         urls = sorted(list(urls))
         p = ProxyJob(node_id=expect_node_id, urls=urls, mask_origin=mask_origin)
         d[name.as_dash_sep()] = asdict(p)
-        await oq.publish_json(d)
+        await oq.publish_cbor(d)
 
         while True:
             if name in self._mount_points:
@@ -686,12 +686,11 @@ class DTPSServer:
         )
         oq = await self.create_oq(
             TOPIC_PROXIED,
-            content_info=ContentInfo.simple(MIME_JSON),
+            content_info=ContentInfo.simple(MIME_CBOR),
             tp=TopicProperties.patchable_only(),
             bounds=Bounds.max_length(1),
         )
-        rd = RawData(content=b"{}", content_type=MIME_JSON)
-        await oq.publish(rd)
+        await oq.publish_cbor({})
         oq.subscribe(self.on_proxied_changed)
 
         await self.create_oq(

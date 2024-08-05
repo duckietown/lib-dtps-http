@@ -416,12 +416,13 @@ impl ServerState {
         ss.new_topic(
             &TopicName::from_dash_sep(TOPIC_PROXIED)?,
             None,
-            CONTENT_TYPE_JSON,
+            CONTENT_TYPE_CBOR,
             &p,
             Some(schema_for!(Proxied)),
             Bounds::max_length(1),
         )?;
-        ss.publish_json(&TopicName::from_dash_sep(TOPIC_PROXIED)?, "{}", None)?;
+        let empty_proxied = Proxied::new();
+        ss.publish_object_as_cbor(&TopicName::from_dash_sep(TOPIC_PROXIED)?, &empty_proxied, None)?;
 
         let p = TopicProperties {
             streamable: true,
@@ -436,12 +437,13 @@ impl ServerState {
         ss.new_topic(
             &TopicName::from_dash_sep(TOPIC_CONNECTIONS)?,
             None,
-            CONTENT_TYPE_JSON,
+            CONTENT_TYPE_CBOR,
             &p,
             Some(schema_for!(ConnectionsWire)),
             Bounds::max_length(1),
         )?;
-        ss.publish_json(&TopicName::from_dash_sep(TOPIC_CONNECTIONS)?, "{}", None)?;
+        let empty_connections = ConnectionsWire::new();
+        ss.publish_object_as_cbor(&TopicName::from_dash_sep(TOPIC_CONNECTIONS)?, &empty_connections, None)?;
 
         Ok(ss)
     }
@@ -855,7 +857,7 @@ impl ServerState {
         }
 
         self.blob_manager.cleanup_blobs(now);
-        /// XXX: we can be more efficeint here
+        // XXX: we can be more efficient here
         if self.blob_manager_debug_message.now() {
             debug_with_info!("summary: {}", self.blob_manager.summarize());
         }
@@ -1022,7 +1024,7 @@ impl ServerState {
             };
 
             let app_data = hashmap! {
-                "path".to_string() => pinfo.local_dir.clone(),
+                "path".to_string() => pinfo.local_dir.clone().into(),
             };
             let mut tr = TopicRefInternal {
                 unique_id: pinfo.unique_id.clone(),
@@ -1047,15 +1049,16 @@ impl ServerState {
         for (alias, target) in self.aliases.iter() {
             let tr = if topics.contains_key(target) {
                 let mut orig = topics.get(target).unwrap().clone();
-                orig.app_data.insert("aliased_to".to_string(), target.to_relative_url());
+                orig.app_data
+                    .insert("aliased_to".to_string(), target.to_relative_url().into());
                 orig
             } else {
                 TopicRefInternal {
                     unique_id: "".to_string(),   // FIXME
                     origin_node: "".to_string(), // FIXME
                     app_data: hashmap! {
-                        "aliased_to".to_string() => target.to_relative_url(),
-                        "comment".to_string() => "Target not existing yet.".to_string(),
+                        "aliased_to".to_string() => target.to_relative_url().into(),
+                        "comment".to_string() => "Target not existing yet.".to_string().into(),
                     },
                     reachability: vec![], // not reachable
                     created: 0,

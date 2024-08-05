@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 import traceback
 from abc import ABC, abstractmethod
@@ -26,7 +25,6 @@ from urllib.parse import unquote
 
 import aiohttp
 import cbor2
-import jsonpatch
 from aiohttp import (
     ClientResponse,
     ClientResponseError,
@@ -41,13 +39,12 @@ from tcp_latency import measure_latency  # type: ignore
 from . import logger, logger as logger0
 from .constants import (
     CONTENT_TYPE_PATCH_CBOR,
-    CONTENT_TYPE_PATCH_JSON,
     HEADER_CONTENT_LOCATION,
     HEADER_DATA_ORIGIN_NODE_ID,
     HEADER_MAX_FREQUENCY,
     HEADER_NODE_ID,
     HTTP_TIMEOUT,
-    MIME_JSON,
+    MIME_CBOR,
     MIME_OCTET,
     REL_CONNECTIONS,
     REL_EVENTS_DATA,
@@ -621,9 +618,9 @@ class DTPSClient:
     async def get_proxied(self, url0: URLIndexer) -> Dict[TopicNameV, ProxyJob]:
         # FIXME: need to use REL_PROXIED
         url = join(url0, TOPIC_PROXIED.as_relative_url())
-        rd = await self.get(url, accept=MIME_JSON)
-
-        js = json.loads(rd.content)
+        rd = await self.get(url, accept=MIME_CBOR)
+        js = cbor2.loads(rd.content)
+        # js = json.loads(rd.content)
         res: Dict[TopicNameV, ProxyJob] = {}
         for k, v in js.items():
             res[TopicNameV.from_dash_sep(k)] = ProxyJob.from_json(v)
@@ -656,28 +653,28 @@ class DTPSClient:
         proxy_job = ProxyJob(node_id, urls, mask_origin)
         patch.append({"op": "add", "path": path, "value": asdict(proxy_job)})
         # compile patch
-        as_json = json.dumps(patch).encode("utf-8")
+        as_cbor = cbor2.dumps(patch)
+        # as_json = json.dumps(patch).encode("utf-8")
         # FIXME: DTSW-5454: need to use REL_PROXIED
         url = join(url0, TOPIC_PROXIED.as_relative_url())
-        await self.patch(url, CONTENT_TYPE_PATCH_JSON, as_json)
+        await self.patch(url, CONTENT_TYPE_PATCH_CBOR, as_cbor)
         return True
 
     async def remove_proxy(self, url0: URLIndexer, topic_name: TopicNameV) -> None:
         patch = [{"op": "remove", "path": "/" + escape_json_pointer(topic_name.as_dash_sep())}]
-        as_json = json.dumps(patch).encode("utf-8")
+        as_cbor = cbor2.dumps(patch)
+        # as_json = json.dumps(patch).encode("utf-8")
         # FIXME: DTSW-5454: need to use REL_PROXIED
         url = join(url0, TOPIC_PROXIED.as_relative_url())
-        await self.patch(url, CONTENT_TYPE_PATCH_JSON, as_json)
+        await self.patch(url, CONTENT_TYPE_PATCH_CBOR, as_cbor)
 
     async def add_topic(self, url0: URLIndexer, topic_name: TopicNameV, tra: TopicRefAdd) -> None:
         path = "/" + escape_json_pointer(topic_name.as_dash_sep())
-        patch = jsonpatch.JsonPatch(
-            [
-                {"op": "add", "path": path, "value": asdict(tra)},
-            ]
-        )
-        patch_json = patch.to_string().encode()
-        await self.patch(url0, CONTENT_TYPE_PATCH_JSON, patch_json)
+        patch = [
+            {"op": "add", "path": path, "value": asdict(tra)},
+        ]
+        as_cbor = cbor2.dumps(patch)
+        await self.patch(url0, CONTENT_TYPE_PATCH_CBOR, as_cbor)
 
     async def patch(self, url0: URL, content_type: Optional[str], data: bytes) -> RawData:
         headers = {"content-type": content_type} if content_type is not None else {}
@@ -737,6 +734,8 @@ class DTPSClient:
                     if accept is not None and content_type != accept:
                         raise ValueError(
                             f"GET gave a different content type ({accept=!r}, {content_type}\n{url0=}"
+                            + "\n"
+                            + pretty(dict(resp.headers))
                         )
                     return rd
         except CancelledError:
