@@ -1,6 +1,6 @@
 import asyncio
 import time
-from asyncio import Event
+from asyncio import CancelledError, Event
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import (
@@ -619,7 +619,9 @@ class ContextManagerUseContext(DTPSContext):
             try:
                 await self.data_get()
                 return self
-            except (asyncio.TimeoutError, NoSuchTopic, TopicOriginUnavailable):
+            except CancelledError:
+                raise
+            except (asyncio.TimeoutError, NoSuchTopic, TopicOriginUnavailable, CannotConnectToAnyURL):
                 if not quiet and time.time() - printed_last > print_every:
                     waited: float = time.time() - stime
                     logger.warning(
@@ -630,6 +632,10 @@ class ContextManagerUseContext(DTPSContext):
                 await asyncio.sleep(retry_every)
                 num_tries += 1
                 continue
+            except Exception as e:
+                msg = f"Unexpected error {e.__class__.__name__} in until_ready. Continuing anyway"
+                logger.error(msg, exc_info=True)
+                raise
         return self
 
     async def connect_to(self, context: "DTPSContext", /) -> "ConnectionInterface":
