@@ -19,7 +19,7 @@ from typing import (
 )
 
 import cbor2
-from aiohttp import ClientResponseError
+from aiohttp import ClientResponseError, ServerDisconnectedError
 from typing_extensions import ParamSpec
 
 from dtps_http import (
@@ -483,7 +483,12 @@ class ContextManagerUseContext(DTPSContext):
         while True:
             try:
                 return await f(*args, **kwargs)
-            except CannotConnectToAnyURL as e:
+            except (CannotConnectToAnyURL, ServerDisconnectedError) as e:
+                await asyncio.sleep(1)
+                continue
+            except:
+                msg = "Unexpected error in patient; will retry anyway"
+                logger.error(msg, exc_info=True)
                 await asyncio.sleep(1)
                 continue
 

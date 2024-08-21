@@ -48,7 +48,7 @@ ARG DEST=release
 COPY --from=builder1 /wd/target/$DEST/dtps-http-rs-server /usr/bin/dtps-http-rs-server
 RUN ls -a -l -h -S /usr/bin
 
-ENV RUST_LOG="warn,dtps_http=debug"
+ENV RUST_LOG="warn,dtps_http=info   "
 ENV RUST_BACKTRACE=full
 RUN <<EOF
     /usr/bin/cloudflared --version

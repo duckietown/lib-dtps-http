@@ -84,11 +84,17 @@ impl TypeOFSource {
     //noinspection RsConstantConditionIf
     async fn get_meta_index_(&self, presented_url: &str, ss_mutex: ServerStateAccess) -> DTPSR<TopicsIndexInternal> {
         // debug_with_info!("get_meta_index: {:?}", self);
-        return match self {
+        match self {
             TypeOFSource::ForwardedQueue(q) => {
                 let ss = ss_mutex.lock().await;
                 let node_id = ss.node_id.clone();
-                let the_data = ss.proxied_topics.get(&q.my_topic_name).unwrap();
+                let the_data = ss.proxied_topics.get(&q.my_topic_name).ok_or({
+                    let topic_name = q.my_topic_name.to_dash_sep();
+                    DTPSError::TopicNotFound(format!(
+                        "get_meta_index: ForwardedQueue: {topic_name} - the forwarded topic does not exist"
+                    ))
+                })?;
+
                 let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
 
                 let mut tr = the_data.tr_original.clone();
@@ -136,7 +142,12 @@ impl TypeOFSource {
                 let ss = ss_mutex.lock().await;
                 let node_id = ss.node_id.clone();
 
-                let oq = ss.oqs.get(topic_name).unwrap();
+                let oq = ss.oqs.get(topic_name).ok_or({
+                    let topic_name = topic_name.to_dash_sep();
+                    DTPSError::TopicNotFound(format!(
+                        "get_meta_index: OurQueue: {topic_name} - the topic does not exist anymore"
+                    ))
+                })?;
                 let mut tr = oq.tr.clone();
 
                 // debug_with_info!("topic_name = {topic_name:?} presented_url = {presented_url:?}");
@@ -177,7 +188,7 @@ impl TypeOFSource {
                 let mut topics: HashMap<TopicName, TopicRefInternal> = hashmap! {};
 
                 debug_with_info!("MountedDir: {:?}", d);
-                let inside = d.read_dir().unwrap();
+                let inside = d.read_dir()?;
                 for x in inside {
                     let filename = x?.file_name().to_str().unwrap().to_string();
                     let mut tr = TopicRefInternal {
@@ -221,6 +232,6 @@ impl TypeOFSource {
             TypeOFSource::History(..) => {
                 not_implemented!("get_meta_index: {self:?}")
             }
-        };
+        }
     }
 }
