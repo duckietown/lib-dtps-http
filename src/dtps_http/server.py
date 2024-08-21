@@ -929,7 +929,8 @@ class DTPSServer:
         history: Dict[int, Any] = {}
         for i in oq.stored:
             ds = oq.saved[i]
-            a = oq.get_data_ready(ds, inline_data=False)
+            content = self.blob_manager.get_blob(ds.digest)
+            a = oq.get_data_ready(ds, inline_data=False, content=content)
             history[a.index] = asdict(a)
 
         cbor = cbor2.dumps(history)
@@ -1644,20 +1645,24 @@ pre {{
 
         every = EveryOnceInAWhile(1.0 / max_frequency if max_frequency is not None else 0.0)
 
+        nsent = 0
+
         @async_error_catcher
         async def send_message(_: ObjectQueue, inot: InsertNotification) -> None:
             # self.logger.debug(f"serve_events: new message {i}")
             # mdata = oq_.saved[i]
             ds = inot.data_saved
             digest = ds.digest
+            nonlocal nsent
 
-            if not self.blob_manager.has_blob(digest):
-                msg = f"Blob {digest} not found, skipping"
-                self.logger.error(msg)
-                return
+            # if not self.blob_manager.has_blob(digest):
+            #     msg = f"While serving {request.url}, seq #{nsent} blob {digest} not found, skipping"
+            #     self.logger.error(msg)
+            #     return
+            nsent += 1
 
             # presented_as = request.url.path
-            data = oq_.get_data_ready(ds, inline_data=send_data)
+            data = oq_.get_data_ready(ds, inline_data=send_data, content=inot.raw_data.content)
 
             if ws.closed:
                 exit_event.set()

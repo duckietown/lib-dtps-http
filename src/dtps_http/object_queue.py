@@ -229,7 +229,7 @@ class ObjectQueue:
         )  # logger.debug(f"published #{self._seq} {self._name}: {obj!r}")
 
         # reached_at = self._name.as_relative_url()
-        data_ready = self.get_data_ready(ds, False)
+        data_ready = self.get_data_ready(ds, False, obj.content)
         return data_ready
 
     def current_clocks(self) -> Clocks:
@@ -322,10 +322,13 @@ class ObjectQueue:
         except Exception as e:
             logger.error(f"Could not unsubscribe {sub_id}: {e}")
 
-    def get_data_ready(self, ds: DataSaved, inline_data: bool) -> DataReady:
+    def get_data_ready(self, ds: DataSaved, inline_data: bool, content: bytes) -> DataReady:
         available_interval = DEFAULT_DATA_AVAILABILITY_TIMEOUT
         available_until = time.time() + available_interval
-        content = self.blob_manager.get_blob(ds.digest)
+
+        # if content is None:
+        #     content = self.blob_manager.get_blob(ds.digest)
+
         actual_url = self.blob_manager.get_use_once_link_store(
             ds.digest, content, ds.content_type, available_interval
         )

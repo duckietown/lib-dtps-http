@@ -1226,7 +1226,13 @@ pub async fn sniff_and_start_proxy(
         TypeOfResource::DTPSIndex { node_id } => {
             let mut ss = ss_mutex.lock().await;
             let urls = vec![url.clone()];
-            ss.add_proxy_connection(&mounted_at, &urls, Some(node_id), ss_mutex.clone(), mask_origin)?;
+            ss.add_proxy_connection(
+                &mounted_at,
+                &urls,
+                None, //Some(node_id),  // TMP:
+                ss_mutex.clone(),
+                mask_origin,
+            )?;
             Ok(())
             // not_implemented!("observe_proxy: TypeOfResource::DTPSIndex")
             // ss.add_proxy_connection(&subcription_name, &url, ss_mutex).await
