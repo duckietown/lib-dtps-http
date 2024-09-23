@@ -1,5 +1,6 @@
 import asyncio
 import time
+import traceback
 from asyncio import CancelledError, Event
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -46,6 +47,7 @@ from dtps_http import (
     url_to_string,
     URLIndexer,
     URLString,
+    DEFAULT_CALLBACK_QUEUE_SIZE,
 )
 from . import logger
 from .config import ContextInfo, ContextManager
@@ -361,6 +363,7 @@ class ContextManagerUseContext(DTPSContext):
         /,
         max_frequency: Optional[float] = None,
         inline: bool = True,
+        queue_size: int = DEFAULT_CALLBACK_QUEUE_SIZE,
     ) -> "SubscriptionInterface":
         if not self.config.patient:
             return await self.subscribe_once(on_data, max_frequency, inline)
@@ -370,7 +373,7 @@ class ContextManagerUseContext(DTPSContext):
         stop_event = Event()
         fldi = FakeSubscriptionInterface(stop_event)
 
-        task = asyncio.create_task(self._subscribe_patient_task(fldi, on_data, max_frequency, inline))
+        task = asyncio.create_task(self._subscribe_patient_task(fldi, on_data, max_frequency, inline, queue_size))
         self.master.remember_task(task)
         return fldi
 
@@ -382,6 +385,7 @@ class ContextManagerUseContext(DTPSContext):
         /,
         max_frequency: Optional[float] = None,
         inline: bool = True,
+        queue_size: int = DEFAULT_CALLBACK_QUEUE_SIZE,
     ) -> None:
 
         logger.debug(f"subscribe _subscribe_patient_task: starting")
@@ -397,7 +401,8 @@ class ContextManagerUseContext(DTPSContext):
                     finished_event.set()
 
                 ntries += 1
-                si = await self.subscribe_once(on_data, max_frequency, inline, on_finished=on_finished)
+                si = await self.subscribe_once(on_data, max_frequency, inline, on_finished=on_finished,
+                                               queue_size=queue_size)
                 nsuccess += 1
                 fldi.real = si
                 logger.debug(f"_subscribe_patient_task: wait for finished_event")
@@ -422,11 +427,40 @@ class ContextManagerUseContext(DTPSContext):
         max_frequency: Optional[float] = None,
         inline: bool = True,
         on_finished: Optional[Callable[[FinishedMsg], Awaitable[None]]] = None,
+        queue_size: int = DEFAULT_CALLBACK_QUEUE_SIZE,
     ) -> "SubscriptionInterface":
         url = await self._get_best_url()
+
+        queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
+
+        async def _processor():
+            while True:
+                data: RawData = await queue.get()
+                # noinspection PyBroadException
+                # ==> this block runs user code, we need to catch exceptions
+                try:
+                    await on_data(data)
+                except Exception:
+                    print(f"Exception in user callback for queue {self}:")
+                    traceback.print_exc()
+                # <== this block runs user code, we need to catch exceptions
+
+        # create processor task
+        asyncio.run_coroutine_threadsafe(_processor(), asyncio.get_event_loop())
+
+        async def _wrapped_on_data(data: RawData):
+            try:
+                queue.put_nowait(data)
+            except asyncio.QueueFull:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                queue.put_nowait(data)
+
         ldi = await self.master.client.listen_url(
             url,
-            on_data,
+            _wrapped_on_data,
             inline_data=inline,
             raise_on_error=True,
             max_frequency=max_frequency,

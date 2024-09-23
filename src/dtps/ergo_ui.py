@@ -25,6 +25,7 @@ from dtps_http import (
     RawData,
     TopicProperties,
     URLString,
+    DEFAULT_CALLBACK_QUEUE_SIZE,
 )
 
 __all__ = [
@@ -159,6 +160,7 @@ class DTPSContext(ABC):
         /,
         max_frequency: Optional[float] = None,
         inline: bool = True,
+        queue_size: int = DEFAULT_CALLBACK_QUEUE_SIZE,
     ) -> "SubscriptionInterface":
         """
         The subscription is persistent: if the topic is not available, we wait until

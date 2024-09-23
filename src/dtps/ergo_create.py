@@ -1,3 +1,5 @@
+import asyncio
+import traceback
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -32,6 +34,7 @@ from dtps_http import (
     TransformError,
     url_to_string,
     URLString,
+    DEFAULT_CALLBACK_QUEUE_SIZE,
 )
 from .config import ContextInfo, ContextManager
 from .ergo_ui import (
@@ -241,19 +244,47 @@ class ContextManagerCreateContext(DTPSContext):
         /,
         max_frequency: Optional[float] = None,
         inline: bool = True,
+        queue_size: int = DEFAULT_CALLBACK_QUEUE_SIZE,
     ) -> "SubscriptionInterface":
         oq0 = self._get_server().get_oq(self._topic)
 
         when = EveryOnceInAWhile(1.0 / max_frequency if max_frequency is not None else 0)
 
+        queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
+
+        async def _processor():
+            while True:
+                data: RawData = await queue.get()
+                # noinspection PyBroadException
+                # ==> this block runs user code, we need to catch exceptions
+                try:
+                    await on_data(data)
+                except Exception:
+                    print(f"Exception in user callback for queue {self}:")
+                    traceback.print_exc()
+                # <== this block runs user code, we need to catch exceptions
+
+        # create processor task
+        asyncio.run_coroutine_threadsafe(_processor(), asyncio.get_event_loop())
+
+        async def _wrapped_on_data(data: RawData):
+            try:
+                queue.put_nowait(data)
+            except asyncio.QueueFull:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                queue.put_nowait(data)
+
         async def wrap(_: ObjectQueue, inot: InsertNotification) -> None:
             if when.now():
-                await on_data(inot.raw_data)
+                await _wrapped_on_data(inot.raw_data)
 
         if oq0.stored:
             last = oq0.last_data()
             # data2: RawData = oq0.get(oq0.last().digest)
-            await on_data(last)
+            await _wrapped_on_data(last)
         _ = inline
         sub_id = oq0.subscribe(wrap, max_frequency=max_frequency)
 
