@@ -1,4 +1,5 @@
 import hashlib
+import itertools
 import json
 from dataclasses import asdict
 from typing import Any, cast, Dict, List, Literal, NewType, Optional, Sequence, Union
@@ -347,14 +348,17 @@ class RawData:
         return RawData.yaml_from_native_object(no)
 
     def get_as(self, content_type: str) -> "RawData":
-        if content_type == "*/*":
-            return self
-        if content_type == MIME_JSON:
+        content_types_split: List[List[str]] = [ct.split(",") for ct in content_type.split(";")]
+        content_types: List[str] = list(itertools.chain.from_iterable(content_types_split))
+        if MIME_JSON in content_types:
             return self.as_json()
-        if content_type == MIME_CBOR:
+        if MIME_CBOR in content_types:
             return self.as_cbor()
-        if content_type == MIME_YAML:
+        if MIME_YAML in content_types:
             return self.as_yaml()
+        # MUST leave most general case to the end
+        if "*/*" in content_types:
+            return self
         raise ValueError(f"Cannot convert to {content_type!r}")
 
 
