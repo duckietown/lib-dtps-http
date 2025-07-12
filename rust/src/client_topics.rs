@@ -17,7 +17,12 @@ pub async fn create_topic(
 
     let value = serde_json::to_value(tr)?;
 
-    let add_operation = AddOperation { path, value };
+    let pointer = jsonptr::PointerBuf::try_from(path).map_err(|e| {
+        // You can customize the error handling here if needed
+        // For now, just convert to a string error
+        format!("Invalid JSON pointer: {}", e)
+    })?;
+    let add_operation = AddOperation { path: pointer, value };
     let operation1 = PatchOperation::Add(add_operation);
     let patch = Patch(vec![operation1]);
     client_verbs::patch_data(conbase, &patch).await?;
@@ -32,7 +37,10 @@ pub async fn delete_topic(conbase: &TypeOfConnection, topic_name: &TopicName) ->
         path.push_str(t);
     }
 
-    let remove_operation = RemoveOperation { path };
+    let pointer = jsonptr::PointerBuf::try_from(path).map_err(|e| {
+        format!("Invalid JSON pointer: {}", e)
+    })?;
+    let remove_operation = RemoveOperation { path: pointer };
     let operation1 = PatchOperation::Remove(remove_operation);
     let patch = Patch(vec![operation1]);
 

@@ -38,6 +38,9 @@ fn create_add_tpt_connection_patch(
     let wire = connection_job.to_wire();
     let value = serde_json::to_value(wire)?;
 
+    let path = jsonptr::PointerBuf::try_from(path.as_str())
+        .map_err(|e| DTPSError::Other(format!("Invalid JSON pointer: {e}")))?;
+
     let add_operation = AddOperation { path, value };
     let operation1 = PatchOperation::Add(add_operation);
     let patch = Patch(vec![operation1]);
@@ -65,6 +68,9 @@ fn create_remove_tpt_connection_patch(connection_name: &CompositeName) -> Patch 
     let mut path: String = String::new();
     path.push('/');
     path.push_str(utils_patch::escape_json_patch(connection_name.as_dash_sep()).as_str());
+
+    let path = jsonptr::PointerBuf::try_from(path.as_str())
+        .expect("Invalid JSON pointer in create_remove_tpt_connection_patch");
 
     let remove_operation = RemoveOperation { path };
     let operation1 = PatchOperation::Remove(remove_operation);

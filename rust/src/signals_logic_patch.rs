@@ -88,34 +88,34 @@ pub fn add_prefix_to_patch_op(op: &PatchOperation, prefix: &str) -> PatchOperati
     match op {
         PatchOperation::Add(y) => {
             let mut y = y.clone();
-            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix);
+            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix).parse().unwrap();
             PatchOperation::Add(y)
         }
         PatchOperation::Remove(y) => {
             let mut y = y.clone();
-            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix);
+            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix).parse().unwrap();
             PatchOperation::Remove(y)
         }
         PatchOperation::Replace(y) => {
             let mut y = y.clone();
-            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix);
+            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix).parse().unwrap();
             PatchOperation::Replace(y)
         }
         PatchOperation::Move(y) => {
             let mut y = y.clone();
-            y.from = format!("{prefix}{from}", from = y.from, prefix = prefix);
-            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix);
+            y.from = format!("{prefix}{from}", from = y.from, prefix = prefix).parse().unwrap();
+            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix).parse().unwrap();
             PatchOperation::Move(y)
         }
         PatchOperation::Copy(y) => {
             let mut y = y.clone();
-            y.from = format!("{prefix}{from}", from = y.from, prefix = prefix);
-            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix);
+            y.from = format!("{prefix}{from}", from = y.from, prefix = prefix).parse().unwrap();
+            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix).parse().unwrap();
             PatchOperation::Copy(y)
         }
         PatchOperation::Test(y) => {
             let mut y = y.clone();
-            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix);
+            y.path = format!("{prefix}{path}", path = y.path, prefix = prefix).parse().unwrap();
             PatchOperation::Test(y)
         }
     }
@@ -281,7 +281,7 @@ async fn patch_proxied(ss_mutex: ServerStateAccess, topic_name: &TopicName, p: &
         match po {
             PatchOperation::Add(ao) => {
                 let pj: ProxyJob = serde_json::from_value(ao.value.clone())?;
-                let key = unescape_json_patch(&ao.path)[1..].to_string();
+                let key = unescape_json_patch(&ao.path.as_str())[1..].to_string();
                 let topic_name = TopicName::from_dash_sep(key)?;
                 let mut urls = Vec::new();
                 for u in pj.urls.iter() {
@@ -304,7 +304,7 @@ async fn patch_proxied(ss_mutex: ServerStateAccess, topic_name: &TopicName, p: &
                 )?;
             }
             PatchOperation::Remove(ro) => {
-                let key = unescape_json_patch(&ro.path)[1..].to_string();
+                let key = unescape_json_patch(ro.path.as_str())[1..].to_string();
                 let topic_name = TopicName::from_dash_sep(key)?;
                 ss.remove_proxy_connection(&topic_name)?;
             }
@@ -355,12 +355,12 @@ async fn patch_connection(ssa: ServerStateAccess, topic_name: &TopicName, p: &Pa
         PatchOperation::Add(ao) => {
             let pj: ConnectionJobWire = serde_json::from_value(ao.value.clone())?;
             let pj = ConnectionJob::from_wire(&pj)?;
-            let key = unescape_json_patch(&ao.path)[1..].to_string();
+            let key = unescape_json_patch(ao.path.as_str())[1..].to_string();
             let name = TopicName::from_dash_sep(key)?;
             ss.add_topic_to_topic_connection_(&name, &pj, ssa.clone()).await?;
         }
         PatchOperation::Remove(ao) => {
-            let key = unescape_json_patch(&ao.path)[1..].to_string();
+            let key = unescape_json_patch(ao.path.as_str())[1..].to_string();
             let name = TopicName::from_dash_sep(key)?;
             ss.remove_topic_to_topic_connection_(&name).await?;
         }
