@@ -1,142 +1,88 @@
+"""Config."""
+
+__all__ = ["context", "context_cleanup"]
+
 import os
-from contextlib import asynccontextmanager
+import typing
+from collections.abc import AsyncIterator, Mapping
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from typing import (
-    AsyncContextManager,
-    AsyncIterator,
-    cast,
-    ClassVar,
-    Dict,
-    List,
-    Mapping,
-    Optional,
-    Tuple,
-    TYPE_CHECKING,
-)
+from typing import TYPE_CHECKING, ClassVar
 
-from dtps_http import parse_url_unescape, ServerWrapped, URLString
-from . import logger
-from .ergo_ui import DTPSContext
+import dtps_http
+from dtps import logger
+from dtps.ergo_abstract import AbstractDTPSContext
+from dtps.ergo_create import ContextManagerCreate
+from dtps.ergo_use import ContextManagerUse
+from dtps_http import ServerWrapped, URLString
 
-__all__ = [
-    "context",
-    "context_cleanup",
-]
+BASE = "DTPS_BASE_"
 
 
-async def context(
-    base_name: str = "self", environment: Optional[Mapping[str, str]] = None, urls: Optional[List[str]] = None
-) -> "DTPSContext":
-    """
-    Initialize a DTPS interface from the environment from a given base name.
+@dataclass
+class ContextInfo:
+    urls: list["ContextUrl"]
 
-    base_name is case-insensitive.
+    def get_tcp_and_unix(self) -> tuple[list[tuple[str, int]], list[str]]:
+        tcp: list[tuple[str, int]] = []
+        unix: list[str] = []
+        for url in self.urls:
+            url_ = dtps_http.parse_url_unescape(url.url)
+            if url_.scheme == "http+unix":
+                host = url_.host
+                unix.append(host)
+            elif url_.scheme in ("http", "https"):
+                host = url_.host or "localhost"
+                if not url_.port:
+                    port = 0
+                elif isinstance(url_.port, str):
+                    port = int(url_.port)
+                else:
+                    port = url_.port
+                tcp.append((host, port))
+            else:
+                message = (
+                    f"Invalid url '{url_}'. Must start with 'http://' or "
+                    "'http+unix://'."
+                )
+                raise ValueError(message)
+        return tcp, unix
 
-    Environment variables of the form DTPS_BASE_<base_name> are used to get the info needed.
-
-    For example:
-
-        DTPS_BASE_SELF = "http://localhost:2120/" # use an existing server
-        DTPS_BASE_SELF = "http+unix://[socket]/" # use an existing unix socket
-
-    We can also use the special prefix "create:" to create a new server.
-    For example:
-
-        DTPS_BASE_SELF = "create:http://localhost:2120/" # create a new server
-
-    Moreover, we can use more than one base name, by adding a number at the end:
-
-        DTPS_BASE_SELF_0 = "create:http://localhost:2120/" #
-        DTPS_BASE_SELF_1 = "create:http+unix://[socket]/"
-
-
-    You need to call context.aclose() at the end to clean up resources.
-
-
-        c = context("mio", environment={'DTPS_BASE_MIO': url})
-
-    """
-    base_name = base_name.lower()
-
-    if environment is not None and urls is not None:
-        raise ValueError("You cannot create a context while passing both 'environment' and 'urls'")
-
-    if urls:
-        environment = environment_from_urls(base_name, urls)
-
-    if environment is None:
-        if base_name in ContextManager.instances:
-            return ContextManager.instances[base_name].get_context()
-        else:
-            context_manager = await create_context(base_name, environment)
-            ContextManager.instances[base_name] = context_manager
-            return context_manager.get_context()
-    else:
-        context_manager = await create_context(base_name, environment)
-        return context_manager.get_context()
-
-
-if TYPE_CHECKING:
-
-    def context_cleanup(
-        base_name: str = "self", environment: Optional[Mapping[str, str]] = None
-    ) -> AsyncContextManager[DTPSContext]: ...
-
-else:
-
-    @asynccontextmanager
-    async def context_cleanup(
-        base_name: str = "self", environment: Optional[Mapping[str, str]] = None
-    ) -> AsyncIterator[DTPSContext]:
-        """Context manager to open a context and clean-up later."""
-        c = await context(base_name, environment)
-        try:
-            yield c
-        finally:
-            await c.aclose()
-
-
-async def create_context(base_name: str, environment: Optional[Mapping[str, str]]) -> "ContextManager":
-    contexts = get_context_info(environment)
-    if base_name not in contexts.contexts:
-        msg = f'Cannot find context "{base_name}" among {list(contexts.contexts)}'
-        raise KeyError(msg)
-
-    context_info = contexts.contexts[base_name]
-    logger.debug(f'Creating context "{base_name}" with {context_info} for environment {environment}')
-    return await ContextManager.create(base_name, context_info)
+    def is_create(self) -> bool:
+        return all(url.create for url in self.urls)
 
 
 class ContextManager:
-    instances: ClassVar[Dict[str, "ContextManager"]] = {}
+    """Context manager."""
 
     context_info: "ContextInfo"
-
-    dtps_server_wrap: Optional[ServerWrapped]
+    dtps_server_wrap: ServerWrapped | None
+    instances: ClassVar[dict[str, "ContextManager"]] = {}
 
     @classmethod
-    async def create(cls, base_name: str, context_info: "ContextInfo") -> "ContextManager":
-        # if base_name in cls.instances:
-        #     msg = f'Context "{base_name}" already exists'
-        #     raise KeyError(msg)
-
-        # logger.info(f'Creating context "{base_name}" with {context_info}')
-
+    async def create(
+        cls,
+        base_name: str,
+        context_info: "ContextInfo",
+    ) -> "ContextManager":
+        context_manager: ContextManagerCreate | ContextManagerUse
         if context_info.is_create():
-            from .ergo_create import ContextManagerCreate
-
-            cm = ContextManagerCreate(base_name, context_info)
+            context_manager = ContextManagerCreate(base_name, context_info)
         else:
-            from .ergo_use import ContextManagerUse
+            context_manager = ContextManagerUse(base_name, context_info)
+        await context_manager.initialize()
+        return context_manager
 
-            cm = ContextManagerUse(base_name, context_info)
+    async def initialize(self) -> None:
+        """Initialize."""
 
-        # cls.instances[base_name] = cm
-        await cm.init()
-        return cm
+    def get_context(self) -> AbstractDTPSContext:
+        raise NotImplementedError
 
-    def get_context(self) -> "DTPSContext":
-        raise NotImplementedError()
+
+@dataclass
+class ContextsInfo:
+    contexts: dict[str, ContextInfo]
 
 
 @dataclass
@@ -145,91 +91,150 @@ class ContextUrl:
     create: bool
 
     def __post_init__(self) -> None:
-        parse_url_unescape(self.url)
+        dtps_http.parse_url_unescape(self.url)
 
 
-@dataclass
-class ContextInfo:
-    urls: List[ContextUrl]
+async def context(
+    base_name: str = "self",
+    environment: Mapping[str, str] | None = None,
+    urls: list[str] | None = None,
+) -> AbstractDTPSContext:
+    """Initialize a DTPS interface.
 
-    def is_create(self) -> bool:
-        return all(x.create for x in self.urls)
+    Initializes a DTPS interface from the environment from a given base
+    name. For example:
 
-    def get_tcp_and_unix(self) -> Tuple[List[Tuple[str, int]], List[str]]:
-        tcp: List[Tuple[str, int]] = []
-        unix: List[str] = []
-        for u in self.urls:
-            url_ = parse_url_unescape(u.url)
-            if url_.scheme == "http+unix":
-                host = url_.host
-                unix.append(host)
+        context_ = context("mio", environment={
+            "DTPS_BASE_MIO": url
+        })
 
-            elif url_.scheme == "http" or url_.scheme == "https":
-                # rest = url.url[len("http://") :]
-                # host, _, rest = rest.partition("/")
-                # host, _, port = host.partition(":")
-                # port = int(port)
-                host = url_.host or "localhost"
-                if not url_.port:
-                    port = 0
-                elif isinstance(url_.port, str):
-                    port = int(url_.port)
-                else:
-                    port = url_.port
+    Note that `base_name` is case-insensitive.
 
-                tcp.append((host, port))
-            else:
-                msg = f'Invalid url "{url_}". Must start with "http://" or "http+unix://".'
-                raise ValueError(msg)
-        return tcp, unix
+    Environment variables of the form `DTPS_BASE_<base_name>` are used
+    to get the info needed. For example:
 
+        # use an existing server
+        DTPS_BASE_SELF = "http://localhost:2120/"
+        # use an existing unix socket
+        DTPS_BASE_SELF = "http+unix://[socket]/"
 
-@dataclass
-class ContextsInfo:
-    contexts: Dict[str, ContextInfo]
+    We can also use the special prefix `create:` to create a new
+    server. For example:
+
+        # create a new server
+        DTPS_BASE_SELF = "create:http://localhost:2120/"
+
+    Moreover, we can use more than one base name, by adding a number at
+    the end:
+
+        DTPS_BASE_SELF_0 = "create:http://localhost:2120/"
+        DTPS_BASE_SELF_1 = "create:http+unix://[socket]/"
 
 
-BASE = "DTPS_BASE_"
+    You need to call `context.aclose()` at the end to clean up
+    resources.
+    """
+    base_name = base_name.lower()
+    if environment is not None and urls is not None:
+        message = (
+            "You cannot create a context while passing both 'environment' and "
+            "'urls'."
+        )
+        raise ValueError(message)
+    if urls:
+        environment = environment_from_urls(base_name, urls)
+    if environment is None:
+        if base_name in ContextManager.instances:
+            return ContextManager.instances[base_name].get_context()
+        context_manager = await create_context(base_name, environment)
+        ContextManager.instances[base_name] = context_manager
+        return context_manager.get_context()
+    context_manager = await create_context(base_name, environment)
+    return context_manager.get_context()
 
 
-def get_context_info(environment: Optional[Mapping[str, str]]) -> ContextsInfo:
+if TYPE_CHECKING:
+
+    def context_cleanup(
+        base_name: str = "self",
+        environment: Mapping[str, str] | None = None,
+    ) -> AbstractAsyncContextManager[AbstractDTPSContext]:
+        """Context cleanup."""
+else:
+
+    @asynccontextmanager
+    async def context_cleanup(
+        base_name: str = "self",
+        environment: Mapping[str, str] | None = None,
+    ) -> AsyncIterator[AbstractDTPSContext]:
+        """Context manager to open a context and clean-up later."""
+        context_ = await context(base_name, environment)
+        try:
+            yield context_
+        finally:
+            await context_.aclose()
+
+
+async def create_context(
+    base_name: str,
+    environment: Mapping[str, str] | None,
+) -> ContextManager:
+    contexts = get_context_info(environment)
+    if base_name not in contexts.contexts:
+        message = (
+            f"Cannot find context '{base_name}' among "
+            f"{list(contexts.contexts)}."
+        )
+        raise KeyError(message)
+    context_info = contexts.contexts[base_name]
+    logger.debug(
+        "Creating context '%s' with %s for environment %s...",
+        base_name,
+        context_info,
+        environment,
+    )
+    return await ContextManager.create(base_name, context_info)
+
+
+def environment_from_urls(name: str, urls: list[str]) -> dict[str, str]:
+    return {f"{BASE}{name}_{i}": url for i, url in enumerate(urls)}
+
+
+def get_context_info(environment: Mapping[str, str] | None) -> ContextsInfo:
     if environment is None:
         environment = dict(os.environ)
-
-    contexts: Dict[str, ContextInfo] = {}
-    for k, v in environment.items():
-        if not k.startswith(BASE):
+    contexts: dict[str, ContextInfo] = {}
+    for key, value in environment.items():
+        if not key.startswith(BASE):
             continue
-        rest = k[len(BASE) :]
-
+        rest = key[len(BASE) :]
         name, _, rest = rest.partition("_")
-
         name = name.lower()
         if name not in contexts:
             contexts[name] = ContextInfo(urls=[])
-
-        if v.startswith("create:"):
-            x = cast(URLString, v[len("create:") :])
+        if value.startswith("create:"):
+            url = typing.cast(URLString, value[7:])
             create = True
-
         else:
-            x = cast(URLString, v)
+            url = typing.cast(URLString, value)
             create = False
         try:
-            parse_url_unescape(x)
-        except ValueError as e:
-            msg = f"Invalid url given by environment:\n{k} = {v}\nExtracted url: {x}"
-            raise ValueError(msg) from e
-        contexts[name].urls.append(ContextUrl(url=x, create=create))
-
+            dtps_http.parse_url_unescape(url)
+        except ValueError as error:
+            message = (
+                f"Invalid url given by environment:\n{key} = {value}\n"
+                f"Extracted url: {url}"
+            )
+            raise ValueError(message) from error
+        context_url = ContextUrl(url=url, create=create)
+        contexts[name].urls.append(context_url)
     for name, info in contexts.items():
-        all_create = all(x.create for x in info.urls)
-        all_not_create = all(not x.create for x in info.urls)
+        all_create = all(url.create for url in info.urls)
+        all_not_create = all(not url.create for url in info.urls)
         if not all_create and not all_not_create:
-            msg = f'Invalid context "{name}". All urls must be either "create:" or not.'
-            raise ValueError(msg)
+            message = (
+                f"Invalid context '{name}'. All urls must be either 'create:' "
+                "or not."
+            )
+            raise ValueError(message)
     return ContextsInfo(contexts=contexts)
-
-
-def environment_from_urls(name: str, urls: List[str]):
-    return {f"{BASE}{name}_{i}": url for i, url in enumerate(urls)}

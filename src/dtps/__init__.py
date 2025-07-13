@@ -1,13 +1,15 @@
+"""DTPS."""
+
 __version__ = "1.3.24"
 
 from logging import DEBUG, getLogger
 
+from dtps.config import *
+from dtps.dtps_utils import *
+from dtps.ergo_abstract import *
+from dtps_http import RawData, TransformError
+
 logger = getLogger(__name__)
 logger.setLevel(DEBUG)
-
-from .config import *
-from .ergo_ui import *
-from .dtps_utils import *
-from dtps_http import RawData, TransformError
 
 _ = RawData, TransformError

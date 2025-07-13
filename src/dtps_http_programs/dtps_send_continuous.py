@@ -1,38 +1,47 @@
+"""DTPS send continuous."""
+
+__all__ = ["dtps_send_continuous_main"]
+
 import argparse
 import asyncio
-import json
-from dataclasses import asdict
-from typing import List, Optional
 
-from dtps_http import ContentType, DTPSClient, parse_url_unescape, URL, URLString
-from . import logger
-
-__all__ = [
-    "dtps_send_continuous_main",
-]
+from dtps_http import (
+    URL,
+    ContentType,
+    DTPSClient,
+    URLString,
+    parse_url_unescape,
+)
 
 
 async def send_continuous(urlbase0: URL) -> None:
-    async with DTPSClient.create() as dtpsclient:
-        md = await dtpsclient.get_metadata(urlbase0)
-        # logger.info(f"Metadata for {urlbase0!r}:\n" + t.dumps(asdict(md), indent=2))
-        if md.events_url is None:
-            raise Exception("No events URL")
-
-        async with dtpsclient.push_through_websocket(md.events_url) as d:
-            # rd = RawData(b'hello!', content_type="text/plain")
+    async with DTPSClient.create() as dtps_client:
+        metadata = await dtps_client.get_metadata(urlbase0)
+        if metadata.events_url is None:
+            message = "No events URL."
+            raise Exception(message)
+        async with dtps_client.push_through_websocket(
+            metadata.events_url,
+        ) as push_interface:
             while True:
-                await d.push_through(b"hello!", content_type=ContentType("text/plain"))
+                content_type = ContentType("text/plain")
+                await push_interface.push_through(b"hello!", content_type)
+                await asyncio.sleep(1)
 
-                await asyncio.sleep(1.0)
 
-
-def dtps_send_continuous_main(args: Optional[List[str]] = None) -> None:
-    parser = argparse.ArgumentParser(description="Connects to DTPS server and pushes through websocket")
+def dtps_send_continuous_main(args: list[str] | None = None) -> None:
+    """Run DTPS send continuous."""
+    description = (
+        "Connects to a DTPS server and then pushes through a websocket."
+    )
+    parser = argparse.ArgumentParser(
+        description=description,
+    )
     parser.add_argument("--url", required=True, help="Topic URL inline data")
     parsed = parser.parse_args(args=args)
     url = parsed.url
-    url = parse_url_unescape(URLString(url))
-    f = send_continuous(url)
+    url_string = URLString(url)
+    url = parse_url_unescape(url_string)
+    future = send_continuous(url)
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(f)
+    loop.run_until_complete(future)

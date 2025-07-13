@@ -1,18 +1,10 @@
-import functools
-import os
-import posixpath
-from typing import cast, List, NamedTuple, NewType, Optional, TYPE_CHECKING
-from urllib.parse import unquote
-
-from urllib3.util import parse_url, Url
-
-from .types import URLString
+"""URLs."""
 
 __all__ = [
     "URL",
+    "URLWS",
     "URLIndexer",
     "URLTopic",
-    "URLWS",
     "URLWSInline",
     "URLWSOffline",
     "get_relative_url",
@@ -22,33 +14,36 @@ __all__ = [
     "url_to_string",
 ]
 
-if TYPE_CHECKING:
+import functools
+import os
+import posixpath
+from pathlib import Path
+from typing import NamedTuple, NewType, cast
+from urllib.parse import unquote
 
-    class URL(NamedTuple):
-        scheme: str
-        auth: Optional[str]
-        host: str
-        port: Optional[int]
-        path: Optional[str]
-        query: Optional[str]
-        fragment: Optional[str]
+from urllib3.util import Url, parse_url
 
-else:
-    from urllib3.util import Url as URL
-
-URLIndexer = NewType("URLIndexer", URL)
-# URLTopic = NewType("URLTopic", URL)
-URLTopic = URL
-URLWS = NewType("URLWS", URL)
-URLWSInline = NewType("URLWSInline", URLWS)
-URLWSOffline = NewType("URLWSOffline", URLWS)
+from dtps_http.types_ import URLString
 
 
-def quote(s: str) -> str:
-    return s.replace("/", "%2F")
+class URL(NamedTuple):
+    """URL."""
+
+    scheme: str
+    auth: str | None
+    host: str
+    port: int | None
+    path: str | None
+    query: str | None
+    fragment: str | None
 
 
-def make_http_unix_url(socket_path: str, url_path: Optional[str] = None) -> URL:
+def quote(string: str) -> str:
+    return string.replace("/", "%2F")
+
+
+def make_http_unix_url(socket_path: str, url_path: str | None = None) -> URL:
+    """Return http+unix URL."""
     if url_path is None:
         url_path = "/"
     return URL(
@@ -63,98 +58,103 @@ def make_http_unix_url(socket_path: str, url_path: Optional[str] = None) -> URL:
 
 
 def parse_url_unescape(s: URLString) -> URL:
+    """Parse URL."""
     parsed = parse_url(s)
-    if parsed.path is None:
-        # logger.warning(f"parse_url_unescape: path is None: {s!r}")
-        path = "/"
-    else:
-        path = parsed.path
-
-    res = Url(  # type: ignore
+    path = "/" if parsed.path is None else parsed.path
+    host = unquote(parsed.host) if parsed.host is not None else None
+    res = Url(
         scheme=parsed.scheme,
-        host=unquote(parsed.host) if parsed.host is not None else None,
+        host=host,
         port=parsed.port,
-        path=path,  # unquote(parsed.path) if parsed.path is not None else None,
+        path=path,
         query=parsed.query,
     )
-
     if res.scheme == "http+unix" and res.host is None:
-        msg = f"This url seems invalid: Expected to have a non-null host:\n  {s!r}"
-        raise ValueError(msg)
-
+        message = (
+            f"This url seems invalid: Expected to have a non-null host:\n{s!r}"
+        )
+        raise ValueError(message)
     return cast(URL, res)
 
 
 def url_to_string(url: URL) -> URLString:
-    # noinspection PyProtectedMember
-    assert isinstance(url, URL), type(url)
-    url2 = url._replace(host=quote(url.host) if url.host is not None else None)
-
+    """Return URL as string."""
+    if not isinstance(url, URL):
+        raise TypeError
+    host = quote(url.host) if url.host is not None else None
+    url2 = url._replace(host=host)
     if not url2.scheme and not url2.host and url2.port is None:
-        s = url2.path or "/"
+        url_path = url2.path or "/"
         if url2.query is not None:
-            s += "?" + url2.query
-        return URLString(s)
-
-    res = cast(URLString, str(url2))
+            url_path += "?" + url2.query
+        return URLString(url_path)
+    url2_string = str(url2)
+    res = cast(URLString, url2_string)
     parse_url_unescape(res)
     return res
 
 
 def join(url: URL, path0: str) -> URL:
+    """Join."""
     if "?" in path0:
         path0, _, query = path0.partition("?")
     else:
         query = None
-
     if "://" in path0:
-        return parse_url_unescape(cast(URLString, path0))
+        path_string = cast(URLString, path0)
+        return parse_url_unescape(path_string)
     if url.path is None:
         path = path0
     else:
-        path = os.path.normpath(os.path.join(url.path, path0))
+        url_path = Path(url.path) / path0
+        path = url_path.as_posix()
+        path = os.path.normpath(path)
     if path0.endswith("/"):
         path += "/"
-    # noinspection PyProtectedMember
-    res = url._replace(path=path, query=query)
-    # print(f'join {url!r} {path0!r} -> {res!r}')
-    return res
+    return url._replace(path=path, query=query)
 
 
 @functools.lru_cache(maxsize=128)
-def _norm_parts(path: str) -> List[str]:
+def _norm_parts(path: str) -> list[str]:
     if not path.startswith("/"):
         path = "/" + path
-    path = posixpath.normpath(path)[1:]
+    path = posixpath.normpath(path)
+    path = path[1:]
     return path.split("/") if path else []
 
 
 def get_relative_url(url: str, other: str) -> URLString:
-    """
-    Return given url relative to other.
+    """Return URL relative to the other.
 
-    Both are operated as slash-separated paths, similarly to the 'path' part of a URL.
-    The last component of `other` is skipped if it contains a dot (considered a file).
-    Actual URLs (with schemas etc.) aren't supported. The leading slash is ignored.
-    Paths are normalized ('..' works as parent directory), but going higher than the
-    root has no effect ('foo/../../bar' ends up just as 'bar').
+    Both are operated as slash-separated paths, similar to the "path"
+    part of a URL. The last component of `other` is skipped if it
+    contains a dot (considered a file). Actual URLs (with schemas etc.)
+    are not supported. The leading slash is ignored. Paths are
+    normalized (`..` works as the parent directory), but going higher
+    than the root has no effect (`foo/../../bar` ends up just as `bar`).
     """
     # Remove filename from other url if it has one.
     dirname, _, basename = other.rpartition("/")
     if "." in basename:
         other = dirname
-
     other_parts = _norm_parts(other)
     dest_parts = _norm_parts(url)
     common = 0
-    for a, b in zip(other_parts, dest_parts):
+    for a, b in zip(other_parts, dest_parts, strict=False):
         if a != b:
             break
         common += 1
-
-    rel_parts = [".."] * (len(other_parts) - common) + dest_parts[common:]
+    other_parts_length = len(other_parts)
+    rel_parts = [".."] * (other_parts_length - common) + dest_parts[common:]
     relurl = "/".join(rel_parts) or "."
     res = relurl + "/" if url.endswith("/") else relurl
     if res == "./":
         res = ""
     return URLString(res)
+
+
+URLIndexer = NewType("URLIndexer", URL)
+URLTopic = URL
+URLWS = NewType("URLWS", URL)
+URLWSInline = NewType("URLWSInline", URLWS)
+URLWSOffline = NewType("URLWSOffline", URLWS)

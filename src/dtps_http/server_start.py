@@ -1,245 +1,119 @@
+"""Server start."""
+
+__all__ = ["ServerWrapped", "app_start", "interpret_command_line_and_start"]
+
 import argparse
 import asyncio
 import json
-import os
 import socket
 import sys
 import tempfile
+from asyncio import Event
+from collections.abc import Iterator, Sequence
+from pathlib import Path
 from socket import AddressFamily
-from typing import Any, cast, Iterator, List, Optional, Sequence, Tuple
+from types import TracebackType
+from typing import cast
 
 import psutil
-from aiohttp import ClientResponseError, web
+from aiohttp import ClientResponseError
+from aiohttp.web import AppRunner, TCPSite, UnixSite
 
-from . import logger
-from .client import DTPSClient
-from .server import DTPSServer
-from .structures import Registration
-from .types import TopicNameV, URLString
-from .urls import make_http_unix_url, parse_url_unescape, url_to_string, URLIndexer
-
-__all__ = [
-    "ServerWrapped",
-    "app_start",
-    "interpret_command_line_and_start",
-]
-
-
-def get_ip_addresses() -> Iterator[Tuple[str, AddressFamily, str]]:
-    for interface, snics in psutil.net_if_addrs().items():
-        # print(f"interface={interface!r} snics={snics!r}")
-        for snic in snics:
-            # if snic.family == family:
-            yield (
-                interface,
-                snic.family,
-                snic.address,
-            )
-
-
-async def interpret_command_line_and_start(dtps: DTPSServer, args: Optional[List[str]] = None) -> None:
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument("--tcp-port", type=int, default=None, required=False)
-    parser.add_argument("--tcp-host", required=False, default="0.0.0.0")
-    parser.add_argument("--unix-path", required=False, default=None)
-    parser.add_argument("--no-alternatives", default=False, action="store_true")
-    parser.add_argument("--tunnel", required=False, default=None, help="cloudflare credentials")
-    parser.add_argument("--advertise", action="append", help="extra advertisement URLS")
-    parser.add_argument("--register-switchboard", default=None, help="Switchboard to register to")
-    parser.add_argument("--register-as", default=None, help="Topic name on which to register.")
-    parser.add_argument(
-        "--register-namespace",
-        default=None,
-        help="Prefix of topics to register on switchboard. E.g. --register-namespace=node  only registers "
-        "node/*",
-    )
-
-    parsed = parser.parse_args(args)
-
-    if parsed.tcp_port is None and parsed.unix_path is None:
-        msg = "Please specify at least one of --tcp-port or --unix-path"
-        logger.error(msg)
-        sys.exit(msg)
-
-    tcps: List[Tuple[str, int]] = []
-    if parsed.tcp_port is not None:
-        tcps.append((parsed.tcp_host, parsed.tcp_port))
-
-    if parsed.unix_path is not None:
-        unix_paths = [parsed.unix_path]
-    else:
-        unix_paths = []
-
-    never = asyncio.Event()
-    no_alternatives = parsed.no_alternatives
-
-    tunnel = parsed.tunnel
-    registrations: List[Registration] = []
-    if parsed.register_switchboard is not None:
-        switchboard_url = URLIndexer(parse_url_unescape(parsed.register_switchboard))
-        if parsed.register_as is None:
-            msg = "Please specify --register-as"
-            logger.error(msg)
-            sys.exit(msg)
-
-        namespace = TopicNameV.from_dash_sep_or_none(parsed.register_namespace)
-
-        registrations.append(
-            Registration(
-                switchboard_url=switchboard_url,
-                topic=TopicNameV.from_dash_sep(parsed.register_as),
-                namespace=namespace,
-            )
-        )
-
-    dtps.add_registrations(registrations)
-
-    s = await app_start(
-        dtps,
-        tcps=tcps,
-        unix_paths=unix_paths,
-        tunnel=tunnel,
-        no_alternatives=no_alternatives,
-        extra_advertise=parsed.advertise,
-    )
-    async with s:
-        await never.wait()
+from dtps_http import logger
+from dtps_http.client import DTPSClient
+from dtps_http.server import DTPSServer
+from dtps_http.structures import Registration
+from dtps_http.types_ import TopicNameV, URLString
+from dtps_http.urls import (
+    URLIndexer,
+    make_http_unix_url,
+    parse_url_unescape,
+    url_to_string,
+)
 
 
 class ServerWrapped:
+    """Server wrapped."""
+
     def __init__(
         self,
         server: DTPSServer,
-        runner: web.AppRunner,
-        tunnel_process: Optional[asyncio.subprocess.Process],
-        unix_paths_to_cleanup: List[str],
+        runner: AppRunner,
+        tunnel_process: asyncio.subprocess.Process | None,
+        unix_paths_to_clean_up: list[str],
     ) -> None:
+        """Initialize server wrapped."""
         self.server = server
         self.runner = runner
         self.tunnel_process = tunnel_process
-        self.unix_paths_to_cleanup = unix_paths_to_cleanup
+        self.unix_paths_to_clean_up = unix_paths_to_clean_up
 
     async def __aenter__(self) -> DTPSServer:
+        """Enter asynchronously."""
         await self.server.started.wait()
         return self.server
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(
+        self,
+        _: type[BaseException] | None,
+        __: BaseException | None,
+        ___: TracebackType | None,
+    ) -> None:
+        """Exit asynchronously."""
         await self.aclose()
 
     async def aclose(self) -> None:
+        """Close asynchronously."""
         await self.server.aclose()
-        for up in self.unix_paths_to_cleanup:
-            if os.path.exists(up):
-                os.unlink(up)
-
+        for unix_path_to_clean_up in self.unix_paths_to_clean_up:
+            path = Path(unix_path_to_clean_up)
+            if path.exists():
+                path.unlink()
         if self.tunnel_process is not None:
-            logger.info("terminating cloudflared tunnel")
+            logger.info("Terminating cloudflared tunnel...")
             self.tunnel_process.terminate()
-            # await self.tunnel_process.wait()
-
-        self.server.logger.debug("closing runner")
-
+        self.server.logger.debug("Closing runner...")
         try:
-            await asyncio.wait_for(self.runner.shutdown(), timeout=2)
+            future = self.runner.shutdown()
+            await asyncio.wait_for(future, 2)
         except asyncio.exceptions.TimeoutError:
-            logger.warning("timeout waiting for runner cleanup")
-        self.server.logger.debug("closing runner: done")
+            logger.warning("Timeout waiting for runner cleanup.")
+        self.server.logger.debug("Closing runner: done")
 
 
 async def app_start(
-    s: DTPSServer,
+    server: DTPSServer,
     /,
     *,
-    tcps: Sequence[Tuple[str, int]] = (),
+    tcps: Sequence[tuple[str, int]] = (),
     unix_paths: Sequence[str] = (),
-    tunnel: Optional[str] = None,
+    tunnel: str | None = None,
     no_alternatives: bool = False,
-    extra_advertise: Optional[List[URLString]] = None,
+    extra_advertise: list[URLString] | None = None,
 ) -> ServerWrapped:
-    runner = web.AppRunner(s.app)
+    """Start app."""
+    runner = AppRunner(server.app)
     await runner.setup()
-
     tunnel_process = None
-
-    available_urls: List[URLString] = []
+    available_urls: list[URLString] = []
     for tcp in tcps:
         tcp_host, port = tcp
-
-        tcp_site = web.TCPSite(runner, tcp_host, port)
-
+        tcp_site = TCPSite(runner, tcp_host, port)
         await tcp_site.start()
         if port == 0:
-            port = tcp_site._server.sockets[0].getsockname()[1]  # type: ignore
+            socket_name = tcp_site._server.sockets[0].getsockname()
+            port = socket_name[1]
         the_url0 = cast(URLString, f"http://{tcp_host}:{port}/")
         logger.info(f"Starting TCP server - the URL is {the_url0!r}")
-
-        if tcp_host != "0.0.0.0":
-            available_urls.append(the_url0)
-
+        if tcp_host == "0.0.0.0":
+            available_urls = get_available_urls(available_urls, port)
         else:
-            # addresses = list(get_ip_addresses())
-            # macs = {}
-            # for interface, family, address in addresses:
-            #     if family == socket.AF_LINK:
-            #         macs[interface] = address
-
-            for interface, family, address in get_ip_addresses():
-                if family != socket.AF_INET:
-                    continue
-
-                if address.startswith("127."):
-                    continue
-
-                the_url = cast(URLString, f"http://{address}:{port}/")
-                available_urls.append(the_url)
-
-            the_url = cast(URLString, f"http://{socket.gethostname()}:{port}/")
-            available_urls.append(the_url)
-
-            add_weird_addresses = False
-            # add a weird address: for testing purposes
-            if add_weird_addresses:
-                the_url = cast(URLString, f"http://8.8.12.2:{port}/")
-                available_urls.append(the_url)
-                # add a non-existente hostname
-                the_url = cast(URLString, f"http://dewde.invalid.com:{port}/")
-                available_urls.append(the_url)
-                # add a wrong port
-                the_url = cast(URLString, f"http://localhost:12345/")
-                available_urls.append(the_url)
-                # add a wrong host
-                the_url = cast(URLString, f"http://google.com/")
-                available_urls.append(the_url)
-                the_url = cast(URLString, f"{the_url}/wrong/path/")
-                available_urls.append(the_url)
-
-            for interface, family, address in get_ip_addresses():
-                if family != socket.AF_INET6:
-                    continue
-
-                if address.startswith("::1") or address.startswith("fe80:"):
-                    continue
-
-                the_url = cast(URLString, f"http://[{address}]:{port}/")
-
-                available_urls.append(the_url)
-            #
-            # if False:
-            #     for interface, family, address in get_ip_addresses():
-            #         if family != socket.AF_LINK:
-            #             continue
-            #
-            #         address = address.replace(":", "%3A")
-            #         the_url = f"http+ether://{address}:{port}"
-            #
-            #         available_urls.append(the_url)
-
+            available_urls.append(the_url0)
         if tunnel is not None:
-            # run the cloudflare tunnel
-            with open(tunnel) as f:
-                data = json.load(f)  # ok, loading cloudflare
-
+            # Run the cloudflare tunnel
+            path = Path(tunnel)
+            with path.open() as file:
+                data = json.load(file)
             tunnel_name = data["TunnelName"]
             cmd = [
                 "cloudflared",
@@ -251,72 +125,202 @@ async def app_start(
                 f"http://127.0.0.1:{port}/",
                 tunnel_name,
             ]
-
-            # run this in a subprocess using asyncio
+            # Run this in a subprocess using asyncio
             logger.info(f"starting cloudflared tunnel - {cmd!r}")
             tunnel_process = await asyncio.create_subprocess_exec(*cmd)
-
-            #  cloudflared tunnel run --cred-file test-dtps1-tunnel.json --url 127.0.0.1:8000 test-dtps1
-
+            # cloudflared tunnel run --cred-file test-dtps1-tunnel.json
+            # --url 127.0.0.1:8000 test-dtps1
     if not tcps and tunnel is not None:
-        logger.error("cannot start cloudflared tunnel without TCP server")
+        logger.exception("cannot start cloudflared tunnel without TCP server")
         sys.exit(1)
-    # logger.info("not starting TCP server. Use --tcp-port to start one.")
-
     unix_paths = list(unix_paths)
-
     tmpdir = tempfile.gettempdir()
-    unix_paths.append(os.path.join(tmpdir, f"dtps-{s.node_id}"))
-
-    for up in unix_paths:
-        if ("%" in up) or not up:
-            msg = f"Unix path {up!r} is invalid"
-            raise Exception(msg)
-
-        the_url = make_http_unix_url(up)
-
-        if os.path.exists(up):
-            try:
-                async with DTPSClient.create(nickname="none", shutdown_event=None) as client:
-
-                    try:
-                        await client.get_metadata(the_url)
-                    except ClientResponseError:
-                        # logger.debug("OK: nobody answers: does not exist: %s", url)
-                        # TODO: check 404
-                        pass
-                    else:
-                        msg = f"There is already a node listening at the path {up}"
-                        logger.error(msg)
-                        sys.exit(1)
-
-                # try connecting
-            except:
-                pass
-            os.unlink(up)
-
-        logger.info(f"starting Unix server on path {up}")
-
-        dn = os.path.dirname(up)
-        os.makedirs(dn, exist_ok=True)
-
-        unix_site = web.UnixSite(runner, up)
-        await unix_site.start()
-
-        available_urls.append(url_to_string(the_url))
-
+    path = Path(tmpdir) / f"dtps-{server.node_id}"
+    path_string = path.as_posix()
+    unix_paths.append(path_string)
+    for unix_path in unix_paths:
+        available_url = await get_available_url_from_unix_path(
+            unix_path,
+            runner,
+        )
+        available_urls.append(available_url)
     if not available_urls:
-        msg = "Please specify at least one of --tcp-port or --unix-path"
-        logger.error(msg)
+        logger.exception(
+            "Please specify at least one of --tcp-port or --unix-path",
+        )
         sys.exit(1)
-
     if extra_advertise is not None:
         available_urls.extend(extra_advertise)
-
     if not no_alternatives:
         for url in sorted(available_urls):
-            await s.add_available_url(url)
-        logger.info("available URLs\n" + "".join("* " + _ + "\n" for _ in available_urls))
+            await server.add_available_url(url)
+        available_urls_string = "".join(
+            "* " + available_url + "\n" for available_url in available_urls
+        )
+        logger.info("Available URLs:\n%s", available_urls_string)
+    await server.started.wait()
+    return ServerWrapped(server, runner, tunnel_process, unix_paths)
 
-    await s.started.wait()
-    return ServerWrapped(s, runner, tunnel_process, unix_paths_to_cleanup=unix_paths)
+
+async def get_available_url_from_unix_path(
+    unix_path: str,
+    runner: AppRunner,
+) -> URLString:
+    if ("%" in unix_path) or not unix_path:
+        message = f"Unix path {unix_path!r} is invalid."
+        raise Exception(message)
+    url0 = make_http_unix_url(unix_path)
+    path = Path(unix_path)
+    if path.exists():
+        try:
+            async with DTPSClient.create(
+                nickname="none",
+                shutdown_event=None,
+            ) as client:
+                try:
+                    await client.get_metadata(url0)
+                except ClientResponseError:
+                    # TODO: Check 404
+                    pass
+                else:
+                    logger.exception(
+                        "There is already a node listening at the path %s",
+                        unix_path,
+                    )
+                    sys.exit(1)
+        except Exception as exception:
+            logger.exception(exception)
+        path.unlink()
+    logger.info("Starting Unix server on path %s", unix_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    unix_site = UnixSite(runner, unix_path)
+    await unix_site.start()
+    return url_to_string(url0)
+
+
+def get_available_urls(
+    available_urls: list[URLString],
+    port: int,
+) -> list[URLString]:
+    for _, family, address in get_ip_addresses():
+        if family != socket.AF_INET:
+            continue
+        if address.startswith("127."):
+            continue
+        the_url = cast(URLString, f"http://{address}:{port}/")
+        available_urls.append(the_url)
+    host_name = socket.gethostname()
+    the_url = cast(URLString, f"http://{host_name}:{port}/")
+    available_urls.append(the_url)
+    add_weird_addresses = False
+    # Add a weird address: for testing purposes
+    if add_weird_addresses:
+        the_url = cast(URLString, f"http://8.8.12.2:{port}/")
+        available_urls.append(the_url)
+        # Add a non-existente hostname
+        the_url = cast(URLString, f"http://dewde.invalid.com:{port}/")
+        available_urls.append(the_url)
+        # Add a wrong port
+        the_url = cast(URLString, "http://localhost:12345/")
+        available_urls.append(the_url)
+        # Add a wrong host
+        the_url = cast(URLString, "http://google.com/")
+        available_urls.append(the_url)
+        the_url = cast(URLString, f"{the_url}/wrong/path/")
+        available_urls.append(the_url)
+    for _, family, address in get_ip_addresses():
+        if family != socket.AF_INET6:
+            continue
+        if address.startswith(("::1", "fe80:")):
+            continue
+        the_url = cast(URLString, f"http://[{address}]:{port}/")
+        available_urls.append(the_url)
+    return available_urls
+
+
+def get_ip_addresses() -> Iterator[tuple[str, AddressFamily, str]]:
+    addresses = psutil.net_if_addrs()
+    for interface, snics in addresses.items():
+        for snic in snics:
+            yield (interface, snic.family, snic.address)
+
+
+async def interpret_command_line_and_start(
+    dtps: DTPSServer,
+    args: list[str] | None = None,
+) -> None:
+    """Interpret command line and start."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--tcp-port", type=int, default=None, required=False)
+    parser.add_argument("--tcp-host", required=False, default="0.0.0.0")
+    parser.add_argument("--unix-path", required=False, default=None)
+    parser.add_argument(
+        "--no-alternatives",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
+        "--tunnel",
+        required=False,
+        default=None,
+        help="cloudflare credentials",
+    )
+    parser.add_argument(
+        "--advertise",
+        action="append",
+        help="extra advertisement URLS",
+    )
+    parser.add_argument(
+        "--register-switchboard",
+        default=None,
+        help="Switchboard to register to",
+    )
+    parser.add_argument(
+        "--register-as",
+        default=None,
+        help="Topic name on which to register.",
+    )
+    parser.add_argument(
+        "--register-namespace",
+        default=None,
+        help="Prefix of topics to register on switchboard. E.g. "
+        "--register-namespace=node  only registers "
+        "node/*",
+    )
+    parsed = parser.parse_args(args)
+    if parsed.tcp_port is None and parsed.unix_path is None:
+        message = (
+            "Please specify at least one of `--tcp-port` or `--unix-path`."
+        )
+        logger.exception(message)
+        sys.exit(message)
+    tcps: list[tuple[str, int]] = []
+    if parsed.tcp_port is not None:
+        tcps.append((parsed.tcp_host, parsed.tcp_port))
+    unix_paths = [parsed.unix_path] if parsed.unix_path is not None else []
+    never = Event()
+    no_alternatives = parsed.no_alternatives
+    tunnel = parsed.tunnel
+    registrations: list[Registration] = []
+    if parsed.register_switchboard is not None:
+        url = parse_url_unescape(parsed.register_switchboard)
+        switchboard_url = URLIndexer(url)
+        if parsed.register_as is None:
+            message = "Please specify --register-as"
+            logger.exception(message)
+            sys.exit(message)
+        topic_name = TopicNameV.from_dash_sep(parsed.register_as)
+        namespace = TopicNameV.from_dash_sep_or_none(parsed.register_namespace)
+        registration = Registration(switchboard_url, topic_name, namespace)
+        registrations.append(registration)
+    dtps.add_registrations(registrations)
+    server_wrapped = await app_start(
+        dtps,
+        tcps=tcps,
+        unix_paths=unix_paths,
+        tunnel=tunnel,
+        no_alternatives=no_alternatives,
+        extra_advertise=parsed.advertise,
+    )
+    async with server_wrapped:
+        await never.wait()

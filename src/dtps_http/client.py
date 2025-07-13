@@ -1,43 +1,50 @@
+"""Client."""
+
+__all__ = [
+    "AbstractListenDataInterface",
+    "DTPSClient",
+    "FoundMetadata",
+    "escape_json_pointer",
+    "my_raise_for_status",
+    "unescape_json_pointer",
+]
+
 import asyncio
-import os
 import traceback
 from abc import ABC, abstractmethod
-from asyncio import CancelledError, Event
-from contextlib import asynccontextmanager, AsyncExitStack
-from dataclasses import asdict, dataclass
-from typing import (
-    Any,
-    AsyncContextManager,
-    AsyncIterator,
-    Awaitable,
-    Callable,
-    cast,
-    Dict,
-    List,
-    Optional,
-    Sequence,
-    Set,
-    Tuple,
-    TYPE_CHECKING,
-    TypeVar,
+from asyncio import FIRST_COMPLETED, CancelledError, Event, Queue, Task
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import (
+    AbstractAsyncContextManager,
+    AsyncExitStack,
+    asynccontextmanager,
+    suppress,
 )
-from urllib.parse import unquote
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, TypeVar, cast
+from urllib import parse
 
 import aiohttp
 import cbor2
+import tcp_latency
 from aiohttp import (
     ClientResponse,
     ClientResponseError,
+    ClientSession,
+    ClientTimeout,
     ClientWebSocketResponse,
     TCPConnector,
     UnixConnector,
     WSCloseCode,
+    WSMessage,
+    WSMsgType,
 )
 from multidict import CIMultiDictProxy
-from tcp_latency import measure_latency  # type: ignore
 
-from . import logger, logger as logger0
-from .constants import (
+from dtps_http import logger
+from dtps_http import logger as logger0
+from dtps_http.constants import (
     CONTENT_TYPE_PATCH_CBOR,
     HEADER_CONTENT_LOCATION,
     HEADER_DATA_ORIGIN_NODE_ID,
@@ -53,19 +60,30 @@ from .constants import (
     REL_META,
     REL_PROXIED,
     REL_STREAM_PUSH,
+    STATUS_ERROR,
+    STATUS_SUCCESS,
+    STATUS_UNAVAILABLE,
     TOPIC_PROXIED,
 )
-from .exceptions import EventListeningNotAvailable, NoSuchTopic, TopicOriginUnavailable
-from .link_headers import get_link_headers
-from .structures import (
+from dtps_http.exceptions import (
+    ConditionSatistiedError,
+    EventListeningNotAvailableError,
+    NoSuchTopicError,
+    ShutdownAskedError,
+    StopContinuousLoopError,
+    TopicOriginUnavailableError,
+)
+from dtps_http.link_headers import get_link_headers
+from dtps_http.server import get_tagged_cbor
+from dtps_http.structures import (
+    CHANNEL_MESSAGE_TYPES,
     ChannelInfo,
-    ChannelMsgs,
     Chunk,
-    ConnectionEstablished,
+    ConnectionEstablishedMessage,
     ConnectionJob,
     DataReady,
-    ErrorMsg,
-    FinishedMsg,
+    ErrorMessage,
+    FinishedMessage,
     ForwardingStep,
     InsertNotification,
     LinkBenchmark,
@@ -73,26 +91,26 @@ from .structures import (
     ProxyJob,
     PushResult,
     RawData,
-    SilenceMsg,
+    SilenceMessage,
     TopicReachability,
     TopicRefAdd,
     TopicsIndex,
     TopicsIndexWire,
-    WarningMsg,
+    WarningMessage,
 )
-from .types import ContentType, NodeID, TopicNameV, URLString
-from .urls import (
-    join,
-    parse_url_unescape,
+from dtps_http.types_ import ContentType, NodeID, TopicNameV, URLString
+from dtps_http.urls import (
     URL,
-    url_to_string,
+    URLWS,
     URLIndexer,
     URLTopic,
-    URLWS,
     URLWSInline,
     URLWSOffline,
+    join,
+    parse_url_unescape,
+    url_to_string,
 )
-from .utils import (
+from dtps_http.utils import (
     async_error_catcher,
     check_is_unix_socket,
     method_lru_cache,
@@ -100,266 +118,231 @@ from .utils import (
     pretty,
 )
 
-__all__ = [
-    "DTPSClient",
-    "FoundMetadata",
-    "ListenDataInterface",
-    "StopContinuousLoop",
-    "escape_json_pointer",
-    "my_raise_for_status",
-    "unescape_json_pointer",
-]
-
 U = TypeVar("U", bound=URL)
-
 X = TypeVar("X")
 
 
-@dataclass
-class FoundMetadata:
-    # The url that was used to get the metadata
-    origin: URLTopic
+class AbstractListenDataInterface(ABC):
+    """Abstract listen data interface."""
 
-    # url alternatives (Location: headers)
-    alternative_urls: List[URLTopic]
-
-    # NodeID if answering is a DTPS node
-    answering: Optional[NodeID]
-
-    origin_node: Optional[NodeID]  # # HEADER_DATA_ORIGIN_NODE_ID
-
-    # websocket with offline data
-    events_url: Optional[URLWSOffline]
-
-    # websocket with inline data
-    events_data_inline_url: Optional[URLWSInline]
-
-    # metadati della risorsa (il ContentInfo etc.)
-    meta_url: Optional[URL]
-
-    # history url
-    history_url: Optional[URL]
-
-    # url for stream push
-    stream_push_url: Optional[URLWS]
-
-    connections_url: Optional[URL]
-
-    proxied_url: Optional[URL]
-
-    raw_headers: CIMultiDictProxy[str]
-
-
-class ShutdownAsked(Exception):
-    pass
-
-
-class ListenDataInterface(ABC):
     @abstractmethod
     async def stop(self) -> None:
-        raise NotImplementedError()
+        """Stop."""
+        raise NotImplementedError
 
     @abstractmethod
     async def wait_for_done(self) -> None:
-        raise NotImplementedError()
+        """Wait for `done`."""
+        raise NotImplementedError
 
-    async def wait_for_done_or_stop_on_event(self, shutdown_event: asyncio.Event) -> None:
-        wait1 = asyncio.create_task(shutdown_event.wait())
-        wait2 = asyncio.create_task(self.wait_for_done())
-        done, pending = await asyncio.wait([wait1, wait2], return_when=asyncio.FIRST_COMPLETED)
-        for f in pending:
-            f.cancel()
+    @async_error_catcher
+    async def wait_for_done_or_stop_on_event(
+        self,
+        shutdown_event: Event,
+    ) -> None:
+        """Wait for `done` or stop on event."""
+        shutdown_coroutine = shutdown_event.wait()
+        wait_for_shutdown_task = asyncio.create_task(shutdown_coroutine)
+        wait_for_done_coroutine = self.wait_for_done()
+        wait_for_done_task = asyncio.create_task(wait_for_done_coroutine)
+        _, pending_tasks = await asyncio.wait(
+            [wait_for_shutdown_task, wait_for_done_task],
+            return_when=FIRST_COMPLETED,
+        )
+        for pending_task in pending_tasks:
+            pending_task.cancel()
         if shutdown_event.is_set():
-            wait2.cancel()
+            wait_for_done_task.cancel()
             await self.stop()
-        else:
-            return
-
-
-@dataclass
-class ListenDataImpl(ListenDataInterface):
-    stop_condition: asyncio.Event
-    task: "asyncio.Task[None]"
-
-    async def stop(self):
-        self.stop_condition.set()
-        # self.task.cancel()
-        await self.wait_for_done()
-        try:
-            await asyncio.wait_for(self.task, 5)
-        except asyncio.TimeoutError:
-            msg = f"ListenDataImpl: stop: timeout waiting for {self.task}"
-            logger0.error(msg)
-            self.task.cancel()
-            return
-
-    async def wait_for_done(self):
-        try:
-            await self.task
-        except CancelledError:
-            if self.task.done():
-                return
-            else:
-                raise
-            # note: cancelling() only for >= 3.11
-            # if asyncio.current_task().cancelling() > 0:
-            #     # propagate the exception up normally
-            #     raise
-
-
-class ConditionSatistied(Exception):
-    pass
 
 
 class DTPSClient:
+    """DTPS client."""
+
+    tasks: list[Task[Any]]
+    blacklist_protocol_host_port: set[tuple[str, str, int]]
+    obtained_answer: dict[tuple[str, str, int], NodeID | None]
+    preferred_cache: dict[URL, URL]
+    sessions: dict[str, ClientSession]
+    shutdown_event: Event
+
     if TYPE_CHECKING:
 
         @classmethod
         def create(
-            cls, nickname: Optional[str] = None, shutdown_event: Optional[asyncio.Event] = None
-        ) -> "AsyncContextManager[DTPSClient]": ...
+            cls,
+            nickname: str | None = None,
+            shutdown_event: Event | None = None,
+        ) -> "AbstractAsyncContextManager[DTPSClient]":
+            """Create."""
 
     else:
 
         @classmethod
         @asynccontextmanager
         async def create(
-            cls, nickname: Optional[str] = None, shutdown_event: Optional[asyncio.Event] = None
+            cls,
+            nickname: str | None = None,
+            shutdown_event: Event | None = None,
         ) -> "AsyncIterator[DTPSClient]":
-            ob = cls(nickname=nickname, shutdown_event=shutdown_event)
-            await ob.init()
+            """Create."""
+            object_ = cls(nickname=nickname, shutdown_event=shutdown_event)
+            await object_.initialize()
             try:
-                yield ob
+                yield object_
             finally:
-                await ob.aclose()
+                await object_.aclose()
 
-    def __init__(self, nickname: Optional[str], shutdown_event: Optional[asyncio.Event]) -> None:
+    def __init__(
+        self,
+        nickname: str | None,
+        shutdown_event: Event | None,
+    ) -> None:
+        """Initialize DTPS client."""
         if shutdown_event is None:
-            shutdown_event = asyncio.Event()
-
+            shutdown_event = Event()
         self.shutdown_event = shutdown_event
-        self.S = AsyncExitStack()
+        self.async_exit_stack = AsyncExitStack()
         self.tasks = []
         self.sessions = {}
         self.preferred_cache = {}
         self.blacklist_protocol_host_port = set()
         self.obtained_answer = {}
         if nickname is None:
-            nickname = str(id(self))
+            id_ = id(self)
+            nickname = str(id_)
         self.nickname = nickname
         self.logger = logger0.getChild(nickname)
-        self.shutdown_event = asyncio.Event()
+        self.shutdown_event = Event()
 
-    def remember_task(self, task: "asyncio.Task[Any]") -> None:
+    def remember_task(self, task: Task[Any]) -> None:
+        """Remember task."""
         self.tasks.append(task)
 
-    tasks: "List[asyncio.Task[Any]]"
-    blacklist_protocol_host_port: Set[Tuple[str, str, int]]
-    obtained_answer: Dict[Tuple[str, str, int], Optional[NodeID]]
-
-    preferred_cache: Dict[URL, URL]
-    sessions: Dict[str, aiohttp.ClientSession]
-    shutdown_event: asyncio.Event
-
-    async def init(self) -> None:
-        pass
-
+    @async_error_catcher
     async def aclose(self) -> None:
-        # self.logger.debug(f"DTPSClient: aclose: setting shutdown event")
+        """Close asynchronously."""
         self.shutdown_event.set()
-        for t in self.tasks:
-            t.cancel()
-        # self.logger.debug(f"DTPSClient: aclose: gathering")
-        # await asyncio.gather(*self.tasks, return_exceptions=True)
-        # self.logger.debug(f"DTPSClient: aclose: closing S")
-        await self.S.aclose()
-        # self.logger.debug(f"DTPSClient: aclose done")
+        for task in self.tasks:
+            task.cancel()
+        await self.async_exit_stack.aclose()
 
+    @async_error_catcher
     async def ask_index(self, url0: URLIndexer) -> TopicsIndex:
+        """Return topic index."""
         url = self._look_cache(url0)
         async with self.my_session(url) as (session, use_url):
-            async with session.get(use_url) as resp:
-                await my_raise_for_status(resp, url0)
-                # answering = resp.headers.get(HEADER_NODE_ID)
-
-                #  logger.debug(f"ask topics {resp.headers}")
-                if (preferred := await self.prefer_alternative(url, resp)) is not None:
-                    self.logger.debug(f"Using preferred alternative to {url} -> {repr(preferred)}")
+            async with session.get(use_url) as response:
+                await my_raise_for_status(response, url0)
+                preferred = await self.prefer_alternative(url, response)
+                if preferred is not None:
+                    self.logger.debug(
+                        "Using preferred alternative to %s -> %r",
+                        url,
+                        preferred,
+                    )
                     return await self.ask_index(preferred)
-                assert resp.status == 200, resp.status
-                res_bytes: bytes = await resp.read()
-                res = cbor2.loads(res_bytes)
-
-            raw = resp.headers.getall(HEADER_CONTENT_LOCATION, [])  # type: ignore
-            alternatives0 = cast(List[URLString], raw)
-            where_this_available: List[URL] = [url]
-            for a in alternatives0:
+                if response.status != STATUS_SUCCESS:
+                    raise ValueError(response.status)
+                response_bytes: bytes = await response.read()
+                respnse_object = cbor2.loads(response_bytes)
+            alternatives0 = response.headers.getall(
+                HEADER_CONTENT_LOCATION,
+                [],
+            )
+            where_this_available: list[URL] = [url]
+            for alternative in cast(list[URLString], alternatives0):
                 try:
-                    x = parse_url_unescape(a)
+                    parsed_alternative = parse_url_unescape(alternative)
                 except ValueError:
-                    self.logger.exception(f"cannot parse {a}")
+                    self.logger.exception("Cannot parse %s.", alternative)
                     continue
                 else:
-                    where_this_available.append(x)
-
-            s = TopicsIndexWire.from_json(res)
-            q = s.to_internal([url])
-            return q
+                    where_this_available.append(parsed_alternative)
+            topics_index_wire = TopicsIndexWire.from_json(respnse_object)
+            return topics_index_wire.to_internal([url])
 
     def _look_cache(self, url0: U) -> U:
-        return cast(U, self.preferred_cache.get(url0, url0))
+        url = self.preferred_cache.get(url0, url0)
+        return cast(U, url)
 
-    async def publish(self, url0: URL, rd: RawData) -> None:
+    @async_error_catcher
+    async def publish(self, url0: URL, raw_data: RawData) -> None:
+        """Publish."""
         url = self._look_cache(url0)
+        headers = {
+            "content-type": raw_data.content_type,
+        }
+        async with (
+            self.my_session(url) as (session, use_url),
+            session.post(
+                use_url,
+                data=raw_data.content,
+                headers=headers,
+            ) as response,
+        ):
+            await my_raise_for_status(response, url0)
+            if response.status not in (200, 201):
+                raise ValueError(response)
+            await self.prefer_alternative(url, response)
 
-        headers = {"content-type": rd.content_type}
-
-        async with self.my_session(url) as (session, use_url):
-            async with session.post(use_url, data=rd.content, headers=headers) as resp:
-                await my_raise_for_status(resp, url0)
-                assert resp.status in [200, 201], resp
-                await self.prefer_alternative(url, resp)
-
-    async def call(self, url0: URL, rd: RawData) -> RawData:
+    @async_error_catcher
+    async def call(self, url0: URL, raw_data: RawData) -> RawData:
+        """Call."""
         url = self._look_cache(url0)
-
-        headers = {"content-type": rd.content_type}
-
+        headers = {
+            "content-type": raw_data.content_type,
+        }
         async with self.my_session(url) as (session, use_url):
-            async with session.post(use_url, data=rd.content, headers=headers) as resp:
-                await my_raise_for_status(resp, url0)
-                assert resp.status in [200, 201], resp
-                await self.prefer_alternative(url, resp)
-                location = resp.headers.get("Location")
+            async with session.post(
+                use_url,
+                data=raw_data.content,
+                headers=headers,
+            ) as response:
+                await my_raise_for_status(response, url0)
+                if response.status not in (200, 201):
+                    raise ValueError(response)
+                await self.prefer_alternative(url, response)
+                location = response.headers.get("Location")
                 if not location:
-                    raise ValueError(f"no location header in response to call for {url} {resp}")
-
+                    message = (
+                        f"No location header in response to call for {url} "
+                        f"{response}."
+                    )
+                    raise ValueError(message)
                 url_redirect = join(url, location)
             return await self.get(url_redirect, accept=None)
 
-    async def prefer_alternative(self, current: U, resp: aiohttp.ClientResponse) -> Optional[U]:
-        assert isinstance(current, URL), current
+    @async_error_catcher
+    async def prefer_alternative(
+        self,
+        current: U,
+        response: aiohttp.ClientResponse,
+    ) -> U | None:
+        """Return alternative URL."""
+        if not isinstance(current, URL):
+            raise TypeError(current)
         if current in self.preferred_cache:
             return cast(U, self.preferred_cache[current])
-
-        nothing: List[URLString] = []
-        alternatives0 = cast(List[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION, nothing))
-
+        nothing: list[URLString] = []
+        urls = response.headers.getall(HEADER_CONTENT_LOCATION, nothing)
+        alternatives0 = cast(list[URLString], urls)
         if not alternatives0:
             return None
         alternatives: list[URL] = [current]
-        for a in alternatives0:
+        for alternative in alternatives0:
             try:
-                x = parse_url_unescape(a)
+                parsed_alternative = parse_url_unescape(alternative)
             except ValueError:
-                self.logger.exception(f"cannot parse {a}")
+                self.logger.exception("Cannot parse %s.", alternative)
                 continue
             else:
-                alternatives.append(x)
-        answering = cast(NodeID, resp.headers.get(HEADER_NODE_ID))
-
-        #  noinspection PyTypeChecker
-        best = await self.find_best_alternative([(_, answering) for _ in alternatives])
+                alternatives.append(parsed_alternative)
+        header = response.headers.get(HEADER_NODE_ID)
+        answering = cast(NodeID, header)
+        best = await self.find_best_alternative(
+            [(_, answering) for _ in alternatives],
+        )
         if best is None:
             best = current
         if best != current:
@@ -367,529 +350,680 @@ class DTPSClient:
             return cast(U, best)
         return None
 
+    @async_error_catcher
     async def compute_with_hop(
         self,
         this_node_id: NodeID,
-        # this_partial_url: URLString,
         connects_to: URLTopic,
         expects_answer_from: NodeID,
-        forwarders: List[ForwardingStep],
-    ) -> Optional[TopicReachability]:
-        assert isinstance(connects_to, URL), connects_to
-        # assert isinstance(this_partial_url, str), this_partial_url
-        if (benchmark := await self.can_use_url(connects_to, expects_answer_from)) is None:
+        forwarders: list[ForwardingStep],
+    ) -> TopicReachability | None:
+        """Compute with hop."""
+        if not isinstance(connects_to, URL):
+            raise TypeError(connects_to)
+        benchmark = await self.can_use_url(connects_to, expects_answer_from)
+        if benchmark is None:
             return None
-
-        me = ForwardingStep(
+        forwarding_node_connects_to = url_to_string(connects_to)
+        forwarding_step = ForwardingStep(
             forwarding_node=this_node_id,
-            forwarding_node_connects_to=url_to_string(connects_to),
+            forwarding_node_connects_to=forwarding_node_connects_to,
             performance=benchmark,
         )
         total = LinkBenchmark.identity()
-        for f in forwarders:
-            total |= f.performance
+        for forwarder in forwarders:
+            total |= forwarder.performance
         total |= benchmark
-        tr2 = TopicReachability(
-            url=url_to_string(connects_to),
+        url_string = url_to_string(connects_to)
+        return TopicReachability(
+            url=url_string,
             answering=this_node_id,
-            forwarders=forwarders + [me],
+            forwarders=[*forwarders, forwarding_step],
             benchmark=total,
         )
-        return tr2
 
-    async def find_best_alternative(self, us: Sequence[Tuple[U, Optional[NodeID]]]) -> Optional[U]:
+    @async_error_catcher
+    async def find_best_alternative(
+        self,
+        us: Sequence[tuple[U, NodeID | None]],
+    ) -> U | None:
+        """Return best alternative."""
         if not us:
             self.logger.warning("find_best_alternative: no alternatives")
             return None
-        results: List[str] = []
-        possible: List[Tuple[float, float, float, U]] = []
-        for a, expects_answer_from in us:
-            assert isinstance(a, URL), a
-            if (score := await self.can_use_url(a, expects_answer_from)) is not None:
-                possible.append((score.complexity, score.latency_ns, -score.bandwidth, a))
+        results: list[str] = []
+        possible: list[tuple[float, float, float, U]] = []
+        for url, expects_answer_from in us:
+            if not isinstance(url, URL):
+                raise TypeError(url)
+            score = await self.can_use_url(url, expects_answer_from)
+            if score is not None:
+                possible.append(
+                    (
+                        score.complexity,
+                        score.latency_ns,
+                        -score.bandwidth,
+                        url,
+                    ),
+                )
                 # TODO: 60 is a magic number?
-                results.append(f"✓ {str(a):<60} -> {score}")
+                results.append(f"✓ {url!s:<60} -> {score}")
             else:
-                results.append(f"✗ {a} ")
-
+                results.append(f"✗ {url} ")
         possible.sort(key=lambda x: (x[0], x[1]))
         if not possible:
-            rs = "\n".join(results)
+            results_ = "\n".join(results)
             self.logger.warning(
-                f"find_best_alternative: no alternatives found:\n {rs}",
+                "find_best_alternative: no alternatives found:\n %s",
+                results_,
             )
             return None
         best = possible[0][-1]
-
         results.append(f"best: {best}")
-        self.logger.debug("\n".join(results))
-
+        results_ = "\n".join(results)
+        self.logger.debug(results_)
         return best
 
     @method_lru_cache()
-    def measure_latency(self, host: str, port: int) -> Optional[float]:
-        self.logger.debug(f"computing latency to {host}:{port}...")
-        res = cast(List[float], measure_latency(host, port, runs=5, wait=0.01, timeout=0.5))
-
-        if not res:
-            self.logger.debug(f"latency to {host}:{port} -> unreachable")
+    def measure_latency(self, host: str, port: int) -> float | None:
+        """Measure latency."""
+        self.logger.debug("computing latency to%s:%s...", host, port)
+        latency_points = tcp_latency.measure_latency(
+            host,
+            port,
+            runs=5,
+            wait=0.01,
+            timeout=0.5,
+        )
+        latency_points = cast(list[float], latency_points)
+        if not latency_points:
+            self.logger.debug("latency to %s:%s -> unreachable", host, port)
             return None
-
-        latency_seconds = (sum(res) / len(res)) / 1000.0
-
-        self.logger.debug(f"latency to {host}:{port} is  {latency_seconds}s  [{res}]")
+        res_sum = sum(latency_points)
+        res_length = len(latency_points)
+        latency_seconds = res_sum / res_length / 1000
+        self.logger.debug(
+            "latency to %s:%s is  %ss  [%s]",
+            host,
+            port,
+            latency_seconds,
+            latency_points,
+        )
         return latency_seconds
 
+    @async_error_catcher
+    async def _process_http_or_https_scheme(
+        self,
+        url: URLTopic,
+        expects_answer_from: NodeID | None,
+        blacklist_key: tuple[str, str, int],
+        *,
+        do_measure_latency: bool = True,
+        check_right_node: bool = True,
+    ) -> LinkBenchmark | None:
+        hops = 1
+        complexity = 2
+        bandwidth = 100_000_000
+        reliability = 0.9
+        if url.port is None:
+            port = 80 if url.scheme == "http" else 443
+        else:
+            port = url.port
+        if do_measure_latency:
+            latency = self.measure_latency(url.host, port)
+            if latency is None:
+                self.blacklist_protocol_host_port.add(blacklist_key)
+                return None
+        else:
+            latency = 0.1
+        if check_right_node and expects_answer_from is not None:
+            who_answers = await self.get_who_answers(url)
+            if (
+                expects_answer_from is not None
+                and who_answers != expects_answer_from
+            ):
+                self.logger.exception(
+                    "can_use_url: wrong %s header in %s, expected %s",
+                    who_answers,
+                    url,
+                    expects_answer_from,
+                )
+                return None
+        latency_ns = int(latency * 1_000_000_000)
+        reliability_percent = int(reliability * 100)
+        return LinkBenchmark(
+            complexity,
+            bandwidth,
+            latency_ns,
+            reliability_percent,
+            hops,
+        )
+
+    @async_error_catcher
+    async def _process_http_plus_unix_scheme(
+        self,
+        url: URLTopic,
+        expects_answer_from: NodeID | None,
+    ) -> LinkBenchmark | None:
+        complexity = 1
+        reliability_percent = 100
+        hops = 1
+        bandwidth = 100_000_000
+        latency = 0.001
+        host = url.host
+        self.logger.debug("checking %s...  path=%r", url, url)
+        path = Path(host)
+        if not path.exists():
+            self.logger.warning("%s: %r does not exist", url, host)
+            return None
+        who_answers = await self.get_who_answers(url)
+        if (
+            expects_answer_from is not None
+            and who_answers != expects_answer_from
+        ):
+            self.logger.exception(
+                "wrong %s header in %s, expected %s",
+                who_answers,
+                url,
+                expects_answer_from,
+            )
+            return None
+        latency_ns = int(latency * 1_000_000_000)
+        return LinkBenchmark(
+            complexity,
+            bandwidth,
+            latency_ns,
+            reliability_percent,
+            hops,
+        )
+
+    @async_error_catcher
     async def can_use_url(
         self,
         url: URLTopic,
-        expects_answer_from: Optional[NodeID],
+        expects_answer_from: NodeID | None,
+        *,
         do_measure_latency: bool = True,
         check_right_node: bool = True,
-    ) -> Optional[LinkBenchmark]:
-        """Returns None or a score for the url."""
+    ) -> LinkBenchmark | None:
+        """Return `None` or a score for the URL."""
         blacklist_key = (url.scheme, url.host, url.port or 0)
         if blacklist_key in self.blacklist_protocol_host_port:
-            self.logger.debug(f"blacklisted {url}")
+            self.logger.debug("blacklisted %s", url)
             return None
-
         if url.scheme in ("http", "https"):
-            hops = 1
-            complexity = 2
-            bandwidth = 100_000_000
-            reliability = 0.9
-            if url.port is None:
-                port = 80 if url.scheme == "http" else 443
-            else:
-                port = url.port
-
-            if do_measure_latency:
-                latency = self.measure_latency(url.host, port)
-                if latency is None:
-                    self.blacklist_protocol_host_port.add(blacklist_key)
-                    return None
-            else:
-                latency = 0.1
-
-            if check_right_node and expects_answer_from is not None:
-                who_answers = await self.get_who_answers(url)
-
-                if expects_answer_from is not None and who_answers != expects_answer_from:
-                    msg = f"can_use_url: wrong {who_answers=} header in {url}, expected {expects_answer_from}"
-                    self.logger.error(msg)
-
-                    #
-
-                    #  self.obtained_answer[blacklist_key] = resp.headers[HEADER_NODE_ID]
-
-                    #
-
-                    #  self.blacklist_protocol_host_port.add(blacklist_key)
-                    return None
-
-            latency_ns = int(latency * 1_000_000_000)
-            reliability_percent = int(reliability * 100)
-            return LinkBenchmark(
-                complexity=complexity,
-                bandwidth=bandwidth,
-                latency_ns=latency_ns,
-                reliability_percent=reliability_percent,
-                hops=hops,
+            return await self._process_http_or_https_scheme(
+                url,
+                expects_answer_from,
+                blacklist_key,
+                do_measure_latency=do_measure_latency,
+                check_right_node=check_right_node,
             )
         if url.scheme == "http+unix":
-            complexity = 1
-            reliability_percent = 100
-            hops = 1
-            bandwidth = 100_000_000
-            latency = 0.001
-            host = url.host
-            self.logger.debug(f"checking {url}...  path={repr(url)}")
-            if not os.path.exists(host):
-                self.logger.warning(f" {url}: {host=!r} does not exist")
-                return None
-            who_answers = await self.get_who_answers(url)
-
-            if expects_answer_from is not None and who_answers != expects_answer_from:
-                msg = f"wrong {who_answers=} header in {url}, expected {expects_answer_from}"
-                self.logger.error(msg)
-
-                #
-
-                #  self.obtained_answer[blacklist_key] = resp.headers[HEADER_NODE_ID]
-
-                #
-
-                #  self.blacklist_protocol_host_port.add(blacklist_key)
-                return None
-
-            latency_ns = int(latency * 1_000_000_000)
-
-            return LinkBenchmark(
-                complexity=complexity,
-                bandwidth=bandwidth,
-                latency_ns=latency_ns,
-                reliability_percent=reliability_percent,
-                hops=hops,
+            return await self._process_http_plus_unix_scheme(
+                url,
+                expects_answer_from,
             )
-
         if url.scheme == "http+ether":
             return None
-
-        self.logger.warning(f"unknown scheme {url.scheme!r} for {url}")
+        self.logger.warning("Unknown scheme %r for %s", url.scheme, url)
         return None
 
-    async def get_who_answers(self, url: URLTopic) -> Optional[NodeID]:
+    @async_error_catcher
+    async def get_who_answers(self, url: URLTopic) -> NodeID | None:
+        """Return who answers."""
         key = (url.scheme, url.host, url.port or 0)
         if key not in self.obtained_answer:
             try:
-                md = await self.get_metadata(url)
-                # logger.warning(f"checking {url} -> {md}")
-                return md.answering
-
-                #   self.obtained_answer[
-            #       key
-            #   ] = (
-            #       md.answering
-            #   )
-            #
-            #   async with self.my_session(url, conn_timeout=1) as (session, url_to_use):
-            #       logger.debug(f"checking {url}...")
-            #       async with session.head(url_to_use) as resp:
-            #           if HEADER_NODE_ID not in resp.headers:
-            #               msg = f"no {HEADER_NODE_ID} header in {url}"
-            #               logger.error(msg)
-            #               self.obtained_answer[key] = None
-            #           else:
-            #               self.obtained_answer[key] = NodeID(resp.headers[HEADER_NODE_ID])
+                metadata = await self.get_metadata(url)
             except CancelledError:
                 raise
-            except:
-                self.logger.exception(f"error checking {url} {traceback.format_exc()}")
+            except Exception:
+                exception = traceback.format_exc()
+                self.logger.exception("Error checking %s\n%s", url, exception)
                 return None
-                self.obtained_answer[key] = None
-
-            res = self.obtained_answer[key]
-            if res is None:
-                logger.warning(f"no {HEADER_NODE_ID} header in {url}: not part of system?")
-
-        res = self.obtained_answer[key]
-
-        return res
+            else:
+                return metadata.answering
+        return self.obtained_answer[key]
 
     if TYPE_CHECKING:
 
         def my_session(
-            self, url: URL, /, *, conn_timeout: Optional[float] = None
-        ) -> AsyncContextManager[Tuple[aiohttp.ClientSession, URLString]]: ...
+            self,
+            url: URL,
+            /,
+            *,
+            conn_timeout: float | None = None,
+        ) -> AbstractAsyncContextManager[tuple[ClientSession, URLString]]:
+            """Return session."""
 
     else:
 
         @asynccontextmanager
         async def my_session(
-            self, url: URL, /, *, conn_timeout: Optional[float] = None
-        ) -> AsyncIterator[Tuple[aiohttp.ClientSession, URLString]]:
-            assert isinstance(url, URL), url
+            self,
+            url: URL,
+            /,
+            *,
+            conn_timeout: float | None = None,
+        ) -> AsyncIterator[tuple[ClientSession, URLString]]:
+            """Return session."""
+            if not isinstance(url, URL):
+                raise TypeError(url)
+            connector: TCPConnector | UnixConnector
             if url.scheme == "http+unix":
                 if url.host is None:
-                    raise AssertionError(f"no host in {url!r}")
-                path = unquote(url.host)
-                connector = UnixConnector(path=path)
-                #  noinspection PyProtectedMember
-                use_url = url_to_string(url._replace(scheme="http", host="localhost"))
-
+                    message = f"No host in {url!r}."
+                    raise AssertionError(message)
+                path = parse.unquote(url.host)
+                connector = UnixConnector(path)
+                use_url = url_to_string(
+                    url._replace(scheme="http", host="localhost"),
+                )
                 try:
                     check_is_unix_socket(path)
-                except ValueError as e:
-                    msg = f"Cannot connect to url because the path does not exist: {url!r}"
-                    raise ValueError(msg) from e
-
+                except ValueError as error:
+                    message = (
+                        "Cannot connect to url because the path does not exist"
+                        f" : {url!r}"
+                    )
+                    raise ValueError(message) from error
             elif url.scheme in ("http", "https"):
                 connector = TCPConnector()
                 use_url = url_to_string(url)
             else:
-                raise ValueError(f"unknown scheme {url.scheme!r} for {repr(url)}")
+                message = f"unknown scheme {url.scheme!r} for {url!r}"
+                raise ValueError(message)
+            timeout = ClientTimeout(conn_timeout)
+            async with (
+                connector,
+                ClientSession(connector=connector, timeout=timeout) as session,
+            ):
+                yield session, use_url
 
-            timeout = aiohttp.ClientTimeout(total=conn_timeout)
-            async with connector:
-                async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                    # self.logger.debug(f"my_session: {url} -> {use_url}")
-                    yield session, use_url
+    @async_error_catcher
+    async def get_proxied(
+        self,
+        url0: URLIndexer,
+    ) -> dict[TopicNameV, ProxyJob]:
+        """Return proxied."""
+        # FIXME: Need to use REL_PROXIED
+        relative_url = TOPIC_PROXIED.as_relative_url()
+        url = join(url0, relative_url)
+        raw_data = await self.get(url, MIME_CBOR)
+        data_object = cbor2.loads(raw_data.content)
+        data_dictionary = cast(dict, data_object)
+        proxy_jobs: dict[TopicNameV, ProxyJob] = {}
+        for key, value in data_dictionary.items():
+            topic_name = TopicNameV.from_dash_sep(key)
+            proxy_jobs[topic_name] = ProxyJob.from_json(value)
+        return proxy_jobs
 
-    async def get_proxied(self, url0: URLIndexer) -> Dict[TopicNameV, ProxyJob]:
-        # FIXME: need to use REL_PROXIED
-        url = join(url0, TOPIC_PROXIED.as_relative_url())
-        rd = await self.get(url, accept=MIME_CBOR)
-        js = cbor2.loads(rd.content)
-        # js = json.loads(rd.content)
-        res: Dict[TopicNameV, ProxyJob] = {}
-        for k, v in js.items():
-            res[TopicNameV.from_dash_sep(k)] = ProxyJob.from_json(v)
-        return res
-
+    @async_error_catcher
     async def add_proxy(
         self,
         url0: URLIndexer,
         topic_name: TopicNameV,
-        node_id: Optional[NodeID],
-        urls: List[URLString],
+        node_id: NodeID | None,
+        urls: list[URLString],
+        *,
         mask_origin: bool,
     ) -> bool:
-        """Returns true if there were changes to be made"""
-
-        found = await self.get_proxied(url0)
-        path = "/" + escape_json_pointer(topic_name.as_dash_sep())
-        patch: List[Dict[str, Any]] = []
-        if topic_name in found:
-            if found[topic_name].node_id == node_id and found[topic_name].urls == urls:
+        """Return `True` if changes required, `False` otherwise."""
+        proxied = await self.get_proxied(url0)
+        dash_separated_topic_name = topic_name.as_dash_sep()
+        path = "/" + escape_json_pointer(dash_separated_topic_name)
+        patch: list[dict[str, Any]] = []
+        if topic_name in proxied:
+            proxy_job = proxied[topic_name]
+            if proxy_job.node_id == node_id and proxy_job.urls == urls:
                 return False
-            else:
-                patch.append(
-                    {
-                        "op": "remove",
-                        "path": path,
-                    }
-                )
-        # add
+            patch.append(
+                {
+                    "op": "remove",
+                    "path": path,
+                },
+            )
         proxy_job = ProxyJob(node_id, urls, mask_origin)
-        patch.append({"op": "add", "path": path, "value": asdict(proxy_job)})
-        # compile patch
-        as_cbor = cbor2.dumps(patch)
-        # as_json = json.dumps(patch).encode("utf-8")
-        # FIXME: DTSW-5454: need to use REL_PROXIED
-        url = join(url0, TOPIC_PROXIED.as_relative_url())
-        await self.patch(url, CONTENT_TYPE_PATCH_CBOR, as_cbor)
+        value = asdict(proxy_job)
+        patch.append(
+            {
+                "op": "add",
+                "path": path,
+                "value": value,
+            },
+        )
+        data = cbor2.dumps(patch)
+        # FIXME: DTSW-5454: Need to use REL_PROXIED
+        relative_url = TOPIC_PROXIED.as_relative_url()
+        url = join(url0, relative_url)
+        await self.patch(url, CONTENT_TYPE_PATCH_CBOR, data)
         return True
 
-    async def remove_proxy(self, url0: URLIndexer, topic_name: TopicNameV) -> None:
-        patch = [{"op": "remove", "path": "/" + escape_json_pointer(topic_name.as_dash_sep())}]
-        as_cbor = cbor2.dumps(patch)
-        # as_json = json.dumps(patch).encode("utf-8")
-        # FIXME: DTSW-5454: need to use REL_PROXIED
-        url = join(url0, TOPIC_PROXIED.as_relative_url())
-        await self.patch(url, CONTENT_TYPE_PATCH_CBOR, as_cbor)
-
-    async def add_topic(self, url0: URLIndexer, topic_name: TopicNameV, tra: TopicRefAdd) -> None:
-        path = "/" + escape_json_pointer(topic_name.as_dash_sep())
+    @async_error_catcher
+    async def remove_proxy(
+        self,
+        url0: URLIndexer,
+        topic_name: TopicNameV,
+    ) -> None:
+        """Remove proxy."""
+        dash_separated_topic_name = topic_name.as_dash_sep()
+        path = "/" + escape_json_pointer(dash_separated_topic_name)
         patch = [
-            {"op": "add", "path": path, "value": asdict(tra)},
+            {
+                "op": "remove",
+                "path": path,
+            },
         ]
-        as_cbor = cbor2.dumps(patch)
-        await self.patch(url0, CONTENT_TYPE_PATCH_CBOR, as_cbor)
+        data = cbor2.dumps(patch)
+        # FIXME: DTSW-5454: Need to use REL_PROXIED
+        relative_url = TOPIC_PROXIED.as_relative_url()
+        url = join(url0, relative_url)
+        await self.patch(url, CONTENT_TYPE_PATCH_CBOR, data)
 
-    async def patch(self, url0: URL, content_type: Optional[str], data: bytes) -> RawData:
-        headers = {"content-type": content_type} if content_type is not None else {}
+    @async_error_catcher
+    async def add_topic(
+        self,
+        url0: URLIndexer,
+        topic_name: TopicNameV,
+        tra: TopicRefAdd,
+    ) -> None:
+        """Add topic."""
+        dash_separated_topic_name = topic_name.as_dash_sep()
+        path = "/" + escape_json_pointer(dash_separated_topic_name)
+        value = asdict(tra)
+        patch = [
+            {
+                "op": "add",
+                "path": path,
+                "value": value,
+            },
+        ]
+        data = cbor2.dumps(patch)
+        await self.patch(url0, CONTENT_TYPE_PATCH_CBOR, data)
 
+    @async_error_catcher
+    async def _process_patch_response(
+        self,
+        response: ClientResponse,
+        url0: URL,
+        use_url: URLString,
+    ) -> RawData:
+        data = await response.read()
+        if not response.ok:
+            message = f"Cannot patch {url0=!r} {use_url=!r} {response=!r}.\n"
+            try:
+                message += data.decode("utf-8")
+            except UnicodeDecodeError:
+                message += str(data)
+            raise ValueError(message)
+        headers = response.headers.get("content-type", MIME_OCTET)
+        content_type = ContentType(headers)
+        return RawData(data, content_type)
+
+    @async_error_catcher
+    async def patch(
+        self,
+        url0: URL,
+        content_type: str | None,
+        data: bytes,
+    ) -> RawData:
+        """Patch."""
+        headers = {}
+        if content_type is not None:
+            headers["content-type"] = content_type
         url = self._look_cache(url0)
         use_url = None
         try:
-            async with self.my_session(url, conn_timeout=HTTP_TIMEOUT) as (session, use_url):
-                async with session.patch(use_url, data=data, headers=headers) as resp:
-                    res_bytes: bytes = await resp.read()
-                    content_type = ContentType(resp.headers.get("content-type", MIME_OCTET))
-                    rd = RawData(content=res_bytes, content_type=content_type)
-
-                    if not resp.ok:
-                        try:
-                            message = res_bytes.decode("utf-8")
-                        except UnicodeDecodeError:
-                            message = res_bytes
-                        raise ValueError(f"cannot patch {url0=!r} {use_url=!r} {resp=!r}\n{message}")
-
-                    return rd
-
+            async with (
+                self.my_session(url, conn_timeout=HTTP_TIMEOUT) as (
+                    session,
+                    use_url,
+                ),
+                session.patch(use_url, data=data, headers=headers) as response,
+            ):
+                return await self._process_patch_response(
+                    response,
+                    url0,
+                    use_url,
+                )
         except CancelledError:
             raise
         except:
-            self.logger.error(f"cannot connect to {url=!r} {use_url=!r} \n{traceback.format_exc()}")
+            exception = traceback.format_exc()
+            self.logger.exception(
+                "Cannot connect to %r %r\n%s",
+                url,
+                use_url,
+                exception,
+            )
             raise
 
-    async def get(self, url0: URL, accept: Optional[str]) -> RawData:
+    @async_error_catcher
+    async def _process_get_response(
+        self,
+        response: ClientResponse,
+        url0: URL,
+        accept: str | None,
+        use_url: URLString,
+    ) -> RawData:
+        data = await response.read()
+        headers = response.headers.get(
+            "content-type",
+            "application/octet-stream",
+        )
+        content_type = ContentType(headers)
+        raw_data = RawData(data, content_type)
+        if not response.ok:
+            message = f"Cannot GET {url0=!r}\n{use_url=!r}\n{response=!r}\n"
+            try:
+                message += data.decode("utf-8")
+            except UnicodeDecodeError:
+                message += str(data)
+            if response.status == STATUS_ERROR:
+                raise NoSuchTopicError(message)
+            if response.status == STATUS_UNAVAILABLE:
+                raise TopicOriginUnavailableError(message)
+            raise ValueError(message)
+        if accept is not None and content_type != accept:
+            response_headers_dictionary = dict(response.headers)
+            pretty_response_headers_dictionary = pretty(
+                response_headers_dictionary,
+            )
+            message = (
+                f"GET gave a different content type {accept=!r}, "
+                f"{content_type}\n{url0=}\n"
+                f"{pretty_response_headers_dictionary}"
+            )
+            raise ValueError(message)
+        return raw_data
+
+    @async_error_catcher
+    async def get(self, url0: URL, accept: str | None) -> RawData:
+        """Return raw data."""
         headers: dict[str, str] = {}
         if accept is not None:
             headers["accept"] = accept
-
         url = self._look_cache(url0)
         use_url = None
         try:
-            async with self.my_session(url, conn_timeout=HTTP_TIMEOUT) as (session, use_url):
-                async with session.get(use_url) as resp:
-                    res_bytes: bytes = await resp.read()
-                    content_type = ContentType(resp.headers.get("content-type", "application/octet-stream"))
-                    rd = RawData(content=res_bytes, content_type=content_type)
-
-                    if not resp.ok:
-                        try:
-                            message = res_bytes.decode("utf-8")
-                        except UnicodeDecodeError:
-                            message = res_bytes
-                        resp: ClientResponse = resp
-                        if resp.status == 404:
-                            raise NoSuchTopic(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
-                        if resp.status == 503:
-                            raise TopicOriginUnavailable(
-                                f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}"
-                            )
-                        raise ValueError(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
-
-                    if accept is not None and content_type != accept:
-                        raise ValueError(
-                            f"GET gave a different content type ({accept=!r}, {content_type}\n{url0=}"
-                            + "\n"
-                            + pretty(dict(resp.headers))
-                        )
-                    return rd
+            async with (
+                self.my_session(url, conn_timeout=HTTP_TIMEOUT) as (
+                    session,
+                    use_url,
+                ),
+                session.get(use_url) as response,
+            ):
+                return await self._process_get_response(
+                    response,
+                    url0,
+                    accept,
+                    use_url,
+                )
         except CancelledError:
             raise
-        except NoSuchTopic:
+        except NoSuchTopicError:
             raise
-        except TopicOriginUnavailable:
+        except TopicOriginUnavailableError:
             raise
         except:
-            self.logger.error(f"cannot connect to {url=!r} {use_url=!r} \n{traceback.format_exc()}")
+            exception = traceback.format_exc()
+            self.logger.exception(
+                "Cannot connect to %r %r \n%s",
+                url,
+                use_url,
+                exception,
+            )
             raise
 
+    @async_error_catcher
     async def delete(self, url0: URL) -> None:
-        # headers: dict[str, str] = {}
-
+        """Delete."""
         url = self._look_cache(url0)
-        # use_url = None
-        async with self.my_session(url, conn_timeout=HTTP_TIMEOUT) as (session, use_url):
-            async with session.delete(use_url) as resp:
-                # res_bytes: bytes = await resp.read()
-                resp.raise_for_status()
+        async with (
+            self.my_session(url, conn_timeout=HTTP_TIMEOUT) as (
+                session,
+                use_url,
+            ),
+            session.delete(use_url) as response,
+        ):
+            response.raise_for_status()
 
-    async def get_metadata(self, url0: URLTopic) -> FoundMetadata:
-        url = self._look_cache(url0)
-        use_url = None
-        try:
-            async with self.my_session(url, conn_timeout=HTTP_TIMEOUT) as (session, use_url):
-                async with session.head(use_url) as resp:
-                    await my_raise_for_status(resp, url0)
-
-                    if HEADER_CONTENT_LOCATION in resp.headers:
-                        alternatives0 = cast(List[URLString], resp.headers.getall(HEADER_CONTENT_LOCATION))
-                    else:
-                        alternatives0 = []
-
-                    links = get_link_headers(resp.headers)
-
-                    if REL_EVENTS_DATA in links:
-                        events_url_data = cast(URLWSInline, join(url, links[REL_EVENTS_DATA].url))
-                    else:
-                        events_url_data = None
-
-                    if REL_EVENTS_NODATA in links:
-                        events_url = cast(URLWSOffline, join(url, links[REL_EVENTS_NODATA].url))
-                    else:
-                        events_url = None
-
-                    if REL_STREAM_PUSH in links:
-                        stream_push_url = cast(URLWS, join(url, links[REL_STREAM_PUSH].url))
-                    else:
-                        stream_push_url = None
-
-                    if REL_META in links:
-                        meta_url = join(url, links[REL_META].url)
-                    else:
-                        meta_url = None
-
-                    if REL_CONNECTIONS in links:
-                        connections_url = join(url, links[REL_CONNECTIONS].url)
-                    else:
-                        connections_url = None
-
-                    if REL_PROXIED in links:
-                        proxied_url = join(url, links[REL_PROXIED].url)
-                    else:
-                        proxied_url = None
-
-                    if REL_HISTORY in links:
-                        history_url = join(url, links[REL_HISTORY].url)
-                    else:
-                        history_url = None
-
-                    if HEADER_NODE_ID not in resp.headers:
-                        answering = None
-                    else:
-                        answering = NodeID(resp.headers[HEADER_NODE_ID])
-
-                    if HEADER_DATA_ORIGIN_NODE_ID not in resp.headers:
-                        origin_node = None
-                    else:
-                        origin_node = NodeID(resp.headers[HEADER_DATA_ORIGIN_NODE_ID])
-
-        except:
-            #  (TimeoutError, ClientConnectorError):
-            # logger.error(f"cannot connect to {url0=!r} {use_url=!r} \n{traceback.format_exc()}")
-
-            #  return FoundMetadata([], None, None, None)
-            raise
-        urls = [cast(URLTopic, join(url, _)) for _ in alternatives0]
+    @async_error_catcher
+    async def _process_head_response(
+        self,
+        response: ClientResponse,
+        url: URLTopic,
+        url0: URL,
+    ) -> "FoundMetadata":
+        await my_raise_for_status(response, url0)
+        if HEADER_CONTENT_LOCATION in response.headers:
+            headers = response.headers.getall(
+                HEADER_CONTENT_LOCATION,
+            )
+            alternatives0 = [URLString(header) for header in headers]
+        else:
+            alternatives0 = []
+        links = get_link_headers(response.headers)
+        if REL_EVENTS_DATA in links:
+            url = join(url, links[REL_EVENTS_DATA].url)
+            events_url_data = cast(URLWSInline, url)
+        else:
+            events_url_data = None
+        if REL_EVENTS_NODATA in links:
+            url = join(url, links[REL_EVENTS_NODATA].url)
+            events_url = cast(URLWSOffline, url)
+        else:
+            events_url = None
+        if REL_STREAM_PUSH in links:
+            url = join(url, links[REL_STREAM_PUSH].url)
+            stream_push_url = cast(URLWS, url)
+        else:
+            stream_push_url = None
+        meta_url = (
+            join(url, links[REL_META].url) if REL_META in links else None
+        )
+        connections_url = (
+            join(url, links[REL_CONNECTIONS].url)
+            if REL_CONNECTIONS in links
+            else None
+        )
+        proxied_url = (
+            join(url, links[REL_PROXIED].url) if REL_PROXIED in links else None
+        )
+        history_url = (
+            join(url, links[REL_HISTORY].url) if REL_HISTORY in links else None
+        )
+        answering = (
+            NodeID(response.headers[HEADER_NODE_ID])
+            if HEADER_NODE_ID in response.headers
+            else None
+        )
+        origin_node = (
+            NodeID(response.headers[HEADER_DATA_ORIGIN_NODE_ID])
+            if HEADER_DATA_ORIGIN_NODE_ID in response.headers
+            else None
+        )
+        urls = []
+        for alternative in alternatives0:
+            url = join(url, alternative)
+            url = cast(URLTopic, url)
+            urls.append(url)
         return FoundMetadata(
             url,
             urls,
             answering=answering,
-            events_url=events_url,
             origin_node=origin_node,
+            events_url=events_url,
             events_data_inline_url=events_url_data,
             meta_url=meta_url,
-            stream_push_url=stream_push_url,
             history_url=history_url,
+            stream_push_url=stream_push_url,
             connections_url=connections_url,
-            raw_headers=resp.headers,
             proxied_url=proxied_url,
+            raw_headers=response.headers,
         )
 
-    async def choose_best(self, reachability: List[TopicReachability]) -> URL:
-        use: List[Tuple[URL, Optional[NodeID]]] = []
+    @async_error_catcher
+    async def get_metadata(self, url0: URLTopic) -> "FoundMetadata":
+        """Return metadata."""
+        url = self._look_cache(url0)
+        async with (
+            self.my_session(url, conn_timeout=HTTP_TIMEOUT) as (
+                session,
+                use_url,
+            ),
+            session.head(use_url) as response,
+        ):
+            return await self._process_head_response(response, url, url0)
+
+    @async_error_catcher
+    async def choose_best_alternative(
+        self,
+        reachability: list[TopicReachability],
+    ) -> URL:
+        """Return best alternative."""
+        use: list[tuple[URL, NodeID | None]] = []
         for r in reachability:
             try:
-                x = parse_url_unescape(r.url)
+                parsed_url = parse_url_unescape(r.url)
             except ValueError:
-                self.logger.exception(f"cannot parse {r.url}")
+                self.logger.exception("Cannot parse %s", r.url)
                 continue
             else:
-                use.append((x, r.answering))
-        res = await self.find_best_alternative(use)
-        if res is None:
-            msg = f"no reachable url for {reachability}"
-            self.logger.error(msg)
-            raise ValueError(msg)
-        return res
+                use.append((parsed_url, r.answering))
+        best_alternative = await self.find_best_alternative(use)
+        if best_alternative is None:
+            message = f"No reachable url for {reachability}."
+            self.logger.exception(message)
+            raise ValueError(message)
+        return best_alternative
 
-    async def listen_topic(
-        self,
-        urlbase: URLIndexer,
-        topic_name: TopicNameV,
-        cb: Callable[[RawData], Any],
-        *,
-        inline_data: bool,
-        raise_on_error: bool,
-        max_frequency: Optional[float],
-    ) -> ListenDataInterface:
-        available = await self.ask_index(urlbase)
-        topic = available.topics[topic_name]
-        url = cast(URLTopic, await self.choose_best(topic.reachability))
-
-        return await self.listen_url(
-            url, cb, inline_data=inline_data, raise_on_error=raise_on_error, max_frequency=max_frequency
-        )
-
+    @async_error_catcher
     async def connect(
         self,
         url_index: URLIndexer,
         connection_name: TopicNameV,
         connection_job: ConnectionJob,
     ) -> None:
+        """Connect."""
         url_index = self._look_cache(url_index)
         metadata = await self.get_metadata(url_index)
         if metadata.connections_url is None:
-            msg = f"Connection functionality not available: {pretty(metadata)}"
-            raise ValueError(msg)
-
-        path = "/" + escape_json_pointer(connection_name.as_dash_sep())
+            pretty_metadata = pretty(metadata)
+            message = (
+                f"Connection functionality not available: {pretty_metadata}"
+            )
+            raise ValueError(message)
+        dash_separated_connection_name = connection_name.as_dash_sep()
+        path = "/" + escape_json_pointer(dash_separated_connection_name)
         wire = connection_job.to_wire()
-        op = {"op": "add", "path": path, "value": asdict(wire)}
+        value = asdict(wire)
+        op = {
+            "op": "add",
+            "path": path,
+            "value": value,
+        }
         ops = [op]
         data = cbor2.dumps(ops)
         await self.patch(
@@ -898,19 +1032,27 @@ class DTPSClient:
             data,
         )
 
+    @async_error_catcher
     async def disconnect(
         self,
         url_index: URLIndexer,
         connection_name: TopicNameV,
     ) -> None:
+        """Disconnect."""
         url_index = self._look_cache(url_index)
         metadata = await self.get_metadata(url_index)
         if metadata.connections_url is None:
-            msg = f"Connection functionality not available: {pretty(metadata)}"
-            raise ValueError(msg)
-
-        path = "/" + escape_json_pointer(connection_name.as_dash_sep())
-        op = {"op": "remove", "path": path}
+            pretty_metadata = pretty(metadata)
+            message = (
+                f"Connection functionality not available: {pretty_metadata}"
+            )
+            raise ValueError(message)
+        dash_separated_connection_name = connection_name.as_dash_sep()
+        path = "/" + escape_json_pointer(dash_separated_connection_name)
+        op = {
+            "op": "remove",
+            "path": path,
+        }
         ops = [op]
         data = cbor2.dumps(ops)
         await self.patch(
@@ -919,808 +1061,912 @@ class DTPSClient:
             data,
         )
 
+    @async_error_catcher
     async def listen_url(
         self,
         url_topic: URLTopic,
-        cb: Callable[[RawData], Awaitable[None]],
+        callback: Callable[[RawData], Awaitable[None]],
         *,
         inline_data: bool,
         raise_on_error: bool,
         connection_timeout: float = 10,
-        max_frequency: Optional[float],
-        on_finished: Optional[Callable[[FinishedMsg], Awaitable[None]]] = None,
-        # stop_condition: Optional[asyncio.Event] = None,
-    ) -> ListenDataInterface:
+        max_frequency: float | None,
+        on_finished: Callable[[FinishedMessage], Awaitable[None]]
+        | None = None,
+    ) -> AbstractListenDataInterface:
+        """Listen to URL."""
         url_topic = self._look_cache(url_topic)
         metadata = await self.get_metadata(url_topic)
-        logger.debug(f"listen_url: listening to {metadata.origin_node=} for {url_topic} -")
-
+        logger.debug(
+            "listen_url: listening to %s for %s -",
+            metadata.origin_node,
+            url_topic,
+        )
+        url_events: URLWSInline | URLWSOffline
         if inline_data:
             if metadata.events_data_inline_url is not None:
                 url_events = metadata.events_data_inline_url
             else:
-                msg = (
-                    f"cannot find field events_data_inline_url for url\n  {url_to_string(url_topic)}\n  "
+                url = url_to_string(url_topic)
+                message = (
+                    f"Cannot find field `events_data_inline_url` for\n{url}\n"
                     f"{metadata=}"
                 )
-                raise EventListeningNotAvailable(msg)
-
+                raise EventListeningNotAvailableError(message)
+        elif metadata.events_url is not None:
+            url_events = metadata.events_url
         else:
-            if metadata.events_url is not None:
-                url_events = metadata.events_url
-            else:
-                msg = f"cannot find events_url for\n  {url_to_string(url_topic)}\n  {metadata=}"
-                raise EventListeningNotAvailable(msg)
-
-        # logger.info(f"listening to  {url_topic} -> {metadata} -> {url_events}")
-        # desc = f"{url_topic} inline={inline_data}"
-
-        connection_event = asyncio.Event()
-
-        @async_error_catcher
-        async def filter_data(lue: ListenURLEvents) -> None:
-            # logger.debug(f"filter_data: {lue}")
-            if isinstance(lue, ErrorMsg):
-                logger.error(f"filter_data: error in {url_events}: {lue.comment}")
-            elif isinstance(lue, WarningMsg):
-                logger.warning(f"filter_data: warning in {url_events}: {lue.comment}")
-            elif isinstance(lue, SilenceMsg):
-                logger.debug(f"filter_data: silence in {url_events}: {lue.comment}")
-            elif isinstance(lue, FinishedMsg):
-                logger.debug(f"filter_data: finished in {url_events}: {lue.comment}")
-                if on_finished is not None:
-                    try:
-                        await on_finished(lue)
-                    except CancelledError:
-                        raise
-            elif isinstance(lue, ConnectionEstablished):
-                logger.debug(f"filter_data: connection established in {url_events}")
-
-                connection_event.set()
-            elif isinstance(lue, InsertNotification):  # type: ignore
-                # noinspection PyBroadException
-                try:
-                    await cb(lue.raw_data)
-                except CancelledError:
-                    raise
-                except Exception:  #
-                    logger.error(f"filter_data: error in handler: {traceback.format_exc()}")
-                    return
-            else:
-                logger.error(f"filter_data: unknown {lue}")
-                raise ValueError(f"unknown {lue}")
-
-        li = await self.listen_url_events3(
+            url = url_to_string(url_topic)
+            message = f"Cannot find `events_url` for\n{url}\n{metadata=}"
+            raise EventListeningNotAvailableError(message)
+        connection_event = Event()
+        filter_data = self._get_filter_data(
             url_events,
+            connection_event,
+            callback,
+            on_finished,
+        )
+        li = await self.listen_url_events3(
+            url_websockets=url_events,
             inline_data=inline_data,
             raise_on_error=raise_on_error,
             add_silence=None,
             max_frequency=max_frequency,
-            callback=filter_data,  # stop_condition=stop_condition
+            callback=filter_data,
         )
-
-        await asyncio.wait_for(connection_event.wait(), timeout=connection_timeout)
-
+        future = connection_event.wait()
+        await asyncio.wait_for(future, connection_timeout)
         return li
 
+    @staticmethod
+    def _get_filter_data(
+        url_events: URLWSInline | URLWSOffline,
+        connection_event: Event,
+        callback: Callable[[RawData], Awaitable[None]],
+        on_finished: Callable[[FinishedMessage], Awaitable[None]] | None,
+    ) -> Any:
+        @async_error_catcher
+        async def filter_data(listen_url_events: ListenURLEvents) -> None:
+            if isinstance(listen_url_events, ErrorMessage):
+                logger.exception(
+                    f"filter_data: error in {url_events}: "
+                    f"{listen_url_events.comment}",
+                )
+            elif isinstance(listen_url_events, WarningMessage):
+                logger.warning(
+                    f"filter_data: warning in {url_events}: "
+                    f"{listen_url_events.comment}",
+                )
+            elif isinstance(listen_url_events, SilenceMessage):
+                logger.debug(
+                    f"filter_data: silence in {url_events}: "
+                    f"{listen_url_events.comment}",
+                )
+            elif isinstance(listen_url_events, FinishedMessage):
+                logger.debug(
+                    f"filter_data: finished in {url_events}: "
+                    f"{listen_url_events.comment}",
+                )
+                if on_finished is not None:
+                    await on_finished(listen_url_events)
+            elif isinstance(listen_url_events, ConnectionEstablishedMessage):
+                logger.debug(
+                    "filter_data: connection established in %s",
+                    url_events,
+                )
+                connection_event.set()
+            elif isinstance(listen_url_events, InsertNotification):
+                try:
+                    await callback(listen_url_events.raw_data)
+                except CancelledError:
+                    raise
+                except Exception:
+                    exception = traceback.format_exc()
+                    logger.exception(
+                        "filter_data: error in handler: %s",
+                        exception,
+                    )
+                    return
+            else:
+                logger.exception("filter_data: unknown %s", listen_url_events)
+                message = f"Unknown {listen_url_events}"
+                raise TypeError(message)
+
+        return filter_data
+
+    @async_error_catcher
     async def listen_url_events3(
         self,
-        url_events: URLWS,
         *,
+        url_websockets: URLWS,
         inline_data: bool,
         raise_on_error: bool,
-        add_silence: Optional[float],
-        max_frequency: Optional[float],
+        add_silence: float | None,
+        max_frequency: float | None,
         callback: Callable[[ListenURLEvents], Awaitable[None]],
-        # stop_condition: "Optional[asyncio.Event]",
-    ) -> ListenDataInterface:
-        # if stop_condition is None:
-        stop_condition = asyncio.Event()
-        # if inline_data:
-        # if "?" not in url_to_string(url_events):
-        #     raise ValueError(f"inline data requested but no ? in {url_events}")
-        task = asyncio.create_task(
-            self.listen_url_events_(
-                url_events,
-                inline_data=inline_data,
-                raise_on_error=raise_on_error,
-                add_silence=add_silence,
-                callback=callback,
-                stop_condition=stop_condition,
-                max_frequency=max_frequency,
-            )
+    ) -> AbstractListenDataInterface:
+        """Listen for URL events."""
+        stop_condition = Event()
+        coroutine = self.listen_url_events_(
+            url_websockets=url_websockets,
+            inline_data=inline_data,
+            raise_on_error=raise_on_error,
+            add_silence=add_silence,
+            max_frequency=max_frequency,
+            callback=callback,
+            stop_condition=stop_condition,
         )
-        # else:
-        #     task = asyncio.create_task(
-        #         self.listen_url_events_with_data_offline(
-        #             url_events,
-        #             raise_on_error=raise_on_error,
-        #             add_silence=add_silence,
-        #             callback=callback,
-        #             stop_condition=stop_condition,
-        #         )
-        #     )
-        # self.remember_task(task)
+        task = asyncio.create_task(coroutine)
+        return ListenData(stop_condition, task)
 
-        return ListenDataImpl(stop_condition, task)
+    @async_error_catcher
+    async def _wait_until_shutdown(
+        self,
+        task: Task[X],
+        condition: Event,
+    ) -> X:
+        """Wait until shutdown.
 
-    async def _wait_until_shutdown(self, a: "asyncio.Task[X]", condition: Event) -> X:
-        """Waits for an event, or for the shutdown event. In that case we raise ShutdownAsked.
-        if the condition is set, we raise ConditionSatistied.
+        Waits for an event or for the shutdown event, in which case we
+        raise `ShutdownAskedError`. If the condition is set, we raise
+        `ConditionSatistiedError`.
         """
-        t_wait = asyncio.create_task(self.shutdown_event.wait())
-        t_condition_wait = asyncio.create_task(condition.wait())
-        tasks = [t_wait, a, t_condition_wait]
-
-        done, not_done = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-
-        for t in not_done:
-            t.cancel()
-
-        # case 1: the shutdown was asked
+        coroutine_1 = self.shutdown_event.wait()
+        task_wait = asyncio.create_task(coroutine_1)
+        coroutine_2 = condition.wait()
+        task_condition_wait = asyncio.create_task(coroutine_2)
+        _, incomplete_tasks = await asyncio.wait(
+            [task_wait, task, task_condition_wait],
+            return_when=FIRST_COMPLETED,
+        )
+        for incomplete_task in incomplete_tasks:
+            incomplete_task.cancel()
         if self.shutdown_event.is_set():
-            # logger.info('shutdown was asked')
-            raise ShutdownAsked()
-        elif condition.is_set():
-            # logger.info('condition is now set')
-            # case2: the condition was satisfied
-            raise ConditionSatistied()
-        else:
-            res = await a
-            # logger.info(f'the result is obtained: {res}')
-            return res
+            raise ShutdownAskedError
+        if condition.is_set():
+            raise ConditionSatistiedError
+        return await task
 
-    async def _download_from_urls(self, urlbase: URL, dr: DataReady) -> RawData:
-        url_datas = [join(urlbase, _.url) for _ in dr.availability]
-
-        #  logger.info(f"url_datas {url_datas}")
-        if not url_datas:
-            self.logger.error(f"no url_datas in {dr}")
-            raise AssertionError(f"no url_datas in {dr}")
-
-        #  TODO: DTSW-4781: try multiple urls
-        url_data = url_datas[0]
-
-        return await self.get(url_data, accept=dr.content_type)
-
-    #
-    # async def wait_for_next_message(
-    #     self,
-    #     ws: ClientWebSocketResponse,
-    #     stop_condition: "asyncio.Event",
-    #     on_silence=Optional[Tuple[float, Callable]],
-    # ) -> WSMessage:
-    #     while True:
-    #         msg = await ws.receive()
-    #         if msg.type == aiohttp.WSMsgType.CLOSE:
-    #             pass
+    @async_error_catcher
+    async def _download_from_urls(
+        self,
+        url_base: URL,
+        data_ready: DataReady,
+    ) -> RawData:
+        url_data_list = []
+        for _ in data_ready.availability:
+            url_base = join(url_base, _.url)
+            url_data_list.append(url_base)
+        if not url_data_list:
+            self.logger.exception("No `url_data_list` in %s", data_ready)
+            message = f"no url_datas in {data_ready}"
+            raise AssertionError(message)
+        #  TODO: DTSW-4781: Try multiple urls
+        url_data = url_data_list[0]
+        return await self.get(url_data, accept=data_ready.content_type)
 
     @async_error_catcher
     async def listen_url_events_(
         self,
+        *,
         url_websockets: URLWS,
-        raise_on_error: bool,
         inline_data: bool,
-        add_silence: Optional[float],
+        raise_on_error: bool,
+        add_silence: float | None,
+        max_frequency: float | None,
         callback: Callable[[ListenURLEvents], Awaitable[None]],
-        stop_condition: "asyncio.Event",
-        max_frequency: Optional[float],
+        stop_condition: Event,
     ) -> None:
-        """Iterates using direct data in websocket."""
-        # self.logger.debug(f"listen_url_events_ {url_websockets}")
-        nreceived = 0
-
-        received_first = False
-
-        # add_silence = 0.5  # XXX: TMP:
-
-        async def callback_wrap(xx: ListenURLEvents) -> None:
-            logger.debug(f"callback_wrap {xx}")
-            try:
-                await callback(xx)
-            except CancelledError:
-                raise
-            except:
-                logger.error(f"error in callback {traceback.format_exc()}")
-
+        """Iterate using direct data in websocket."""
         try:
             async with self.my_session(url_websockets) as (session, use_url):
-                ws: ClientWebSocketResponse
                 headers: dict[str, str] = {}
                 if max_frequency is not None:
                     headers[HEADER_MAX_FREQUENCY] = str(max_frequency)
-
-                async with session.ws_connect(use_url, headers=headers) as ws:
-                    # await callback(ConnectionEstablished(comment=f"opened session to {url_websockets}"))
-                    #  noinspection PyProtectedMember
-                    # headers = "".join(f"{k}: {v}\n" for k, v in ws._response.headers.items())
-                    # logger.info(f"websocket to {url_websockets} ready\n{headers}")
+                async with session.ws_connect(
+                    use_url,
+                    headers=headers,
+                ) as websocket:
                     try:
-                        while not stop_condition.is_set():
-                            if ws.closed:
-                                if nreceived == 0:
-                                    await callback_wrap(
-                                        ErrorMsg(comment="Closed, but not even one event received")
-                                    )
-
-                                await callback_wrap(FinishedMsg(comment="closed"))
-                                break
-
-                            receive_timeout = None
-
-                            wmsg_task = self._wait_until_shutdown(
-                                asyncio.create_task(ws.receive(timeout=receive_timeout)), stop_condition
-                            )
-                            try:
-                                if add_silence is not None:
-                                    try:
-                                        wm = await asyncio.wait_for(wmsg_task, timeout=add_silence)
-                                    except asyncio.exceptions.TimeoutError:
-                                        # logger.debug(f"add_silence {add_silence} expired")
-                                        if add_silence is not None:
-                                            await callback_wrap(
-                                                SilenceMsg(dt=add_silence, comment=f"nreceived={nreceived}")
-                                            )
-                                        continue
-                                else:
-                                    try:
-                                        wm = await wmsg_task
-                                    except asyncio.exceptions.TimeoutError:
-                                        continue
-                            except ShutdownAsked:
-                                msg = f"shutdown asked: ending listen_url"
-                                await callback_wrap(FinishedMsg(comment=msg))
-                                break
-                            except ConditionSatistied:
-                                msg = f"condition satisfied: ending listen_url"
-                                await callback_wrap(FinishedMsg(comment=msg))
-                                break
-
-                            if not received_first:
-                                await callback_wrap(ConnectionEstablished(comment=f"received {wm}"))
-                                received_first = True
-
-                            if wm.type == aiohttp.WSMsgType.CLOSE:  # aiohttp-specific
-                                if nreceived == 0:
-                                    await callback_wrap(
-                                        ErrorMsg(comment="Closed, but not even one event received")
-                                    )
-
-                                await callback_wrap(FinishedMsg(comment="closed"))
-                                break
-
-                            elif wm.type == aiohttp.WSMsgType.CLOSED:
-                                await callback_wrap(FinishedMsg(comment="closed"))
-                                break
-                            elif wm.type == aiohttp.WSMsgType.CLOSING:  # aiohttp-specific
-                                if nreceived == 0:
-                                    await callback_wrap(
-                                        ErrorMsg(comment="Closing, but not even one event received")
-                                    )
-                                await callback_wrap(FinishedMsg(comment="closing"))
-                                break
-                            elif wm.type == aiohttp.WSMsgType.ERROR:
-                                await callback_wrap(ErrorMsg(comment=str(wm.data)))
-                                if raise_on_error:
-                                    raise Exception(str(wm.data))
-                            elif wm.type == aiohttp.WSMsgType.BINARY:
-                                try:
-                                    cm: ChannelMsgs = channel_msgs_parse(wm.data)
-                                except Exception as e:
-                                    s = f"error in parsing {wm.data!r}: {e.__class__.__name__}:\n{e}"
-                                    self.logger.error(s)
-                                    await callback_wrap(ErrorMsg(comment=s))
-                                    if raise_on_error:
-                                        raise Exception(s)
-                                    continue
-                                else:
-                                    if isinstance(cm, DataReady):
-                                        dr = cm
-
-                                        if inline_data:
-                                            if dr.chunks_arriving == 0:
-                                                s = (
-                                                    f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}, "
-                                                    f"{inline_data=}"
-                                                )
-                                                self.logger.error(s)
-                                                await callback_wrap(ErrorMsg(comment=s))
-                                                if raise_on_error:
-                                                    raise Exception(s)
-
-                                            #  create a byte array initialized at
-
-                                            data = b""
-                                            for _ in range(dr.chunks_arriving):
-                                                wm = await ws.receive()
-                                                cm = channel_msgs_parse(
-                                                    wm.data
-                                                )  # FIXME: need to use primitives
-
-                                                if isinstance(cm, Chunk):
-                                                    data += cm.data
-                                                else:
-                                                    s = f"unexpected message while waiting for chunks {wm!r}"
-                                                    self.logger.error(s)
-                                                    await callback_wrap(ErrorMsg(comment=s))
-                                                    if raise_on_error:
-                                                        raise Exception(s)
-                                                    continue
-
-                                            if len(data) != dr.content_length:
-                                                s = (
-                                                    f"unexpected data length {len(data)} != "
-                                                    f"{dr.content_length}\n{dr}"
-                                                )
-                                                self.logger.error(s)
-                                                await callback_wrap(ErrorMsg(comment=s))
-                                                if raise_on_error:
-                                                    raise Exception(
-                                                        f"unexpected data length {len(data)} != "
-                                                        f"{dr.content_length}"
-                                                    )
-
-                                            raw_data = RawData(content_type=dr.content_type, content=data)
-                                            x = InsertNotification(
-                                                data_saved=dr.as_data_saved(), raw_data=raw_data
-                                            )
-                                            await callback_wrap(x)
-                                        else:
-                                            if dr.chunks_arriving > 0:
-                                                s = (
-                                                    f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}, "
-                                                    f"{inline_data=}"
-                                                )
-                                                self.logger.error(s)
-                                                await callback_wrap(ErrorMsg(comment=s))
-                                                if raise_on_error:
-                                                    raise Exception(s)
-
-                                            try:
-                                                # TODO: re-use the same session for gets
-                                                # logger.debug(f"downloading {url_websockets} from {cm}")
-                                                data = await self._download_from_urls(url_websockets, cm)
-                                            except Exception as e:
-                                                msg = (
-                                                    f"error in downloading {cm}: {e.__class__.__name__}\n{e}"
-                                                )
-                                                self.logger.error(msg)
-                                                await callback_wrap(ErrorMsg(comment=msg))
-                                                if raise_on_error:
-                                                    await ws.close(message=msg.encode())
-                                                    raise Exception(msg) from e
-                                                continue
-
-                                            await callback_wrap(
-                                                InsertNotification(
-                                                    data_saved=cm.as_data_saved(), raw_data=data
-                                                )
-                                            )
-
-                                    elif isinstance(cm, ChannelInfo):
-                                        nreceived += 1
-                                        m = ConnectionEstablished(comment=f"received {nreceived}")
-                                        await callback_wrap(m)
-                                        # logger.info(f"channel info {cm}")
-                                    elif isinstance(cm, (WarningMsg, ErrorMsg, FinishedMsg)):
-                                        await callback_wrap(cm)
-                                    elif isinstance(cm, SilenceMsg):
-                                        await callback_wrap(cm)
-                                    else:
-                                        s = f"listen_url_events_: unexpected message {cm!r}"
-                                        self.logger.error(s)
-                                        await callback_wrap(ErrorMsg(comment=s))
-                                        if raise_on_error:
-                                            raise Exception(s)
-
-                            else:
-                                s = f"listen_url_events_: unexpected message type {wm.type} with {wm.data!r}"
-                                self.logger.error(s)
-                                await callback_wrap(ErrorMsg(comment=s))
-                                if raise_on_error:
-                                    raise Exception(s)
-                                continue
+                        await self._process_url_events(
+                            websocket,
+                            url_websockets=url_websockets,
+                            inline_data=inline_data,
+                            raise_on_error=raise_on_error,
+                            add_silence=add_silence,
+                            callback=callback,
+                            stop_condition=stop_condition,
+                        )
                     except CancelledError:
-                        self.logger.debug(f"listen_url_events_: canceled")
+                        self.logger.debug("listen_url_events_: canceled")
                         raise
-                    except Exception as e:
-                        self.logger.error(f"listen_url_events_: error in websocket {traceback.format_exc()}")
-                        msg = str(e)[:100]
-                        await ws.close(code=WSCloseCode.ABNORMAL_CLOSURE, message=msg.encode())
+                    except Exception as exception:
+                        self.logger.exception(
+                            "listen_url_events_: error in websocket %s",
+                        )
+                        message = str(exception)[:100]
+                        encoded_message = message.encode()
+                        await websocket.close(
+                            code=WSCloseCode.ABNORMAL_CLOSURE,
+                            message=encoded_message,
+                        )
                         raise
                     else:
-                        self.logger.debug(f"listen_url_events_: closed normally")
-                        await ws.close(code=WSCloseCode.OK)
-
+                        self.logger.debug(
+                            "listen_url_events_: closed normally",
+                        )
+                        await websocket.close(code=WSCloseCode.OK)
         finally:
-            self.logger.debug(f"listen_url_events_: finally")
-            pass
-        return None
+            self.logger.debug("listen_url_events_: finally")
+
+    @staticmethod
+    @async_error_catcher
+    async def _callback_wrap(
+        callback: Callable[[ListenURLEvents], Awaitable[None]],
+        listen_url_events: ListenURLEvents,
+    ) -> None:
+        logger.debug(f"callback_wrap {listen_url_events}")
+        try:
+            await callback(listen_url_events)
+        except CancelledError:
+            raise
+        except Exception:
+            exception = traceback.format_exc()
+            logger.exception("Error in callback %s", exception)
+
+    @async_error_catcher
+    async def _get_websocket_message(
+        self,
+        websocket: ClientWebSocketResponse,
+        *,
+        add_silence: float | None,
+        callback: Callable[[ListenURLEvents], Awaitable[None]],
+        stop_condition: Event,
+    ) -> WSMessage | None:
+        coroutine = websocket.receive()
+        task = asyncio.create_task(coroutine)
+        websocket_message_task = self._wait_until_shutdown(
+            task,
+            stop_condition,
+        )
+        websocket_message = None
+        if add_silence is not None:
+            try:
+                websocket_message = await asyncio.wait_for(
+                    websocket_message_task,
+                    timeout=add_silence,
+                )
+            except asyncio.exceptions.TimeoutError:
+                if add_silence is not None:
+                    silenced_message = SilenceMessage(
+                        dt=add_silence,
+                        comment=f"{self.number_received=}",
+                    )
+                    await self._callback_wrap(callback, silenced_message)
+        else:
+            with suppress(asyncio.exceptions.TimeoutError):
+                websocket_message = await websocket_message_task
+        return websocket_message
+
+    @async_error_catcher
+    async def _process_url_events(
+        self,
+        websocket: ClientWebSocketResponse,
+        *,
+        url_websockets: URLWS,
+        inline_data: bool,
+        raise_on_error: bool,
+        add_silence: float | None,
+        callback: Callable[[ListenURLEvents], Awaitable[None]],
+        stop_condition: Event,
+    ) -> None:
+        self.number_received = 0
+        received_first = False
+        while not stop_condition.is_set():
+            if websocket.closed:
+                if self.number_received == 0:
+                    error_message = ErrorMessage(
+                        "Closed, but not even one event received.",
+                    )
+                    await self._callback_wrap(callback, error_message)
+                finished_message = FinishedMessage("Closed")
+                await self._callback_wrap(callback, finished_message)
+                break
+            try:
+                websocket_message = await self._get_websocket_message(
+                    websocket,
+                    add_silence=add_silence,
+                    callback=callback,
+                    stop_condition=stop_condition,
+                )
+                if websocket_message is None:
+                    continue
+            except ShutdownAskedError:
+                finished_message = FinishedMessage(
+                    "Shutdown asked: ending `listen_url`...",
+                )
+                await self._callback_wrap(callback, finished_message)
+                break
+            except ConditionSatistiedError:
+                finished_message = FinishedMessage(
+                    "Condition satisfied: ending `listen_url`...",
+                )
+                await self._callback_wrap(callback, finished_message)
+                break
+            if not received_first:
+                connection_established_message = ConnectionEstablishedMessage(
+                    f"Received {websocket_message}",
+                )
+                await self._callback_wrap(
+                    callback,
+                    connection_established_message,
+                )
+                received_first = True
+            exit_loop = await self._process_websocket_message(
+                websocket_message,
+                websocket,
+                url_websockets=url_websockets,
+                inline_data=inline_data,
+                raise_on_error=raise_on_error,
+                callback=callback,
+            )
+            if exit_loop:
+                break
+
+    @async_error_catcher
+    async def _process_websocket_message(
+        self,
+        websocket_message: WSMessage,
+        websocket: ClientWebSocketResponse,
+        *,
+        url_websockets: URLWS,
+        inline_data: bool,
+        raise_on_error: bool,
+        callback: Callable[[ListenURLEvents], Awaitable[None]],
+    ) -> bool:
+        if websocket_message.type in (WSMsgType.CLOSE, WSMsgType.CLOSING):
+            if self.number_received == 0:
+                message = (
+                    "Closed but not even one event received."
+                    if websocket_message.type == WSMsgType.CLOSE
+                    else "Closing but not even one event received"
+                )
+                error_message = ErrorMessage(message)
+                await self._callback_wrap(callback, error_message)
+            message = (
+                "Closed."
+                if websocket_message.type == WSMsgType.CLOSE
+                else "Closing..."
+            )
+            finished_message = FinishedMessage(message)
+            await self._callback_wrap(callback, finished_message)
+            return True
+        if websocket_message.type == WSMsgType.CLOSED:
+            finished_message = FinishedMessage("Closed.")
+            await self._callback_wrap(callback, finished_message)
+            return True
+        if websocket_message.type == WSMsgType.ERROR:
+            message = str(websocket_message.data)
+            error_message = ErrorMessage(message)
+            await self._callback_wrap(callback, error_message)
+            if raise_on_error:
+                raise Exception(message)
+        elif websocket_message.type == WSMsgType.BINARY:
+            await self._process_binary_websocket_message(
+                websocket_message,
+                websocket,
+                url_websockets,
+                inline_data=inline_data,
+                raise_on_error=raise_on_error,
+                callback=callback,
+            )
+        else:
+            message = (
+                f"listen_url_events_: unexpected message type "
+                f"{websocket_message.type} with {websocket_message.data!r}"
+            )
+            self.logger.exception(message)
+            error_message = ErrorMessage(message)
+            await self._callback_wrap(callback, error_message)
+            if raise_on_error:
+                raise Exception(message)
+        return False
+
+    @async_error_catcher
+    async def _process_binary_websocket_message(
+        self,
+        websocket_message: WSMessage,
+        websocket: ClientWebSocketResponse,
+        url_websockets: URLWS,
+        *,
+        inline_data: bool,
+        raise_on_error: bool,
+        callback: Callable[[ListenURLEvents], Awaitable[None]],
+    ) -> None:
+        try:
+            channel_messages = parse_cbor_tagged(
+                websocket_message.data,
+                *CHANNEL_MESSAGE_TYPES,
+            )
+        except Exception as exception:
+            message = (
+                f"error in parsing {websocket_message.data!r}: "
+                f"{exception.__class__.__name__}:\n{exception}"
+            )
+            self.logger.exception(message)
+            error_message = ErrorMessage(message)
+            await self._callback_wrap(callback, error_message)
+            if raise_on_error:
+                raise Exception(message) from exception
+            return
+        else:
+            if isinstance(channel_messages, DataReady):
+                data_ready = channel_messages
+                if inline_data:
+                    if data_ready.chunks_arriving == 0:
+                        message = (
+                            f"Unexpected `chunks_arriving` "
+                            f"{data_ready.chunks_arriving} in "
+                            f"{data_ready}, {inline_data=}."
+                        )
+                        self.logger.exception(message)
+                        error_message = ErrorMessage(message)
+                        await self._callback_wrap(callback, error_message)
+                        if raise_on_error:
+                            raise Exception(message)
+                    data = b""
+                    for _ in range(data_ready.chunks_arriving):
+                        websocket_message = await websocket.receive()
+                        # FIXME: Need to use primitives
+                        inner_channel_messages = parse_cbor_tagged(
+                            websocket_message.data,
+                            *CHANNEL_MESSAGE_TYPES,
+                        )
+                        if isinstance(inner_channel_messages, Chunk):
+                            data += inner_channel_messages.data
+                        else:
+                            message = (
+                                "unexpected message while waiting for chunks "
+                                f"{websocket_message!r}"
+                            )
+                            self.logger.exception(message)
+                            error_message = ErrorMessage(message)
+                            await self._callback_wrap(callback, error_message)
+                            if raise_on_error:
+                                raise Exception(message)
+                            continue
+                    data_length = len(data)
+                    if data_length != data_ready.content_length:
+                        message = (
+                            f"unexpected data length {data_length} != "
+                            f"{data_ready.content_length}\n"
+                            f"{data_ready}"
+                        )
+                        self.logger.exception(message)
+                        error_message = ErrorMessage(message)
+                        await self._callback_wrap(callback, error_message)
+                        if raise_on_error:
+                            message = (
+                                f"Unexpected data length {data_length} != "
+                                f"{data_ready.content_length}"
+                            )
+                            raise Exception(message)
+                    raw_data = RawData(data, data_ready.content_type)
+                    data_saved = data_ready.as_data_saved()
+                    insert_notification = InsertNotification(
+                        data_saved,
+                        raw_data,
+                    )
+                    await self._callback_wrap(callback, insert_notification)
+                else:
+                    if data_ready.chunks_arriving > 0:
+                        message = (
+                            f"unexpected chunks_arriving "
+                            f"{data_ready.chunks_arriving} in "
+                            f"{data_ready}, {inline_data=}"
+                        )
+                        self.logger.exception(message)
+                        error_message = ErrorMessage(message)
+                        await self._callback_wrap(callback, error_message)
+                        if raise_on_error:
+                            raise Exception(message)
+                    try:
+                        # TODO: Re-use the same session for gets
+                        raw_data = await self._download_from_urls(
+                            url_websockets,
+                            data_ready,
+                        )
+                    except Exception as exception:
+                        message = (
+                            f"error in downloading {data_ready}: "
+                            f"{exception.__class__.__name__}\n{exception}"
+                        )
+                        self.logger.exception(message)
+                        error_message = ErrorMessage(message)
+                        await self._callback_wrap(callback, error_message)
+                        if raise_on_error:
+                            encoded_message = message.encode()
+                            await websocket.close(message=encoded_message)
+                            raise Exception(message) from exception
+                        return
+                    data_saved = data_ready.as_data_saved()
+                    insert_notification = InsertNotification(
+                        data_saved,
+                        raw_data,
+                    )
+                    await self._callback_wrap(callback, insert_notification)
+            elif isinstance(data_ready, ChannelInfo):
+                self.number_received += 1
+                connection_established_message = ConnectionEstablishedMessage(
+                    f"Received {self.number_received}.",
+                )
+                await self._callback_wrap(
+                    callback,
+                    connection_established_message,
+                )
+            elif isinstance(
+                data_ready,
+                ErrorMessage
+                | FinishedMessage
+                | SilenceMessage
+                | WarningMessage,
+            ):
+                await self._callback_wrap(callback, data_ready)
+            else:
+                message = (
+                    f"listen_url_events_: unexpected message {data_ready!r}"
+                )
+                self.logger.exception(message)
+                error_message = ErrorMessage(message)
+                await self._callback_wrap(callback, error_message)
+                if raise_on_error:
+                    raise Exception(message)
 
     @asynccontextmanager
     async def push_through_websocket(
         self,
         url_websockets: URLWS,
-    ) -> "AsyncIterator[PushInterface]":
-        """Iterates using direct data using side loading"""
-        from .server import get_tagged_cbor
-
+    ) -> AsyncIterator["PushInterface"]:
+        """Iterate using direct data using side loading."""
         use_url: URLString
-        async with self.my_session(url_websockets) as (session, use_url):
-            ws: ClientWebSocketResponse
-            async with session.ws_connect(use_url) as ws:
-
-                class PushInterfaceImpl(PushInterface):
-                    async def push_through(self, data: bytes, content_type: ContentType) -> bool:
-                        rd = RawData(content_type=content_type, content=data)
-
-                        await ws.send_bytes(get_tagged_cbor(rd))
-                        while True:
-                            response = await ws.receive()
-                            if response.type in [
-                                aiohttp.WSMsgType.CLOSE,
-                                aiohttp.WSMsgType.CLOSED,
-                                aiohttp.WSMsgType.CLOSING,
-                            ]:
-                                return False
-                            elif response.type == aiohttp.WSMsgType.BINARY:
-                                pr = parse_cbor_tagged(response.data, PushResult)
-                                return pr.result
-                            else:
-                                logger.error(f"unexpected {response}")
-                                continue
-
-                yield PushInterfaceImpl()
+        websocket: ClientWebSocketResponse
+        async with (
+            self.my_session(url_websockets) as (session, use_url),
+            session.ws_connect(use_url) as websocket,
+        ):
+            yield PushInterface(websocket)
 
     @async_error_catcher
     async def listen_continuous(
         self,
         urlbase0: URL,
-        expect_node: Optional[NodeID],
+        expect_node: NodeID | None,
         *,
         switch_identity_ok: bool,
         raise_on_error: bool,
-        add_silence: Optional[float],
+        add_silence: float | None,
         inline_data: bool,
         callback: Callable[[ListenURLEvents], Awaitable[None]],
-        max_frequency: Optional[float],
-    ) -> ListenDataInterface:
-        i = ListenDataContinuousImp(None)
-        t = asyncio.create_task(
-            self._listen_continuous_(
-                urlbase0,
-                expect_node,
-                switch_identity_ok=switch_identity_ok,
-                raise_on_error=raise_on_error,
-                add_silence=add_silence,
-                inline_data=inline_data,
-                callback=callback,
-                ldi=i,
-                max_frequency=max_frequency,
-            )
+        max_frequency: float | None,
+    ) -> AbstractListenDataInterface:
+        """Listen continuously."""
+        listen_data_interface = ListenDataContinuous(None)
+        coroutine = self._listen_continuous_(
+            urlbase0,
+            expect_node,
+            switch_identity_ok=switch_identity_ok,
+            raise_on_error=raise_on_error,
+            add_silence=add_silence,
+            inline_data=inline_data,
+            callback=callback,
+            listen_data_interface=listen_data_interface,
+            max_frequency=max_frequency,
         )
-        i.task = t
-        self.remember_task(t)
-
-        return i
+        task = asyncio.create_task(coroutine)
+        listen_data_interface.task = task
+        self.remember_task(task)
+        return listen_data_interface
 
     @async_error_catcher
     async def _listen_continuous_(
         self,
         urlbase0: URL,
-        expect_node: Optional[NodeID],
+        expect_node: NodeID | None,
         *,
-        ldi: "ListenDataContinuousImp",
+        listen_data_interface: "ListenDataContinuous",
         switch_identity_ok: bool,
         raise_on_error: bool,
-        add_silence: Optional[float],
+        add_silence: float | None,
         inline_data: bool,
         callback: Callable[[ListenURLEvents], Awaitable[None]],
-        max_frequency: Optional[float],
-    ):
-        while not ldi.stop_condition.is_set():
+        max_frequency: float | None,
+    ) -> None:
+        while not listen_data_interface.stop_condition.is_set():
             try:
-                md = await self.get_metadata(urlbase0)
-            except Exception as e:
-                msg = f"Error getting metadata for {urlbase0!r}: {e!r}"
-                self.logger.error(msg)
-
-                if raise_on_error:
-                    raise Exception(msg) from e
-
-                await asyncio.sleep(1.0)
-                continue
-
-            # logger.info(
-            #     f"Metadata for {urlbase0!r}:\n" + json.dumps(asdict(md), indent=2)
-            # )  # available = await dtpsclient.ask_topics(urlbase0)
-
-            if md.answering is None:
-                msg = f"This is not a DTPS node."
-                self.logger.error(msg)
-                if raise_on_error:
-                    raise Exception(msg)
-                await asyncio.sleep(2.0)
-                continue
-
-            if expect_node is not None and md.answering != expect_node:
-                if switch_identity_ok:
-                    msg = f"Switching identity to {md.answering!r}."
-                    self.logger.debug(msg)
-                else:
-                    msg = f"This is not the expected node {expect_node!r}."
-                    self.logger.error(msg)
-                    if raise_on_error:
-                        raise Exception(msg)
-                    await asyncio.sleep(2.0)
-                    continue
-
-            expect_node = md.answering
-
-            if md.events_url is None and md.events_data_inline_url == "":
-                msg = f"This resource does not support events."
-                self.logger.error(msg)
-                if raise_on_error:
-                    raise Exception(msg)
-                await asyncio.sleep(2.0)
-                continue
-
-            if not inline_data:
-                if md.events_url is None:
-                    msg = f"This resource does not support events."
-                    self.logger.error(msg)
-                    if raise_on_error:
-                        raise Exception(msg)
-                    await asyncio.sleep(2.0)
-                    continue
-
-                listen_data = await self.listen_url_events3(
-                    md.events_url,
-                    raise_on_error=raise_on_error,
-                    inline_data=False,
-                    add_silence=add_silence,
-                    max_frequency=max_frequency,
-                    callback=callback,  # stop_condition=stop_condition
+                metadata = await self.get_metadata(urlbase0)
+            except Exception as exception:
+                message = (
+                    f"Error getting metadata for {urlbase0!r}: {exception!r}"
                 )
-
-            else:
-                if md.events_data_inline_url is None:
-                    msg = f"This resource does not support inline data events."
-                    self.logger.error(msg)
+                self.logger.exception(message)
+                if raise_on_error:
+                    raise Exception(message) from exception
+                await asyncio.sleep(1)
+                continue
+            if metadata.answering is None:
+                message = "This is not a DTPS node."
+                self.logger.exception(message)
+                if raise_on_error:
+                    raise Exception(message)
+                await asyncio.sleep(2)
+                continue
+            if expect_node is not None and metadata.answering != expect_node:
+                if switch_identity_ok:
+                    self.logger.debug(
+                        "Switching identity to %r.",
+                        metadata.answering,
+                    )
+                else:
+                    message = f"This is not the expected node {expect_node!r}."
+                    self.logger.exception(message)
                     if raise_on_error:
-                        raise Exception(msg)
-                    await asyncio.sleep(2.0)
+                        raise Exception(message)
+                    await asyncio.sleep(2)
+                    continue
+            expect_node = metadata.answering
+            if (
+                metadata.events_url is None
+                and metadata.events_data_inline_url == ""
+            ):
+                message = "This resource does not support events."
+                self.logger.exception(message)
+                if raise_on_error:
+                    raise Exception(message)
+                await asyncio.sleep(2)
+                continue
+            if not inline_data:
+                if metadata.events_url is None:
+                    message = "This resource does not support events."
+                    self.logger.exception(message)
+                    if raise_on_error:
+                        raise Exception(message)
+                    await asyncio.sleep(2)
                     continue
                 listen_data = await self.listen_url_events3(
-                    md.events_data_inline_url,
+                    url_websockets=metadata.events_url,
+                    inline_data=False,
                     raise_on_error=raise_on_error,
-                    inline_data=True,
                     add_silence=add_silence,
                     max_frequency=max_frequency,
                     callback=callback,
                 )
-
+            else:
+                if metadata.events_data_inline_url is None:
+                    message = (
+                        "This resource does not support inline data events."
+                    )
+                    self.logger.exception(message)
+                    if raise_on_error:
+                        raise Exception(message)
+                    await asyncio.sleep(2)
+                    continue
+                listen_data = await self.listen_url_events3(
+                    url_websockets=metadata.events_data_inline_url,
+                    inline_data=True,
+                    raise_on_error=raise_on_error,
+                    add_silence=add_silence,
+                    max_frequency=max_frequency,
+                    callback=callback,
+                )
             try:
                 try:
-                    finish = asyncio.create_task(listen_data.wait_for_done())
+                    coroutine = listen_data.wait_for_done()
+                    finish = asyncio.create_task(coroutine)
                     try:
-                        await self._wait_until_shutdown(finish, ldi.stop_condition)
-                    except ShutdownAsked:
+                        await self._wait_until_shutdown(
+                            finish,
+                            listen_data_interface.stop_condition,
+                        )
+                    except ShutdownAskedError:
                         return
-                    except ConditionSatistied:
+                    except ConditionSatistiedError:
                         return
-
-                except StopContinuousLoop as e:
-                    self.logger.error(f"obtained {e}")
+                except StopContinuousLoopError:
                     break
-            except CancelledError:
-                raise
-            except Exception as e:
-                msg = f"Error listening to {urlbase0!r}:\n{traceback.format_exc()}"
-                self.logger.error(msg)
+            except Exception as exception:
+                formatted_traceback = traceback.format_exc()
+                message = (
+                    f"Error listening to {urlbase0!r}:\n{formatted_traceback}"
+                )
+                self.logger.exception(message)
                 if raise_on_error:
-                    raise Exception(msg) from e
-                await asyncio.sleep(1.0)
+                    raise Exception(message) from exception
+                await asyncio.sleep(1)
                 continue
-
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(1)
 
     @async_error_catcher
     async def push_continuous(
         self,
         urlbase0: URL,
         *,
-        queue_in: "asyncio.Queue[RawData]",
-        queue_out: "asyncio.Queue[bool]",
-    ) -> "asyncio.Task[None]":
+        queue_in: Queue[RawData],
+        queue_out: Queue[bool],
+    ) -> Task[None]:
+        """Push continuously."""
         try:
-            md = await self.get_metadata(urlbase0)
-        except Exception as e:
-            msg = f"Error getting metadata for {urlbase0!r}: {e!r}"
-            self.logger.error(msg)
-            raise ValueError(msg) from e
-
-        if md.stream_push_url is None:
-            raise ValueError(f"no stream push url in {md}")
-
-        task = asyncio.create_task(pusher(self, md.stream_push_url, queue_in, queue_out))
+            metadata = await self.get_metadata(urlbase0)
+        except Exception as error:
+            message = f"Error getting metadata for {urlbase0!r}: {error!r}"
+            self.logger.exception(message)
+            raise ValueError(message) from error
+        if metadata.stream_push_url is None:
+            message = f"No stream push url in {metadata}."
+            raise ValueError(message)
+        coroutine = pusher(self, metadata.stream_push_url, queue_in, queue_out)
+        task = asyncio.create_task(coroutine)
         self.remember_task(task)
-
         return task
+
+
+@dataclass
+class FoundMetadata:
+    """Found metadata."""
+
+    # The URL that was used to get the metadata
+    origin: URLTopic
+    # URL alternatives (Location: headers)
+    alternative_urls: list[URLTopic]
+    # NodeID if answering is a DTPS node
+    answering: NodeID | None
+    # HEADER_DATA_ORIGIN_NODE_ID
+    origin_node: NodeID | None
+    # Websocket with offline data
+    events_url: URLWSOffline | None
+    # Websocket with inline data
+    events_data_inline_url: URLWSInline | None
+    # Meta URL
+    meta_url: URL | None
+    # History URL
+    history_url: URL | None
+    # URL for stream push
+    stream_push_url: URLWS | None
+    connections_url: URL | None
+    proxied_url: URL | None
+    raw_headers: CIMultiDictProxy[str]
+
+
+@dataclass
+class ListenData(AbstractListenDataInterface):
+    stop_condition: Event
+    task: Task[None]
+
+    @async_error_catcher
+    async def stop(self) -> None:
+        self.stop_condition.set()
+        self.task.cancel()
+
+    @async_error_catcher
+    async def wait_for_done(self) -> None:
+        try:
+            await self.task
+        except CancelledError:
+            if self.task.done():
+                return
+
+
+class ListenDataContinuous(AbstractListenDataInterface):
+    listen_data_interface: AbstractListenDataInterface | None = None
+    stop_condition: Event
+    task: Task[None] | None
+
+    def __init__(
+        self,
+        listen_data_interface: AbstractListenDataInterface | None,
+    ) -> None:
+        self.listen_data_interface = listen_data_interface
+        self.stop_condition = Event()
+        self.task = None
+
+    @async_error_catcher
+    async def stop(self) -> None:
+        self.stop_condition.set()
+        if self.task is None:
+            raise ValueError
+        await self.task
+
+    @async_error_catcher
+    async def wait_for_done(self) -> None:
+        if self.task is None:
+            raise ValueError
+        await self.task
+
+
+class PushInterface:
+    """Push interface."""
+
+    websocket: ClientWebSocketResponse
+
+    def __init__(self, websocket: ClientWebSocketResponse) -> None:
+        self.websocket = websocket
+
+    @async_error_catcher
+    async def push_through(
+        self,
+        data: bytes,
+        content_type: ContentType,
+    ) -> bool:
+        """Push through."""
+        raw_data = RawData(data, content_type)
+        tagged_cbor = get_tagged_cbor(raw_data)
+        await self.websocket.send_bytes(tagged_cbor)
+        while True:
+            response = await self.websocket.receive()
+            if response.type in (
+                WSMsgType.CLOSE,
+                WSMsgType.CLOSED,
+                WSMsgType.CLOSING,
+            ):
+                return False
+            if response.type == WSMsgType.BINARY:
+                push_result = parse_cbor_tagged(response.data, PushResult)
+                return push_result.result
+            logger.exception("Unexpected %s.", response)
+
+
+def escape_json_pointer(string: str) -> str:
+    """Return escaped JSON pointer."""
+    string = string.replace("~", "~0")
+    return string.replace("/", "~1")
+
+
+@async_error_catcher
+async def my_raise_for_status(response: ClientResponse, url0: URL) -> None:
+    """My raise for status."""
+    if not response.ok:
+        # Reason should always be `not None` for a started response
+        if response.reason is None:
+            raise ValueError
+        url_string = url_to_string(url0)
+        message = (
+            f"method: {response.method}\nurl0: {url_string}\nreason: "
+            f"{response.reason}\nmessage:\n"
+        )
+        response_payload = await response.read()
+        try:
+            decoded_response_payload = response_payload.decode("utf-8")
+            message += f"{decoded_response_payload}\n"
+        except UnicodeDecodeError:
+            message += f"{response_payload!s}\n"
+        raise ClientResponseError(
+            response.request_info,
+            response.history,
+            status=response.status,
+            message=message,
+            headers=response.headers,
+        )
 
 
 @async_error_catcher
 async def pusher(
-    client: DTPSClient, to_url: URLWS, queue_in: "asyncio.Queue[RawData]", queue_out: "asyncio.Queue[bool]"
-):
-    async with client.push_through_websocket(to_url) as p:
+    client: DTPSClient,
+    to_url: URLWS,
+    queue_in: Queue[RawData],
+    queue_out: Queue[bool],
+) -> None:
+    """Pusher."""
+    async with client.push_through_websocket(to_url) as push_interface:
         while True:
-            rd = await queue_in.get()
-            success = await p.push_through(rd.content, rd.content_type)
+            raw_data = await queue_in.get()
+            success = await push_interface.push_through(
+                raw_data.content,
+                raw_data.content_type,
+            )
             queue_in.task_done()
             queue_out.put_nowait(success)
 
 
-class PushInterface(ABC):
-    @abstractmethod
-    async def push_through(self, data: bytes, content_type: ContentType) -> bool: ...
-
-
-def escape_json_pointer(s: str) -> str:
-    return s.replace("~", "~0").replace("/", "~1")
-
-
-def unescape_json_pointer(s: str) -> str:
-    return s.replace("~1", "/").replace("~0", "~")
-
-
-if False:
-    # unused now
-    @async_error_catcher
-    async def _listen_and_callback(
-        desc: str, it: AsyncIterator[ListenURLEvents], cb: Callable[[RawData], Awaitable[None]]
-    ) -> None:
-        try:
-            # logger.debug(f"_listen_and_callback ({desc}): starting")
-            i = 0
-            async for lue in it:
-                i += 1
-                # logger.debug(f"_listen_and_callback ({desc}): {i} {lue}")
-                if isinstance(lue, InsertNotification):
-                    await cb(lue.raw_data)
-
-        except CancelledError:
-            # logger.debug(f"_listen_and_callback ({desc}): cancelled")
-            raise
-        # logger.debug(f"_listen_and_callback ({desc}): finished")
-
-
-async def my_raise_for_status(resp: ClientResponse, url0: URL) -> None:
-    if not resp.ok:
-        # reason should always be not None for a started response
-        assert resp.reason is not None
-        msg = await resp.read()
-        try:
-            msg = msg.decode("utf-8")
-        except UnicodeDecodeError:
-            pass
-
-        message = ""
-        message += f"method: {resp.method}\n"
-        message += f"url0: {url_to_string(url0)}\n"
-        message += f"reason: {resp.reason}\n"
-        message += f"msg:\n{msg}\n"
-
-        raise ClientResponseError(
-            resp.request_info,
-            resp.history,
-            status=resp.status,
-            message=message,
-            headers=resp.headers,
-        )
-
-
-class StopContinuousLoop(Exception):
-    pass
-
-
-class ListenDataContinuousImp(ListenDataInterface):
-    ldi: Optional[ListenDataInterface] = None
-    stop_condition: Event
-    task: "Optional[asyncio.Task[None]]"
-
-    def __init__(self, ldi: Optional[ListenDataInterface]):
-        self.ldi = ldi
-        self.stop_condition = asyncio.Event()
-        self.task = None
-
-    async def stop(self) -> None:
-        self.stop_condition.set()
-        assert self.task is not None
-        await self.task
-
-    async def wait_for_done(self) -> None:
-        assert self.task is not None
-        await self.task
-
-
-def channel_msgs_parse(d: bytes) -> "ChannelMsgs":
-    Ts = (
-        ChannelInfo,
-        DataReady,
-        Chunk,
-        FinishedMsg,
-        ErrorMsg,
-        WarningMsg,
-        SilenceMsg,
-    )
-
-    return parse_cbor_tagged(d, *Ts)
-
-
-#
-# pub async fn add_tpt_connection(
-#     conbase: &TypeOfConnection,
-#     connection_name: &CompositeName,
-#     connection_job: &ConnectionJob,
-# ) -> DTPSR<()> {
-#     let md = crate::get_metadata(conbase).await?;
-#     let url = match md.connections_url {
-#         None => {
-#             return not_available!(
-#                 "cannot remove connection: no connections_url in metadata for {}",
-#                 conbase.to_string()
-#             );
-#         }
-#         Some(url) => url,
-#     };
-#
-#     let patch = create_add_tpt_connection_patch(connection_name, connection_job)?;
-#
-#     client_verbs::patch_data(&url, &patch).await
-# }
-#
-# fn create_add_tpt_connection_patch(
-#     connection_name: &CompositeName,
-#     connection_job: &ConnectionJob,
-# ) -> Result<Patch, DTPSError> {
-#     let mut path: String = String::new();
-#     path.push('/');
-#     path.push_str(utils_patch::escape_json_patch(connection_name.as_dash_sep()).as_str());
-#
-#     let wire = connection_job.to_wire();
-#     let value = serde_json::to_value(wire)?;
-#
-#     let add_operation = AddOperation { path, value };
-#     let operation1 = PatchOperation::Add(add_operation);
-#     let patch = json_patch::Patch(vec![operation1]);
-#     Ok(patch)
-# }
-#
-# pub async fn remove_tpt_connection(conbase: &TypeOfConnection, connection_name: &CompositeName) ->
-# DTPSR<()> {
-#     let md = crate::get_metadata(conbase).await?;
-#     let url = match md.connections_url {
-#         None => {
-#             return not_available!(
-#                 "cannot remove connection: no connections_url in metadata for {}",
-#                 conbase.to_string()
-#             );
-#         }
-#         Some(url) => url,
-#     };
-#
-#     let patch = create_remove_tpt_connection_patch(connection_name);
-#
-#     client_verbs::patch_data(&url, &patch).await
-# }
-#
-# fn create_remove_tpt_connection_patch(connection_name: &CompositeName) -> Patch {
-#     let mut path: String = String::new();
-#     path.push('/');
-#     path.push_str(utils_patch::escape_json_patch(connection_name.as_dash_sep()).as_str());
-#
-#     let remove_operation = RemoveOperation { path };
-#     let operation1 = PatchOperation::Remove(remove_operation);
-#     json_patch::Patch(vec![operation1])
-# }
+def unescape_json_pointer(string: str) -> str:
+    """Return unescaped JSON pointer."""
+    string = string.replace("~1", "/")
+    return string.replace("~0", "~")

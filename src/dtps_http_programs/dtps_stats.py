@@ -1,104 +1,127 @@
+"""DTPS statistics."""
+
+__all__ = ["dtps_stats_main"]
+
 import argparse
 import asyncio
-import functools
 import sys
 import time
-from typing import cast, List, Optional
+from typing import Any, cast
 
 from dtps_http import (
     DTPSClient,
-    parse_url_unescape,
-    pretty,
     RawData,
     TopicNameV,
     URLIndexer,
     URLString,
     URLTopic,
+    parse_url_unescape,
+    pretty,
 )
-from . import logger
+from dtps_http_programs import logger
 
-__all__ = [
-    "dtps_stats_main",
-]
+LAST_MAXIMUM_LENGTH = 10
 
 
-async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> None:
-    url = cast(URLIndexer, parse_url_unescape(urlbase0))
-    last: List[float] = []
-    i = 0
-
-    async def new_observation(topic_name: TopicNameV, data: RawData) -> None:
+def new_observation(i: int, last: list[float], topic_name: TopicNameV) -> Any:
+    def wrapper(data: RawData) -> None:
         nonlocal i
-
-        current = time.time_ns()
+        time_ns = time.time_ns()
         if "clock" not in topic_name.as_relative_url():
             return
-
-        j = int(data.content.decode())
-
-        diff = current - j
+        decoded_data_content = data.content.decode()
+        j = int(decoded_data_content)
+        difference = time_ns - j
         # convert nanoseconds to milliseconds
-        diff_ms = diff / 1_000_000.0
+        difference_ms = difference / 1_000_000
         if i > 0:
-            last.append(diff_ms)
+            last.append(difference_ms)
         i += 1
-        if len(last) > 10:
+        if len(last) > LAST_MAXIMUM_LENGTH:
             last.pop(0)
         if last:
             min_ = min(last)
             max_ = max(last)
-            avg = sum(last) / len(last)
-
+            last_length = len(last)
+            last_summation = sum(last)
+            avg = last_summation / last_length
+            dash_separated_topic_name = topic_name.as_dash_sep()
+            message = (
+                "%24s: latency %.3fms  [last %s  mean: %.3fms min: %.3fms max:"
+                " %.3fms]"
+            )
             logger.info(
-                f"{topic_name.as_dash_sep():24}: latency {diff_ms:.3f}ms  [last {len(last)}  mean: "
-                f"{avg:.3f}ms" + f" min: {min_:.3f}ms max: {max_:.3f}ms]"
+                message,
+                dash_separated_topic_name,
+                difference_ms,
+                last_length,
+                avg,
+                min_,
+                max_,
             )
 
-    subcriptions: "List[asyncio.Task[None]]" = []
-    async with DTPSClient.create() as dtpsclient:
-        available = await dtpsclient.ask_index(url)
+    return wrapper
 
-        for name, desc in available.topics.items():
-            # list_urls = "".join(f"\t{u} \n" for u in desc.urls)
+
+async def listen_to_all_topics(
+    urlbase0: URLString,
+    *,
+    inline_data: bool,
+) -> None:
+    url = parse_url_unescape(urlbase0)
+    url_indexer = cast(URLIndexer, url)
+    i = 0
+    last: list[float] = []
+    subcriptions = []
+    async with DTPSClient.create() as dtps_client:
+        available = await dtps_client.ask_index(url_indexer)
+        for topic_name, topic_reference in available.topics.items():
+            pretty_topic_reference = pretty(topic_reference)
             logger.info(
-                f"Found topic {name!r}:\n"
-                + pretty(desc)
-                + "\n"
-                # + f"unique_id: {desc.unique_id}\n"
-                # + f"origin_node: {desc.origin_node}\n"
-                # + f"forwarders: {desc.forwarders}\n"
+                "Found topic %r:\n%s\n",
+                topic_name,
+                pretty_topic_reference,
             )
-
-            url = cast(URLTopic, await dtpsclient.choose_best(desc.reachability))
-            ldi = await dtpsclient.listen_url(
-                url,
-                functools.partial(new_observation, name),
+            best_alternative = await dtps_client.choose_best_alternative(
+                topic_reference.reachability,
+            )
+            url_topic = cast(URLTopic, best_alternative)
+            callback = new_observation(i, last, topic_name)
+            listen_data_interface = await dtps_client.listen_url(
+                url_topic,
+                callback,
                 inline_data=inline_data,
                 raise_on_error=False,
                 max_frequency=None,
             )
-            t = asyncio.create_task(ldi.wait_for_done())
-            subcriptions.append(t)
-
+            coroutine = listen_data_interface.wait_for_done()
+            task = asyncio.create_task(coroutine)
+            subcriptions.append(task)
         await asyncio.gather(*subcriptions)
 
 
-def dtps_stats_main(args: Optional[List[str]] = None) -> None:
-    parser = argparse.ArgumentParser(
-        description="Connects to DTPS server and listens and subscribes to all topics"
+def dtps_stats_main(args: list[str] | None = None) -> None:
+    """Run DTPS statistics."""
+    description = (
+        "Connects to a DTPS server and then listens and subscribes to all "
+        "topics."
     )
-    parser.add_argument("--inline-data", default=False, action="store_true", help="Use inline data")
+    parser = argparse.ArgumentParser(
+        description=description,
+    )
+    parser.add_argument(
+        "--inline-data",
+        default=False,
+        action="store_true",
+        help="Use inline data",
+    )
     parsed, rest = parser.parse_known_args(args=args)
     if len(rest) != 1:
-        msg = f"Expected exactly one argument.\nObtained: {args!r}\n"
-        logger.error(msg)
+        message = f"Expected exactly one argument.\nObtained: {args!r}\n"
+        logger.exception(message)
         sys.exit(2)
-
     urlbase = URLString(rest[0])
-
     use_inline_data = parsed.inline_data
-
-    f = listen_to_all_topics(urlbase, inline_data=use_inline_data)
-
+    future = listen_to_all_topics(urlbase, inline_data=use_inline_data)
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(f)
+    loop.run_until_complete(future)

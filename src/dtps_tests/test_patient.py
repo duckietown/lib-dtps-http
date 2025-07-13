@@ -1,117 +1,156 @@
+"""Patient test."""
+
 import asyncio
-import os
-import tempfile
 from asyncio import Event
-from typing import List
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Any
 from unittest import IsolatedAsyncioTestCase
 
-from dtps import ContextConfig, DTPSContext
-from dtps_http import (
-    async_error_catcher,
-    RawData,
-)
+from dtps import AbstractDTPSContext, ContextConfig
+from dtps_http import RawData, async_error_catcher
 from dtps_http_tests.utils import test_timeout
-from . import logger
-from .utils import create_python_at_known_socket, create_use
+from dtps_tests import logger
+from dtps_tests.utils import create_python_at_known_socket, create_use
+
+MAXIMUM_FOUND_LENGTH = 2
 
 
-class TestPatient1(IsolatedAsyncioTestCase):
+class TestPatient(IsolatedAsyncioTestCase):
+    """Patient test."""
+
+    @staticmethod
+    async def get_data(use_topic: AbstractDTPSContext) -> RawData:
+        """Return data."""
+        return await use_topic.data_get()
+
     @test_timeout(20)
     @async_error_catcher
-    async def test_patient_get(self):
-        with tempfile.TemporaryDirectory() as td:
+    async def test_patient_get(self) -> None:
+        """Run patient get test."""
+        with TemporaryDirectory() as temporary_directory:
             testname = "patientget"
-            socket = os.path.join(td, "patientget")
-
-            context_use: DTPSContext
-            async with create_use(name="using", socket_node=socket) as context_use:
-                context_use = context_use.configure(ContextConfig(patient=True))
+            path = Path(temporary_directory) / "patientget"
+            socket = path.as_posix()
+            async with create_use(
+                name="using",
+                socket_node=socket,
+            ) as context_use:
+                context_configuration = ContextConfig(patient=True)
+                patient_context_use = context_use.configure(
+                    context_configuration,
+                )
                 topic_name = "my_topic"
-                use_topic = context_use / topic_name
-
-                async def get_it():
-                    return await use_topic.data_get()
-
-                task = asyncio.create_task(get_it())
-
+                use_topic = patient_context_use / topic_name
+                coroutine = self.get_data(use_topic)
+                task = asyncio.create_task(coroutine)
                 await asyncio.sleep(1)
-                async with create_python_at_known_socket(socket, testname) as (create, use):
-                    topic = await (create / topic_name).queue_create()
-                    rd = RawData(content=b"hello", content_type="text/plain")
-                    await topic.publish(rd)
-
+                async with create_python_at_known_socket(socket, testname) as (
+                    create,
+                    _,
+                ):
+                    topic = create / topic_name
+                    await topic.queue_create()
+                    raw_data = RawData(
+                        content=b"hello",
+                        content_type="text/plain",
+                    )
+                    await topic.publish(raw_data)
                     await asyncio.sleep(1)
-
                 await task
+
+    @staticmethod
+    def _get_collect(
+        found: list[RawData],
+        events_arrived: tuple[Event, Event],
+        finished: Event,
+    ) -> Any:
+        @async_error_catcher
+        async def collect(raw_data: RawData) -> None:
+            logger.info("client_task: Collected one %s", raw_data)
+            i = len(found)
+            events_arrived[i].set()
+            found.append(raw_data)
+            if len(found) == MAXIMUM_FOUND_LENGTH:
+                logger.info("client_task: Finished collecting.")
+                finished.set()
+
+        return collect
+
+    @async_error_catcher
+    async def client_task(
+        self,
+        found: list[RawData],
+        events_arrived: tuple[Event, Event],
+        use_topic: AbstractDTPSContext,
+    ) -> None:
+        """Run client task."""
+        finished = Event()
+        collect = self._get_collect(found, events_arrived, finished)
+        logger.info("client_task: Subscribing...")
+        sub = await use_topic.subscribe(collect)
+        try:
+            logger.info("client_task: Wait for finish.")
+            await finished.wait()
+        finally:
+            logger.info("client_task: Finishing...")
+            await sub.unsubscribe()
 
     @test_timeout(120)
     @async_error_catcher
-    async def test_patient_sub1(self):
-        with tempfile.TemporaryDirectory() as td:
-
-            socket = os.path.join(td, "patientsub1")
-            context_use: DTPSContext
-            async with create_use(name="using", socket_node=socket) as context_use:
-                context_use = context_use.configure(ContextConfig(patient=True))
+    async def test_patient_sub(self) -> None:
+        """Run patient subscription test."""
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "patientsub1"
+            socket = path.as_posix()
+            async with create_use(
+                name="using",
+                socket_node=socket,
+            ) as context_use:
+                context_configuration = ContextConfig(patient=True)
+                configured_context_use = context_use.configure(
+                    context_configuration,
+                )
                 topic_name = "my_topic"
-                use_topic = context_use / topic_name
-
-                events_arrived = [Event(), Event()]
-                found: List[RawData] = []
-
-                @async_error_catcher
-                async def client_task() -> None:
-                    finished = Event()
-
-                    @async_error_catcher
-                    async def collect(rd_: RawData) -> None:
-                        logger.info(f"client_task: collected one {rd_}")
-
-                        i = len(found)
-                        events_arrived[i].set()
-                        found.append(rd_)
-
-                        if len(found) == 2:
-                            logger.info(f"client_task: finished collecting")
-                            finished.set()
-
-                    logger.info(f"client_task: subscribing")
-                    sub = await use_topic.subscribe(collect)
-                    try:
-                        logger.info(f"client_task: wait for finish")
-                        await finished.wait()
-                    finally:
-                        logger.info(f"client_task: finishing")
-                        await sub.unsubscribe()
-
-                t = asyncio.create_task(client_task())
-                # await asyncio.sleep(1)
-                logger.info(f"creating first instance")
-
-                async with create_python_at_known_socket(socket, "instance1") as (create, use):
-                    topic = await (create / topic_name).queue_create()
-                    rd = RawData(content=b"hello1", content_type="text/plain")
-                    await topic.publish(rd)
-
-                    # await asyncio.sleep(10)
-                    logger.info(f"waiting for client to get one")
+                use_topic = configured_context_use / topic_name
+                events_arrived = (Event(), Event())
+                found: list[RawData] = []
+                coroutine = self.client_task(found, events_arrived, use_topic)
+                task = asyncio.create_task(coroutine)
+                logger.info("Creating first instance...")
+                async with create_python_at_known_socket(
+                    socket,
+                    "instance1",
+                ) as (create, _):
+                    topic = create / topic_name
+                    await topic.queue_create()
+                    raw_data = RawData(
+                        content=b"hello1",
+                        content_type="text/plain",
+                    )
+                    await topic.publish(raw_data)
+                    logger.info("Waiting for client to get one...")
                     await events_arrived[0].wait()
-                    logger.info(f"terminating first instance")
-
-                if os.path.exists(socket):
-                    msg = "socket still exists"
-                    raise Exception(msg)
-                logger.info(f"terminated first instance")
-
-                logger.info(f"creating second instance")
-                async with create_python_at_known_socket(socket, "instance2") as (create, use):
-                    topic = await (create / topic_name).queue_create()
-                    rd = RawData(content=b"hello2", content_type="text/plain")
-                    await topic.publish(rd)
-                    logger.info(f"waiting for client to get second")
+                    logger.info("Terminating first instance...")
+                if path.exists():
+                    message = "Socket still exists."
+                    raise Exception(message)
+                logger.info("Terminated first instance.")
+                logger.info("Creating second instance...")
+                async with create_python_at_known_socket(
+                    socket,
+                    "instance2",
+                ) as (create, _):
+                    topic = create / topic_name
+                    await topic.queue_create()
+                    raw_data = RawData(
+                        content=b"hello2",
+                        content_type="text/plain",
+                    )
+                    await topic.publish(raw_data)
+                    logger.info("Waiting for client to get second...")
                     await events_arrived[1].wait()
-                    logger.info(f"terminating second instance")
-                logger.info(f"terminated second instance")
-                await t
-                logger.info(f"found: {found}")
-                # self.assertEqual(len(found), 2)
+                    logger.info("Terminating second instance...")
+                logger.info("Terminated second instance.")
+                await task
+                logger.info("found: %s", found)

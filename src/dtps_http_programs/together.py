@@ -1,21 +1,20 @@
+"""Together."""
+
+__all__ = ["dtps_main"]
+
 import sys
-from typing import List, Optional
 
-from . import logger
+from dtps_http_programs import logger
+from dtps_http_programs.dtps_listen import dtps_listen_main
+from dtps_http_programs.dtps_send_continuous import dtps_send_continuous_main
+from dtps_http_programs.dtps_stats import dtps_stats_main
+from dtps_http_programs.server_clock import clock_main, server_main
 
-__all__ = [
-    "dtps_main",
-]
 
-
-def dtps_main(args: Optional[List[str]] = None) -> None:
+def dtps_main(args: list[str] | None = None) -> None:
+    """Run DTPS."""
     if args is None:
         args = sys.argv[1:]
-    from .dtps_listen import dtps_listen_main
-    from .dtps_send_continuous import dtps_send_continuous_main
-    from .dtps_stats import dtps_stats_main
-    from .server_clock import clock_main, server_main
-
     commands = {
         "listen": dtps_listen_main,
         "stats": dtps_stats_main,
@@ -23,12 +22,19 @@ def dtps_main(args: Optional[List[str]] = None) -> None:
         "server": server_main,
         "clock": clock_main,
     }
+    commands_keys = commands.keys()
+    commands_keys_list = list(commands_keys)
     if len(args) == 0:
-        logger.error(f"Expected at least one argument: {list(commands.keys())}")
-
+        logger.exception(
+            "Expected at least one argument: %s",
+            commands_keys_list,
+        )
     first = args[0]
     if first not in commands:
-        logger.error(f"Unknown command: {first}. Expected one of {list(commands.keys())}")
+        logger.exception(
+            "Unknown command: %s. Expected one of %s",
+            first,
+            commands_keys_list,
+        )
         sys.exit(2)
-
     commands[first](args[1:])

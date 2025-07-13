@@ -54,27 +54,27 @@ from dtps import context
 
 
 async def main():
-    c = await context("self")
+    context_ = await context("self")
     ...
 
-    await c.aclose()
+    await context_.aclose()
 
 ```
 
-Alternatively there is a context manager that will cleanup after itself:
+Alternatively there is a context manager that will clean up after itself:
 
 ```python
 from dtps import context_cleanup
 
 
 async def main():
-    async with context_cleanup("self") as c:
+    async with context_cleanup("self") as context_:
         ...
 ```
 
 One can easily use multiple contexts. For example, if the environment variables are:
 
-    DTPS_BASE_NODE1 = "http://localhost:2001/" 
+    DTPS_BASE_NODE1 = "http://localhost:2001/"
     DTPS_BASE_NODE2 = "http://localhost:2002/"
 
 Then we can use them as follows:
@@ -138,12 +138,11 @@ from dtps import RawData, context
 async def example1_process_data() -> None:
     # DTPS_BASE_SELF = "create:http://:8000/"
 
-    me = await context("self")
+    out = await context("self") / "dtps" / "node" / "out"
+    await out.queue_create()
 
-    node_output = await (me / "dtps" / "node" / "out").queue_create()
-
-    rd = RawData(b"Hello World", "text/plain")
-    await node_output.publish(rd)
+    raw_data = RawData(b"Hello World", "text/plain")
+    await out.publish(raw_data)
 
 ```
 
@@ -158,7 +157,7 @@ which returns a publisher object:
 from dtps import DTPSContext, RawData
 
 async def example_continuous(context: DTPSContext):
-    
+
     async with context.publisher_context() as publisher:
         for _ in range(10):
             data = RawData(b"Hello World", "text/plain")
@@ -176,7 +175,7 @@ from dtps import DTPSContext, RawData
 async def get_data(context: DTPSContext):
     data: RawData = await context.data_get()
 ```
- 
+
 
 ### Subscribing to updates
 
@@ -192,8 +191,8 @@ from dtps import RawData, context
 
 async def example2_process_data() -> None:
     # Environment example:
-    #   DTPS_BASE_SOURCE = "http://:8000/dtps/node/out" 
-    #   DTPS_BASE_TARGET= "http://:8001/dtps/node/in" 
+    #   DTPS_BASE_SOURCE = "http://:8000/dtps/node/out"
+    #   DTPS_BASE_TARGET= "http://:8001/dtps/node/in"
 
     source = await context("source")
     target = await context("target")
@@ -268,23 +267,23 @@ mechanism.
 Note: while the standard used to define the patch mechanism is JSON-patch (RFC 6902), this
 can be used also on CBOR and YAML resources.
 
-```python 
+```python
 from dtps import DTPSContext, RawData
 async def example_patch(context: DTPSContext):
-    # first, publish this as CBOR    
+    # first, publish this as CBOR
     ob1 = {"a": 1}
-    rd = RawData.cbor_from_native_object(ob1)
-    await context.publish(rd)
+    raw_data = RawData.cbor_from_native_object(ob1)
+    await context.publish(raw_data)
 
     # now create a JSON patch to update the value of "a"
     patch1 = [{"op": "replace", "path": "/a", "value": 2}]
     await context.patch(patch1)
-    
+
     # now read the value back
-    rd2 = await context.data_get()
-    
-    rd2_expected = RawData.cbor_from_native_object({"a": 2})
-    assert rd2 == rd2_expected
+    raw_data_2 = await context.data_get()
+
+    raw_data_2_expected = RawData.cbor_from_native_object({"a": 2})
+    assert raw_data == raw_data_2_expected
 
 ```
 
@@ -297,11 +296,11 @@ The `call()` method is used to call a remote procedure.
 It takes a `RawData` object as input and returns a `RawData` object as output.
 
 
-```python 
+```python
 from dtps import DTPSContext, RawData
-async def example_call(context: DTPSContext): 
-    rd = RawData(b"Hello World", "text/plain")
-    result: RawData = await context.call(rd)
+async def example_call(context: DTPSContext):
+    raw_data = RawData(b"Hello World", "text/plain")
+    result: RawData = await context.call(raw_data)
 ```
 
 From the server side, you can create a handler for the call by passing a parameter `transform` to the `queue_create()` method.
@@ -320,16 +319,16 @@ from typing import Union
 async def example_listen() -> None:
     # DTPS_BASE_SELF = "create:http://:8000/"
 
-    me = await context("self")
+    rpc = await context("self") / "rpc
 
-    async def transform(rd: RawData, /) -> Union[RawData, TransformError]:
-    
+    async def transform(raw_data: RawData, /) -> Union[RawData, TransformError]:
+
         # interpret json, yaml, cbor, etc. as a phython object
-        number = rd.get_as_native_object()
+        number = raw_data.get_as_native_object()
         if not isinstance(number, int):
             # return error
             return TransformError(400, f"Expected an integer for this parameter, got {type(number)}")
-    
+
         if number % 2 == 0:
             # if the number is even, we return a string
             result = RawData.cbor_from_native_object(
@@ -339,8 +338,8 @@ async def example_listen() -> None:
         else:
             # return error
             return TransformError(400, f"Expected an even integer, got {number}")
-      
-    await (me / "rpc").queue_create(transform=transform)
 
-    
+    await rpc.queue_create(transform=transform)
+
+
 ```

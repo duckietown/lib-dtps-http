@@ -1,34 +1,48 @@
+"""Server."""
+
+__all__ = ["DTPSServer", "ForwardedTopic", "get_tagged_cbor"]
+
 import asyncio
 import base64
-import pathlib
 import time
 import traceback
 import uuid
-from asyncio import CancelledError
-from contextlib import asynccontextmanager, contextmanager
-from dataclasses import asdict, dataclass as original_dataclass, replace
-from typing import (
-    Any,
-    AsyncContextManager,
+from asyncio import FIRST_COMPLETED, CancelledError, Event, Task
+from collections.abc import (
     AsyncIterator,
     Awaitable,
     Callable,
-    cast,
-    Dict,
     Iterator,
-    List,
-    Optional,
     Sequence,
-    Tuple,
+)
+from contextlib import (
+    AbstractAsyncContextManager,
+    asynccontextmanager,
+    contextmanager,
+)
+from dataclasses import asdict, replace
+from dataclasses import dataclass as original_dataclass
+from pathlib import Path
+from typing import (
     TYPE_CHECKING,
-    Union,
+    Any,
+    cast,
 )
 
 import cbor2
 import yaml
-from aiohttp import web, WSMsgType
+from aiohttp import WSMsgType
+from aiohttp.web import (
+    Application,
+    HTTPNotFound,
+    Request,
+    Response,
+    RouteTableDef,
+    StreamResponse,
+    WebSocketResponse,
+)
 from aiohttp.web_exceptions import HTTPBadRequest
-from aiopubsub import Hub  # type: ignore
+from aiopubsub import Hub
 from cbor2 import CBORDecodeError
 from jsonpatch import (
     AddOperation,
@@ -38,14 +52,16 @@ from jsonpatch import (
     RemoveOperation,
     ReplaceOperation,
     TestOperation,
+    static,
 )
 from multidict import CIMultiDict
 from pydantic.dataclasses import dataclass
 
-from . import __version__, logger as logger0
-from .blob_manager import BlobManager
-from .client import DTPSClient, FoundMetadata, unescape_json_pointer
-from .constants import (
+from dtps_http import __version__
+from dtps_http import logger as logger0
+from dtps_http.blob_manager import BlobManager
+from dtps_http.client import DTPSClient, FoundMetadata, unescape_json_pointer
+from dtps_http.constants import (
     CONTENT_TYPE_DTPS_DATAREADY_CBOR,
     CONTENT_TYPE_DTPS_INDEX_CBOR,
     CONTENT_TYPE_PATCH_CBOR,
@@ -80,27 +96,25 @@ from .constants import (
     TOPIC_STATE_NOTIFICATION,
     TOPIC_STATE_SUMMARY,
 )
-from .link_headers import put_link_header
-from .object_queue import (
+from dtps_http.link_headers import put_link_header
+from dtps_http.object_queue import (
     ObjectQueue,
     ObjectServeFunction,
     ObjectTransformFunction,
-    PostResult,
-    transform_identity,
     TransformError,
+    transform_identity,
 )
-from .structures import (
+from dtps_http.structures import (
     Bounds,
-    ChannelMsgs,
+    ChannelMessages,
     Chunk,
-    ConnectionEstablished,
+    ConnectionEstablishedMessage,
     ContentInfo,
     DataReady,
-    ErrorMsg,
-    FinishedMsg,
+    Digest,
+    ErrorMessage,
+    FinishedMessage,
     InsertNotification,
-    is_image,
-    is_structure,
     LinkBenchmark,
     ListenURLEvents,
     ProxyJob,
@@ -108,48 +122,57 @@ from .structures import (
     RawData,
     Registration,
     ResourceAvailability,
-    SilenceMsg,
+    SilenceMessage,
     TopicProperties,
     TopicReachability,
     TopicRef,
     TopicRefAdd,
     TopicsIndex,
     TopicsIndexWire,
-    WarningMsg,
+    WarningMessage,
+    is_image,
+    is_structure,
 )
-from .types import ContentType, HTTPResponse, NodeID, SourceID, TopicNameV, URLString
-from .types_of_source import (
+from dtps_http.types_ import (
+    ContentType,
+    HTTPResponse,
+    NodeID,
+    SourceID,
+    TopicNameV,
+    URLString,
+)
+from dtps_http.types_of_source import (
+    AbstractSource,
     ForwardedQueue,
     Native,
     NotAvailableYet,
     NotFound,
     OurQueue,
-    Source,
+    ResolvedData,
     SourceComposition,
 )
-from .urls import parse_url_unescape, URL, URLIndexer, URLWS
-from .utils import async_error_catcher, multidict_update
-from .utils_every_once_in_a_while import EveryOnceInAWhile
+from dtps_http.urls import URL, URLWS, URLIndexer, parse_url_unescape
+from dtps_http.utils import async_error_catcher, multidict_update
+from dtps_http.utils_every_once_in_a_while import EveryOnceInAWhile
 
-SEND_DATA_ARGNAME = "send_data"
+MAX_AVAILABILITY = 10
 ROOT = TopicNameV.root()
-
-__all__ = [
-    "DTPSServer",
-    "ForwardedTopic",
-    "get_tagged_cbor",
-]
+SEND_DATA_ARGNAME = "send_data"
 
 
 @dataclass
 class ForwardedTopic:
-    unique_id: SourceID  # unique id for the stream
-    origin_node: NodeID  # unique id of the node that created the stream
-    app_data: Dict[str, Any]
+    """Forwarded topic."""
+
+    # Unique ID for the stream
+    unique_id: SourceID
+    # Unique ID of the node that created the stream
+    origin_node: NodeID
+    app_data: dict[str, Any]
     forward_url_data: URL
-    forward_url_events: Optional[URLWS]
-    forward_url_events_inline_data: Optional[URLWS]
-    reachability: List[TopicReachability]
+    forward_url_events: URLWS | None
+    forward_url_events_inline_data: URLWS | None
+    reachability: list[TopicReachability]
     properties: TopicProperties
     content_info: ContentInfo
     bounds: Bounds
@@ -158,1028 +181,1364 @@ class ForwardedTopic:
 @original_dataclass
 class ForwardInfoEstablished:
     best_url: URL
-    md: FoundMetadata
+    found_metadata: FoundMetadata
     index_internal: TopicsIndex
 
 
 @original_dataclass
 class ForwardInfo:
-    urls: List[URLString]
-    expect_node_id: Optional[NodeID]
-
-    established: Optional[ForwardInfoEstablished]
+    urls: list[URLString]
+    expect_node_id: NodeID | None
+    established: ForwardInfoEstablished | None
     mask_origin: bool
-    task: "asyncio.Task[Any]"
+    task: Task[Any] | None
 
     def __post_init__(self) -> None:
-        for u in self.urls:
-            parse_url_unescape(u)
+        for url in self.urls:
+            parse_url_unescape(url)
 
 
 def get_static_dir() -> str:
-    options = [
-        pathlib.Path(__file__).parent / "static",
-        pathlib.Path(__file__).parent.parent / "static",
-        pathlib.Path(__file__).parent.parent.parent / "static",
-    ]
-    for o in options:
-        if o.exists():
-            return str(o)
-
-    msg = f"Static directory not found: {options}."
-    raise FileNotFoundError(msg)
+    path = Path(__file__)
+    parent = None
+    options: list[Path] = []
+    for _ in range(3):
+        parent = path.parent if parent is None else parent.parent
+        options.append(parent / "static")
+    for option in options:
+        if option.exists():
+            return str(option)
+    message = f"Static directory not found: {options}."
+    raise FileNotFoundError(message)
 
 
 class DTPSServer:
-    node_id: NodeID
+    """DTPS server."""
 
-    # set when we have been going through the startup process
-    started: asyncio.Event
-
-    _oqs: Dict[TopicNameV, ObjectQueue]
-    _mount_points: Dict[TopicNameV, ForwardInfo]
-    _forwarded: Dict[TopicNameV, ForwardedTopic]
-
-    tasks: "List[asyncio.Task[Any]]"
-    # digest_to_urls: Dict[str, List[URL]]
-    node_app_data: Dict[str, Any]
-    registrations: List[Registration]
-    available_urls: "List[URLString]"
-    nickname: str
-
+    _mount_points: dict[TopicNameV, ForwardInfo]
+    available_urls: list[URLString]
     blob_manager: BlobManager
+    forwarded: dict[TopicNameV, ForwardedTopic]
+    nickname: str
+    node_app_data: dict[str, Any]
+    node_id: NodeID
+    object_queues: dict[TopicNameV, ObjectQueue]
+    registrations: list[Registration]
+    # Set when we have been going through the startup process
+    started: Event
+    tasks: list[Task[Any]]
 
     @classmethod
     def create(
         cls,
         on_startup: "Sequence[Callable[[DTPSServer], Awaitable[None]]]" = (),
-        nickname: Optional[str] = None,
+        nickname: str | None = None,
+        *,
         enable_clock: bool = True,
     ) -> "DTPSServer":
-        return cls(on_startup=on_startup, nickname=nickname, enable_clock=enable_clock)
+        """Create."""
+        return cls(
+            on_startup=on_startup,
+            nickname=nickname,
+            enable_clock=enable_clock,
+        )
 
     def __init__(
         self,
         *,
         on_startup: "Sequence[Callable[[DTPSServer], Awaitable[None]]]",
-        nickname: Optional[str],
+        nickname: str | None,
         enable_clock: bool,
     ) -> None:
+        """Initialize DTPS server."""
         if nickname is None:
-            nickname = str(id(self))
+            self_id = id(self)
+            nickname = str(self_id)
         self.nickname = nickname
         self.logger = logger0.getChild(nickname)
-
-        self.app = web.Application()
-
+        self.app = Application()
         self.node_app_data = {}
         self.node_started = time.time_ns()
-
-        routes = web.RouteTableDef()
+        routes = RouteTableDef()
         self._more_on_startup = on_startup
         self.app.on_startup.append(self.on_startup)
-        # self.app.on_shutdown.append(self.on_shutdown)
-        routes.get("/{ignore:.*}/:blobs/{digest}/{content_type_base64:.*}")(self.serve_blob)
-
-        routes.get("/{topic:.*}" + EVENTS_SUFFIX + "/")(self.serve_events)
-        routes.get("/{topic:.*}" + REL_URL_META + "/")(self.serve_meta)
-        routes.get("/{topic:.*}" + REL_URL_HISTORY + "/")(self.serve_history)
-        routes.get("/{topic:.*}" + REL_STREAM_PUSH_SUFFIX + "/")(self.serve_push_stream)
-
-        # routes.get("/{topic:.*}/data/{digest}/")(self.serve_data_get)
-        # routes.get("/data/{digest}/")(self.serve_data_get)
-        routes.post("/{topic:.*}")(self.serve_post)
-        routes.patch("/{topic:.*}")(self.serve_patch)
-
-        routes.get("/{topic:.*}")(self.serve_get)
-        routes.delete("/{topic:.*}")(self.serve_delete)
-
+        route = routes.get(
+            "/{ignore:.*}/:blobs/{digest}/{content_type_base64:.*}",
+        )
+        route(self.serve_blob)
+        route = routes.get("/{topic:.*EVENTS_SUFFIX}/")
+        route(self.serve_events)
+        route = routes.get("/{topic:.*REL_URL_META}/")
+        route(self.serve_meta)
+        route = routes.get("/{topic:.*REL_URL_HISTORY}/")
+        route(self.serve_history)
+        route = routes.get("/{topic:.*REL_STREAM_PUSH_SUFFIX}/")
+        route(self.serve_push_stream)
+        route = routes.post("/{topic:.*}")
+        route(self.serve_post)
+        route = routes.patch("/{topic:.*}")
+        route(self.serve_patch)
+        route = routes.get("/{topic:.*}")
+        route(self.serve_get)
+        route = routes.delete("/{topic:.*}")
+        route(self.serve_delete)
+        # TODO: Make smaller than 5
         self.blob_manager = BlobManager(
-            cleanup_interval=5.0, forget_forgetting_interval=5.0
-        )  # TODO: make smaller than 5
-
-        # mount a static directory for the web interface
+            cleanup_interval=5,
+            forget_forgetting_interval=5,
+        )
+        # Mount a static directory for the web interface
         static_dir = get_static_dir()
-        self.logger.debug(f"Using static dir: {static_dir}")
-        self.app.add_routes([web.static("/static", static_dir)])
+        self.logger.debug("Using static dir: %s", static_dir)
+        static_route = static("/static", static_dir)
+        self.app.add_routes([static_route])
         self.app.add_routes(routes)
-
         self.hub = Hub()
-        self._oqs = {}
+        self.object_queues = {}
         self._mount_points = {}
-        self._forwarded = {}
+        self.forwarded = {}
         self.tasks = []
         self.available_urls = []
-        self.node_id = NodeID(f"{self.nickname}-{str(uuid.uuid4())[:8]}")
-
-        # self.digest_to_urls = {}
-
+        uuid4 = uuid.uuid4()
+        uuid4_string = str(uuid4)
+        self.node_id = NodeID(f"{self.nickname}-{uuid4_string[:8]}")
         self.registrations = []
-
-        self.started = asyncio.Event()
-        self.shutdown_event = asyncio.Event()
+        self.started = Event()
+        self.shutdown_event = Event()
         self.enable_clock = enable_clock
 
+    @staticmethod
+    @async_error_catcher
+    async def _send(
+        channel_messages: ChannelMessages,
+        websocket: WebSocketResponse,
+    ) -> None:
+        data = get_tagged_cbor(channel_messages)
+        await websocket.send_bytes(data)
+
+    def _get_callback(
+        self,
+        websocket: WebSocketResponse,
+        url_websockets: URLWS,
+        *,
+        inline_data_send: bool,
+    ) -> Any:
+        @async_error_catcher
+        async def callback(listen_url_events: ListenURLEvents) -> None:
+            if isinstance(listen_url_events, InsertNotification):
+                data_saved = listen_url_events.data_saved
+                if inline_data_send:
+                    availability = []
+                    chunks_arriving = 1
+                else:
+                    available_until = time.time() + MAX_AVAILABILITY
+                    digest = data_saved.digest
+                    the_url = self.blob_manager.get_use_once_link_store(
+                        digest,
+                        listen_url_events.raw_data.content,
+                        listen_url_events.raw_data.content_type,
+                        MAX_AVAILABILITY,
+                    )
+                    self.logger.debug(
+                        "serve_events_forwarder_one: sending ref %s, %s",
+                        the_url,
+                        available_until,
+                    )
+                    availability = [
+                        ResourceAvailability(the_url, available_until),
+                    ]
+                    chunks_arriving = 0
+                data_ready = DataReady(
+                    index=data_saved.index,
+                    time_inserted=data_saved.time_inserted,
+                    digest=data_saved.digest,
+                    content_type=data_saved.content_type,
+                    content_length=data_saved.content_length,
+                    availability=availability,
+                    chunks_arriving=chunks_arriving,
+                    clocks=data_saved.clocks,
+                    origin_node=data_saved.origin_node,
+                    unique_id=data_saved.unique_id,
+                )
+                await self._send(data_ready, websocket)
+                if inline_data_send:
+                    # TODO: Divide chunks
+                    chunk = Chunk(
+                        data_ready.digest,
+                        0,
+                        1,
+                        0,
+                        listen_url_events.raw_data.content,
+                    )
+                    await self._send(chunk, websocket)
+                else:
+                    pass
+            elif isinstance(listen_url_events, ConnectionEstablishedMessage):
+                silence_message = SilenceMessage(
+                    0,
+                    f"Connection established to {url_websockets}.",
+                )
+                await self._send(silence_message, websocket)
+            elif isinstance(
+                listen_url_events,
+                WarningMessage
+                | ErrorMessage
+                | FinishedMessage
+                | SilenceMessage,
+            ):
+                await self._send(listen_url_events, websocket)
+            else:
+                self.logger.warning(
+                    "Unknown message type %s.",
+                    listen_url_events,
+                )
+                message = f"Cannot handle {listen_url_events!r}."
+                raise NotImplementedError(message)
+
+        return callback
+
     def add_registrations(self, registrations: Sequence[Registration]) -> None:
+        """Add registrations."""
         self.registrations.extend(registrations)
 
     def has_forwarded(self, topic_name: TopicNameV) -> bool:
-        return topic_name in self._forwarded
+        """Return `True` if forwarded, `False` otherwise."""
+        return topic_name in self.forwarded
 
-    def get_headers_alternatives(self, request: web.Request) -> CIMultiDict[str]:
+    def get_header_alternatives(
+        self,
+        request: Request,
+    ) -> CIMultiDict[str]:
+        """Return header alternatives."""
         original_url = str(request.url)
-
-        # noinspection PyProtectedMember
-        sock = request.transport._sock  # type: ignore
-        sockname = sock.getsockname()  # type: ignore
+        sock = request.transport._sock
+        sockname = sock.getsockname()
         if isinstance(sockname, str):
             path = sockname.replace("/", "%2F")
-            use_url = original_url.replace("http://", "http+unix://").replace("localhost", path)
+            use_url = original_url.replace("http://", "http+unix://")
+            use_url = use_url.replace("localhost", path)
         else:
             use_url = original_url
-
         res: CIMultiDict[str] = CIMultiDict()
         if not self.available_urls:
             res[HEADER_NO_AVAIL] = "No alternative URLs available"
             return res
-
-        alternatives: List[str] = []
-        url = use_url
-
-        for a in self.available_urls + [
+        alternatives = []
+        for a in (
+            *self.available_urls,
             f"http://127.0.0.1:{request.url.port}/",
             f"http://localhost:{request.url.port}/",
-        ]:
-            if url.startswith(a):
+        ):
+            if use_url.startswith(a):
                 for b in self.available_urls:
                     if a == b:
                         continue
-                    alternative = b + removeprefix(url, a)
+                    alternative = b + removeprefix(use_url, a)
                     alternatives.append(alternative)
-
-        url_URL = parse_url_unescape(URLString(url))
-        if url_URL.path == "/":
-            for b in self.available_urls:
-                alternatives.append(b)
-
-        for a in sorted(set(alternatives)):
+        use_url_string = URLString(use_url)
+        url = parse_url_unescape(use_url_string)
+        if url.path == "/":
+            alternatives.extend(self.available_urls)
+        alternatives_set = set(alternatives)
+        for a in sorted(alternatives_set):
             res.add(HEADER_CONTENT_LOCATION, a)
         if not alternatives:
-            res[HEADER_NO_AVAIL] = f"Nothing matched {url} of {self.available_urls}"
+            res[HEADER_NO_AVAIL] = (
+                f"Nothing matched {use_url} of {self.available_urls}"
+            )
         else:
             res.popall(HEADER_NO_AVAIL, None)
         return res
 
+    @async_error_catcher
     async def add_available_url(self, url: URLString) -> None:
+        """Add available URL."""
         if url in self.available_urls:
             return
         parse_url_unescape(url)
-
         self.available_urls.append(url)
-        self.available_urls = sorted(list(set(self.available_urls)))
-        oq = self.get_oq(TOPIC_AVAILABILITY)
-        await oq.publish_json(self.available_urls)
+        available_urls_set = set(self.available_urls)
+        available_urls_list = list(available_urls_set)
+        self.available_urls = sorted(available_urls_list)
+        object_queue = self.get_object_queue(TOPIC_AVAILABILITY)
+        await object_queue.publish_json(self.available_urls)
 
-    def remember_task(self, task: "asyncio.Task[Any]") -> None:
-        """Add a task to the list of tasks to be cancelled on shutdown"""
+    def remember_task(self, task: Task[Any]) -> None:
+        """Remember task.
+
+        Adds a task to the list of tasks to be cancelled on shutdown
+        """
         self.tasks.append(task)
 
+    @async_error_catcher
     async def _update_lists(self) -> None:
-        if TOPIC_LIST not in self._oqs:
-            raise AssertionError(f"Topic {TOPIC_LIST.as_relative_url()} not found")
-        if ROOT not in self._oqs:
-            raise AssertionError(f"Topic {ROOT.as_relative_url()} not found")
-        topics: List[TopicNameV] = []
-        topics.extend(self._oqs.keys())
-        topics.extend(self._forwarded.keys())
-        urls = sorted([_.as_relative_url() for _ in topics])
-        await self._oqs[TOPIC_LIST].publish_json(urls)
-
-        index = self.create_root_index()
-        index_wire = index.to_wire()
-        await self._oqs[ROOT].publish_cbor(asdict(index_wire), CONTENT_TYPE_DTPS_INDEX_CBOR)
-
-    async def remove_oq(self, name: TopicNameV) -> None:
-        if name in self._oqs:
-            self._oqs.pop(name)
-            await self._update_lists()
-
-    async def remove_forward(self, name: TopicNameV) -> None:
-        if name in self._forwarded:
-            self._forwarded.pop(name)
-            await self._update_lists()
-
-    async def _add_proxied_mountpoint(
-        self, name: TopicNameV, node_id: Optional[NodeID], urls: List[URLString], mask_origin: bool
-    ) -> None:
-        if name in self._mount_points or name in self._oqs:
-            raise ValueError(f"Topic {name} already exists")
-
-        finfo = ForwardInfo(
-            urls=urls,
-            expect_node_id=node_id,
-            mask_origin=mask_origin,
-            task=None,  # type: ignore
-            established=None,
+        if TOPIC_LIST not in self.object_queues:
+            relative_url = TOPIC_LIST.as_relative_url()
+            message = f"Topic {relative_url} not found."
+            raise AssertionError(message)
+        if ROOT not in self.object_queues:
+            relative_url = ROOT.as_relative_url()
+            message = f"Topic {relative_url} not found."
+            raise AssertionError(message)
+        topics: list[TopicNameV] = []
+        object_queue_keys = self.object_queues.keys()
+        topics.extend(object_queue_keys)
+        forwarded_keys = self.forwarded.keys()
+        topics.extend(forwarded_keys)
+        relative_urls = []
+        for topic in topics:
+            relative_url = topic.as_relative_url()
+            relative_urls.append(relative_url)
+        urls = sorted(relative_urls)
+        await self.object_queues[TOPIC_LIST].publish_json(urls)
+        topics_index = self.create_root_index()
+        topics_index_wire = topics_index.to_wire()
+        topics_index_wire_dictionary = asdict(topics_index_wire)
+        await self.object_queues[ROOT].publish_cbor(
+            topics_index_wire_dictionary,
+            CONTENT_TYPE_DTPS_INDEX_CBOR,
         )
-        self._mount_points[name] = finfo
-        finfo.task = asyncio.create_task(self._ask_for_topics_continuous(name, finfo))
-        self.remember_task(finfo.task)
 
     @async_error_catcher
-    async def _ask_for_topics_continuous(self, name: TopicNameV, finfo: ForwardInfo) -> None:
-        nickname = f"{self.nickname}:proxyreader({name.as_dash_sep()})"
-        self.logger.debug(f"Starting {nickname} finfo = {finfo}")
-        try:
-            async with self._client(nickname) as dtpsclient:
-                url = URLIndexer(parse_url_unescape(finfo.urls[0]))
+    async def remove_object_queue(self, name: TopicNameV) -> None:
+        """Remove object queue."""
+        if name in self.object_queues:
+            self.object_queues.pop(name)
+            await self._update_lists()
 
-                md = await dtpsclient.get_metadata(url)
-                if md.answering is not None and finfo.expect_node_id is not None:
-                    if md.answering != finfo.expect_node_id:
-                        self.logger.error(f"Node {finfo.expect_node_id} expected but {md.answering} found")
-                        await asyncio.sleep(1.0)
-                        # continue
-                # TODO: check node id
-                best_url = url
-                ti = await dtpsclient.ask_index(url)
-                finfo.established = ForwardInfoEstablished(
-                    best_url,
-                    md=md,
-                    index_internal=TopicsIndex({}),
+    @async_error_catcher
+    async def remove_forward(self, name: TopicNameV) -> None:
+        """Remove forward."""
+        if name in self.forwarded:
+            self.forwarded.pop(name)
+            await self._update_lists()
+
+    @async_error_catcher
+    async def _add_proxied_mountpoint(
+        self,
+        name: TopicNameV,
+        node_id: NodeID | None,
+        urls: list[URLString],
+        *,
+        mask_origin: bool,
+    ) -> None:
+        if name in self._mount_points or name in self.object_queues:
+            message = f"Topic {name} already exists."
+            raise ValueError(message)
+        forward_info = ForwardInfo(
+            urls=urls,
+            expect_node_id=node_id,
+            established=None,
+            mask_origin=mask_origin,
+            task=None,
+        )
+        self._mount_points[name] = forward_info
+        coroutine = self._ask_for_topics_continuous(name, forward_info)
+        forward_info.task = asyncio.create_task(coroutine)
+        self.remember_task(forward_info.task)
+
+    def _get_on_data(
+        self,
+        dtps_client: DTPSClient,
+        topic_name: TopicNameV,
+        best_url: URLIndexer,
+        forward_info: ForwardInfo,
+    ) -> Any:
+        @async_error_catcher
+        async def on_data(raw_data: RawData) -> None:
+            od = raw_data.get_as_native_object()
+            ti2_ = TopicsIndexWire.from_json(od)
+            ti2 = ti2_.to_internal([best_url])
+            await self._process_change_topics(
+                dtps_client,
+                topic_name,
+                ti2,
+                mask_origin=forward_info.mask_origin,
+            )
+
+        return on_data
+
+    @async_error_catcher
+    async def _ask_for_topics_continuous(
+        self,
+        topic_name: TopicNameV,
+        forward_info: ForwardInfo,
+    ) -> None:
+        dash_separated_topic_name = topic_name.as_dash_sep()
+        nickname = f"{self.nickname}:proxyreader({dash_separated_topic_name})"
+        self.logger.debug(
+            "Starting %s forward_info=%s",
+            nickname,
+            forward_info,
+        )
+        async with self.client(nickname) as dtps_client:
+            url = parse_url_unescape(forward_info.urls[0])
+            url_indexer = URLIndexer(url)
+            metadata = await dtps_client.get_metadata(url_indexer)
+            if (
+                metadata.answering is not None
+                and forward_info.expect_node_id is not None
+                and metadata.answering != forward_info.expect_node_id
+            ):
+                self.logger.exception(
+                    "Node %s expected but s% found",
+                    forward_info.expect_node_id,
+                    metadata.answering,
                 )
-                await self._process_change_topics(dtpsclient, name, ti, mask_origin=finfo.mask_origin)
-
-                async def on_data(rd: RawData) -> None:
-                    od = rd.get_as_native_object()
-                    ti2_ = TopicsIndexWire.from_json(od)
-                    ti2 = ti2_.to_internal([best_url])
-                    await self._process_change_topics(dtpsclient, name, ti2, mask_origin=finfo.mask_origin)
-
-                ldi = await dtpsclient.listen_url(
-                    url, on_data, inline_data=True, raise_on_error=False, max_frequency=None
+                await asyncio.sleep(1)
+            # TODO: Check node ID
+            best_url = url_indexer
+            topics_index = await dtps_client.ask_index(url_indexer)
+            index_internal = TopicsIndex({})
+            forward_info.established = ForwardInfoEstablished(
+                best_url,
+                metadata,
+                index_internal,
+            )
+            await self._process_change_topics(
+                dtps_client,
+                topic_name,
+                topics_index,
+                mask_origin=forward_info.mask_origin,
+            )
+            on_data = self._get_on_data(
+                dtps_client,
+                topic_name,
+                best_url,
+                forward_info,
+            )
+            listen_data_interface = await dtps_client.listen_url(
+                url_indexer,
+                on_data,
+                inline_data=True,
+                raise_on_error=False,
+                max_frequency=None,
+            )
+            try:
+                wait_coroutine = self.shutdown_event.wait()
+                condition = asyncio.create_task(wait_coroutine)
+                wait_for_done_coroutine = listen_data_interface.wait_for_done()
+                waiting = asyncio.create_task(wait_for_done_coroutine)
+                await asyncio.wait(
+                    [condition, waiting],
+                    return_when=FIRST_COMPLETED,
                 )
-                try:
-                    condition = asyncio.create_task(self.shutdown_event.wait())
-                    waiting = asyncio.create_task(ldi.wait_for_done())
-                    await asyncio.wait([condition, waiting], return_when=asyncio.FIRST_COMPLETED)
-                    # await ldi.wait_for_done()
-                except:
-                    await ldi.stop()
-                    raise
+            except Exception:
+                await listen_data_interface.stop()
 
-        except Exception as e:
-            self.logger.error(f"Error in _ask_for_topics_continuous: {e}")
-            # await asyncio.sleep(1.0)
-            raise
+    @staticmethod
+    def _process_change_topics_key(
+        topic_reachability: TopicReachability,
+    ) -> tuple[int, float, float]:
+        return (
+            topic_reachability.benchmark.complexity,
+            topic_reachability.benchmark.latency_ns,
+            -topic_reachability.benchmark.bandwidth,
+        )
 
+    @async_error_catcher
     async def _process_change_topics(
-        self, dtpsclient: DTPSClient, prefix: TopicNameV, ti: TopicsIndex, mask_origin: bool
+        self,
+        dtps_client: DTPSClient,
+        prefix: TopicNameV,
+        topic_index: TopicsIndex,
+        *,
+        mask_origin: bool,
     ) -> None:
         info = self._mount_points[prefix]
         if info.established is None:
-            raise AssertionError(f"Established is None for {prefix}")
+            message = f"Established is None for {prefix}."
+            raise AssertionError(message)
         previous = list(info.established.index_internal.topics)
-        current = list(ti.topics)
-        removed = set(previous) - set(current)
-        added = set(current) - set(previous)
-        self.logger.debug(f"added={added!r} removed={removed!r}")
-
+        current = list(topic_index.topics)
+        previous_set = set(previous)
+        current_set = set(current)
+        removed = previous_set - current_set
+        added = current_set - previous_set
+        self.logger.debug("added=%r removed=%r", added, removed)
         for topic_name in removed:
             new_topic = prefix + topic_name
             if self.has_forwarded(new_topic):
                 self.logger.debug("removing topic %s", new_topic)
                 await self.remove_forward(new_topic)
-
-        # TODO: note that this remains the choice for ever
+        # TODO: Note that this remains the choice for ever
         for topic_name in added:
-            tr = ti.topics[topic_name]
+            topic_reference = topic_index.topics[topic_name]
             new_topic = prefix + topic_name
-
             if self.has_forwarded(new_topic):
                 self.logger.debug("already have topic %s", new_topic)
                 continue
-
-            # self.logger.info(f"adding topic {tr}")
-            possible: List[TopicReachability] = []
-            for reachability in tr.reachability:
-                # urlhere = new_topic.as_relative_url()
-                # rurl = parse_url_unescape(reachability.url)
-                metadata0 = await dtpsclient.get_metadata(parse_url_unescape(reachability.url))
-                for m in metadata0.alternative_urls:  # + [rurl]:
-                    reach_with_me = await dtpsclient.compute_with_hop(
+            possible: list[TopicReachability] = []
+            for reachability in topic_reference.reachability:
+                url = parse_url_unescape(reachability.url)
+                metadata0 = await dtps_client.get_metadata(url)
+                for url_topic in metadata0.alternative_urls:  # + [rurl]:
+                    reach_with_me = await dtps_client.compute_with_hop(
                         self.node_id,
-                        connects_to=m,
+                        connects_to=url_topic,
                         expects_answer_from=reachability.answering,
                         forwarders=reachability.forwarders,
                     )
                     if reach_with_me is not None:
-                        # try:
-                        #     # xx = join(m, reach_with_me.url)
-                        #     xx = m
-                        # except Exception:
-                        #     self.logger.error(f"Could not parse {reach_with_me.url!r}")
-                        #     continue
-                        # else:
                         possible.append(reach_with_me)
-                    else:
-                        pass  # logger.info(f"Could not proxy {new_topic!r} as {urlbase} {topic_name}
-                        # -> {m}")
-
             if not possible:
-                self.logger.error(f"Topic {topic_name} cannot be reached")
+                self.logger.exception(
+                    "Topic %s cannot be reached,",
+                    topic_name,
+                )
                 continue
-
-            def choose_key(x: TopicReachability) -> Tuple[int, float, float]:
-                return x.benchmark.complexity, x.benchmark.latency_ns, -x.benchmark.bandwidth
-
-            possible.sort(key=choose_key)
-            r = possible[0]
-            url_to_use = parse_url_unescape(r.url)
-            assert isinstance(url_to_use, URL), url_to_use
-
-            self.logger.debug(f"Proxying {new_topic} through {url_to_use} with benchmark info {r.benchmark}")
-
-            metadata = await dtpsclient.get_metadata(url_to_use)
-
+            possible.sort(key=self._process_change_topics_key)
+            topic_reachability = possible[0]
+            url_to_use = parse_url_unescape(topic_reachability.url)
+            if not isinstance(url_to_use, URL):
+                raise TypeError
+            self.logger.debug(
+                "Proxying %s through %s with benchmark info %s",
+                new_topic,
+                url_to_use,
+                topic_reachability.benchmark,
+            )
+            metadata = await dtps_client.get_metadata(url_to_use)
             if mask_origin:
-                tr2 = replace(tr, reachability=[r])
+                topic_reference_2 = replace(
+                    topic_reference,
+                    reachability=[topic_reachability],
+                )
             else:
-                tr2 = replace(tr, reachability=tr.reachability + [r])
-
-            # self.logger.info(f"adding topic {new_topic} -> {repr(url_to_use)}")
-
-            # metadata_to_use = await dtpsclient.get_metadata(url_to_use)
-            fd = ForwardedTopic(
-                unique_id=tr2.unique_id,
-                origin_node=tr2.origin_node,
-                app_data=tr2.app_data,
-                reachability=tr2.reachability,
+                topic_reference_2 = replace(
+                    topic_reference,
+                    reachability=[
+                        *topic_reference.reachability,
+                        topic_reachability,
+                    ],
+                )
+            forwarded_topic = ForwardedTopic(
+                unique_id=topic_reference_2.unique_id,
+                origin_node=topic_reference_2.origin_node,
+                app_data=topic_reference_2.app_data,
+                reachability=topic_reference_2.reachability,
                 forward_url_data=metadata.origin,
                 forward_url_events=metadata.events_url,
                 forward_url_events_inline_data=metadata.events_data_inline_url,
-                content_info=tr2.content_info,  # FIXME: content info
-                properties=tr2.properties,
-                bounds=tr2.bounds,
+                content_info=topic_reference_2.content_info,  # FIXME: Content info
+                properties=topic_reference_2.properties,
+                bounds=topic_reference_2.bounds,
             )
-            #
-            # self.logger.info(
-            #     f"Proxying {new_topic} as    {topic_name}  with metadata = {metadata!r} \n"
-            #     # "->  \n"
-            #     # f" available at\n: {json.dumps(asdict(tr), indent=2)} \n"
-            #     # f" proxied at\n: {json.dumps(asdict(fd), indent=2)} \n"
-            # )
+            await self._add_forwarded(new_topic, forwarded_topic)
 
-            await self._add_forwarded(new_topic, fd)
-
+    @async_error_catcher
     async def expose(
-        self, name: TopicNameV, expect_node_id: Optional[NodeID], urls: Sequence[URLString], mask_origin: bool
+        self,
+        topic_name: TopicNameV,
+        expect_node_id: NodeID | None,
+        urls: Sequence[URLString],
+        *,
+        mask_origin: bool,
     ) -> None:
-        oq = self.get_oq(TOPIC_PROXIED)
-        x = oq.last_data()
-        d = cast(Dict[str, Any], x.get_as_native_object())
-        urls = sorted(list(urls))
-        p = ProxyJob(node_id=expect_node_id, urls=urls, mask_origin=mask_origin)
-        d[name.as_dash_sep()] = asdict(p)
-        await oq.publish_cbor(d)
-
+        """Expose."""
+        queue = self.get_object_queue(TOPIC_PROXIED)
+        raw_data = queue.last_data()
+        native_object = raw_data.get_as_native_object()
+        dictionary = cast(dict[str, Any], native_object)
+        urls = list(urls)
+        urls = sorted(urls)
+        proxy_job = ProxyJob(expect_node_id, urls, mask_origin)
+        topic_name_separated_name = topic_name.as_dash_sep()
+        dictionary[topic_name_separated_name] = asdict(proxy_job)
+        await queue.publish_cbor(dictionary)
         while True:
-            if name in self._mount_points:
-                self.logger.debug(f"Found {name} in mountpoints")
-                if self._mount_points[name].established is not None:
-                    self.logger.debug(f"Found {name} in mountpoints and established is not None")
+            if topic_name in self._mount_points:
+                self.logger.debug("Found %s in mountpoints.", topic_name)
+                if self._mount_points[topic_name].established is not None:
+                    self.logger.debug(
+                        "Found %s in mountpoints and established is not "
+                        "`None`.",
+                        topic_name,
+                    )
                     break
-
             await asyncio.sleep(0.1)
 
-    async def _add_forwarded(self, name: TopicNameV, forwarded: ForwardedTopic) -> None:
-        if name in self._forwarded or name in self._oqs:
-            raise ValueError(f"Topic {name} already exists")
-        self._forwarded[name] = forwarded
-        await self._update_lists()
-
-    def get_oq(self, name: TopicNameV) -> ObjectQueue:
-        if name in self._forwarded:
-            raise ValueError(f"Topic {name.as_dash_sep()} is a forwarded one")
-
-        return self._oqs[name]
-
-    async def create_oq(
+    @async_error_catcher
+    async def _add_forwarded(
         self,
         name: TopicNameV,
+        forwarded: ForwardedTopic,
+    ) -> None:
+        if name in self.forwarded or name in self.object_queues:
+            message = f"Topic {name} already exists."
+            raise ValueError(message)
+        self.forwarded[name] = forwarded
+        await self._update_lists()
+
+    def get_object_queue(self, topic_name: TopicNameV) -> ObjectQueue:
+        """Return object queue."""
+        if topic_name in self.forwarded:
+            dash_separated_topic_name = topic_name.as_dash_sep()
+            message = f"Topic {dash_separated_topic_name} is a forwarded one."
+            raise ValueError(message)
+        return self.object_queues[topic_name]
+
+    @async_error_catcher
+    async def create_object_queue(
+        self,
+        topic_name: TopicNameV,
         content_info: ContentInfo,
         *,
-        tp: Optional[TopicProperties],
-        bounds: Optional[Bounds],
+        topic_properties: TopicProperties | None,
+        bounds: Bounds | None,
         transform: ObjectTransformFunction = transform_identity,
-        serve: Optional[ObjectServeFunction] = None,
-        app_data: Optional[Dict[str, bytes]] = None,
+        serve: ObjectServeFunction | None = None,
+        app_data: dict[str, bytes] | None = None,
     ) -> ObjectQueue:
+        """Create object queue."""
         if app_data is None:
             app_data = {}
-        # self.logger.info(f"Creating {name} tp = {tp} bounds = {bounds}")
         if bounds is None:
             bounds = Bounds.default()
-        if name in self._forwarded:
-            raise ValueError(f"Topic '{name.as_dash_sep()}' is a forwarded one")
-        if name in self._oqs:
-            return self._oqs[name]
-
-        unique_id = get_unique_id(self.node_id, name)
-
+        if topic_name in self.forwarded:
+            dash_separated_topic_name = topic_name.as_dash_sep()
+            message = (
+                f"Topic '{dash_separated_topic_name}' is a forwarded one."
+            )
+            raise ValueError(message)
+        if topic_name in self.object_queues:
+            return self.object_queues[topic_name]
+        unique_id = get_unique_id(self.node_id, topic_name)
+        relative_url = topic_name.as_relative_url()
+        benchmark = LinkBenchmark.identity()
         treach = TopicReachability(
-            url=name.as_relative_url(),
+            url=relative_url,
             answering=self.node_id,
             forwarders=[],
-            benchmark=LinkBenchmark.identity(),
+            benchmark=benchmark,
         )
-        reachability: List[TopicReachability] = [treach]
-        if tp is None:
-            tp = TopicProperties.default()
-
-        tr = TopicRef(
+        reachability: list[TopicReachability] = [treach]
+        if topic_properties is None:
+            topic_properties = TopicProperties.default()
+        current_time = time.time_ns()
+        topic_reference = TopicRef(
             unique_id=unique_id,
             origin_node=self.node_id,
             app_data=app_data,
             reachability=reachability,
-            created=time.time_ns(),
-            properties=tp,
+            created=current_time,
+            properties=topic_properties,
             content_info=content_info,
             bounds=bounds,
         )
-
-        self._oqs[name] = ObjectQueue(
+        self.object_queues[topic_name] = ObjectQueue(
             self.hub,
-            name,
-            tr,
+            topic_name,
+            topic_reference,
             bounds=bounds,
             blob_manager=self.blob_manager,
             transform=transform,
             serve=serve,
         )
         await self._update_lists()
-        return self._oqs[name]
+        return self.object_queues[topic_name]
 
     @async_error_catcher
-    async def on_startup(self, _: web.Application) -> None:
-        # self.logger.info("on_startup")
+    async def on_startup(self, _: Application) -> None:
+        """Run on startup."""
         content_info = ContentInfo.simple(CONTENT_TYPE_DTPS_INDEX_CBOR)
-
-        tr = TopicRef(
-            unique_id=get_unique_id(self.node_id, ROOT),
+        unique_id = get_unique_id(self.node_id, ROOT)
+        properties = TopicProperties.streamable_readonly()
+        current_time = time.time_ns()
+        bounds = Bounds.max_length(1)
+        topic_reference = TopicRef(
+            unique_id=unique_id,
             origin_node=self.node_id,
             app_data={},
             reachability=[],
             content_info=content_info,
-            properties=TopicProperties.streamable_readonly(),
-            created=time.time_ns(),
-            bounds=Bounds.max_length(1),
+            properties=properties,
+            created=current_time,
+            bounds=bounds,
         )
-        self._oqs[ROOT] = ObjectQueue(
-            self.hub, ROOT, tr, blob_manager=self.blob_manager, bounds=Bounds.max_length(1)
+        bounds = Bounds.max_length(1)
+        self.object_queues[ROOT] = ObjectQueue(
+            self.hub,
+            ROOT,
+            topic_reference,
+            blob_manager=self.blob_manager,
+            bounds=bounds,
         )
         index = self.create_root_index()
         wire = index.to_wire()
-        as_cbor = cbor2.dumps(asdict(wire))
-        await self._oqs[ROOT].publish(RawData(content=as_cbor, content_type=CONTENT_TYPE_DTPS_INDEX_CBOR))
-
+        wire_dictionary = asdict(wire)
+        content = cbor2.dumps(wire_dictionary)
+        await self.object_queues[ROOT].publish(
+            RawData(
+                content=content,
+                content_type=CONTENT_TYPE_DTPS_INDEX_CBOR,
+            ),
+        )
         content_info = ContentInfo.simple(MIME_JSON)
-        tr = TopicRef(
-            unique_id=get_unique_id(self.node_id, TOPIC_LIST),
+        unique_id = get_unique_id(self.node_id, TOPIC_LIST)
+        properties = TopicProperties.streamable_readonly()
+        current_time = time.time_ns()
+        bounds = Bounds.max_length(1)
+        topic_reference = TopicRef(
+            unique_id=unique_id,
             origin_node=self.node_id,
             app_data={},
             reachability=[],
             content_info=content_info,
-            properties=TopicProperties.streamable_readonly(),
-            created=time.time_ns(),
-            bounds=Bounds.max_length(1),
+            properties=properties,
+            created=current_time,
+            bounds=bounds,
         )
-        self._oqs[TOPIC_LIST] = ObjectQueue(
+        bounds = Bounds.max_length(1)
+        self.object_queues[TOPIC_LIST] = ObjectQueue(
             self.hub,
             TOPIC_LIST,
-            tr,
+            topic_reference,
             blob_manager=self.blob_manager,
-            bounds=Bounds.max_length(1),
+            bounds=bounds,
         )
-
-        await self.create_oq(
-            TOPIC_LOGS, content_info=ContentInfo.simple(MIME_JSON), tp=None, bounds=Bounds.max_length(100)
+        content_info = ContentInfo.simple(MIME_JSON)
+        bounds = Bounds.max_length(100)
+        await self.create_object_queue(
+            TOPIC_LOGS,
+            content_info=content_info,
+            topic_properties=None,
+            bounds=bounds,
         )
         if self.enable_clock:
-            await self.create_oq(
+            content_info = ContentInfo.simple(MIME_JSON)
+            bounds = Bounds.max_length(1)
+            await self.create_object_queue(
                 TOPIC_CLOCK,
-                content_info=ContentInfo.simple(MIME_JSON),
-                tp=None,
-                bounds=Bounds.max_length(1),
+                content_info=content_info,
+                topic_properties=None,
+                bounds=bounds,
             )
-        await self.create_oq(
+        content_info = ContentInfo.simple(MIME_JSON)
+        bounds = Bounds.max_length(1)
+        await self.create_object_queue(
             TOPIC_AVAILABILITY,
-            content_info=ContentInfo.simple(MIME_JSON),
-            tp=None,
-            bounds=Bounds.max_length(1),
+            content_info=content_info,
+            topic_properties=None,
+            bounds=bounds,
         )
-        await self.create_oq(
+        content_info = ContentInfo.simple(MIME_JSON)
+        bounds = Bounds.max_length(1)
+        await self.create_object_queue(
             TOPIC_STATE_SUMMARY,
-            content_info=ContentInfo.simple(MIME_JSON),
-            tp=None,
-            bounds=Bounds.max_length(1),
+            content_info=content_info,
+            topic_properties=None,
+            bounds=bounds,
         )
-        oq = await self.create_oq(
+        content_info = ContentInfo.simple(MIME_CBOR)
+        topic_properties = TopicProperties.patchable_only()
+        bounds = Bounds.max_length(1)
+        object_queue = await self.create_object_queue(
             TOPIC_PROXIED,
-            content_info=ContentInfo.simple(MIME_CBOR),
-            tp=TopicProperties.patchable_only(),
-            bounds=Bounds.max_length(1),
+            content_info=content_info,
+            topic_properties=topic_properties,
+            bounds=bounds,
         )
-        await oq.publish_cbor({})
-        oq.subscribe(self.on_proxied_changed)
-
-        await self.create_oq(
+        await object_queue.publish_cbor({})
+        object_queue.subscribe(self.on_proxied_changed)
+        content_info = ContentInfo.simple(MIME_CBOR)
+        bounds = Bounds.max_length(1)
+        await self.create_object_queue(
             TOPIC_STATE_NOTIFICATION,
-            content_info=ContentInfo.simple(MIME_CBOR),
-            tp=None,
-            bounds=Bounds.max_length(1),
+            content_info=content_info,
+            topic_properties=None,
+            bounds=bounds,
         )
-
         if self.enable_clock:
-            self.remember_task(asyncio.create_task(update_clock(self, TOPIC_CLOCK, 1.0, 0.0)))
-
-        for f in self._more_on_startup:
-            await f(self)
-
+            coroutine = update_clock(self, TOPIC_CLOCK, 1, 0)
+            task = asyncio.create_task(coroutine)
+            self.remember_task(task)
+        for function in self._more_on_startup:
+            await function(self)
         for registration in self.registrations:
-            self.remember_task(asyncio.create_task(self._register(registration)))
-
+            coroutine = self._register(registration)
+            task = asyncio.create_task(coroutine)
+            self.remember_task(task)
         self.started.set()
 
-    async def on_proxied_changed(self, _: ObjectQueue, inot: InsertNotification) -> None:
-        # x = cast(dict, oq.last_data().get_as_native_object())
-        current = list(self._forwarded)
-        x = cast(Dict[str, Any], inot.raw_data.get_as_native_object())
-        topics = list(TopicNameV.from_dash_sep(_) for _ in x)
-
-        added = set(topics) - set(current)
-        removed = set(current) - set(topics)
-        for r in removed:
-            await self.remove_forward(r)  # XXX
-        for a in added:
-            proxy_job = ProxyJob.from_json(x[a.as_dash_sep()])
+    @async_error_catcher
+    async def on_proxied_changed(
+        self,
+        _: ObjectQueue,
+        insert_notification: InsertNotification,
+    ) -> None:
+        """Run on proxied changed."""
+        current = list(self.forwarded)
+        insert_notification_object = (
+            insert_notification.raw_data.get_as_native_object()
+        )
+        insert_notification_dictionary = cast(
+            dict[str, Any],
+            insert_notification_object,
+        )
+        topic_names = []
+        for dash_separated_topic_name in insert_notification_dictionary:
+            topic_name = TopicNameV.from_dash_sep(dash_separated_topic_name)
+            topic_names.append(topic_name)
+        topic_names_set = set(topic_names)
+        current_set = set(current)
+        added = topic_names_set - current_set
+        removed = current_set - topic_names_set
+        for topic_name in removed:
+            await self.remove_forward(topic_name)
+        for topic_name in added:
+            dash_separated_topic_name = topic_name.as_dash_sep()
+            proxy_job = ProxyJob.from_json(
+                insert_notification_dictionary[dash_separated_topic_name],
+            )
             await self._add_proxied_mountpoint(
-                a, proxy_job.node_id, proxy_job.urls, mask_origin=proxy_job.mask_origin
+                topic_name,
+                proxy_job.node_id,
+                proxy_job.urls,
+                mask_origin=proxy_job.mask_origin,
             )
 
+    @async_error_catcher
     async def aclose(self) -> None:
-        # self.logger.info("aclose: shutting down")
+        """Close asynchronously."""
         self.shutdown_event.set()
-        for t in self.tasks:
-            t.cancel()
-        for q in self._oqs.values():
-            await q.aclose()
-        # await asyncio.gather(*self.tasks, return_exceptions=True)
+        for task in self.tasks:
+            task.cancel()
+        for queue in self.object_queues.values():
+            await queue.aclose()
 
     @async_error_catcher
-    async def _register(self, r: Registration) -> None:
-        n = 0
+    async def _register(self, registration: Registration) -> None:
+        count = 0
         while True:
             try:
-                changes = await self._try_register(r)
-
-            except Exception as e:
-                self.logger.error(f"Error while registering {r}: {e}")
-                await asyncio.sleep(1.0)
+                changes = await self._try_register(registration)
+            except Exception:
+                self.logger.exception(
+                    "Error while registering %s",
+                    registration,
+                )
+                await asyncio.sleep(1)
             else:
-                if n == 0:
-                    self.logger.debug(f"Registered as {r.topic.as_dash_sep()} on {r.switchboard_url}")
-                else:
-                    if changes:
-                        self.logger.debug(f"Re-registered as {r.topic.as_dash_sep()} on {r.switchboard_url}")
-
-                n += 1
-                # TODO: DTSW-4782: just open a websocket connection and see when it closes
-                await asyncio.sleep(10.0)
+                dash_separated_topic_name = registration.topic.as_dash_sep()
+                if count == 0:
+                    self.logger.debug(
+                        "Registered as %s on %s",
+                        dash_separated_topic_name,
+                        registration.switchboard_url,
+                    )
+                elif changes:
+                    self.logger.debug(
+                        "Re-registered as %s on %s",
+                        dash_separated_topic_name,
+                        registration.switchboard_url,
+                    )
+                count += 1
+                # TODO: DTSW-4782: Just open a websocket connection and
+                # see when it closes
+                await asyncio.sleep(10)
 
     @async_error_catcher
-    async def _try_register(self, r: Registration) -> bool:
-        async with self._client() as client:
-            # url = parse_url_unescape(r.switchboard_url)
+    async def _try_register(self, registration: Registration) -> bool:
+        async with self.client() as client:
             if not self.available_urls:
-                msg = f"Cannot register {r} because no available URLs"
-                self.logger.error(msg)
-                raise ValueError(msg)
-            postfix = r.namespace.as_relative_url()
-            urls = [cast(URLString, _ + postfix) for _ in self.available_urls]
-            return await client.add_proxy(r.switchboard_url, r.topic, self.node_id, urls, mask_origin=False)
-
-    # @async_error_catcher
-    # async def on_shutdown(self, _: web.Application) -> None:
-    #     self.logger.debug("DTPSServer: on_shutdown")
-    #     for t in self.tasks:
-    #         t.cancel()
-    #     self.logger.debug("DTPSServer: on_shutdown done")
+                message = (
+                    f"Cannot register {registration} because of no available "
+                    "URLs."
+                )
+                self.logger.exception(message)
+                raise ValueError(message)
+            postfix = registration.namespace.as_relative_url()
+            urls = []
+            for available_url in self.available_urls:
+                url = cast(URLString, available_url + postfix)
+                urls.append(url)
+            return await client.add_proxy(
+                registration.switchboard_url,
+                registration.topic,
+                self.node_id,
+                urls,
+                mask_origin=False,
+            )
 
     def create_root_index(self) -> TopicsIndex:
-        topics: Dict[TopicNameV, TopicRef] = {}
-        for topic_name, oqs in self._oqs.items():
+        """Create root index."""
+        topics: dict[TopicNameV, TopicRef] = {}
+        for topic_name, object_queue in self.object_queues.items():
             qual_topic_name = topic_name
-            reach = TopicReachability(
-                url=qual_topic_name.as_relative_url(),
-                answering=self.node_id,
-                forwarders=[],
-                benchmark=LinkBenchmark.identity(),
+            url = qual_topic_name.as_relative_url()
+            benchmark = LinkBenchmark.identity()
+            reach = TopicReachability(url, self.node_id, [], benchmark)
+            topic_ref = replace(
+                object_queue.topic_reference,
+                reachability=[reach],
             )
-            topic_ref = replace(oqs.tr, reachability=[reach])
             topics[qual_topic_name] = topic_ref
-
-        for topic_name, fd in self._forwarded.items():
+        for topic_name, forwarded_topic in self.forwarded.items():
             qual_topic_name = topic_name
-
-            tr = TopicRef(
-                unique_id=fd.unique_id,
-                origin_node=fd.origin_node,
-                app_data={},
-                reachability=fd.reachability,
-                properties=fd.properties,
-                created=time.time_ns(),
-                content_info=fd.content_info,
-                bounds=fd.bounds,
+            current_time = time.time_ns()
+            topic_reference = TopicRef(
+                forwarded_topic.unique_id,
+                forwarded_topic.origin_node,
+                {},
+                forwarded_topic.reachability,
+                current_time,
+                forwarded_topic.properties,
+                forwarded_topic.content_info,
+                forwarded_topic.bounds,
             )
-            topics[qual_topic_name] = tr
-
+            topics[qual_topic_name] = topic_reference
         for topic_name in list(topics):
-            for x in topic_name.nontrivial_prefixes():
-                if x not in topics:
+            for prefix in topic_name.nontrivial_prefixes():
+                if prefix not in topics:
+                    url = prefix.as_relative_url()
+                    benchmark = LinkBenchmark.identity()
                     reachability = [
-                        TopicReachability(
-                            url=x.as_relative_url(),
-                            answering=self.node_id,
-                            forwarders=[],
-                            benchmark=LinkBenchmark.identity(),
-                        ),
+                        TopicReachability(url, self.node_id, [], benchmark),
                     ]
-                    topics[x] = TopicRef(
-                        unique_id=get_unique_id(self.node_id, x),
-                        origin_node=self.node_id,
-                        app_data={},
-                        reachability=reachability,
-                        properties=TopicProperties.streamable_readonly(),
-                        created=time.time_ns(),
-                        content_info=ContentInfo.simple(CONTENT_TYPE_DTPS_INDEX_CBOR),
-                        bounds=Bounds.unbounded(),  # XXX
+                    unique_id = get_unique_id(self.node_id, prefix)
+                    properties = TopicProperties.streamable_readonly()
+                    current_time = time.time_ns()
+                    content_info = ContentInfo.simple(
+                        CONTENT_TYPE_DTPS_INDEX_CBOR,
                     )
-
-        index_internal = TopicsIndex(topics=topics)
-        return index_internal
+                    bounds = Bounds.unbounded()
+                    topics[prefix] = TopicRef(
+                        unique_id,
+                        self.node_id,
+                        {},
+                        reachability,
+                        current_time,
+                        properties,
+                        content_info,
+                        bounds,
+                    )
+        return TopicsIndex(topics)
 
     @async_error_catcher
-    async def serve_index(self, request: web.Request) -> web.Response:
-        headers_s = "".join(f"{k}: {v}\n" for k, v in request.headers.items())
-        # self.logger.debug(f"serve_index: {request.url} \n {headers_s}")
-
+    async def serve_index(self, request: Request) -> Response:
+        """Serve index."""
+        headers_ = request.headers.items()
+        headers_string = "".join(
+            f"{key}: {value}\n" for key, value in headers_
+        )
         index_internal = self.create_root_index()
         index_wire = index_internal.to_wire()
-
         headers: CIMultiDict[str] = CIMultiDict()
-
         add_nocache_headers(headers)
-        multidict_update(headers, self.get_headers_alternatives(request))
+        header_alternatives = self.get_header_alternatives(request)
+        multidict_update(headers, header_alternatives)
         self._add_own_headers(headers)
-
-        properties = self._oqs[ROOT].tr.properties
+        properties = self.object_queues[ROOT].topic_reference.properties
         put_meta_headers(headers, properties)
         json_data = asdict(index_wire)
-
-        put_link_header(headers, TOPIC_PROXIED.as_relative_url(), REL_PROXIED, CONTENT_TYPE_DTPS_INDEX_CBOR)
-
+        relative_url = TOPIC_PROXIED.as_relative_url()
+        put_link_header(
+            headers,
+            relative_url,
+            REL_PROXIED,
+            CONTENT_TYPE_DTPS_INDEX_CBOR,
+        )
         headers.add(HEADER_DATA_ORIGIN_NODE_ID, self.node_id)
-
-        # get all the accept headers
+        # Get all the accept headers
         accept: list[str] = []
         default_empty: list[str] = []
-        for _ in request.headers.getall("accept", default_empty):
-            accept.extend(_.split(","))
-
-        if "application/cbor" not in accept and CONTENT_TYPE_DTPS_INDEX_CBOR not in accept:
-            if "text/html" in accept:
-                topics_html = "<ul>"
-                for topic_name in sorted(list(index_internal.topics)):
-                    # topic_ref = index_internal.topics[topic_name]
-                    if topic_name.is_root():
-                        continue
-                    topics_html += (
-                        f"<li><a href='{topic_name.as_relative_url()}'><code>"
-                        f"{topic_name.as_relative_url()}</code></a></li>\n"
-                    )
-                topics_html += "</ul>"
-                # language=html
-                html_index = f"""
-                <html lang="en">
-                <head>
-                <style> 
-                </style>
-                <link rel="stylesheet" href="/static/style.css">
-                
-                <script src="https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.min.js"></script>
-                <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
-                <script src="/static/send.js"></script>
-                <title>DTPS server</title>
-                </head>
-                <body>
-                <h1>DTPS server</h1>
-
-                <p> This response coming to you in HTML format because you requested it in HTML format.</p>
-
-                <p>Node ID: <code>{self.node_id}</code></p>
-                <p>Node App Data:</p>
-                <pre><code>{yaml.dump(self.node_app_data, indent=3)}</code></pre>
-
-                <h2>Topics</h2>
-                {topics_html}
-                <h2>Index answer presented in YAML</h2>
-                <pre><code>{yaml.dump(json_data, indent=3)}</code></pre>
-
-
-                <h2>Your request headers</h2>
-                <pre><code>{headers_s}</code></pre>
-                </body>
-                </html>
-                """
-                return web.Response(body=html_index, content_type="text/html", headers=headers)
-
+        for accept_header in request.headers.getall("accept", default_empty):
+            split_accept_header = accept_header.split(",")
+            accept.extend(split_accept_header)
+        if (
+            "application/cbor" not in accept
+            and CONTENT_TYPE_DTPS_INDEX_CBOR not in accept
+            and "text/html" in accept
+        ):
+            topics_html = "<ul>"
+            for topic_name in sorted(index_internal.topics):
+                if topic_name.is_root():
+                    continue
+                relative_url = topic_name.as_relative_url()
+                topics_html += (
+                    f"<li><a href='{relative_url}'><code>{relative_url}</code>"
+                    "</a></li>\n"
+                )
+            topics_html += "</ul>"
+            node_app_data_yaml = yaml.dump(self.node_app_data, indent=3)
+            json_data_yaml = yaml.dump(json_data, indent=3)
+            cbor_source = (
+                "https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.min.js"
+            )
+            js_yaml_source = (
+                "https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/"
+                "js-yaml.min.js"
+            )
+            html_index = f"""
+            <html lang="en">
+            <head>
+            <style>
+            </style>
+            <link rel="stylesheet" href="/static/style.css">
+            <script src="{cbor_source}"></script>
+            <script src="{js_yaml_source}"></script>
+            <script src="/static/send.js"></script>
+            <title>DTPS server</title>
+            </head>
+            <body>
+            <h1>DTPS server</h1>
+            <p> This response coming to you in HTML format because you
+            requested it in HTML format.</p>
+            <p>Node ID: <code>{self.node_id}</code></p>
+            <p>Node App Data:</p>
+            <pre><code>{node_app_data_yaml}</code></pre>
+            <h2>Topics</h2>
+            {topics_html}
+            <h2>Index answer presented in YAML</h2>
+            <pre><code>{json_data_yaml}</code></pre>
+            <h2>Your request headers</h2>
+            <pre><code>{headers_string}</code></pre>
+            </body>
+            </html>
+            """
+            return Response(
+                body=html_index,
+                content_type="text/html",
+                headers=headers,
+            )
         as_cbor = cbor2.dumps(json_data)
-
-        return web.Response(body=as_cbor, content_type=CONTENT_TYPE_DTPS_INDEX_CBOR, headers=headers)
+        return Response(
+            body=as_cbor,
+            content_type=CONTENT_TYPE_DTPS_INDEX_CBOR,
+            headers=headers,
+        )
 
     @async_error_catcher
-    async def serve_history(self, request: web.Request) -> web.StreamResponse:
+    async def serve_history(self, request: Request) -> StreamResponse:
+        """Serve history."""
         headers: CIMultiDict[str] = CIMultiDict()
         add_nocache_headers(headers)
-        multidict_update(headers, self.get_headers_alternatives(request))
+        alternatives = self.get_header_alternatives(request)
+        multidict_update(headers, alternatives)
         self._add_own_headers(headers)
-
-        topic_name_s = request.match_info["topic"]
+        dash_separated_topic_name = request.match_info["topic"]
         try:
-            source = self.resolve(topic_name_s)
-        except KeyError as e:
-            raise web.HTTPNotFound(text=f"{e}", headers=headers) from e
-
+            source = self.resolve(dash_separated_topic_name)
+        except KeyError as error:
+            raise HTTPNotFound(text=f"{error}", headers=headers) from error
         if not isinstance(source, OurQueue):
-            raise web.HTTPNotFound(text=f"Topic {topic_name_s} is not a queue", headers=headers)
-
-        oq = self.get_oq(source.topic_name)
-        # presented_as = request.url.path
-        history: Dict[int, Any] = {}
-        for i in oq.stored:
-            ds = oq.saved[i]
-            content = self.blob_manager.get_blob(ds.digest)
-            a = oq.get_data_ready(ds, inline_data=False, content=content)
-            history[a.index] = asdict(a)
-
-        cbor = cbor2.dumps(history)
-        rd = RawData(content=cbor, content_type=CONTENT_TYPE_TOPIC_HISTORY_CBOR)
-        title = f"History for {topic_name_s}"
-        return self.visualize_data(request, title, rd, headers, is_streamable=False, is_pushable=False)
+            raise HTTPNotFound(
+                text=f"Topic {dash_separated_topic_name} is not a queue.",
+                headers=headers,
+            )
+        queue = self.get_object_queue(source.topic_name)
+        history = {}
+        for item in queue.stored:
+            data_saved = queue.saved[item]
+            content = self.blob_manager.get_blob(data_saved.digest)
+            data_ready = queue.get_data_ready(
+                data_saved,
+                content,
+                inline_data=False,
+            )
+            history[data_ready.index] = asdict(data_ready)
+        data = cbor2.dumps(history)
+        raw_data = RawData(data, CONTENT_TYPE_TOPIC_HISTORY_CBOR)
+        return self.visualize_data(
+            request,
+            f"History for {dash_separated_topic_name}.",
+            raw_data,
+            headers,
+            is_streamable=False,
+            is_pushable=False,
+        )
 
     @async_error_catcher
-    async def serve_meta(self, request: web.Request) -> web.StreamResponse:
+    async def serve_meta(self, request: Request) -> StreamResponse:
+        """Serve meta."""
         headers: CIMultiDict[str] = CIMultiDict()
         add_nocache_headers(headers)
-        multidict_update(headers, self.get_headers_alternatives(request))
+        header_alternatives = self.get_header_alternatives(request)
+        multidict_update(headers, header_alternatives)
         self._add_own_headers(headers)
-
-        topic_name_s = request.match_info["topic"]
+        dash_separated_topic_name = request.match_info["topic"]
         try:
-            source = self.resolve(topic_name_s)
-        except KeyError as e:
-            raise web.HTTPNotFound(text=f"{e}", headers=headers)
-
-        # logger.debug(f"serve_meta: {request.url!r} -> {source!r}")
-
+            source = self.resolve(dash_separated_topic_name)
+        except KeyError as error:
+            raise HTTPNotFound(text=f"{error}", headers=headers) from error
         index_internal = await source.get_meta_info(request.url.path, self)
-
         index_wire = index_internal.to_wire()
-        rd = RawData(content=cbor2.dumps(asdict(index_wire)), content_type=CONTENT_TYPE_DTPS_INDEX_CBOR)
-        title = f"Meta for {topic_name_s}"
-        return self.visualize_data(request, title, rd, headers, is_streamable=False, is_pushable=False)
+        index_wire_dictionary = asdict(index_wire)
+        data = cbor2.dumps(index_wire_dictionary)
+        raw_data = RawData(data, CONTENT_TYPE_DTPS_INDEX_CBOR)
+        return self.visualize_data(
+            request,
+            f"Meta for {dash_separated_topic_name}",
+            raw_data,
+            headers,
+            is_streamable=False,
+            is_pushable=False,
+        )
 
-    def resolve(self, url0: str) -> Source:
-        after: Optional[str]
+    def resolve(self, url0: str) -> AbstractSource:
+        """Resolve."""
+        after: str | None
         url = url0
         if url and not url.endswith("/"):
             url, _, after = url.rpartition("/")
             url += "/"
         else:
             after = None
+        topic_name = TopicNameV.from_relative_url(url)
+        return self.resolve_topic_name(topic_name, url0, after)
 
-        # logger.debug(f"resolve({url0!r}) - url: {url!r} after: {after!r}")
-        tn = TopicNameV.from_relative_url(url)
-        return self._resolve_tn(tn, url0, after)
-
-    def _resolve_tn(self, tn: TopicNameV, url0: str, after: Optional[str] = None) -> Source:
-        sources = self.iterate_sources()
-
-        subtopics: List[Tuple[TopicNameV, Sequence[str], Sequence[str], Source]] = []
-
-        for k, source in sources.items():
-            if k.is_root() and not tn.is_root():
-                continue
-            if k == tn:
-                if after is not None:
-                    return source.get_inside_after(after)
-                else:
-                    return source
-
-            if (ispref := k.is_prefix_of(tn)) is not None:
-                matched, rest = ispref
-                return source.resolve_extra(rest, after)
-
-            if (ispref2 := tn.is_prefix_of(k)) is not None:
-                matched, rest = ispref2
-                subtopics.append((k, matched, rest, source))
-
-        if not subtopics:
-            for k, source in self._mount_points.items():
-                if source.established is None and (k.is_prefix_of(tn) is not None):
-                    msg = f"This topic is on the mount point {k} but the connection is not established yet.\n"
-                    raise KeyError(msg)
-
-            msg = f"Cannot find a matching topic for {url0!r}.\n"
-            msg += f"| topic name: {tn.as_dash_sep()}\n"
-            msg += f"| sources: \n"
-            for k, source in sources.items():
-                msg += f"| {k.as_dash_sep()!r}: {type(source).__name__}\n"
-            # self.logger.debug(msg)
-
+    def _get_no_subtopics_message(
+        self,
+        topic_name: TopicNameV,
+        url0: str,
+        sources: dict[TopicNameV, AbstractSource],
+    ) -> str:
+        for (
+            forward_info_topic_name,
+            forward_info,
+        ) in self._mount_points.items():
+            if (
+                forward_info.established is None
+                and forward_info_topic_name.is_prefix_of(topic_name)
+                is not None
+            ):
+                return (
+                    f"This topic is on the mount point {topic_name} but the "
+                    "connection is not established yet.\n"
+                )
+            message = f"Cannot find a matching topic for {url0!r}.\n"
+            dash_separated_topic_name = topic_name.as_dash_sep()
+            message += f"| topic name: {dash_separated_topic_name}\n"
+            message += "| sources: \n"
+            for source_topic_name, source in sources.items():
+                dash_separated_topic_name = source_topic_name.as_dash_sep()
+                source_class = type(source)
+                message += (
+                    f"| {dash_separated_topic_name!r}: {source_class.__name__}"
+                    "\n"
+                )
             if self._mount_points:
-                msg += f"| mount points: \n"
-                for k, source in self._mount_points.items():
-                    msg += (
-                        f"| {k.as_dash_sep()!r}: {type(source).__name__} established = "
-                        f"{source.established is not None}\n"
+                message += "| mount points: \n"
+                for (
+                    inner_forward_info_topic_name,
+                    inner_forward_info,
+                ) in self._mount_points.items():
+                    dash_separated_topic_name = (
+                        inner_forward_info_topic_name.as_dash_sep()
+                    )
+                    forward_info_class = type(inner_forward_info)
+                    message += (
+                        f"| {dash_separated_topic_name!r}: "
+                        f"{forward_info_class.__name__} established="
+                        f"{inner_forward_info.established is not None}\n"
                     )
             else:
-                msg += f"| no mount points\n"
-            raise KeyError(msg)
+                message += "| no mount points\n"
+        return message
 
+    def resolve_topic_name(
+        self,
+        topic_name: TopicNameV,
+        url0: str,
+        after: str | None = None,
+    ) -> AbstractSource | SourceComposition:
+        """Resolve topic name."""
+        sources = self.iterate_sources()
+        subtopics = []
+        for source_topic_name, source in sources.items():
+            if source_topic_name.is_root() and not topic_name.is_root():
+                continue
+            potential_source = self._get_source(
+                source,
+                topic_name,
+                after,
+                source_topic_name,
+            )
+            if potential_source is not None:
+                return potential_source
+            is_pref_2 = topic_name.is_prefix_of(source_topic_name)
+            if is_pref_2 is not None:
+                subtopics.append((source_topic_name, *is_pref_2, source))
+        if not subtopics:
+            message = self._get_no_subtopics_message(topic_name, url0, sources)
+            raise KeyError(message)
         origin_node = self.node_id
-        if tn in self._mount_points:
-            if (established := self._mount_points[tn].established) is not None:
-                origin_node = established.md.answering
-                if origin_node is None:
-                    origin_node = self.node_id
-            # else:
-            #     raise KeyError(f"Mount point {tn} is not established yet")
-
-        unique_id = get_unique_id(origin_node, tn)
-        subsources: Dict[TopicNameV, Source] = {}
-        for _, _, rest, source in subtopics:
-            subsources[TopicNameV.from_components(rest)] = source
-
-        sc = SourceComposition(
-            topic_name=tn,
-            sources=subsources,
-            unique_id=unique_id,
-            origin_node=origin_node,
+        established = self._mount_points[topic_name].established
+        if (
+            topic_name in self._mount_points
+            and established is not None
+            and established.found_metadata.answering is not None
+        ):
+            origin_node = established.found_metadata.answering
+        unique_id = get_unique_id(origin_node, topic_name)
+        subsources = {}
+        for _, _, components, source in subtopics:
+            source_topic_name = TopicNameV.from_components(components)
+            subsources[source_topic_name] = source
+        source_composition = SourceComposition(
+            topic_name,
+            subsources,
+            unique_id,
+            origin_node,
         )
-
         if after is not None:
-            return sc.get_inside_after(after)
-        else:
-            return sc
+            return source_composition.get_inside_after(after)
+        return source_composition
 
-    def iterate_sources(self) -> Dict[TopicNameV, Source]:
-        res: Dict[TopicNameV, Source] = {}
-        for topic_name, x in self._forwarded.items():
-            sb = ForwardedQueue(topic_name)
-            res[topic_name] = sb
-        for topic_name, x in self._oqs.items():
-            sb = OurQueue(topic_name)
-            res[topic_name] = sb
+    @staticmethod
+    def _get_source(
+        source: AbstractSource,
+        topic_name: TopicNameV,
+        after: str | None,
+        source_topic_name: TopicNameV,
+    ) -> AbstractSource | None:
+        if source_topic_name == topic_name:
+            if after is not None:
+                return source.get_inside_after(after)
+            return source
+        is_pref = source_topic_name.is_prefix_of(topic_name)
+        if is_pref is not None:
+            _, rest = is_pref
+            return source.resolve_extra(rest, after)
+        return None
 
-        ordered = sorted(res.items(), key=lambda y: len(y[0].components), reverse=True)
-        return {k: v for k, v in ordered}
+    @staticmethod
+    def _iterate_sources_key(
+        sources_item: tuple[TopicNameV, AbstractSource],
+    ) -> int:
+        return len(sources_item[0].components)
+
+    def iterate_sources(self) -> dict[TopicNameV, AbstractSource]:
+        """Iterate sources."""
+        sources: dict[TopicNameV, AbstractSource] = {}
+        queue: ForwardedQueue | OurQueue
+        for topic_name in self.forwarded:
+            queue = ForwardedQueue(topic_name)
+            sources[topic_name] = queue
+        for topic_name in self.object_queues:
+            queue = OurQueue(topic_name)
+            sources[topic_name] = queue
+        sources_items = sources.items()
+        sorted_sources = sorted(
+            sources_items,
+            key=self._iterate_sources_key,
+            reverse=True,
+        )
+        return dict(sorted_sources)
 
     @async_error_catcher
-    async def serve_delete(self, request: web.Request) -> web.StreamResponse:
+    async def serve_delete(self, request: Request) -> StreamResponse:
+        """Serve delete."""
         headers: CIMultiDict[str] = CIMultiDict()
         self._add_own_headers(headers)
         add_nocache_headers(headers)
-
-        topic_name_s = request.match_info["topic"]
-
+        dash_separated_topic_name = request.match_info["topic"]
         try:
-            source = self.resolve(topic_name_s)
-        except KeyError as e:
-            msg = f"404: {request.url!r}\nCannot find topic '{topic_name_s}':\n{e.args[0]}"
-            # logger.error()
-            # text = f'404: Cannot find topic "{topic_name_s}"'
-            return web.HTTPNotFound(text=msg, headers=headers)
-
-        otr = await source.delete(presented_as=request.url.path, server=self)
-        if isinstance(otr, TransformError):
-            return web.Response(status=otr.http_code, text=otr.message, headers=headers)
-        else:
-
-            return web.Response(body="", headers=headers)
-        #
-        # if isinstance(source, OurQueue):
-        #     properties = source.get_properties(self)
-        #     if not properties.droppable:
-        #         msg = f"{request.url!r}\nCannot delete queue '{topic_name_s}' because it is marked as non-droppable."
-        #         return web.HTTPForbidden(text=msg, headers=headers)
-        #
-        #     await self.remove_oq(source.topic_name)
-        #     msg = f"{request.url!r}\nDeleted queue '{topic_name_s}'."
-        #     return web.Response(text=msg, headers=headers, status=200)
-        # else:
-        #     # TODO: delete for forwarded
-        #     msg = f"{request.url!r}\nCannot delete topic '{topic_name_s}'."
-        #     return web.HTTPServerError(text=msg, headers=headers)
+            source = self.resolve(dash_separated_topic_name)
+        except KeyError as error:
+            message = (
+                f"404: {request.url!r}\nCannot find topic "
+                f"'{dash_separated_topic_name}':\n{error.args[0]}"
+            )
+            return HTTPNotFound(text=message, headers=headers)
+        result = await source.delete(dash_separated_topic_name, self)
+        if isinstance(result, TransformError):
+            return Response(
+                status=result.http_code,
+                text=result.message,
+                headers=headers,
+            )
+        return Response(body="", headers=headers)
 
     @async_error_catcher
-    async def serve_get(self, request: web.Request) -> web.StreamResponse:
+    async def serve_get(self, request: Request) -> StreamResponse:
+        """Serve `GET` request."""
         with self._log_request(request):
             headers: CIMultiDict[str] = CIMultiDict()
             self._add_own_headers(headers)
             add_nocache_headers(headers)
-
-            topic_name_s = request.match_info["topic"]
-
-            if topic_name_s == "":
+            dash_separated_topic_name = request.match_info["topic"]
+            if dash_separated_topic_name == "":
                 return await self.serve_index(request)
-
-            # self.logger.info(f"serve_get: {request.url!r} -> {topic_name_s!r}")
-
             try:
-                source = self.resolve(topic_name_s)
-            except KeyError as e:
-                msg = f"404: {request.url!r}\nCannot find topic '{topic_name_s}':\n{e.args[0]}"
-                # self.logger.error(msg)
-                # text = f'404: Cannot find topic "{topic_name_s}"'
-                return web.HTTPNotFound(text=msg, headers=headers)
-
-            multidict_update(headers, self.get_headers_alternatives(request))
+                source = self.resolve(dash_separated_topic_name)
+            except KeyError as error:
+                message = (
+                    f"404: {request.url!r}\nCannot find topic "
+                    f"'{dash_separated_topic_name}':\n{error.args[0]}"
+                )
+                return HTTPNotFound(text=message, headers=headers)
+            header_alternatives = self.get_header_alternatives(request)
+            multidict_update(headers, header_alternatives)
             properties = source.get_properties(self)
-            # self.logger.info(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {properties!r}")
             put_meta_headers(headers, properties)
-
             origin_node = await source.get_source_node_id(self)
             if origin_node is not None:
                 headers.add(HEADER_DATA_ORIGIN_NODE_ID, origin_node)
-
-            # logger.debug(f"serve_get: {request.url!r} -> {source!r}")
-
             if isinstance(source, ForwardedQueue):
-                # Optimization: streaming
-                return await self.serve_get_proxied(request, self._forwarded[source.topic_name])
-
-            # if topic_name not in self._oqs:
-            #     msg = f'Cannot find topic "{topic_name.as_dash_sep()}"'
-            #     raise web.HTTPNotFound(text=msg, headers=headers)
-
-            title = topic_name_s
-            url = topic_name_s
-            # logger.info(f"url: {topic_name_s!r} source: {source!r}")
+                # Optimization for streaming
+                return await self.serve_get_proxied(
+                    request,
+                    self.forwarded[source.topic_name],
+                )
             try:
-                rs = await source.get_resolved_data(url, self, request)
-            except KeyError as e:
-                self.logger.error(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {e}")
-                raise web.HTTPNotFound(text=f"404\n{e}", headers=headers) from e
-
-            if isinstance(rs, HTTPResponse):
-                return rs
-
-            rd: Union[RawData, NotAvailableYet]
-            if isinstance(rs, RawData):
-                rd = rs
-            elif isinstance(rs, Native):
-                # logger.info(f"Native: {rs}")
-                rd = RawData.cbor_from_native_object(rs.ob)
-
-                # TODO: implement
-            elif isinstance(rs, NotAvailableYet):
-                rd = rs
-            elif isinstance(rs, NotFound):  # type: ignore
-                raise NotImplementedError(f"Cannot handle {rs!r}")
-            else:
-                raise AssertionError
-
+                resolved_data = await source.get_resolved_data(
+                    dash_separated_topic_name,
+                    self,
+                    request,
+                )
+            except KeyError as error:
+                self.logger.exception(
+                    "serve_get: %r -> %r",
+                    request.url,
+                    dash_separated_topic_name,
+                )
+                raise HTTPNotFound(
+                    text=f"404\n{error}",
+                    headers=headers,
+                ) from error
+            if isinstance(resolved_data, HTTPResponse):
+                return resolved_data
+            raw_data = self._get_raw_data(resolved_data)
             accept_headers = request.headers.get("accept", "")
-
-            if accept_headers and isinstance(rd, RawData) and not "html" in accept_headers:
-                rd = rd.get_as(accept_headers)
-
-            # pprint(properties)
+            if (
+                accept_headers
+                and isinstance(raw_data, RawData)
+                and "html" not in accept_headers
+            ):
+                raw_data = raw_data.get_as(accept_headers)
             return self.visualize_data(
                 request,
-                title,
-                rd,
+                dash_separated_topic_name,
+                raw_data,
                 headers,
                 is_streamable=properties.streamable,
                 is_pushable=properties.pushable,
             )
 
+    @staticmethod
+    def _get_raw_data(
+        resolved_data: ResolvedData,
+    ) -> RawData | NotAvailableYet:
+        raw_data: RawData | NotAvailableYet
+        if isinstance(resolved_data, RawData):
+            raw_data = resolved_data
+        elif isinstance(resolved_data, Native):
+            raw_data = RawData.cbor_from_native_object(resolved_data.object_)
+            # TODO: Implement
+        elif isinstance(resolved_data, NotAvailableYet):
+            raw_data = resolved_data
+        elif isinstance(resolved_data, NotFound):
+            message = f"Cannot handle {resolved_data!r}."
+            raise NotImplementedError(message)
+        else:
+            raise TypeError
+        return raw_data
+
     def make_friendly_visualization(
         self,
-        title: str,  # rd: RawData,
+        title: str,
         initial_data_html: str,
         *,
         is_image_content: bool,
@@ -1188,890 +1547,987 @@ class DTPSServer:
         initial_push_value: str,
         initial_push_contenttype: str,
         streamable: bool,
-    ) -> web.StreamResponse:
+    ) -> StreamResponse:
+        """Make friendly visualization."""
         headers: CIMultiDict[str] = CIMultiDict()
-
-        # language=html
-        html_index = f"""\
-<html lang="en">
-<head>
-    <title>{title}</title>
-    <link rel="stylesheet" href="/static/style.css">
-    <script src="/static/send.js"></script>
-
-    <script src="https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
-
-</head>
-<body>
-<h1>{title}</h1>
-
-<p>This response coming to you in HTML format because you requested it in HTML format.</p>
-
-<p>Content type: <code>{content_type}</code></p>
-
+        cbor_source = "https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.min.js"
+        js_yaml_source = (
+            "https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/"
+            "js-yaml.min.js"
+        )
+        html_index = f"""
+        <html lang="en">
+        <head>
+            <title>{title}</title>
+            <link rel="stylesheet" href="/static/style.css">
+            <script src="/static/send.js"></script>
+            <script src="{cbor_source}"></script>
+            <script src="{js_yaml_source}"></script>
+        </head>
+        <body>
+        <h1>{title}</h1>
+        <p>This response coming to you in HTML format because you requested it
+        in HTML format.</p>
+        <p>Content type: <code>{content_type}</code></p>
         """
         if is_image_content:
-            # language=html
             html_index += f"""
-                <img id="data_field_image" src="data:{content_type};base64,{initial_data_html}" alt="image"/>
-            
+            <img id="data_field_image"
+            src="data:{content_type};base64,{initial_data_html}" alt="image"/>
             """
         else:
-            # language=html
             html_index += f"""
-                <pre id="data_field"><code>{initial_data_html}</code></pre>
+            <pre id="data_field"><code>{initial_data_html}</code></pre>
             """
         if pushable:
-            # language=html
             html_index += f"""
             <h3>Push to queue</h3>
-            <textarea id="myTextAreaContentType">{initial_push_contenttype}</textarea>
-            
+            <textarea id="myTextAreaContentType">{initial_push_contenttype}
+            </textarea>
             <textarea id="myTextArea">{initial_push_value}</textarea>
             <br/>
             <button id="myButton">push</button>
             """
-
         if streamable:
-            # language=html
             html_index += """
             <p>Streaming is available for this topic.</p>
             <pre id="result"></pre>
             """
-        return web.Response(body=html_index, content_type="text/html", headers=headers)
+        return Response(
+            body=html_index,
+            headers=headers,
+            content_type="text/html",
+        )
 
     def visualize_data(
         self,
-        request: web.Request,
+        request: Request,
         title: str,
-        rd: Union[RawData, NotAvailableYet],
+        raw_data: RawData | NotAvailableYet,
         headers: CIMultiDict[str],
         *,
         is_streamable: bool,
         is_pushable: bool,
-    ) -> web.StreamResponse:
+    ) -> StreamResponse:
+        """Visualize data."""
         accept_headers = request.headers.get("accept", "")
-
         accepts_html = "text/html" in accept_headers
-        if isinstance(rd, RawData):
+        if isinstance(raw_data, RawData):
             if (
-                rd.content_type != "text/html"
+                raw_data.content_type != "text/html"
                 and accepts_html
-                and (is_structure(rd.content_type) or is_image(rd.content_type))
+                and (
+                    is_structure(raw_data.content_type)
+                    or is_image(raw_data.content_type)
+                )
             ):
-                if is_structure(rd.content_type):
+                if is_structure(raw_data.content_type):
                     is_image_content = False
-                    initial_data_html = rd.get_as_yaml()
+                    initial_data_html = raw_data.get_as_yaml()
                 else:
-                    # convert to base64
+                    # Convert to base64
                     is_image_content = True
-                    encoded: bytes = base64.b64encode(rd.content)
-
-                    initial_data_html: str = encoded.decode("ascii")
+                    encoded = base64.b64encode(raw_data.content)
+                    initial_data_html = encoded.decode("ascii")
                 return self.make_friendly_visualization(
                     title,
                     initial_data_html,
                     streamable=is_streamable,
                     pushable=is_pushable,
                     initial_push_value=initial_data_html,
-                    initial_push_contenttype=rd.content_type,
+                    initial_push_contenttype=raw_data.content_type,
                     is_image_content=is_image_content,
-                    content_type=rd.content_type,
+                    content_type=raw_data.content_type,
                 )
-            else:
-                return web.Response(body=rd.content, content_type=rd.content_type, headers=headers)
-        elif isinstance(rd, NotAvailableYet):  # type: ignore
+            return Response(
+                body=raw_data.content,
+                content_type=raw_data.content_type,
+                headers=headers,
+            )
+        if isinstance(raw_data, NotAvailableYet):
             if accepts_html:
-                # language=html
                 html_index = f"""
-<html lang="en">
-<head>
-<style>
-pre {{ 
-    background-color: #eee;
-    padding: 10px;
-    border: 1px solid #999;
-    border-radius: 5px; 
-}}
-</style>
-<title>{title}</title>
-</head>
-<body>
-<h1>{title}</h1>
-
-<p>There is no data yet to visualize.</p>
-
-</body>
-</html>
-
-                        """
-                return web.Response(body=html_index, content_type="text/html", status=200, headers=headers)
-            else:
-                body = "204 - No data yet."
-                return web.Response(body=body, content_type="text/plain", status=204, headers=headers)
-
-        else:
-            raise AssertionError(f"Cannot handle {rd!r}")
+                <html lang="en">
+                <head>
+                <style>
+                pre {{
+                    background-color: #eee;
+                    padding: 10px;
+                    border: 1px solid #999;
+                    border-radius: 5px;
+                }}
+                </style>
+                <title>{title}</title>
+                </head>
+                <body>
+                <h1>{title}</h1>
+                <p>There is no data yet to visualize.</p>
+                </body>
+                </html>
+                """
+                return Response(
+                    body=html_index,
+                    content_type="text/html",
+                    status=200,
+                    headers=headers,
+                )
+            body = "204 - No data yet."
+            return Response(
+                body=body,
+                content_type="text/plain",
+                status=204,
+                headers=headers,
+            )
+        message = f"Cannot handle {raw_data!r}."
+        raise AssertionError(message)
 
     @async_error_catcher
-    async def serve_get_proxied(self, request: web.Request, fd: ForwardedTopic) -> web.StreamResponse:
-        async with self._client() as client:
-            async with client.my_session(fd.forward_url_data) as (session, use_url):
-                # Create the proxied request using the original request's headers
-                async with session.get(use_url, headers=request.headers) as resp:
-                    # Read the response's body
+    async def serve_get_proxied(
+        self,
+        request: Request,
+        forwarded_topic: ForwardedTopic,
+    ) -> StreamResponse:
+        """Return proxied response.
 
-                    # Create a response with the proxied request's status and body,
-                    # forwarding all the headers
-                    headers: CIMultiDict[str] = CIMultiDict()
-                    multidict_update(headers, resp.headers)
-                    default_empty: list[str] = []
-                    headers.popall(HEADER_NO_AVAIL, default_empty)
-                    headers.popall(HEADER_CONTENT_LOCATION, default_empty)
-
-                    headers.add(HEADER_DATA_ORIGIN_NODE_ID, fd.origin_node)
-
-                    for r in fd.reachability:
-                        if r.answering == self.node_id:
-                            r.benchmark.fill_headers(headers)
-
-                    # headers.add('X-DTPS-Forwarded-node', resp.headers.get(HEADER_NODE_ID, '???'))
-                    multidict_update(headers, self.get_headers_alternatives(request))
-                    self._add_own_headers(headers)
-
-                    response = web.StreamResponse(status=resp.status, headers=headers)
-
-                    await response.prepare(request)
-                    async for chunk in resp.content.iter_any():
-                        await response.write(chunk)
-
-                    return response
+        Reads the response's body and creates a response with the
+        proxied request's status and body, forwarding all the headers.
+        """
+        async with (
+            self.client() as client,
+            client.my_session(forwarded_topic.forward_url_data) as (
+                session,
+                use_url,
+            ),
+            session.get(use_url, headers=request.headers) as resp,
+        ):
+            headers: CIMultiDict[str] = CIMultiDict()
+            multidict_update(headers, resp.headers)
+            default_empty: list[str] = []
+            headers.popall(HEADER_NO_AVAIL, default_empty)
+            headers.popall(HEADER_CONTENT_LOCATION, default_empty)
+            headers.add(
+                HEADER_DATA_ORIGIN_NODE_ID,
+                forwarded_topic.origin_node,
+            )
+            for resource_reachability in forwarded_topic.reachability:
+                if resource_reachability.answering == self.node_id:
+                    resource_reachability.benchmark.fill_headers(headers)
+            source = self.get_header_alternatives(request)
+            multidict_update(headers, source)
+            self._add_own_headers(headers)
+            response = StreamResponse(status=resp.status, headers=headers)
+            await response.prepare(request)
+            async for chunk in resp.content.iter_any():
+                await response.write(chunk)
+            return response
 
     def _add_own_headers(self, headers: CIMultiDict[str]) -> None:
-        # passed_already = headers.get(HEADER_NODE_PASSED_THROUGH, [])
-        default: List[str] = []
+        default: list[str] = []
         prevnodeids = headers.getall(HEADER_NODE_ID, default)
         if len(prevnodeids) > 1:
-            raise ValueError(f"More than one {HEADER_NODE_ID} header found: {prevnodeids}")
-
+            message = (
+                f"More than one {HEADER_NODE_ID} header found: {prevnodeids}"
+            )
+            raise ValueError(message)
         if prevnodeids:
             headers.add(HEADER_NODE_PASSED_THROUGH, prevnodeids[0])
-
         server_string = f"lib-dtps-http/Python/{__version__}"
-        HEADER_SERVER = "Server"
-
-        current_server_strings = headers.getall(HEADER_SERVER, default)
-        # logger.info(f'current_server_strings: {current_server_strings} cur = {headers}')
-        if HEADER_SERVER not in current_server_strings:
-            headers.add(HEADER_SERVER, server_string)
-        # leave our own
+        header_server = "Server"
+        current_server_strings = headers.getall(header_server, default)
+        if header_server not in current_server_strings:
+            headers.add(header_server, server_string)
+        # Leave our own
         headers.popall(HEADER_NODE_ID, None)
         headers[HEADER_NODE_ID] = self.node_id
 
-    def _headers(self, request: web.Request) -> CIMultiDict[str]:
+    def _headers(self, request: Request) -> CIMultiDict[str]:
         headers: CIMultiDict[str] = CIMultiDict()
         add_nocache_headers(headers)
         self._add_own_headers(headers)
-        multidict_update(headers, self.get_headers_alternatives(request))
+        header_alternatives = self.get_header_alternatives(request)
+        multidict_update(headers, header_alternatives)
         return headers
 
-    def _resolve(self, request: web.Request) -> Source:
-        """Raises HTTPNotFound"""
-        topic_name_s: str = request.match_info["topic"]
-        # topic_name = TopicNameV.from_relative_url(topic_name_s)
+    def _resolve(self, request: Request) -> AbstractSource:
+        """Raise `HTTPNotFound`."""
+        dash_separated_topic_name = request.match_info["topic"]
         try:
-            return self.resolve(topic_name_s)
-        except KeyError as e:
-            # self.logger.error(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {e}")
-            raise web.HTTPNotFound(text=f"404\n{e}", headers=self._headers(request)) from e
+            return self.resolve(dash_separated_topic_name)
+        except KeyError as error:
+            headers = self._headers(request)
+            raise HTTPNotFound(
+                text=f"404\n{error}",
+                headers=headers,
+            ) from error
 
     @async_error_catcher
-    async def serve_post(self, request: web.Request) -> web.Response:
+    async def serve_post(self, request: Request) -> Response:
+        """Serve `POST` request."""
         with self._log_request(request):
-            content_type = request.headers.get("Content-Type", "application/octet-stream")
+            content_type_string = request.headers.get(
+                "Content-Type",
+                "application/octet-stream",
+            )
             data = await request.read()
-            rd = RawData(content=data, content_type=ContentType(content_type))
-
-            source: Source = self._resolve(request)
-
+            content_type = ContentType(content_type_string)
+            raw_data = RawData(data, content_type)
+            source = self._resolve(request)
             headers = self._headers(request)
-
-            presented_as = request.url.path
-
-            # self.logger.info(f"serve_post: {request.url!r} -> {source!r}")
-            pr: PostResult = await source.publish(presented_as, self, rd)
-
-            if isinstance(pr, TransformError):
-                return web.Response(status=pr.http_code, text=pr.message, headers=headers)
-            elif isinstance(pr, DataReady):  # type: ignore
-                data = get_simple_cbor(pr.as_data_saved())
-                for r in pr.availability:
-                    headers.add("Location", r.url)
-
-                return web.Response(
+            result = await source.publish(request.url.path, self, raw_data)
+            if isinstance(result, TransformError):
+                return Response(
+                    status=result.http_code,
+                    text=result.message,
+                    headers=headers,
+                )
+            if isinstance(result, DataReady):
+                data_saved = result.as_data_saved()
+                data = get_simple_cbor(data_saved)
+                for resource_availability in result.availability:
+                    headers.add("Location", resource_availability.url)
+                return Response(
                     status=201,
                     content_type=CONTENT_TYPE_DTPS_DATAREADY_CBOR,
                     body=data,
-                    headers=headers,  # content_type=otr.content_type, body=otr.content
+                    headers=headers,
                 )
-            else:
-                raise AssertionError(f"Cannot handle {pr!r} for {source}")
+            message = f"Cannot handle {result!r} for {source}."
+            raise AssertionError(message)
 
     @contextmanager
-    def _log_request(self, request: web.Request) -> Iterator[None]:
-        self.logger.debug(f"{request.method} {request.url}")
-        try:
-            yield
-        except Exception:
-            # logger.error(f"{request.method} {request.url}: response {e}")
-            raise
+    def _log_request(self, request: Request) -> Iterator[None]:
+        self.logger.debug("%s %s", request.method, request.url)
+        yield
 
     @async_error_catcher
-    async def serve_patch(self, request: web.Request) -> web.Response:
+    async def serve_patch(self, request: Request) -> Response:
+        """Serve `PATCH` request."""
         with self._log_request(request):
-            presented_as = request.url.path
-
             headers = self._headers(request)
-
-            topic_name_s: str = request.match_info["topic"]
-
+            dash_separated_topic_name = request.match_info["topic"]
             try:
-                source = self.resolve(topic_name_s)
-            except KeyError as e:
-                # self.logger.error(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {e}")
-                raise web.HTTPNotFound(text=f"404\n{e.args[0]}", headers=headers) from e
-
-            topic_name = TopicNameV.from_relative_url(topic_name_s)
+                source = self.resolve(dash_separated_topic_name)
+            except KeyError as error:
+                raise HTTPNotFound(
+                    text=f"404\n{error.args[0]}",
+                    headers=headers,
+                ) from error
+            topic_name = TopicNameV.from_relative_url(
+                dash_separated_topic_name,
+            )
             if topic_name.is_root():
                 return await self.serve_patch_root(request)
-            # elif topic_name == TOPIC_PROXIED:
-            #     return await self.serve_patch_proxied(request)
-
             data = await request.read()
-
-            content_type = request.headers.get("Content-Type", "application/json")
+            content_type = request.headers.get(
+                "Content-Type",
+                "application/json",
+            )
             if content_type == CONTENT_TYPE_PATCH_JSON:
                 decoded = data.decode("utf-8")
                 patch = JsonPatch.from_string(decoded)
             elif content_type == CONTENT_TYPE_PATCH_CBOR:
                 p = cbor2.loads(data)
-                patch = JsonPatch(p)  # type: ignore
+                patch = JsonPatch(p)
             elif content_type == CONTENT_TYPE_PATCH_YAML:
                 p = yaml.safe_load(data)
                 patch = JsonPatch(p)
             else:
-                msg = "Unsupported content type for patch: {content_type}. I can do json and cbor"
-                return web.Response(status=415, text=msg)
-
-            otr = await source.patch(presented_as, self, patch)
-
-            if isinstance(otr, TransformError):
-                return web.Response(status=otr.http_code, text=otr.message, headers=headers)
-            elif isinstance(otr, DataReady):  # type: ignore
-                data = get_simple_cbor(otr.as_data_saved())
-                for r in otr.availability:
-                    headers.add("Location", r.url)
-
-                return web.Response(
+                message = (
+                    f"Unsupported content type for patch: {content_type}. I "
+                    "can do JSON and CBOR."
+                )
+                return Response(status=415, text=message)
+            result = await source.patch(
+                dash_separated_topic_name,
+                self,
+                patch,
+            )
+            if isinstance(result, TransformError):
+                return Response(
+                    status=result.http_code,
+                    text=result.message,
+                    headers=headers,
+                )
+            if isinstance(result, DataReady):
+                data_saved = result.as_data_saved()
+                data = get_simple_cbor(data_saved)
+                for resource_availability in result.availability:
+                    headers.add("Location", resource_availability.url)
+                return Response(
                     status=201,
                     content_type=CONTENT_TYPE_DTPS_DATAREADY_CBOR,
                     body=data,
-                    headers=headers,  # content_type=otr.content_type, body=otr.content
+                    headers=headers,
                 )
-            else:
-                raise AssertionError(f"Cannot handle {otr!r}")
+            message = f"Cannot handle {result!r}"
+            raise AssertionError(message)
 
     @async_error_catcher
-    async def serve_patch_root(self, request: web.Request) -> web.Response:
+    async def serve_patch_root(self, request: Request) -> Response:
+        """Serve `PATCH` request."""
         with self._log_request(request):
             data = await request.read()
-
-            content_type = request.headers.get("Content-Type", "application/json")
+            content_type = request.headers.get(
+                "Content-Type",
+                "application/json",
+            )
             if content_type == CONTENT_TYPE_PATCH_JSON:
-                decoded = data.decode("utf-8")
-                patch = JsonPatch.from_string(decoded)
+                patch_string = data.decode("utf-8")
+                json_patch = JsonPatch.from_string(patch_string)
             elif content_type == CONTENT_TYPE_PATCH_CBOR:
-                p = cbor2.loads(data)
-                patch = JsonPatch(p)  # type: ignore
+                patch = cbor2.loads(data)
+                json_patch = JsonPatch(patch)
             elif content_type == CONTENT_TYPE_PATCH_YAML:
-                p = yaml.safe_load(data)
-                patch = JsonPatch(p)
+                patch = yaml.safe_load(data)
+                json_patch = JsonPatch(patch)
             else:
-                msg = "Unsupported content type for patch: {content_type}. I can do json and cbor"
-                return web.Response(status=415, text=msg)
-            # logger.info(f"decoded: {decoded} patch: {patch}")
-
-            for operation in patch._ops:  # type: ignore
+                message = (
+                    f"Unsupported content type for patch: {content_type}. I "
+                    "can do JSON and CBOR."
+                )
+                return Response(status=415, text=message)
+            for operation in json_patch._ops:
                 if isinstance(operation, RemoveOperation):
-                    topic = topic_name_from_json_pointer(operation.location)
-
-                    if topic.is_root():
-                        raise ValueError(f"Cannot create root topic (path = {operation.path!r})")  # type: ignore
-
-                    self.logger.info(f"deleting topic: '{topic.as_dash_sep()}'")
-
-                    await self.remove_oq(topic)
-
-                elif isinstance(operation, AddOperation):
-                    # logger.info(f"op: {operation.__dict__}, {operation.pointer.parts}")
-                    topic = topic_name_from_json_pointer(operation.location)
-
-                    if topic.is_root():
-                        raise ValueError(f"Cannot create root topic (path = {operation.path!r})")  # type: ignore
-
-                    value = operation.operation["value"]  # type: ignore
-                    trf = TopicRefAdd.from_json(value)
-                    await self.create_oq(
-                        topic, trf.content_info, tp=trf.properties, bounds=trf.bounds, app_data=trf.app_data
+                    topic_name = topic_name_from_json_pointer(
+                        operation.location,
                     )
-                    self.logger.info(f"created new topic: '{topic.as_dash_sep()}'")
-
-                elif isinstance(operation, (ReplaceOperation, MoveOperation, TestOperation, CopyOperation)):
-                    return web.Response(status=405)
+                    if topic_name.is_root():
+                        message = (
+                            "Cannot create root topic "
+                            f"(path = {operation.path!r})."
+                        )
+                        raise ValueError(message)
+                    dash_separated_topic_name = topic_name.as_dash_sep()
+                    self.logger.info(
+                        "deleting topic: '%s'",
+                        dash_separated_topic_name,
+                    )
+                    await self.remove_object_queue(topic_name)
+                elif isinstance(operation, AddOperation):
+                    topic_name = topic_name_from_json_pointer(
+                        operation.location,
+                    )
+                    if topic_name.is_root():
+                        message = (
+                            "Cannot create root topic "
+                            f"(path = {operation.path!r})"
+                        )
+                        raise ValueError(message)
+                    value = operation.operation["value"]
+                    topic_reference = TopicRefAdd.from_json(value)
+                    await self.create_object_queue(
+                        topic_name,
+                        topic_reference.content_info,
+                        topic_properties=topic_reference.properties,
+                        bounds=topic_reference.bounds,
+                        app_data=topic_reference.app_data,
+                    )
+                    dash_separated_topic_name = topic_name.as_dash_sep()
+                    self.logger.info(
+                        "Created new topic: '%s'",
+                        dash_separated_topic_name,
+                    )
+                elif isinstance(
+                    operation,
+                    ReplaceOperation
+                    | MoveOperation
+                    | TestOperation
+                    | CopyOperation,
+                ):
+                    return Response(status=405)
                 else:
-                    raise NotImplementedError(f"Cannot handle {operation!r}")
-
+                    message = f"Cannot handle {operation!r}."
+                    raise NotImplementedError(message)
             headers = self._headers(request)
-            return web.Response(status=200, headers=headers)
+            return Response(status=200, headers=headers)
 
     @async_error_catcher
-    async def serve_blob(self, request: web.Request) -> web.Response:
+    async def serve_blob(self, request: Request) -> Response:
+        """Serve blob."""
         headers: CIMultiDict[str] = CIMultiDict()
-        multidict_update(headers, self.get_headers_alternatives(request))
+        header_alternatives = self.get_header_alternatives(request)
+        multidict_update(headers, header_alternatives)
         self._add_own_headers(headers)
-
-        digest = request.match_info["digest"]
+        digest = Digest(request.match_info["digest"])
         content_type_base64 = request.match_info["content_type_base64"]
-        content_type = base64.urlsafe_b64decode(content_type_base64.encode()).decode("ascii")
-
+        encoded_content_type = content_type_base64.encode()
+        urlsafe_content_type = base64.urlsafe_b64decode(encoded_content_type)
+        content_type = urlsafe_content_type.decode("ascii")
         if digest in self.blob_manager.blobs:
             blob = self.blob_manager.blobs[digest]
-            return web.Response(body=blob.content, headers=headers, content_type=content_type)
-        else:
-            msg = f"Cannot resolve blob: {request.url}\ndigest: {digest!r}"
-            self.logger.error(msg)
-            raise web.HTTPNotFound(text=msg, headers=headers)
-
-    # routes.get("/{ignore:.*}/:blobs/{digest}/{content_type}")(self.serve_blob)
-
-    # @async_error_catcher
-    # async def serve_data_get(self, request: web.Request) -> web.Response:
-    #     headers: CIMultiDict[str] = CIMultiDict()
-    #     multidict_update(headers, self.get_headers_alternatives(request))
-    #     self._add_own_headers(headers)
-    #     if "topic" not in request.match_info:
-    #         topic_name_s = ""
-    #     else:
-    #         topic_name_s = request.match_info["topic"] + "/"
-    #     topic_name = TopicNameV.from_relative_url(topic_name_s)
-    #     digest = request.match_info["digest"]
-    #     if topic_name not in self._oqs:
-    #         msg = f"Cannot resolve topic: {request.url}\ntopic: {topic_name_s!r}"
-    #         self.logger.error(msg)
-    #         raise web.HTTPNotFound(text=msg, headers=headers)
-    #     oq = self._oqs[topic_name]
-    #     data = oq.last_data()
-    #     headers[HEADER_DATA_UNIQUE_ID] = oq.tr.unique_id
-    #     headers[HEADER_DATA_ORIGIN_NODE_ID] = oq.tr.origin_node
-    #
-    #     return web.Response(body=data, headers=headers, content_type=data.content_type)
+            return Response(
+                body=blob.content,
+                headers=headers,
+                content_type=content_type,
+            )
+        message = f"Cannot resolve blob: {request.url}\ndigest: {digest!r}"
+        self.logger.exception(message)
+        raise HTTPNotFound(text=message, headers=headers)
 
     @async_error_catcher
-    async def serve_events(self, request: web.Request) -> web.WebSocketResponse:
-        presented_as = request.url.path
-
-        if SEND_DATA_ARGNAME in request.query:
-            send_data = True
-        else:
-            send_data = False
-
-        topic_name_s = request.match_info["topic"]
-
-        # logger.info(f"serve_events: {request} topic_name={topic_name_s} send_data={send_data}")
-        topic_name = TopicNameV.from_relative_url(topic_name_s)
-        if topic_name not in self._oqs and topic_name not in self._forwarded:
+    async def serve_events(
+        self,
+        request: Request,
+    ) -> WebSocketResponse:
+        """Serve events."""
+        send_data = SEND_DATA_ARGNAME in request.query
+        dash_separated_topic_name = request.match_info["topic"]
+        topic_name = TopicNameV.from_relative_url(dash_separated_topic_name)
+        if (
+            topic_name not in self.object_queues
+            and topic_name not in self.forwarded
+        ):
             headers: CIMultiDict[str] = CIMultiDict()
-
             self._add_own_headers(headers)
-            msg = f"Cannot resolve topic: {request.url}\ntopic: {topic_name_s!r}"
-            raise web.HTTPNotFound(text=msg, headers=headers)
-
-        headers = request.headers  # type: ignore
-        # self.logger.debug(f"serve_events: {headers=}")
-        if HEADER_MAX_FREQUENCY in headers:
-            s = headers[HEADER_MAX_FREQUENCY]
+            message = (
+                f"Cannot resolve topic: {request.url}\ntopic: "
+                f"{dash_separated_topic_name!r}"
+            )
+            raise HTTPNotFound(text=message, headers=headers)
+        headers_proxy = request.headers
+        if HEADER_MAX_FREQUENCY in headers_proxy:
+            max_frequency_string = headers_proxy[HEADER_MAX_FREQUENCY]
             try:
-                max_frequency = float(s)
-            except ValueError:
-                msg = f"Cannot interpret header {HEADER_MAX_FREQUENCY} set to {s:r}"
-                raise HTTPBadRequest(text=msg)
+                max_frequency = float(max_frequency_string)
+            except ValueError as error:
+                message = (
+                    f"Cannot interpret header {HEADER_MAX_FREQUENCY} set to "
+                    f"{max_frequency_string:r}."
+                )
+                raise HTTPBadRequest(text=message) from error
         else:
             max_frequency = None
-        self.logger.debug(f"serve_events: {max_frequency=}")
-
-        ws = web.WebSocketResponse()
-        multidict_update(ws.headers, self.get_headers_alternatives(request))
-        self._add_own_headers(ws.headers)
-
-        if topic_name in self._forwarded:
-            fd = self._forwarded[topic_name]
-
-            for r in fd.reachability:
-                if r.answering == self.node_id:
-                    r.benchmark.fill_headers(ws.headers)
-
-            if fd.forward_url_events is None:
-                msg = f"Forwarding for topic {topic_name!r} is not enabled"
-                raise web.HTTPBadRequest(reason=msg)
-
-            await ws.prepare(request)
-
-            # self.logger.info(f"serve_events_forwarder: {request.url} topic_name={topic_name_s} fd={fd}")
-            await self.serve_events_forwarder(ws, presented_as, fd, send_data, max_frequency=max_frequency)
-            return ws
-
-        oq_ = self._oqs[topic_name]
-        ws.headers[HEADER_DATA_UNIQUE_ID] = oq_.tr.unique_id
-        ws.headers[HEADER_DATA_ORIGIN_NODE_ID] = oq_.tr.origin_node
-        await ws.prepare(request)
-        self.logger.debug(f"serve_events: {request.url} topic_name={topic_name_s} send_data={send_data}")
-
-        exit_event = asyncio.Event()
-        ci = oq_.get_channel_info()
-
-        self.logger.debug(f"serve_events: {request.url} sending {ci}")
-        await ws.send_bytes(get_tagged_cbor(ci))
-
-        every = EveryOnceInAWhile(1.0 / max_frequency if max_frequency is not None else 0.0)
-
-        nsent = 0
-
-        @async_error_catcher
-        async def send_message(_: ObjectQueue, inot: InsertNotification) -> None:
-            # self.logger.debug(f"serve_events: new message {i}")
-            # mdata = oq_.saved[i]
-            ds = inot.data_saved
-            digest = ds.digest
-            nonlocal nsent
-
-            # if not self.blob_manager.has_blob(digest):
-            #     msg = f"While serving {request.url}, seq #{nsent} blob {digest} not found, skipping"
-            #     self.logger.error(msg)
-            #     return
-            nsent += 1
-
-            # presented_as = request.url.path
-            data = oq_.get_data_ready(ds, inline_data=send_data, content=inot.raw_data.content)
-
-            if ws.closed:
-                exit_event.set()
-                return
-
-            if every.now():
-                try:
-                    await ws.send_bytes(get_tagged_cbor(data))
-                except ConnectionResetError:
-                    exit_event.set()
-                    pass
-
-                if send_data:
-                    the_bytes = inot.raw_data.content
-                    chunk = Chunk(digest=digest, i=0, n=1, index=0, data=the_bytes)
-
-                    try:
-                        await ws.send_bytes(get_tagged_cbor(chunk))
-                    except ConnectionResetError:
-                        exit_event.set()
-                        pass
-
-        @async_error_catcher
-        async def read_message() -> None:
-            self.logger.debug(f"serve_events: start of read_message()")
-            try:
-                while True:
-                    if ws.closed:
-                        break
-
-                    wm = await ws.receive()
-                    self.logger.debug(f"serve_events: received {wm}")
-                    if wm.type in [WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.CLOSING]:
-                        exit_event.set()
-                        break
-            finally:
-                self.logger.debug(f"serve_events: end of read_message()")
-
-        t1 = asyncio.create_task(read_message())
-        self.tasks.append(t1)
-
-        @async_error_catcher
-        async def serve() -> None:
-
-            try:
-
-                async with oq_.subscribe_context(send_message, max_frequency=max_frequency):
-
-                    if oq_.stored:
-                        last = oq_.last()
-                        last_data = oq_.last_data()
-                        inot2 = InsertNotification(last, last_data)
-
-                        await send_message(oq_, inot2)
-
-                    await exit_event.wait()
-
-            finally:
-                self.logger.debug(f"serve_events: closing websocket {request.url}")
-                try:
-                    await ws.close()
-                except:
-                    pass
-                t1.cancel()
-
-        t2 = asyncio.create_task(serve())
-        self.tasks.append(t2)
-
-        await t2
-
-        return ws
+        self.logger.debug("serve_events: max_frequency=%s", max_frequency)
+        websocket = WebSocketResponse()
+        header_alternatives = self.get_header_alternatives(request)
+        multidict_update(websocket.headers, header_alternatives)
+        self._add_own_headers(websocket.headers)
+        if topic_name in self.forwarded:
+            forwarded_topic = self.forwarded[topic_name]
+            for resource_reachability in forwarded_topic.reachability:
+                if resource_reachability.answering == self.node_id:
+                    resource_reachability.benchmark.fill_headers(
+                        websocket.headers,
+                    )
+            if forwarded_topic.forward_url_events is None:
+                message = (
+                    f"Forwarding for topic {topic_name!r} is not enabled."
+                )
+                raise HTTPBadRequest(reason=message)
+            await websocket.prepare(request)
+            await self.serve_events_forwarder(
+                websocket,
+                forwarded_topic,
+                max_frequency,
+                inline_data=send_data,
+            )
+            return websocket
+        queue = self.object_queues[topic_name]
+        websocket.headers[HEADER_DATA_UNIQUE_ID] = (
+            queue.topic_reference.unique_id
+        )
+        websocket.headers[HEADER_DATA_ORIGIN_NODE_ID] = (
+            queue.topic_reference.origin_node
+        )
+        await websocket.prepare(request)
+        self.logger.debug(
+            "serve_events: %s topic_name=%s send_data=%s",
+            request.url,
+            dash_separated_topic_name,
+            send_data,
+        )
+        exit_event = Event()
+        channel_info = queue.get_channel_info()
+        self.logger.debug(
+            "serve_events: %s sending %s",
+            request.url,
+            channel_info,
+        )
+        data = get_tagged_cbor(channel_info)
+        await websocket.send_bytes(data)
+        period = 1 / max_frequency if max_frequency is not None else 0
+        every_once_in_a_while = EveryOnceInAWhile(period)
+        self.number_sent = 0
+        coroutine = self._read_message(websocket, exit_event)
+        task = asyncio.create_task(coroutine)
+        self.tasks.append(task)
+        coroutine = self._serve(
+            queue,
+            websocket,
+            exit_event,
+            every_once_in_a_while,
+            max_frequency,
+            task,
+            send_data=send_data,
+        )
+        task = asyncio.create_task(coroutine)
+        self.tasks.append(task)
+        await task
+        return websocket
 
     @async_error_catcher
-    async def serve_push_stream(self, request: web.Request) -> web.WebSocketResponse:
-        headers: CIMultiDict[str] = CIMultiDict()
-        self._add_own_headers(headers)
-
-        topic_name_s = request.match_info["topic"]
+    async def _serve(
+        self,
+        queue: ObjectQueue,
+        websocket: WebSocketResponse,
+        exit_event: Event,
+        every_once_in_a_while: EveryOnceInAWhile,
+        max_frequency: float | None,
+        task: Task[None],
+        *,
+        send_data: bool,
+    ) -> None:
         try:
-            source = self.resolve(topic_name_s)
-        except KeyError as e:
-            raise web.HTTPNotFound(text=f"{e.args[0]}") from e
+            send_message = self._get_send_message(
+                websocket,
+                exit_event,
+                every_once_in_a_while,
+                send_data=send_data,
+            )
+            async with queue.subscribe_context(
+                send_message,
+                max_frequency=max_frequency,
+            ):
+                if queue.stored:
+                    last = queue.last()
+                    last_data = queue.last_data()
+                    insert_notification = InsertNotification(last, last_data)
+                    await send_message(queue, insert_notification)
+                await exit_event.wait()
+        finally:
+            try:
+                await websocket.close()
+            except Exception:
+                self.logger.exception(
+                    "serve_events: could not close websocket.",
+                )
+            task.cancel()
 
-        if isinstance(source, OurQueue):
-            return await self.serve_push_stream_oq(request, source)
-        else:
-            raise web.HTTPBadRequest(text=f"Topic {topic_name_s} is not a queue")
-
-    async def serve_push_stream_oq(self, request: web.Request, oq: OurQueue) -> web.WebSocketResponse:
-        ws = web.WebSocketResponse()
-        multidict_update(ws.headers, self.get_headers_alternatives(request))
-        self._add_own_headers(ws.headers)
-
-        await ws.prepare(request)
-
-        oq_ = self._oqs[oq.topic_name]
-
-        while True:  # TODO: respect on_shutdown
-            wm = await ws.receive()
-            # self.logger.debug(f"serve_push_stream_oq: received {msg}")
-
-            if wm.type in [WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.CLOSING]:
+    @staticmethod
+    @async_error_catcher
+    async def _read_message(
+        websocket: WebSocketResponse,
+        exit_event: Event,
+    ) -> None:
+        while True:
+            if websocket.closed:
+                break
+            websocket_message = await websocket.receive()
+            if websocket_message.type in (
+                WSMsgType.CLOSE,
+                WSMsgType.CLOSED,
+                WSMsgType.CLOSING,
+            ):
+                exit_event.set()
                 break
 
-            elif wm.type == WSMsgType.BINARY:
-                # read cbor
+    def _get_send_message(
+        self,
+        websocket: WebSocketResponse,
+        exit_event: Event,
+        every_once_in_a_while: EveryOnceInAWhile,
+        *,
+        send_data: bool,
+    ) -> Any:
+        @async_error_catcher
+        async def send_message(
+            queue: ObjectQueue,
+            insert_notification: InsertNotification,
+        ) -> None:
+            """Send message."""
+            data_saved = insert_notification.data_saved
+            digest = data_saved.digest
+            self.number_sent += 1
+            data_ready = queue.get_data_ready(
+                data_saved,
+                insert_notification.raw_data.content,
+                inline_data=send_data,
+            )
+            if websocket.closed:
+                exit_event.set()
+                return
+            if every_once_in_a_while.now():
                 try:
-                    data = cbor2.loads(wm.data)
-                except CBORDecodeError:
-                    msg = f"Cannot decode {wm.data!r}"
-                    self.logger.error(msg)
-                    result = PushResult(False, msg)
-                    await ws.send_bytes(get_tagged_cbor(result))
-                    continue
-                # logger.info(f"received: {data}")
-                # interpret as RawData
-                if not isinstance(data, dict):
-                    msg = f"Cannot handle {data!r}"
-                    self.logger.error(msg)
-                    result = PushResult(False, msg)
-                    await ws.send_bytes(get_tagged_cbor(result))
-                    continue
-
-                if RawData.__name__ in data:
-                    inside: Dict[str, Any]
-                    inside = data[RawData.__name__]  # type: ignore
-                    rd = RawData(inside["content"], inside["content_type"])  # type: ignore
-                    await oq_.publish(rd)
-
-                    result = PushResult(True, "")
+                    data = get_tagged_cbor(data_ready)
+                    await websocket.send_bytes(data)
+                except ConnectionResetError:
+                    exit_event.set()
+                if send_data:
+                    chunk = Chunk(
+                        digest,
+                        0,
+                        1,
+                        0,
+                        insert_notification.raw_data.content,
+                    )
                     try:
-                        await ws.send_bytes(get_tagged_cbor(result))
+                        data = get_tagged_cbor(chunk)
+                        await websocket.send_bytes(data)
                     except ConnectionResetError:
-                        self.logger.info("Client terminated connection")
-                        break
+                        exit_event.set()
 
-                else:
-                    msg = f"Cannot handle {data!r}"
-                    self.logger.error(msg)
-                    result = PushResult(False, msg)
-                    await ws.send_bytes(get_tagged_cbor(result))
+        return send_message
 
+    @async_error_catcher
+    async def serve_push_stream(
+        self,
+        request: Request,
+    ) -> WebSocketResponse:
+        """Serve `PUSH` request."""
+        headers: CIMultiDict[str] = CIMultiDict()
+        self._add_own_headers(headers)
+        dash_separated_topic_name = request.match_info["topic"]
+        try:
+            source = self.resolve(dash_separated_topic_name)
+        except KeyError as error:
+            raise HTTPNotFound(text=f"{error.args[0]}") from error
+        if isinstance(source, OurQueue):
+            return await self.serve_push_stream_object_queue(request, source)
+        text = f"Topic {dash_separated_topic_name} is not a queue."
+        raise HTTPBadRequest(text=text)
+
+    @async_error_catcher
+    async def serve_push_stream_object_queue(
+        self,
+        request: Request,
+        object_queue: OurQueue,
+    ) -> WebSocketResponse:
+        """Serve `PUSH` stream request."""
+        websocket = WebSocketResponse()
+        alternatives = self.get_header_alternatives(request)
+        multidict_update(websocket.headers, alternatives)
+        self._add_own_headers(websocket.headers)
+        await websocket.prepare(request)
+        queue = self.object_queues[object_queue.topic_name]
+        # TODO: Respect on_shutdown
+        while True:
+            websocket_message = await websocket.receive()
+            if websocket_message.type in (
+                WSMsgType.CLOSE,
+                WSMsgType.CLOSED,
+                WSMsgType.CLOSING,
+            ):
+                break
+            if websocket_message.type == WSMsgType.BINARY:
+                # Read CBOR
+                try:
+                    cbor = cbor2.loads(websocket_message.data)
+                except CBORDecodeError:
+                    message = f"Cannot decode {websocket_message.data!r}."
+                    self.logger.exception(message)
+                    result = PushResult(result=False, message=message)
+                    data = get_tagged_cbor(result)
+                    await websocket.send_bytes(data)
                     continue
-
+                # Interpret as RawData
+                if not isinstance(cbor, dict):
+                    message = f"Cannot handle {cbor!r}."
+                    self.logger.exception(message)
+                    result = PushResult(result=False, message=message)
+                    data = get_tagged_cbor(result)
+                    await websocket.send_bytes(data)
+                    continue
+                if RawData.__name__ in cbor:
+                    inside = cbor[RawData.__name__]
+                    raw_data = RawData(
+                        inside["content"],
+                        inside["content_type"],
+                    )
+                    await queue.publish(raw_data)
+                    result = PushResult(result=True, message="")
+                    data = get_tagged_cbor(result)
+                    try:
+                        await websocket.send_bytes(data)
+                    except ConnectionResetError:
+                        self.logger.info("Client terminated connection.")
+                        break
+                else:
+                    message = f"Cannot handle {cbor!r}."
+                    self.logger.exception(message)
+                    result = PushResult(result=False, message=message)
+                    data = get_tagged_cbor(result)
+                    await websocket.send_bytes(data)
+                    continue
             else:
-                msg = f"Cannot handle message type {wm.type!r}"
-                self.logger.error(msg)
-                result = PushResult(False, msg)
-                await ws.send_bytes(get_tagged_cbor(result))
+                message = (
+                    f"Cannot handle message type {websocket_message.type!r}."
+                )
+                self.logger.exception(message)
+                result = PushResult(result=False, message=message)
+                data = get_tagged_cbor(result)
+                await websocket.send_bytes(data)
+        await websocket.close()
+        return websocket
 
-        await ws.close()
-
-        return ws
+    @async_error_catcher
+    async def _serve_events_forward(
+        self,
+        websocket: WebSocketResponse,
+        forwarded_topic: ForwardedTopic,
+        max_frequency: float | None,
+        *,
+        inline_data: bool,
+    ) -> None:
+        url = forwarded_topic.forward_url_events_inline_data
+        if inline_data:
+            if url is not None:
+                await self.serve_events_forward_simple(websocket, url)
+            elif (url := forwarded_topic.forward_url_events) is not None:
+                await self.serve_events_forwarder_one(
+                    websocket,
+                    url,
+                    inline_data_send=inline_data,
+                    inline_data_receive=False,
+                    max_frequency=max_frequency,
+                )
+            else:
+                message = "Events not supported."
+                raise ValueError(message)
+        else:
+            if url is not None:
+                inline_data_receive = True
+            elif (url := forwarded_topic.forward_url_events) is not None:
+                inline_data_receive = False
+            else:
+                message = "Events not supported."
+                raise ValueError(message)
+            await self.serve_events_forwarder_one(
+                websocket,
+                url,
+                inline_data_send=inline_data,
+                inline_data_receive=inline_data_receive,
+                max_frequency=max_frequency,
+            )
 
     @async_error_catcher
     async def serve_events_forwarder(
         self,
-        ws: web.WebSocketResponse,
-        presented_as: str,
-        fd: ForwardedTopic,
+        websocket: WebSocketResponse,
+        forwarded_topic: ForwardedTopic,
+        max_frequency: float | None,
+        *,
         inline_data: bool,
-        max_frequency: Optional[float],
     ) -> None:
-        # assert fd.forward_url_events is not None
+        """Serve events forwarder."""
         while not self.shutdown_event.is_set():
-            if ws.closed:
+            if websocket.closed:
                 break
-            # noinspection PyBroadException
             try:
-                if inline_data:
-                    if (url := fd.forward_url_events_inline_data) is not None:
-                        await self.serve_events_forward_simple(ws, url)
-                    elif (url := fd.forward_url_events) is not None:
-                        await self.serve_events_forwarder_one(
-                            ws,
-                            presented_as,
-                            url,
-                            inline_data_send=inline_data,
-                            inline_data_receive=False,
-                            max_frequency=max_frequency,
-                        )
-                    else:
-                        raise ValueError(f"Events not supported")
-
-                        # await self.serve_events_forwarder_one(ws,  True)
-                else:
-                    if (url := fd.forward_url_events_inline_data) is not None:
-                        inline_data_receive = True
-                    elif (url := fd.forward_url_events) is not None:
-                        inline_data_receive = False
-                    else:
-                        raise ValueError(f"Events not supported")
-
-                    await self.serve_events_forwarder_one(
-                        ws,
-                        presented_as,
-                        url,
-                        inline_data_send=inline_data,
-                        inline_data_receive=inline_data_receive,
-                        max_frequency=max_frequency,
-                    )
-
+                await self._serve_events_forward(
+                    websocket,
+                    forwarded_topic,
+                    max_frequency,
+                    inline_data=inline_data,
+                )
             except CancelledError:
                 raise
             except Exception:
-                self.logger.error(f"Exception in serve_events_forwarder_one: {traceback.format_exc()}")
+                formated_traceback = traceback.format_exc()
+                self.logger.exception(
+                    "Exception in serve_events_forwarder_one: %s",
+                    formated_traceback,
+                )
                 await asyncio.sleep(1)
 
     if TYPE_CHECKING:
 
-        def _client(self, nickname: Optional[str] = None) -> AsyncContextManager[DTPSClient]: ...
-
+        def client(
+            self,
+            nickname: str | None = None,
+        ) -> AbstractAsyncContextManager[DTPSClient]:
+            """Client."""
     else:
 
         @asynccontextmanager
-        async def _client(self, nickname: Optional[str] = None) -> AsyncIterator[DTPSClient]:
-            async with DTPSClient.create(nickname=nickname, shutdown_event=self.shutdown_event) as client:
+        async def client(
+            self,
+            nickname: str | None = None,
+        ) -> AsyncIterator[DTPSClient]:
+            """Client."""
+            async with DTPSClient.create(
+                nickname=nickname,
+                shutdown_event=self.shutdown_event,
+            ) as client:
                 yield client
 
-    async def serve_events_forward_simple(self, ws_to_write: web.WebSocketResponse, url: URL) -> None:
-        """Iterates using direct data in websocket."""
-        self.logger.debug(f"serve_events_forward_simple: {url} [no overhead forwarding]")
-
-        async with self._client() as client:
-            async with client.my_session(url) as (session, use_url):
-                async with session.ws_connect(use_url) as ws:
-                    # logger.debug(f"websocket to {use_url} ready")
-                    async for msg in ws:
-                        if msg.type in [WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.CLOSING]:
-                            break
-                        if msg.type == WSMsgType.TEXT:
-                            # self.logger.warning(f"serve_events_forward_simple: forwarding text {msg}")
-                            await ws_to_write.send_str(msg.data)  # OK
-                        elif msg.type == WSMsgType.BINARY:
-                            await ws_to_write.send_bytes(msg.data)  # OK
-                        else:
-                            self.logger.warning(f"Unknown message type {msg.type}")
+    @async_error_catcher
+    async def serve_events_forward_simple(
+        self,
+        ws_to_write: WebSocketResponse,
+        url: URL,
+    ) -> None:
+        """Iterate using direct data in websocket."""
+        self.logger.debug(
+            "serve_events_forward_simple: %s [no overhead forwarding]",
+            url,
+        )
+        async with (
+            self.client() as client,
+            client.my_session(url) as (session, use_url),
+            session.ws_connect(use_url) as websocket,
+        ):
+            async for message in websocket:
+                if message.type in (
+                    WSMsgType.CLOSE,
+                    WSMsgType.CLOSED,
+                    WSMsgType.CLOSING,
+                ):
+                    break
+                if message.type == WSMsgType.TEXT:
+                    await ws_to_write.send_str(message.data)
+                elif message.type == WSMsgType.BINARY:
+                    await ws_to_write.send_bytes(message.data)
+                else:
+                    self.logger.warning(
+                        "Unknown message type %s",
+                        message.type,
+                    )
 
     @async_error_catcher
     async def serve_events_forwarder_one(
         self,
-        ws: web.WebSocketResponse,
-        presented_as: str,
-        url: URLWS,
+        websocket: WebSocketResponse,
+        url_websockets: URLWS,
+        *,
         inline_data_receive: bool,
         inline_data_send: bool,
-        max_frequency: Optional[float],
+        max_frequency: float | None,
     ) -> None:
-        available_for = 10.0
-        assert isinstance(url, URL)
-        self.logger.debug(f"serve_events_forwarder_one: {url} {inline_data_receive=} {inline_data_send=}")
-
-        async with self._client() as client:
-
-            @async_error_catcher
-            async def callback(lue: ListenURLEvents) -> None:
-                async def send(m: ChannelMsgs):
-                    await ws.send_bytes(get_tagged_cbor(m))
-
-                if isinstance(lue, InsertNotification):
-                    ds = lue.data_saved
-                    if inline_data_send:
-                        availability = []
-                        chunks_arriving = 1
-                    else:
-                        available_until = time.time() + available_for
-                        digest = ds.digest
-                        the_url = self.blob_manager.get_use_once_link_store(
-                            digest, lue.raw_data.content, lue.raw_data.content_type, available_for
-                        )
-                        # the_url, available_until = get_data_url(
-                        #     self.blob_manager, lue.raw_data, available_for
-                        # )
-                        self.logger.debug(
-                            f"serve_events_forwarder_one: sending ref {the_url} {available_until}"
-                        )
-                        availability = [ResourceAvailability(the_url, available_until)]
-                        chunks_arriving = 0
-                    dr2 = DataReady(
-                        index=ds.index,
-                        time_inserted=ds.time_inserted,
-                        digest=ds.digest,
-                        content_type=ds.content_type,
-                        content_length=ds.content_length,
-                        availability=availability,
-                        chunks_arriving=chunks_arriving,
-                        clocks=ds.clocks,
-                        origin_node=ds.origin_node,
-                        unique_id=ds.unique_id,
-                    )
-                    # logger.debug(f"Forwarding {dr} -> {dr2}")
-                    await send(dr2)
-                    if inline_data_send:
-                        # TODO: divide chunks
-                        chunk = Chunk(digest=dr2.digest, i=0, n=1, index=0, data=lue.raw_data.content)
-                        await send(chunk)
-                    else:
-                        pass
-                elif isinstance(lue, ConnectionEstablished):
-                    await send(SilenceMsg(0.0, f"Connection established to {url}"))
-
-                elif isinstance(
-                    lue,
-                    (
-                        WarningMsg,
-                        ErrorMsg,
-                        FinishedMsg,
-                        SilenceMsg,
-                    ),
-                ):  # type: ignore
-                    await send(lue)
-                else:
-                    self.logger.warning(f"Unknown message type {lue}")
-                    raise NotImplementedError(f"Cannot handle {lue!r}")
-
-            ld = await client.listen_url_events3(
-                url,
+        """Serve events forwarder one."""
+        if not isinstance(url_websockets, URL):
+            raise TypeError
+        self.logger.debug(
+            "serve_events_forwarder_one: %s inline_data_receive=%s "
+            "inline_data_send=%s",
+            url_websockets,
+            inline_data_receive,
+            inline_data_send,
+        )
+        async with self.client() as client:
+            callback = self._get_callback(
+                websocket,
+                url_websockets,
+                inline_data_send=inline_data_send,
+            )
+            listen_data_interface = await client.listen_url_events3(
+                url_websockets=url_websockets,
                 inline_data=inline_data_receive,
                 raise_on_error=False,
                 add_silence=None,
-                callback=callback,
                 max_frequency=max_frequency,
+                callback=callback,
+            )
+            await listen_data_interface.wait_for_done_or_stop_on_event(
+                self.shutdown_event,
             )
 
-            await ld.wait_for_done_or_stop_on_event(self.shutdown_event)
 
-
-def add_nocache_headers(h: CIMultiDict[str]) -> None:
-    h.update(HEADER_NO_CACHE)
-    h["Cookie"] = f"help-no-cache={time.monotonic_ns()}"
+def add_nocache_headers(headers: CIMultiDict[str]) -> None:
+    headers.update(HEADER_NO_CACHE)
+    monotonic_ns = time.monotonic_ns()
+    headers["Cookie"] = f"help-no-cache={monotonic_ns}"
 
 
 def get_unique_id(node_id: NodeID, topic_name: TopicNameV) -> SourceID:
     if topic_name.is_root():
         return cast(SourceID, node_id)
-    return cast(SourceID, f"{node_id}:{topic_name.as_relative_url()}")
+    url = topic_name.as_relative_url()
+    return cast(SourceID, f"{node_id}:{url}")
 
 
-def put_meta_headers(h: CIMultiDict[str], tp: TopicProperties) -> None:
-    if tp.streamable:
-        put_link_header(h, f"{EVENTS_SUFFIX}/", REL_EVENTS_NODATA, "websocket")
-        put_link_header(h, f"{EVENTS_SUFFIX}/?send_data=1", REL_EVENTS_DATA, "websocket")
-
-    if tp.pushable:
-        put_link_header(h, f"{REL_STREAM_PUSH_SUFFIX}/", REL_STREAM_PUSH, "websocket")
-    put_link_header(h, f"{REL_URL_META}/", REL_META, CONTENT_TYPE_DTPS_INDEX_CBOR)
-
-    if tp.has_history:
-        put_link_header(h, f"{REL_URL_HISTORY}/", REL_HISTORY, CONTENT_TYPE_TOPIC_HISTORY_CBOR)
-
-
-#
+def put_meta_headers(
+    headers: CIMultiDict[str],
+    topic_properties: TopicProperties,
+) -> None:
+    if topic_properties.streamable:
+        put_link_header(
+            headers,
+            f"{EVENTS_SUFFIX}/",
+            REL_EVENTS_NODATA,
+            "websocket",
+        )
+        put_link_header(
+            headers,
+            f"{EVENTS_SUFFIX}/?send_data=1",
+            REL_EVENTS_DATA,
+            "websocket",
+        )
+    if topic_properties.pushable:
+        put_link_header(
+            headers,
+            f"{REL_STREAM_PUSH_SUFFIX}/",
+            REL_STREAM_PUSH,
+            "websocket",
+        )
+    put_link_header(
+        headers,
+        f"{REL_URL_META}/",
+        REL_META,
+        CONTENT_TYPE_DTPS_INDEX_CBOR,
+    )
+    if topic_properties.has_history:
+        put_link_header(
+            headers,
+            f"{REL_URL_HISTORY}/",
+            REL_HISTORY,
+            CONTENT_TYPE_TOPIC_HISTORY_CBOR,
+        )
 
 
 @async_error_catcher
-async def update_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, initial_delay: float) -> None:
+async def update_clock(
+    server: DTPSServer,
+    topic_name: TopicNameV,
+    interval: float,
+    initial_delay: float,
+) -> None:
     await asyncio.sleep(initial_delay)
-    s.logger.info(f"Starting clock {topic_name.as_relative_url()} with interval {interval}")
-    oq = s.get_oq(topic_name)
+    url = topic_name.as_relative_url()
+    server.logger.info("Starting clock %s with interval %s...", url, interval)
+    queue = server.get_object_queue(topic_name)
     while True:
-        t = time.time_ns()
-        data = str(t).encode()
-        await oq.publish(RawData(content=data, content_type=MIME_JSON))
+        current_time = time.time_ns()
+        current_time_string = str(current_time)
+        encoded_current_time_string = current_time_string.encode()
+        raw_data = RawData(encoded_current_time_string, MIME_JSON)
+        await queue.publish(raw_data)
         try:
             await asyncio.sleep(interval)
         except CancelledError:
-            s.logger.info(f"Clock {topic_name.as_relative_url()} cancelled")
-            raise  #
+            url = topic_name.as_relative_url()
+            server.logger.info("Clock %s cancelled.", url)
+            raise
 
 
-def get_simple_cbor(ob: Any) -> bytes:
-    return cbor2.dumps(asdict(ob))
+def get_simple_cbor(object_: Any) -> bytes:
+    """Return simple CBOR."""
+    dictionary = asdict(object_)
+    return cbor2.dumps(dictionary)
 
 
-def get_tagged_cbor(ob: Any) -> bytes:
-    data = {ob.__class__.__name__: asdict(ob)}
+def get_tagged_cbor(object_: Any) -> bytes:
+    """Return tagged CBOR."""
+    dictionary = asdict(object_)
+    data = {
+        object_.__class__.__name__: dictionary,
+    }
     return cbor2.dumps(data)
 
 
-def removeprefix(s: str, prefix: str) -> str:
-    if s.startswith(prefix):
-        return s[len(prefix) :]
-    else:
-        return s[:]
+def removeprefix(string: str, prefix: str) -> str:
+    """Remove prefix."""
+    if string.startswith(prefix):
+        prefix_length = len(prefix)
+        return string[prefix_length:]
+    return string[:]
 
 
 def topic_name_from_json_pointer(path: str) -> TopicNameV:
+    """Return topic name from JSON pointer."""
     path = unescape_json_pointer(path)
-
-    components: List[str] = []
-    for p in path.split("/"):
-        if not p:
+    components: list[str] = []
+    for component in path.split("/"):
+        if not component:
             continue
-        components.append(p)
-
+        components.append(component)
     return TopicNameV.from_components(components)
-
-
-# def get_data_url(blob_manager: BlobManager, rd: RawData, available_for: float) -> Tuple[URLString, float]:
-#     now = time.time()
-#     deadline = now + available_for
-#     digest = blob_manager.save_blob_deadline(rd.content, deadline)
-#     return encode_url(digest, rd.content_type), deadline
-
-#
-# def encode_url(digest: Digest, content_type: str) -> URLString:
-#     if not content_type:
-#         raise ValueError(f"Cannot encode url for empty content type")
-#     b64 = base64.urlsafe_b64encode(content_type.encode()).decode("ascii")
-#
-#     url = URLString(f"./:blobs/{digest}/{b64}")
-#     return url

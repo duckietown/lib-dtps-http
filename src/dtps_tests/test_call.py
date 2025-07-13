@@ -1,59 +1,79 @@
-from typing import Union
+"""Call test."""
+
+from typing import Any
 from unittest import IsolatedAsyncioTestCase
 
-from dtps_http import (
-    async_error_catcher,
-    MIME_TEXT,
-    RawData,
-)
+import pytest
+
+from dtps_http import MIME_TEXT, RawData, async_error_catcher
 from dtps_http.object_queue import TransformError
 from dtps_http_tests.utils import test_timeout
-from . import logger
-from .utils import create_use_pair
+from dtps_tests import logger
+from dtps_tests.utils import create_use_pair
 
 
 class TestCall(IsolatedAsyncioTestCase):
+    """Call test."""
+
+    @staticmethod
+    def _get_rpc_handler_1(request: RawData, response: RawData) -> Any:
+        async def rpc_handler(otc: RawData) -> RawData | TransformError:
+            if otc != request:
+                raise AssertionError
+            return response
+
+        return rpc_handler
+
+    @staticmethod
+    def _get_rpc_handler_2() -> Any:
+        async def rpc_handler(_: RawData) -> RawData | TransformError:
+            raise AssertionError
+
+        return rpc_handler
+
     @test_timeout(20)
     @async_error_catcher
-    async def test_call1(self):
-        async with create_use_pair("call1") as (context_rpcserver, context_rpcclient):
-            rpc_listen = context_rpcserver / "rpc"
-            rpc_call = context_rpcclient / "rpc"
-
+    async def test_call(self) -> None:
+        """Run call test."""
+        async with create_use_pair("call1") as (
+            context_rpc_server,
+            context_rpc_client,
+        ):
+            rpc_listen = context_rpc_server / "rpc"
+            rpc_call = context_rpc_client / "rpc"
             request = RawData(content=b"hi", content_type=MIME_TEXT)
             response = RawData(content=b"hello", content_type=MIME_TEXT)
-
-            async def rpc_handler(otc: RawData) -> Union[RawData, TransformError]:
-                self.assertEqual(otc, request)
-                return response
-
-            self.assertEqual(await rpc_listen.exists(), False)
+            if await rpc_listen.exists():
+                raise AssertionError
+            rpc_handler = self._get_rpc_handler_1(request, response)
             await rpc_listen.queue_create(transform=rpc_handler)
-            self.assertEqual(await rpc_listen.exists(), True)
-
+            if not await rpc_listen.exists():
+                raise AssertionError
             result1 = await rpc_listen.call(request)
             if result1 != response:
-                raise Exception("unexpected content")
-
-            logger.info(f"rpc_call: {rpc_call}")
-            logger.info(f"rpc_listen: {rpc_listen}")
-            self.assertEqual(await rpc_call.exists(), True)
+                message = "Unexpected content."
+                raise Exception(message)
+            logger.info("rpc_call: %s", rpc_call)
+            logger.info("rpc_listen: %s", rpc_listen)
+            if not await rpc_call.exists():
+                raise AssertionError
             result = await rpc_call.call(request)
-
             if result != response:
-                raise Exception("unexpected content")
-
-            node_id1 = await context_rpcserver.get_node_id()
-            node_id2 = await context_rpcclient.get_node_id()
-            self.assertEqual(node_id1, node_id2)
+                message = "Unexpected content."
+                raise Exception(message)
+            node_id1 = await context_rpc_server.get_node_id()
+            node_id2 = await context_rpc_client.get_node_id()
+            if node_id1 != node_id2:
+                raise AssertionError
 
     @test_timeout(20)
     @async_error_catcher
-    async def test_call_cannot_create(self):
-        async with create_use_pair("callcannotcreate") as (context_rpcserver, context_rpcclient):
-
-            async def rpc_handler(_: RawData) -> Union[RawData, TransformError]:
-                raise AssertionError
-
-            with self.assertRaises(ValueError):
-                await context_rpcclient.queue_create(transform=rpc_handler)
+    async def test_call_cannot_create(self) -> None:
+        """Run call cannot create test."""
+        async with create_use_pair("callcannotcreate") as (
+            context_rpc_server,
+            context_rpc_client,
+        ):
+            rpc_handler = self._get_rpc_handler_2()
+            with pytest.raises(ValueError):
+                await context_rpc_client.queue_create(transform=rpc_handler)

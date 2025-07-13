@@ -60,9 +60,9 @@ The 40x status codes are used to indicate that the client made a mistake, e.g. t
 
 ### Setting the transform function
 
-The transform function is set in the `create_oq()` function call:
+The transform function is set in the `create_object_queue()` function call:
 
 ```python
 
-queue_in = await s.create_oq(..., transform=transform)
+queue_in = await s.create_object_queue(..., transform=transform)
 ```

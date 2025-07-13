@@ -1,26 +1,22 @@
+"""Multidict tests."""
+
 from multidict import CIMultiDict
 
 from dtps_http import multidict_update
 
 
-def test_multidict1() -> None:
+def test_multidict() -> None:
+    """Run multidict test."""
     d1: CIMultiDict[str] = CIMultiDict()
-
     d1.add("a", "1")
     d1.add("a", "2")
-    # print(f'{d1=!r}')
-
     d2: CIMultiDict[str] = CIMultiDict()
     d2.add("a", "3")
-
     d2.update(d1)
-    # print(f"{d2=!r}")
-    # print(d2)
-    assert list(d2) == ["a", "a"]
-
+    if tuple(d2) != ("a", "a"):
+        raise AssertionError
     d3: CIMultiDict[str] = CIMultiDict()
     d3.add("a", "3")
     multidict_update(d3, d1)
-    # print(f'{d3=!r}')
-
-    assert list(d3) == ["a", "a", "a"]
+    if tuple(d3) != ("a", "a", "a"):
+        raise AssertionError

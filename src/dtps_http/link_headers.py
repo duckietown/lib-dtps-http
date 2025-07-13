@@ -1,30 +1,31 @@
+"""Link headers."""
+
+__all__ = ["LinkHeader", "get_link_headers", "put_link_header"]
+
 from dataclasses import field
-from typing import Dict, List, Optional, Union
 
 from multidict import CIMultiDict, CIMultiDictProxy
 from pydantic.dataclasses import dataclass
 
-__all__ = [
-    "LinkHeader",
-    "get_link_headers",
-    "put_link_header",
-]
-
 
 @dataclass
 class LinkHeader:
+    """Link header."""
+
     url: str
     rel: str
-    attributes: Dict[str, str] = field(default_factory=dict)
+    attributes: dict[str, str] = field(default_factory=dict)
 
     def to_header(self) -> str:
-        s = f"<{self.url}>; rel={self.rel}"
-        for k, v in self.attributes.items():
-            s += f"; {k}={v}"
-        return s
+        """Convert to header."""
+        header = f"<{self.url}>; rel={self.rel}"
+        for key, value in self.attributes.items():
+            header += f"; {key}={value}"
+        return header
 
     @classmethod
     def parse(cls, header: str) -> "LinkHeader":
+        """Parse."""
         pairs = header.split(";")
         if not pairs:
             raise ValueError
@@ -32,31 +33,38 @@ class LinkHeader:
         if not first.startswith("<") or not first.endswith(">"):
             raise ValueError
         url = first[1:-1]
-
-        attributes: Dict[str, str] = {}
-        for p in pairs[1:]:
-            p = p.strip()
-            k, _, v = p.partition("=")
-            k = k.strip()
-            v = v.strip()
-            attributes[k] = v
-
+        attributes: dict[str, str] = {}
+        for pair in pairs[1:]:
+            stripped_pair = pair.strip()
+            key, _, value = stripped_pair.partition("=")
+            key = key.strip()
+            value = value.strip()
+            attributes[key] = value
         rel = attributes.pop("rel", "")
-        return cls(url=url, rel=rel, attributes=attributes)
+        return cls(url, rel, attributes)
 
 
-def get_link_headers(h: Union[CIMultiDict[str], CIMultiDictProxy[str]]) -> Dict[str, LinkHeader]:
-    res: Dict[str, LinkHeader] = {}
-    default: List[str] = []
-    for l in h.getall("Link", default):
-        lh = LinkHeader.parse(l)
-        res[lh.rel] = lh
-    return res
+def get_link_headers(
+    headers: CIMultiDict[str] | CIMultiDictProxy[str],
+) -> dict[str, LinkHeader]:
+    """Return link headers."""
+    link_headers: dict[str, LinkHeader] = {}
+    default: list[str] = []
+    for header in headers.getall("Link", default):
+        link_header = LinkHeader.parse(header)
+        link_headers[link_header.rel] = link_header
+    return link_headers
 
 
-def put_link_header(h: CIMultiDict[str], url: str, rel: str, content_type: Optional[str]):
-    l = LinkHeader(url=url, rel=rel)
+def put_link_header(
+    headers: CIMultiDict[str],
+    url: str,
+    rel: str,
+    content_type: str | None,
+) -> None:
+    """Put link header."""
+    link_header = LinkHeader(url, rel)
     if content_type is not None:
-        l.attributes["type"] = content_type
-
-    h.add("Link", l.to_header())
+        link_header.attributes["type"] = content_type
+    header = link_header.to_header()
+    headers.add("Link", header)

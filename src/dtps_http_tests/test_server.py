@@ -1,131 +1,134 @@
+"""Server tests."""
+
 import asyncio
 import json
-import os
 import tempfile
 import unittest
-from typing import cast, List, Literal
+from pathlib import Path
+from typing import Any, Literal, cast
 
+import aiohttp
 import cbor2
 import yaml
 
 from dtps_http import (
-    app_start,
-    async_error_catcher,
     CONTENT_TYPE_PATCH_CBOR,
     CONTENT_TYPE_PATCH_JSON,
     CONTENT_TYPE_PATCH_YAML,
-    ContentInfo,
-    DTPSClient,
-    DTPSServer,
-    interpret_command_line_and_start,
-    join,
-    make_http_unix_url,
     MIME_CBOR,
     MIME_JSON,
     MIME_YAML,
-    parse_url_unescape,
+    ContentInfo,
+    DTPSClient,
+    DTPSServer,
     RawData,
     TopicNameV,
     TopicProperties,
     TopicRefAdd,
     URLIndexer,
     URLString,
+    app_start,
+    async_error_catcher,
+    interpret_command_line_and_start,
+    join,
+    make_http_unix_url,
+    parse_url_unescape,
 )
 from dtps_http.structures import Bounds
-from . import logger
-from .utils import test_timeout
+from dtps_http_tests import logger
+from dtps_http_tests.utils import test_timeout
 
 
 class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
+    """Test async server function."""
+
     @test_timeout(10)
     @async_error_catcher
-    async def test_push1(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            socket_node = os.path.join(td, "node")
+    async def test_push(self) -> None:
+        """Run push test."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "node"
+            socket_node = path.as_posix()
             dtps_server = DTPSServer.create(nickname="node")
-            server = await app_start(
-                dtps_server,
-                unix_paths=[socket_node],
-            )
+            server = await app_start(dtps_server, unix_paths=[socket_node])
             async with server:
                 url0 = make_http_unix_url(socket_node)
-
                 async with DTPSClient.create() as client:
+                    content_info = ContentInfo.simple(MIME_JSON)
+                    properties = TopicProperties.rw_pushable()
+                    bounds = Bounds.unbounded()
                     parameters = TopicRefAdd(
-                        content_info=ContentInfo.simple(MIME_JSON),
-                        properties=TopicProperties.rw_pushable(),
                         app_data={},
-                        bounds=Bounds.unbounded(),
+                        properties=properties,
+                        content_info=content_info,
+                        bounds=bounds,
                     )
                     topic = TopicNameV.from_dash_sep("a/b")
-
-                    await client.add_topic(cast(URLIndexer, url0), topic, parameters)
-
-                    queue_in: "asyncio.Queue[RawData]" = asyncio.Queue()
-                    queue_out: "asyncio.Queue[bool]" = asyncio.Queue()
-                    url_topic = join(url0, topic.as_relative_url())
-
-                    received: List[RawData] = []
-
-                    async def found(rd_: RawData) -> None:
-                        logger.info(f"found {rd!r}")
-                        received.append(rd_)
-
-                    ldi = await client.listen_url(
-                        url_topic, found, inline_data=True, raise_on_error=True, max_frequency=None
+                    url_indexer = cast(URLIndexer, url0)
+                    await client.add_topic(url_indexer, topic, parameters)
+                    queue_in: asyncio.Queue[RawData] = asyncio.Queue()
+                    queue_out: asyncio.Queue[bool] = asyncio.Queue()
+                    relative_url = topic.as_relative_url()
+                    url_topic = join(url0, relative_url)
+                    received: list[RawData] = []
+                    callback = self._get_callback(received)
+                    listen_data_interface = await client.listen_url(
+                        url_topic,
+                        callback,
+                        inline_data=True,
+                        raise_on_error=True,
+                        max_frequency=None,
                     )
                     task_push = await client.push_continuous(
-                        url_topic, queue_in=queue_in, queue_out=queue_out
+                        url_topic,
+                        queue_in=queue_in,
+                        queue_out=queue_out,
                     )
-                    N = 5
-                    sent: List[RawData] = []
-                    for i in range(N):
-                        rd = RawData.json_from_native_object(i)
-                        sent.append(rd)
-                        await queue_in.put(rd)
-                        logger.info(f"got {rd!r}")
+                    sent: list[RawData] = []
+                    for i in range(5):
+                        raw_data = RawData.json_from_native_object(i)
+                        sent.append(raw_data)
+                        await queue_in.put(raw_data)
+                        logger.info("Got %r.", raw_data)
                         success = await queue_out.get()
                         if not success:
-                            raise Exception(f"Could not push {rd!r}")
-                    await asyncio.sleep(1.0)
-                    logger.info(f"received={received!r}")
+                            message = f"Could not push {raw_data!r}."
+                            raise Exception(message)
+                    await asyncio.sleep(1)
+                    logger.info("Received %r.", received)
                     if received != sent:
-                        raise Exception(f"received={received!r} != sent={sent!r}")
+                        message = f"received={received!r} != sent={sent!r}."
+                        raise Exception(message)
                     task_push.cancel()
-                    await ldi.stop()
+                    await listen_data_interface.stop()
+                    logger.info("Test complete.")
 
-                    logger.info(f"test finished")
-                    # task_server.cancel()
-                    # await task_push
-                    # await task_sub
+    def _get_callback(self, received: list[RawData]) -> Any:
+        def callback(raw_data: RawData) -> None:
+            received.append(raw_data)
+            logger.info("Found %r.", raw_data)
+
+        return callback
 
     @test_timeout(10)
-    async def test_static1(self) -> None:
-        port = 8432
-        args = ["--tcp-port", str(port)]
+    async def test_static(self) -> None:
+        """Run static test."""
+        port = "8432"
+        args = ["--tcp-port", port]
         dtps_server = DTPSServer.create()
-        t = interpret_command_line_and_start(dtps_server, args)
-        task = asyncio.create_task(t)
+        coroutine = interpret_command_line_and_start(dtps_server, args)
+        task = asyncio.create_task(coroutine)
         await dtps_server.started.wait()
-
-        # make http request using aiohttp
-        # https://docs.aiohttp.org/en/stable/client_quickstart.html
-        import aiohttp
-
-        paths = ["/", "/static/style.css", "/static/send.js"]
-        urls = [f"http://localhost:{port}{p}" for p in paths]
-
+        paths = ("/", "/static/style.css", "/static/send.js")
+        urls = [f"http://localhost:{port}{path}" for path in paths]
         for url in urls:
-            logger.info(f"GET {url!r}")
+            logger.info("GET %r", url)
             async with aiohttp.ClientSession() as session:
-                logger.info(f"GET {url!r}")
-
+                logger.info("GET %r", url)
                 async with session.get(url) as resp:
-                    logger.info(f"GET {url!r} status={resp.status}")
+                    logger.info("GET %r status=%s", url, resp.status)
                     resp.raise_for_status()
-
         task.cancel()
-
         try:
             await task
         except asyncio.CancelledError:
@@ -136,59 +139,75 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
 
     @test_timeout(10)
     async def test_patch1_json_json(self) -> None:
-        await doit("json", "json")
+        """JSON-JSON patch test."""
+        await do_it("json", "json")
 
     @test_timeout(10)
     async def test_patch1_json_cbor(self) -> None:
-        await doit("json", "cbor")
+        """JSON-CBOR patch test."""
+        await do_it("json", "cbor")
 
     @test_timeout(10)
     async def test_patch1_cbor_json(self) -> None:
-        await doit("cbor", "json")
+        """CBOR-JSON patch test."""
+        await do_it("cbor", "json")
 
     @test_timeout(10)
     async def test_patch1_cbor_cbor(self) -> None:
-        await doit("cbor", "cbor")
+        """CBOR-CBOR patch test."""
+        await do_it("cbor", "cbor")
 
     @test_timeout(10)
     async def test_patch1_cbor_yaml(self) -> None:
-        await doit("cbor", "yaml")
+        """CBOR-YAML patch test."""
+        await do_it("cbor", "yaml")
 
     @test_timeout(10)
     async def test_patch1_yaml_cbor(self) -> None:
-        await doit("yaml", "cbor")
+        """YAML-CBOR patch test."""
+        await do_it("yaml", "cbor")
 
     @test_timeout(10)
     async def test_patch1_json_yaml(self) -> None:
-        await doit("json", "yaml")
+        """JSON-YAML patch test."""
+        await do_it("json", "yaml")
 
     @test_timeout(10)
     async def test_patch1_yaml_json(self) -> None:
-        await doit("yaml", "json")
+        """YAML-JSON patch test."""
+        await do_it("yaml", "json")
 
     @test_timeout(10)
     async def test_patch_creation(self) -> None:
-        port = 8435
-        args = ["--tcp-port", str(port)]
+        """Patch creation test."""
+        port = "8435"
+        args = ["--tcp-port", port]
         dtps_server = DTPSServer.create()
-        t = interpret_command_line_and_start(dtps_server, args)
-        task = asyncio.create_task(t)
+        coroutine = interpret_command_line_and_start(dtps_server, args)
+        task = asyncio.create_task(coroutine)
         logger.info("waiting for server to start")
         await dtps_server.started.wait()
         logger.info("waiting for server to start: done")
-        url = URLIndexer(parse_url_unescape(URLString(f"http://localhost:{port}/")))
-
-        tra = TopicRefAdd(
-            content_info=ContentInfo.simple(MIME_JSON),
-            properties=TopicProperties.rw_pushable(),
+        url_string = URLString(f"http://localhost:{port}/")
+        url = parse_url_unescape(url_string)
+        url_indexer = URLIndexer(url)
+        content_info = ContentInfo.simple(MIME_JSON)
+        properties = TopicProperties.rw_pushable()
+        bounds = Bounds.unbounded()
+        topic_reference_add = TopicRefAdd(
+            content_info=content_info,
+            properties=properties,
             app_data={},
-            bounds=Bounds.unbounded(),
+            bounds=bounds,
         )
         async with DTPSClient.create() as client:
-            await client.add_topic(url, TopicNameV.from_dash_sep("a/b"), tra)
-
+            topic_name = TopicNameV.from_dash_sep("a/b")
+            await client.add_topic(
+                url_indexer,
+                topic_name,
+                topic_reference_add,
+            )
         task.cancel()
-
         try:
             await task
         except asyncio.CancelledError:
@@ -198,21 +217,21 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
                 raise
 
 
-async def doit(topic_mime: Literal["json", "cbor", "yaml"], patch_mime: Literal["json", "cbor", "yaml"]):
-    with tempfile.TemporaryDirectory() as td:
-        socket_node = os.path.join(td, "node")
+async def do_it(
+    topic_mime: Literal["json", "cbor", "yaml"],
+    patch_mime: Literal["json", "cbor", "yaml"],
+) -> None:
+    """Do it."""
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        path = Path(temporary_directory) / "node"
+        socket_node = path.as_posix()
         dtps_server = DTPSServer.create(nickname="node")
-        server = await app_start(
-            dtps_server,
-            unix_paths=[socket_node],
-        )
-
+        server = await app_start(dtps_server, unix_paths=[socket_node])
         url_server = make_http_unix_url(socket_node)
         async with server:
-            assert os.path.exists(socket_node)
-
-            topic = TopicNameV.from_relative_url("config/")
-
+            if not path.exists():
+                raise AssertionError
+            topic_name = TopicNameV.from_relative_url("config/")
             if topic_mime == "json":
                 topic_content_type = MIME_JSON
             elif topic_mime == "cbor":
@@ -220,56 +239,81 @@ async def doit(topic_mime: Literal["json", "cbor", "yaml"], patch_mime: Literal[
             elif topic_mime == "yaml":
                 topic_content_type = MIME_YAML
             else:
-                raise Exception(f"Unknown topic_mime={topic_mime!r}")
-
-            oq = await dtps_server.create_oq(
-                topic, content_info=ContentInfo.simple(topic_content_type), tp=None, bounds=Bounds.unbounded()
+                message = f"Unknown topic_mime={topic_mime!r}"
+                raise Exception(message)
+            content_info = ContentInfo.simple(topic_content_type)
+            bounds = Bounds.unbounded()
+            object_queue = await dtps_server.create_object_queue(
+                topic_name,
+                content_info=content_info,
+                topic_properties=None,
+                bounds=bounds,
             )
-            ob1 = {"A": {"B": ["C", "D"]}}
-
+            ob1 = {
+                "A": {
+                    "B": ["C", "D"],
+                },
+            }
             if topic_mime == "json":
-                await oq.publish_json(ob1)
+                await object_queue.publish_json(ob1)
             elif topic_mime == "cbor":
-                await oq.publish_cbor(ob1)
+                await object_queue.publish_cbor(ob1)
             elif topic_mime == "yaml":
-                await oq.publish_yaml(ob1)
+                await object_queue.publish_yaml(ob1)
             else:
-                raise Exception(f"Unknown topic_mime={patch_mime!r}")
-
-            logger.info(str(list(dtps_server._oqs.keys())))
-            url = join(url_server, topic.as_relative_url())
-
+                message = f"Unknown topic_mime={patch_mime!r}"
+                raise Exception(message)
+            dtps_server_object_queues_keys = dtps_server.object_queues.keys()
+            dtps_server_object_queues_keys_list = list(
+                dtps_server_object_queues_keys,
+            )
+            logger.info(dtps_server_object_queues_keys_list)
+            relative_url = topic_name.as_relative_url()
+            url = join(url_server, relative_url)
             patch = [
-                {"op": "add", "path": "/A/B/-", "value": "E"},
+                {
+                    "op": "add",
+                    "path": "/A/B/-",
+                    "value": "E",
+                },
             ]
-
-            ob2_expected = {"A": {"B": ["C", "D", "E"]}}
-
+            ob2_expected = {
+                "A": {
+                    "B": ["C", "D", "E"],
+                },
+            }
+            data: bytes | str
             if patch_mime == "json":
-                headers = {"Content-type": CONTENT_TYPE_PATCH_JSON}
+                headers = {
+                    "Content-type": CONTENT_TYPE_PATCH_JSON,
+                }
                 data = json.dumps(patch)
             elif patch_mime == "cbor":
-                headers = {"Content-type": CONTENT_TYPE_PATCH_CBOR}
+                headers = {
+                    "Content-type": CONTENT_TYPE_PATCH_CBOR,
+                }
                 data = cbor2.dumps(patch)
             elif patch_mime == "yaml":
-                headers = {"Content-type": CONTENT_TYPE_PATCH_YAML}
+                headers = {
+                    "Content-type": CONTENT_TYPE_PATCH_YAML,
+                }
                 data = yaml.dump(patch)
             else:
-                raise Exception(f"Unknown patch_mime={patch_mime!r}")
-
-            async with DTPSClient.create() as client:
-                async with client.my_session(url) as (session, use_url):
-                    resp = await session.patch(use_url, headers=headers, data=data)
-                    resp.raise_for_status()
-
-            rd2 = oq.last_data()
-            ob2 = rd2.get_as_native_object()
-
-            logger.info(f"ob1={ob1!r}")
-            logger.info(f"ob2={ob2!r}")
-
+                message = f"Unknown patch_mime={patch_mime!r}"
+                raise Exception(message)
+            async with (
+                DTPSClient.create() as client,
+                client.my_session(url) as (session, use_url),
+            ):
+                resp = await session.patch(use_url, headers=headers, data=data)
+                resp.raise_for_status()
+            raw_data_2 = object_queue.last_data()
+            ob2 = raw_data_2.get_as_native_object()
+            logger.info("ob1=%r", ob1)
+            logger.info("ob2=%r", ob2)
             if ob2 != ob2_expected:
-                raise Exception(f"ob2={ob2!r} != ob2_expected={ob2_expected!r}")
+                message = f"ob2={ob2!r} != ob2_expected={ob2_expected!r}"
+                raise Exception(message)
 
 
 # This allows running the tests with `nose2` command.
