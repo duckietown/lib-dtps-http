@@ -285,7 +285,27 @@ class RawData:
 
     @classmethod
     def cbor_from_native_object(cls, ob: object) -> "RawData":
-        return cls(content=cbor2.dumps(ob), content_type=MIME_CBOR)
+        """
+        Serialize *ob* to CBOR with low overhead.
+
+        - Pydantic *BaseModel* instances are converted once via ``model_dump`` ‑
+          this uses the fast Rust core and yields only builtin Python types.
+        - *dataclass* instances are flattened once via ``asdict``.
+        - All other objects are left to ``cbor2``'s native encoder.
+        """
+        from pydantic import BaseModel  # local import avoids hard dependency
+        from dataclasses import asdict as _asdict, is_dataclass
+
+        def _default(o):
+            if isinstance(o, BaseModel):
+                # Fast path: returns dicts/lists/str/int/etc.
+                return o.model_dump(mode="python", round_trip=False)
+            if is_dataclass(o):
+                return _asdict(o)
+            # Let cbor2 handle (or fail) for anything else
+            raise TypeError(f"Object of type {type(o).__name__!s} is not CBOR serialisable")
+
+        return cls(content=cbor2.dumps(ob, default=_default), content_type=MIME_CBOR)
 
     @classmethod
     def json_from_native_object(cls, ob: object) -> "RawData":
