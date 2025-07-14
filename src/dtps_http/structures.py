@@ -1,12 +1,13 @@
 import hashlib
 import itertools
 import json
-from dataclasses import asdict
+from dataclasses import dataclass
+from dataclasses import asdict, is_dataclass
+from pydantic import BaseModel
 from typing import Any, cast, Dict, List, Literal, NewType, Optional, Sequence, Union
 
 import cbor2
 from multidict import CIMultiDict
-from dataclasses import dataclass
 
 from .constants import DEFAULT_MAX_HISTORY, HEADER_LINK_BENCHMARK, MIME_CBOR, MIME_JSON, MIME_TEXT, MIME_YAML
 from .types import ContentType, NodeID, SourceID, TopicNameS, TopicNameV, URLString
@@ -286,26 +287,29 @@ class RawData:
     @classmethod
     def cbor_from_native_object(cls, ob: object) -> "RawData":
         """
-        Serialize *ob* to CBOR with low overhead.
-
-        - Pydantic *BaseModel* instances are converted once via ``model_dump`` ‑
-          this uses the fast Rust core and yields only builtin Python types.
-        - *dataclass* instances are flattened once via ``asdict``.
-        - All other objects are left to ``cbor2``'s native encoder.
+        One-pass CBOR serialiser that calls `model_dump()` or `asdict()` **exactly once**.
         """
-        from pydantic import BaseModel  # local import avoids hard dependency
-        from dataclasses import asdict as _asdict, is_dataclass
+        if isinstance(ob, BaseModel):
+            payload = ob.model_dump(mode="python", round_trip=False)
+            # at this point *all* nested models are already plain dict/list/str/int
+            cbor_bytes = cbor2.dumps(payload)
+            return cls(content=cbor_bytes, content_type=MIME_CBOR)
 
+        if is_dataclass(ob):
+            payload = asdict(ob)          # one dataclass → plain containers
+            cbor_bytes = cbor2.dumps(payload)
+            return cls(content=cbor_bytes, content_type=MIME_CBOR)
+
+        # fallback – only hit for non-model, non-dataclass roots
         def _default(o):
             if isinstance(o, BaseModel):
-                # Fast path: returns dicts/lists/str/int/etc.
                 return o.model_dump(mode="python", round_trip=False)
             if is_dataclass(o):
-                return _asdict(o)
-            # Let cbor2 handle (or fail) for anything else
-            raise TypeError(f"Object of type {type(o).__name__!s} is not CBOR serialisable")
+                return asdict(o)
+            raise TypeError(f"{type(o).__name__} not CBOR-serialisable")
 
-        return cls(content=cbor2.dumps(ob, default=_default), content_type=MIME_CBOR)
+        cbor_bytes = cbor2.dumps(ob, default=_default)
+        return cls(content=cbor_bytes, content_type=MIME_CBOR)
 
     @classmethod
     def json_from_native_object(cls, ob: object) -> "RawData":
