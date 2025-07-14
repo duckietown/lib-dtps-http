@@ -1,0 +1,12 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "py-spy-record",
+      "type": "shell",
+      "isBackground": true,
+      "problemMatcher": [],
+      "command": "py-spy record -o flamegraph.svg -- python3 ${file}"
+    }
+  ]
+}
