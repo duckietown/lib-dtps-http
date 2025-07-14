@@ -6,7 +6,7 @@ from typing import Any, cast, Dict, List, Literal, NewType, Optional, Sequence, 
 
 import cbor2
 from multidict import CIMultiDict
-from pydantic.dataclasses import dataclass
+from dataclasses import dataclass
 
 from .constants import DEFAULT_MAX_HISTORY, HEADER_LINK_BENCHMARK, MIME_CBOR, MIME_JSON, MIME_TEXT, MIME_YAML
 from .types import ContentType, NodeID, SourceID, TopicNameS, TopicNameV, URLString
@@ -467,14 +467,14 @@ class DataReady:
     @classmethod
     def from_json_string(cls, s: str) -> "DataReady":
         struct = json.loads(s)
-        return pydantic_parse(cls, struct)
+        return cls(**struct)
 
     @classmethod
     def from_cbor(cls, s: bytes) -> "DataReady":
         struct = cbor2.loads(s)
         if not isinstance(struct, dict):
             raise ValueError(f"Expected a dictionary here: {s!r}\n{struct}")
-        return pydantic_parse(cls, struct)
+        return cls(**struct)
 
     def as_data_saved(self) -> DataSaved:
         return DataSaved(

@@ -108,6 +108,8 @@ if TYPE_CHECKING:
 else:
     from methodtools import lru_cache as method_lru_cache
 
+import dataclasses
+
 
 def multidict_update(dest: CIMultiDict[X], src: Union[CIMultiDict[X], CIMultiDictProxy[X]]) -> None:
     for k, v in src.items():
@@ -216,7 +218,24 @@ def parse_tagged(d: Dict[str, Any], *Ts: Type[X]) -> X:
 
 
 def pydantic_parse(T: Type[X], d: Any) -> X:
-    return parse_obj_as(T, d)
+    """
+    Parses data into either a Pydantic model or a standard dataclass.
+
+    Args:
+        T: The target type (Pydantic model or dataclass).
+        d: The data to parse.
+
+    Returns:
+        An instance of T.
+    """
+    # Try Pydantic parse
+    try:
+        return parse_obj_as(T, d)
+    except Exception:
+        # Fallback for standard dataclasses
+        if dataclasses.is_dataclass(T):
+            return T(**d)
+        raise
 
 
 def pretty(d: object, /) -> str:
