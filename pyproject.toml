@@ -56,7 +56,7 @@ metadata = false
 tagged-metadata = false
 vcs = "git"
 style = "pep440"
-strict = true
+strict = false
 
 
 
