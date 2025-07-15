@@ -15,8 +15,10 @@ packages = [
     { from = "src", include = "dtps_http_programs" },
 ]
 
-include = ["static/*"]
-
+include = [
+  "static/**",
+  "src/dtps_http/static/**"
+]
 [tool.poetry.dependencies]
 python = "^3.8"
 aiohttp = "^3"
