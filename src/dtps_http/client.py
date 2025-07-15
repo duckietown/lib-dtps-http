@@ -183,15 +183,15 @@ class ListenDataImpl(ListenDataInterface):
 
     async def stop(self):
         self.stop_condition.set()
-        # self.task.cancel()
-        await self.wait_for_done()
-        try:
-            await asyncio.wait_for(self.task, 5)
-        except asyncio.TimeoutError:
-            msg = f"ListenDataImpl: stop: timeout waiting for {self.task}"
-            logger0.error(msg)
-            self.task.cancel()
-            return
+        self.task.cancel()
+        # await self.wait_for_done()
+        # try:
+        #     await asyncio.wait_for(self.task, 5)
+        # except asyncio.TimeoutError:
+        #     msg = f"ListenDataImpl: stop: timeout waiting for {self.task}"
+        #     logger0.error(msg)
+        #     self.task.cancel()
+        #     return
 
     async def wait_for_done(self):
         try:
