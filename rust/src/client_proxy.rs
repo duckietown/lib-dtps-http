@@ -45,6 +45,8 @@ fn create_add_proxy_patch(
     path.push_str(utils_patch::escape_json_patch(mountpoint.as_dash_sep()).as_str());
     let value = serde_json::to_value(pj)?;
 
+    let path = jsonptr::PointerBuf::try_from(path.as_str())
+        .map_err(|e| DTPSError::Other(format!("Invalid JSON pointer: {e}")))?;
     let add_operation = AddOperation { path, value };
     let operation1 = PatchOperation::Add(add_operation);
     let patch = json_patch::Patch(vec![operation1]);
@@ -73,6 +75,8 @@ fn create_remove_proxy_patch(mountpoint: &TopicName) -> Patch {
     path.push('/');
     path.push_str(utils_patch::escape_json_patch(mountpoint.as_dash_sep()).as_str());
 
+    let path = jsonptr::PointerBuf::try_from(path)
+        .expect("Invalid JSON pointer in remove_proxy_patch");
     let remove_operation = RemoveOperation { path };
     let operation1 = PatchOperation::Remove(remove_operation);
     json_patch::Patch(vec![operation1])

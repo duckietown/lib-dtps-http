@@ -1115,7 +1115,7 @@ class DTPSClient:
         # add_silence = 0.5  # XXX: TMP:
 
         async def callback_wrap(xx: ListenURLEvents) -> None:
-            logger.debug(f"callback_wrap {xx}")
+            logger.debug("callback_wrap %r", xx)
             try:
                 await callback(xx)
             except CancelledError:

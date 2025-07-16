@@ -145,9 +145,32 @@ pub fn get_metadata_from_response(
     // let headers = resp.headers();
     let alternative_urls: Vec<String> = get_alternative_urls(headers);
 
-    // convert into a vector of URLs
-    let mut alternative_urls: Vec<TypeOfConnection> =
-        alternative_urls.iter().map(|x| parse_url_ext(x).unwrap()).collect();
+    // ------------------------------------------------------------------
+    // Convert header strings into `TypeOfConnection`s.
+    //
+    // * First try to parse each value as an absolute URL.
+    // * If that fails, fall back to joining it against the base URL
+    //   (this lets us accept relative paths such as "topic2/").
+    // * If both attempts fail we log a warning and skip the entry
+    //   instead of panicking – malformed headers should not take
+    //   the whole process down.
+    // ------------------------------------------------------------------
+    let mut alternative_urls: Vec<TypeOfConnection> = alternative_urls
+        .iter()
+        .filter_map(|raw| {
+            // Attempt absolute parse
+            parse_url_ext(raw)
+                // otherwise try relative to the base
+                .or_else(|_| join_ext(conbase, raw))
+                .map_err(|e| {
+                    warn_with_info!("Ignoring malformed alternative URL {:?}: {}", raw, e);
+                    e
+                })
+                .ok()
+        })
+        .collect();
+
+    // Always include the connection we just queried
     alternative_urls.push(conbase.clone());
 
     let answering = headers.get(HEADER_NODE_ID).map(string_from_header_value);

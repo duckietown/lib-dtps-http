@@ -63,6 +63,30 @@ def make_http_unix_url(socket_path: str, url_path: Optional[str] = None) -> URL:
 
 
 def parse_url_unescape(s: URLString) -> URL:
+    # ------------------------------------------------------------------
+    # Accept bare IPv6 literals such as "http://::1:8000/…".
+    # urllib3's `parse_url` requires IPv6 addresses to be wrapped in
+    # square brackets; if they are not, it raises `LocationParseError`.
+    # Detect that case and normalise it before delegating to `parse_url`.
+    # ------------------------------------------------------------------
+    s_str = str(s)
+    if "://" in s_str:
+        scheme, rest = s_str.split("://", 1)
+        netloc, slash, remainder = rest.partition("/")
+        # An IPv6 literal will contain more than one ':' character.
+        # If it is *not* already bracketed, add the brackets, keeping
+        # any trailing port number intact.
+        if netloc.count(":") > 1 and not netloc.startswith("["):
+            host_part, sep, port_part = netloc.rpartition(":")
+            if sep and port_part.isdigit():
+                # Form: ::1:8000  ->  [::1]:8000
+                netloc = f"[{host_part}]:{port_part}"
+            else:
+                # Form: ::1  ->  [::1]
+                netloc = f"[{netloc}]"
+            rest = netloc + (slash + remainder if slash else "")
+            s_str = f"{scheme}://{rest}"
+            s = cast(URLString, s_str)
     parsed = parse_url(s)
     if parsed.path is None:
         # logger.warning(f"parse_url_unescape: path is None: {s!r}")

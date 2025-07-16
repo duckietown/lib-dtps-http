@@ -1,0 +1,2 @@
+include static/*
+recursive-include src/dtps_http/static *

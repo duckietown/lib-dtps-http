@@ -86,7 +86,8 @@ impl Pushable for TypeOFSource {
                         let ops = vec![
                             PatchOperation::Replace(
                                 ReplaceOperation {
-                                    path: prefix,
+                                    path: jsonptr::PointerBuf::try_from(prefix)
+                                        .map_err(|e| anyhow::anyhow!("Invalid JSON pointer: {e}"))?,
                                     value,
                                 }
                             )
