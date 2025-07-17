@@ -9,9 +9,23 @@
 		"dockerfile": "../Dockerfile"
 	},
 	"features": {
-		"ghcr.io/devcontainers/features/python:1": {},
-		"ghcr.io/devcontainers/features/rust:1": {},
-		"ghcr.io/devcontainers/features/git-lfs:1": {}
+		"ghcr.io/devcontainers/features/python:1": {
+			"installTools": true,
+			"version": "os-provided"
+		},
+		"ghcr.io/devcontainers/features/rust:1": {
+			"version": "latest",
+			"profile": "minimal",
+			"targets": "aarch64-unknown-linux-gnu",
+			"components": "rust-analyzer,rust-src,rustfmt,clippy"
+		},
+		"ghcr.io/devcontainers/features/git-lfs:1": {
+			"autoPull": true,
+			"version": "latest"
+		},
+		"ghcr.io/devcontainers-extra/features/poetry:2": {
+			"version": "latest"
+		}
 	},
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
