@@ -16,9 +16,9 @@ packages = [
 ]
 
 include = [
-  "static/**",
-  "src/dtps_http/static/**"
+    { path = "src/dtps_http/static/**", format = ['sdist', 'wheel'] }
 ]
+
 [tool.poetry.dependencies]
 python = "^3.8"
 aiohttp = "^3"
