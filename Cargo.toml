@@ -1,6 +1,6 @@
 [package]
 name = "dtps-http"
-version = "1.4.3"
+version = "1.4.4"
 edition = "2021"
 build = "rust/build.rs"
 
@@ -52,7 +52,7 @@ warp = { version = "0.3.5", features = ["compression"] }
 json-patch = "*"
 strip-ansi-escapes = "0.2.0"
 tempfile = "3.8.1"
-lazy_static = "1.4.3"
+lazy_static = "1.4.4"
 uuid = { version = "0.8.2", features = ["v4"] }
 xxhash-rust = { version = "0.8.10", features = ["xxh64"] }
 jsonptr = "0.7.1"
