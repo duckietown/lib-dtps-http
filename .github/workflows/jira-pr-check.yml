@@ -1,0 +1,41 @@
+name: Enforce Jira Key in PR Title and Branch
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  check-jira-key:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR title and branch name for Jira issue key
+        run: |
+          echo "🔍 Checking PR title and branch name..."
+
+          JIRA_PATTERN="DTSW-[0-9]{4,}"
+
+          TITLE="${{ github.event.pull_request.title }}"
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+
+          echo "📌 PR Title:  $TITLE"
+          echo "📌 Branch:    $BRANCH"
+
+          TITLE_OK=$(echo "$TITLE" | grep -E "$JIRA_PATTERN" || true)
+          BRANCH_OK=$(echo "$BRANCH" | grep -E "$JIRA_PATTERN" || true)
+
+          if [ -z "$TITLE_OK" ]; then
+            echo "❌ PR title is missing a valid Jira issue key (DTSW-XXXX)"
+            FAIL=1
+          fi
+
+          if [ -z "$BRANCH_OK" ]; then
+            echo "❌ Branch name is missing a valid Jira issue key (DTSW-XXXX)"
+            FAIL=1
+          fi
+
+          if [ "$FAIL" = "1" ]; then
+            echo "🚫 Merge blocked: Jira issue key not found in PR title or branch name"
+            exit 1
+          fi
+
+          echo "✅ Jira issue key found in both PR title and branch name."
