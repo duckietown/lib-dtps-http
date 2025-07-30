@@ -23,19 +23,16 @@ jobs:
           TITLE_OK=$(echo "$TITLE" | grep -E "$JIRA_PATTERN" || true)
           BRANCH_OK=$(echo "$BRANCH" | grep -E "$JIRA_PATTERN" || true)
 
-          if [ -z "$TITLE_OK" ]; then
-            echo "❌ PR title is missing a valid Jira issue key (DTSW-XXXX)"
-            FAIL=1
-          fi
-
-          if [ -z "$BRANCH_OK" ]; then
-            echo "❌ Branch name is missing a valid Jira issue key (DTSW-XXXX)"
-            FAIL=1
-          fi
-
-          if [ "$FAIL" = "1" ]; then
-            echo "🚫 Merge blocked: Jira issue key not found in PR title or branch name"
+          if [ -z "$TITLE_OK" ] && [ -z "$BRANCH_OK" ]; then
+            echo "❌ Neither PR title nor branch name contains a valid Jira issue key (DTSW-XXXX)"
+            echo "🚫 Merge blocked: Jira issue key must be present in either PR title or branch name"
             exit 1
           fi
 
-          echo "✅ Jira issue key found in both PR title and branch name."
+          if [ -n "$TITLE_OK" ] && [ -n "$BRANCH_OK" ]; then
+            echo "✅ Jira issue key found in both PR title and branch name."
+          elif [ -n "$TITLE_OK" ]; then
+            echo "✅ Jira issue key found in PR title."
+          elif [ -n "$BRANCH_OK" ]; then
+            echo "✅ Jira issue key found in branch name."
+          fi
