@@ -8,7 +8,7 @@ use warp::{Rejection, Reply};
 use crate::HandlersResponse;
 
 // Embed the static directory into the crate
-pub const STATIC_FILES: Dir = include_dir!("$CARGO_MANIFEST_DIR/static");
+pub const STATIC_FILES: Dir = include_dir!("$CARGO_MANIFEST_DIR/src/dtps_http/static");
 
 pub async fn serve_static_file2(_s: String, path: warp::path::Tail) -> Result<impl Reply, Rejection> {
     serve_static_file(path).await
