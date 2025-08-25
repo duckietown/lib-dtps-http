@@ -103,9 +103,9 @@ class ObjectQueue:
     _hub: Hub
     _pub: Publisher
     _sub: Subscriber
+    _transform: ObjectTransformFunction
     tr: TopicRef
     bounds: Bounds
-    transform: ObjectTransformFunction
     blob_manager: BlobManager
     serve: Optional[ObjectServeFunction]
     listeners: "Dict[SUB_ID,  ListenerData]"
@@ -169,7 +169,7 @@ class ObjectQueue:
         return await self.publish(RawData(content=data.encode(), content_type=content_type), get_data=True)
 
     async def publish_yaml(self, obj: object, content_type: ContentType = MIME_YAML) -> PostResult:
-        """Publish a python object as a JSON encoded object."""
+        """Publish a python object as a YAML encoded object."""
         data = yaml.dump(obj)
         return await self.publish(RawData(content=data.encode(), content_type=content_type), get_data=True)
 
