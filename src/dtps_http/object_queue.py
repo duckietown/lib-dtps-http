@@ -69,7 +69,7 @@ class SuccessPostResult:
     redirect_url: str
 
 
-PostResult = Union[DataReady, TransformError]
+PostResult = Union[DataReady, TransformError, None]
 GetResult = Union[DataReady, HTTPResponse]
 
 # PublishResult = Union[DataSaved, TransformError]
@@ -156,24 +156,24 @@ class ObjectQueue:
 
     async def publish_text(self, text: str, content_type: ContentType = MIME_TEXT) -> PostResult:
         data = text.encode("utf-8")
-        return await self.publish(RawData(content=data, content_type=content_type))
+        return await self.publish(RawData(content=data, content_type=content_type), get_data=True)
 
     async def publish_cbor(self, obj: object, content_type: ContentType = MIME_CBOR) -> PostResult:
         """Publish a python object as a cbor2 encoded object."""
         data = cbor2.dumps(obj)
-        return await self.publish(RawData(content=data, content_type=content_type))
+        return await self.publish(RawData(content=data, content_type=content_type), get_data=True)
 
     async def publish_json(self, obj: object, content_type: ContentType = MIME_JSON) -> PostResult:
         """Publish a python object as a JSON encoded object."""
         data = json.dumps(obj)  # OK
-        return await self.publish(RawData(content=data.encode(), content_type=content_type))
+        return await self.publish(RawData(content=data.encode(), content_type=content_type), get_data=True)
 
     async def publish_yaml(self, obj: object, content_type: ContentType = MIME_YAML) -> PostResult:
         """Publish a python object as a JSON encoded object."""
         data = yaml.dump(obj)
-        return await self.publish(RawData(content=data.encode(), content_type=content_type))
+        return await self.publish(RawData(content=data.encode(), content_type=content_type), get_data=True)
 
-    async def publish(self, obj0: RawData, /) -> PostResult:
+    async def publish(self, obj0: RawData, /, *, get_data: bool = False) -> PostResult:
         """
         Publish raw bytes.
 
@@ -229,8 +229,9 @@ class ObjectQueue:
         )  # logger.debug(f"published #{self._seq} {self._name}: {obj!r}")
 
         # reached_at = self._name.as_relative_url()
-        data_ready = self.get_data_ready(ds, False, obj.content)
-        return data_ready
+        if get_data:
+            return self.get_data_ready(ds, False, obj.content)
+        return None
 
     def current_clocks(self) -> Clocks:
         clocks = Clocks.empty()
