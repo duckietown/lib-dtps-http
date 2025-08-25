@@ -323,7 +323,7 @@ class ContextManagerCreateContext(DTPSContext):
         resolve = server._resolve_tn(topic, url0=url0)
         res = await resolve.call(url0, server, data)
         # queue = server.get_oq(topic)
-        # res = await queue.publish(data)
+        # res = await queue.publish(data, get_data=True)
         if isinstance(res, TransformError):
             raise Exception(f"{res.http_code}: {res.message}")
         return res

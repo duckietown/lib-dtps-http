@@ -69,7 +69,7 @@ class SuccessPostResult:
     redirect_url: str
 
 
-PostResult = Union[DataReady, TransformError]
+PostResult = Union[DataReady, TransformError, None]
 GetResult = Union[DataReady, HTTPResponse]
 
 # PublishResult = Union[DataSaved, TransformError]
@@ -103,9 +103,9 @@ class ObjectQueue:
     _hub: Hub
     _pub: Publisher
     _sub: Subscriber
+    _transform: ObjectTransformFunction
     tr: TopicRef
     bounds: Bounds
-    transform: ObjectTransformFunction
     blob_manager: BlobManager
     serve: Optional[ObjectServeFunction]
     listeners: "Dict[SUB_ID,  ListenerData]"
@@ -128,7 +128,7 @@ class ObjectQueue:
         # self._data = {}
         self._name = name
         self.tr = tr
-        self.stored = deque()
+        self.stored = deque(maxlen=bounds.max_size)
         self.saved = {}
         self._transform = transform
         self.serve = serve
@@ -156,24 +156,24 @@ class ObjectQueue:
 
     async def publish_text(self, text: str, content_type: ContentType = MIME_TEXT) -> PostResult:
         data = text.encode("utf-8")
-        return await self.publish(RawData(content=data, content_type=content_type))
+        return await self.publish(RawData(content=data, content_type=content_type), get_data=True)
 
     async def publish_cbor(self, obj: object, content_type: ContentType = MIME_CBOR) -> PostResult:
         """Publish a python object as a cbor2 encoded object."""
         data = cbor2.dumps(obj)
-        return await self.publish(RawData(content=data, content_type=content_type))
+        return await self.publish(RawData(content=data, content_type=content_type), get_data=True)
 
     async def publish_json(self, obj: object, content_type: ContentType = MIME_JSON) -> PostResult:
         """Publish a python object as a JSON encoded object."""
         data = json.dumps(obj)  # OK
-        return await self.publish(RawData(content=data.encode(), content_type=content_type))
+        return await self.publish(RawData(content=data.encode(), content_type=content_type), get_data=True)
 
     async def publish_yaml(self, obj: object, content_type: ContentType = MIME_YAML) -> PostResult:
-        """Publish a python object as a JSON encoded object."""
+        """Publish a python object as a YAML encoded object."""
         data = yaml.dump(obj)
-        return await self.publish(RawData(content=data.encode(), content_type=content_type))
+        return await self.publish(RawData(content=data.encode(), content_type=content_type), get_data=True)
 
-    async def publish(self, obj0: RawData, /) -> PostResult:
+    async def publish(self, obj0: RawData, /, *, get_data: bool = False) -> PostResult:
         """
         Publish raw bytes.
 
@@ -206,22 +206,22 @@ class ObjectQueue:
         )
 
         # self._data[digest] = obj
-        self.stored.append(use_seq)
-        self.saved[use_seq] = ds
 
         # logger.info(
         #    f'pushing, bounds = {self.bounds}  stored = {len(self.stored)}  saved = {len(self.saved)} '
         #    f'blobs={len(self.blob_manager.blobs)}')
-        if self.bounds.max_size is not None:  # TODO: implement the semantics for others
-            while len(self.stored) > self.bounds.max_size:
-                x_old: int = self.stored.popleft()
-                if x_old in self.saved:  # should always be true
-                    ds_old = self.saved.pop(x_old)
-                    # if TOLERANCE_REMOVAL is not None and TOLERANCE_REMOVAL > 0:
-                    #     # extend deadline by an arbitrary 10 seconds
-                    #     # (should not be needed, but just in case)
-                    #     self.blob_manager.extend_deadline(ds_old.digest, TOLERANCE_REMOVAL)
-                    self.blob_manager.release_blob(ds_old.digest, (self.name_for_blob_manager, x_old))
+        if self.bounds.max_size is not None and len(self.stored) == self.bounds.max_size:  # TODO: implement the semantics for others
+            x_old: int = self.stored[0]
+            if x_old in self.saved:  # should always be true
+                ds_old = self.saved.pop(x_old)
+                # if TOLERANCE_REMOVAL is not None and TOLERANCE_REMOVAL > 0:
+                #     # extend deadline by an arbitrary 10 seconds
+                #     # (should not be needed, but just in case)
+                #     self.blob_manager.extend_deadline(ds_old.digest, TOLERANCE_REMOVAL)
+                self.blob_manager.release_blob(ds_old.digest, (self.name_for_blob_manager, x_old))
+
+        self.stored.append(use_seq)
+        self.saved[use_seq] = ds
 
         inot = InsertNotification(ds, obj0)
         self._pub.publish(
@@ -229,8 +229,9 @@ class ObjectQueue:
         )  # logger.debug(f"published #{self._seq} {self._name}: {obj!r}")
 
         # reached_at = self._name.as_relative_url()
-        data_ready = self.get_data_ready(ds, False, obj.content)
-        return data_ready
+        if get_data:
+            return self.get_data_ready(ds, False, obj.content)
+        return None
 
     def current_clocks(self) -> Clocks:
         clocks = Clocks.empty()

@@ -238,7 +238,7 @@ class OurQueue(Source):
     async def publish(self, presented_as: str, server: "DTPSServer", rd: RawData) -> "PostResult":
         oq = server.get_oq(self.topic_name)
 
-        otr = await oq.publish(rd)
+        otr = await oq.publish(rd, get_data=True)
         return otr
 
     async def call(
@@ -246,7 +246,7 @@ class OurQueue(Source):
     ) -> Union[RawData, TransformError]:
         oq = server.get_oq(self.topic_name)
 
-        otr = await oq.publish(rd)
+        otr = await oq.publish(rd, get_data=True)
         if isinstance(otr, TransformError):
             return otr
         else:
@@ -277,7 +277,7 @@ class OurQueue(Source):
             raise web.HTTPBadRequest(reason=msg)
         ob2 = cast(Dict[str, Any], ob2)
         rd = RawData.json_from_native_object(ob2)
-        otr = await oq.publish(rd)
+        otr = await oq.publish(rd, get_data=True)
         return otr
 
     async def delete(self, presented_as: str, server: "DTPSServer") -> "Optional[TransformError]":
