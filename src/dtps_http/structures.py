@@ -1,7 +1,7 @@
 import hashlib
 import itertools
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from dataclasses import asdict, is_dataclass
 from pydantic import BaseModel
 from typing import Any, cast, Dict, List, Literal, NewType, Optional, Sequence, Union
@@ -276,6 +276,7 @@ def get_digest(s: bytes) -> Digest:
 class RawData:
     content: bytes
     content_type: ContentType
+    _cached_digest: Optional[Digest] = field(default=None, init=False, repr=False, compare=False)
 
     def short_description(self) -> str:
         return f"RawData({self.content_type}; {len(self.content)} bytes)"
@@ -324,7 +325,9 @@ class RawData:
         return cls(content=data.encode(), content_type=MIME_YAML)
 
     def digest(self) -> Digest:
-        return get_digest(self.content)
+        if self._cached_digest is None:
+            self._cached_digest = get_digest(self.content)
+        return self._cached_digest
 
     def get_as_yaml(self) -> str:
         ob = self.get_as_native_object()
@@ -359,10 +362,18 @@ class RawData:
         raise ValueError(f"cannot convert {self.content_type!r} to native object")
 
     def as_cbor(self) -> "RawData":
+        # Direct conversion for JSON -> CBOR without intermediate native object
+        if is_json(self.content_type):
+            return self._json_to_cbor_direct()
+        # Fall back to generic conversion for other formats
         no = self.get_as_native_object()
         return RawData.cbor_from_native_object(no)
 
     def as_json(self) -> "RawData":
+        # Direct conversion for CBOR -> JSON without intermediate native object  
+        if is_cbor(self.content_type):
+            return self._cbor_to_json_direct()
+        # Fall back to generic conversion for other formats
         no = self.get_as_native_object()
         return RawData.json_from_native_object(no)
 
@@ -372,18 +383,39 @@ class RawData:
         return RawData.yaml_from_native_object(no)
 
     def get_as(self, content_type: str) -> "RawData":
-        content_types_split: List[List[str]] = [ct.split(",") for ct in content_type.split(";")]
-        content_types: List[str] = list(itertools.chain.from_iterable(content_types_split))
-        if MIME_JSON in content_types:
+        # Optimized content type parsing - simple string checks instead of complex parsing
+        if MIME_JSON in content_type:
             return self.as_json()
-        if MIME_CBOR in content_types:
+        if MIME_CBOR in content_type:
             return self.as_cbor()
-        if MIME_YAML in content_types:
+        if MIME_YAML in content_type:
             return self.as_yaml()
         # MUST leave most general case to the end
-        if "*/*" in content_types:
+        if "*/*" in content_type:
             return self
         raise ValueError(f"Cannot convert to {content_type!r}")
+
+    def _json_to_cbor_direct(self) -> "RawData":
+        """Direct JSON to CBOR conversion without intermediate native object."""
+        import json
+        import cbor2
+        
+        # Parse JSON directly to a dictionary/list structure
+        parsed = json.loads(self.content)
+        # Serialize directly to CBOR
+        cbor_bytes = cbor2.dumps(parsed)
+        return RawData(content=cbor_bytes, content_type=MIME_CBOR)
+
+    def _cbor_to_json_direct(self) -> "RawData":
+        """Direct CBOR to JSON conversion without intermediate native object.""" 
+        import json
+        import cbor2
+        
+        # Parse CBOR directly to a dictionary/list structure
+        parsed = cbor2.loads(self.content)
+        # Serialize directly to JSON
+        json_bytes = json.dumps(parsed).encode()
+        return RawData(content=json_bytes, content_type=MIME_JSON)
 
 
 def is_structure(content_type: str) -> bool:
