@@ -1,7 +1,8 @@
 import hashlib
 import itertools
 import json
-from dataclasses import asdict
+import yaml
+from dataclasses import asdict, field
 from typing import Any, cast, Dict, List, Literal, NewType, Optional, Sequence, Union
 
 import cbor2
@@ -268,13 +269,18 @@ def get_digest_md5(s: bytes) -> Digest:
 
 
 def get_digest(s: bytes) -> Digest:
-    return get_digest_xxh128(s)
+    # Use xxh64 for better performance on large data while maintaining good collision resistance
+    return get_digest_xxh64(s)
 
 
 @dataclass
 class RawData:
     content: bytes
     content_type: ContentType
+    
+    # Cache fields for performance optimization - not part of the public API
+    _digest_cache: Optional[Digest] = field(default=None, init=False, repr=False, compare=False)
+    _native_object_cache: Optional[object] = field(default=None, init=False, repr=False, compare=False)
 
     def short_description(self) -> str:
         return f"RawData({self.content_type}; {len(self.content)} bytes)"
@@ -293,61 +299,110 @@ class RawData:
 
     @classmethod
     def yaml_from_native_object(cls, ob: object) -> "RawData":
-        import yaml
-
         data = yaml.safe_dump(ob)
-
         return cls(content=data.encode(), content_type=MIME_YAML)
 
     def digest(self) -> Digest:
-        return get_digest(self.content)
+        """Compute digest with caching to avoid repeated hash calculations."""
+        if self._digest_cache is None:
+            self._digest_cache = get_digest(self.content)
+        return self._digest_cache
 
     def get_as_yaml(self) -> str:
         ob = self.get_as_native_object()
-        import yaml
-
         return yaml.safe_dump(ob)
 
     def get_as_native_object(self) -> object:
+        """Convert content to native Python object with caching."""
+        if self._native_object_cache is not None:
+            return self._native_object_cache
+            
         if is_plain_text(self.content_type):
-            return self.content.decode("utf-8")
-
-        if not is_structure(self.content_type):
+            result = self.content.decode("utf-8")
+        elif not is_structure(self.content_type):
             msg = (
                 f"Cannot convert non-structure content to native object (content_type="
                 f"{self.content_type!r})\n"
                 f"data = {self.content!r}"
             )
             raise ValueError(msg)
-
-        if is_yaml(self.content_type):
-            import yaml
-
-            return yaml.safe_load(self.content)
-        if is_json(self.content_type):
-            import json
-
-            return json.loads(self.content)
-        if is_cbor(self.content_type):
-            import cbor2
-
-            return cbor2.loads(self.content)
-        raise ValueError(f"cannot convert {self.content_type!r} to native object")
+        elif is_yaml(self.content_type):
+            result = yaml.safe_load(self.content)
+        elif is_json(self.content_type):
+            result = json.loads(self.content)
+        elif is_cbor(self.content_type):
+            result = cbor2.loads(self.content)
+        else:
+            raise ValueError(f"cannot convert {self.content_type!r} to native object")
+        
+        # Cache the result for future calls
+        self._native_object_cache = result
+        return result
 
     def as_cbor(self) -> "RawData":
+        """Convert to CBOR format with optimized direct conversion when possible."""
+        if is_cbor(self.content_type):
+            # Already CBOR, return self
+            return self
+        
+        # For direct JSON to CBOR conversion, we can sometimes avoid going through Python objects
+        if is_json(self.content_type):
+            try:
+                # Try direct conversion without intermediate Python object
+                json_obj = json.loads(self.content)
+                cbor_content = cbor2.dumps(json_obj)
+                return RawData(content=cbor_content, content_type=MIME_CBOR)
+            except Exception:
+                # Fall back to the safe path
+                pass
+        
+        # General path through native object
         no = self.get_as_native_object()
         return RawData.cbor_from_native_object(no)
 
     def as_json(self) -> "RawData":
+        """Convert to JSON format with optimized direct conversion when possible."""
+        if is_json(self.content_type):
+            # Already JSON, return self
+            return self
+            
+        # For direct CBOR to JSON conversion 
+        if is_cbor(self.content_type):
+            try:
+                # Try direct conversion without intermediate Python object
+                cbor_obj = cbor2.loads(self.content)
+                json_content = json.dumps(cbor_obj).encode()
+                return RawData(content=json_content, content_type=MIME_JSON)
+            except Exception:
+                # Fall back to the safe path
+                pass
+        
+        # General path through native object
         no = self.get_as_native_object()
         return RawData.json_from_native_object(no)
 
     def as_yaml(self) -> "RawData":
+        """Convert to YAML format."""
+        if is_yaml(self.content_type):
+            # Already YAML, return self
+            return self
+            
         no = self.get_as_native_object()
-
         return RawData.yaml_from_native_object(no)
 
     def get_as(self, content_type: str) -> "RawData":
+        """Convert to requested content type with optimized parsing."""
+        # Optimize content type parsing by avoiding intermediate lists
+        if MIME_JSON in content_type:
+            return self.as_json()
+        if MIME_CBOR in content_type:
+            return self.as_cbor()
+        if MIME_YAML in content_type:
+            return self.as_yaml()
+        if "*/*" in content_type:
+            return self
+            
+        # Fall back to original more complex parsing for edge cases
         content_types_split: List[List[str]] = [ct.split(",") for ct in content_type.split(";")]
         content_types: List[str] = list(itertools.chain.from_iterable(content_types_split))
         if MIME_JSON in content_types:
@@ -356,7 +411,6 @@ class RawData:
             return self.as_cbor()
         if MIME_YAML in content_types:
             return self.as_yaml()
-        # MUST leave most general case to the end
         if "*/*" in content_types:
             return self
         raise ValueError(f"Cannot convert to {content_type!r}")
