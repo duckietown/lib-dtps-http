@@ -275,6 +275,7 @@ def get_digest(s: bytes) -> Digest:
 class RawData:
     content: bytes
     content_type: ContentType
+    _cached_digest: Optional[Digest] = None
 
     def short_description(self) -> str:
         return f"RawData({self.content_type}; {len(self.content)} bytes)"
@@ -300,7 +301,9 @@ class RawData:
         return cls(content=data.encode(), content_type=MIME_YAML)
 
     def digest(self) -> Digest:
-        return get_digest(self.content)
+        if self._cached_digest is None:
+            self._cached_digest = get_digest(self.content)
+        return self._cached_digest
 
     def get_as_yaml(self) -> str:
         ob = self.get_as_native_object()
