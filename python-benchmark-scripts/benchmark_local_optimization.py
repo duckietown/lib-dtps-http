@@ -26,16 +26,31 @@ async def benchmark_local_publishing():
     print("=== Local Publishing Performance Benchmark ===")
     
     # Create a server for testing
-    server = DTPSServer()
+    async def setup_server(server: DTPSServer) -> None:
+        # Create a test topic
+        topic_name = TopicNameV.from_dash_sep("benchmark/test")
+        oq = await server.create_oq(
+            topic_name,
+            content_info=ContentInfo.simple(MIME_JSON),
+            tp=None,
+            bounds=None
+        )
+        # Store the queue for access in benchmark
+        server._benchmark_oq = oq
+        server._benchmark_topic = topic_name
     
-    # Create a test topic
-    topic_name = TopicNameV.from_dash_sep("benchmark/test")
-    oq = await server.create_oq(
-        topic_name,
-        content_info=ContentInfo.simple(MIME_JSON),
-        tp=None,
-        bounds=None
+    server = DTPSServer.create(
+        on_startup=[setup_server],
+        nickname="benchmark_server",
+        enable_clock=False
     )
+    
+    # Start the server
+    await server.on_startup(None)  # Initialize the server
+    
+    # Get the pre-created objects
+    oq = server._benchmark_oq
+    topic_name = server._benchmark_topic
     
     # Test data
     test_data = RawData(
