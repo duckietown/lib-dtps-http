@@ -1,6 +1,7 @@
 import hashlib
 import itertools
 import json
+import yaml
 from dataclasses import dataclass, field
 from dataclasses import asdict, is_dataclass
 from pydantic import BaseModel
@@ -318,8 +319,6 @@ class RawData:
 
     @classmethod
     def yaml_from_native_object(cls, ob: object) -> "RawData":
-        import yaml
-
         data = yaml.safe_dump(ob)
 
         return cls(content=data.encode(), content_type=MIME_YAML)
@@ -331,8 +330,6 @@ class RawData:
 
     def get_as_yaml(self) -> str:
         ob = self.get_as_native_object()
-        import yaml
-
         return yaml.safe_dump(ob)
 
     def get_as_native_object(self) -> object:
@@ -348,16 +345,10 @@ class RawData:
             raise ValueError(msg)
 
         if is_yaml(self.content_type):
-            import yaml
-
             return yaml.safe_load(self.content)
         if is_json(self.content_type):
-            import json
-
             return json.loads(self.content)
         if is_cbor(self.content_type):
-            import cbor2
-
             return cbor2.loads(self.content)
         raise ValueError(f"cannot convert {self.content_type!r} to native object")
 
@@ -397,9 +388,6 @@ class RawData:
 
     def _json_to_cbor_direct(self) -> "RawData":
         """Direct JSON to CBOR conversion without intermediate native object."""
-        import json
-        import cbor2
-        
         # Parse JSON directly to a dictionary/list structure
         parsed = json.loads(self.content)
         # Serialize directly to CBOR
@@ -407,10 +395,7 @@ class RawData:
         return RawData(content=cbor_bytes, content_type=MIME_CBOR)
 
     def _cbor_to_json_direct(self) -> "RawData":
-        """Direct CBOR to JSON conversion without intermediate native object.""" 
-        import json
-        import cbor2
-        
+        """Direct CBOR to JSON conversion without intermediate native object."""
         # Parse CBOR directly to a dictionary/list structure
         parsed = cbor2.loads(self.content)
         # Serialize directly to JSON
