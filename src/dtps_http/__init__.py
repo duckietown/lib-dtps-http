@@ -18,6 +18,21 @@ from .object_queue import *
 from .types_of_source import *
 from .utils_every_once_in_a_while import *
 
+# Import local optimizations to automatically enhance performance
+try:
+    from . import local_optimization
+    from . import client_local_optimization
+    logger.info("Local publishing optimizations loaded")
+except ImportError as e:
+    logger.debug(f"Could not load local optimizations: {e}")
+
+# Optional WebSocket optimization
+try:
+    from . import websocket_optimization
+    logger.info("WebSocket optimizations loaded")
+except ImportError as e:
+    logger.debug(f"Could not load WebSocket optimizations (aiohttp required): {e}")
+
 getLogger("asyncio").setLevel(INFO)
 getLogger("aiohttp.access").setLevel(WARNING)
 getLogger("aiopubsub").setLevel(INFO)

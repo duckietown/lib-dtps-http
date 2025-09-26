@@ -111,6 +111,7 @@ mod test_range;
 
 mod client_topics;
 mod client_websocket_push;
+mod local_optimization;
 mod shared_statuses;
 #[cfg(test)]
 mod test_connections;

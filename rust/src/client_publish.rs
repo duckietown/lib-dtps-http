@@ -2,16 +2,12 @@ use anyhow::Context;
 use serde::Serialize;
 
 use crate::connections::TypeOfConnection;
+use crate::local_optimization::{optimized_publish};
 use crate::{context, post_data, DataSaved, RawData, DTPSR};
 
 pub async fn publish(con: &TypeOfConnection, data: &RawData) -> DTPSR<DataSaved> {
-    let r = post_data(con, data).await?;
-    let ds = context!(
-        r.rd.interpret_owned::<DataSaved>(),
-        "Cannot interpret response to {con}:\n{:?}",
-        r.rd
-    )?;
-    Ok(ds)
+    // Try optimized publish first for local connections
+    optimized_publish(con, data).await
 }
 
 pub async fn publish_json<T>(con: &TypeOfConnection, value: &T) -> DTPSR<DataSaved>
