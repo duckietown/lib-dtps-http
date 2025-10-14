@@ -492,7 +492,7 @@ pub mod tests {
         post_cbor(&con_topic, &h).await?;
 
         let replace = ReplaceOperation {
-            path: "/value".to_string(),
+            path: jsonptr::PointerBuf::try_from("/value").unwrap(),
             value: serde_json::Value::String("new".to_string()),
         };
         let operation = PatchOperation::Replace(replace);
@@ -502,7 +502,7 @@ pub mod tests {
         // now test something that should fail
         info!("Testing NOTEXISTING addressing");
         let replace = ReplaceOperation {
-            path: "/NOTEXISTING".to_string(),
+            path: jsonptr::PointerBuf::try_from("/NOTEXISTING").unwrap(),
             value: serde_json::Value::String("new".to_string()),
         };
         let operation = PatchOperation::Replace(replace);
@@ -513,7 +513,7 @@ pub mod tests {
         let value2 = json!({"A": {"B": ["C", "D"]}});
         info!("----\nTesting replacing entire value ({h:?}) with a new one ({value2:?})");
         let replace = ReplaceOperation {
-            path: "".to_string(),
+            path: jsonptr::PointerBuf::try_from("").unwrap(),
             value: value2,
         };
         let operation = PatchOperation::Replace(replace);
@@ -526,11 +526,11 @@ pub mod tests {
         info!("----\nTesting adding first and last to array");
         let b_address = con_topic.join("A/B/")?;
         let add_operation1 = AddOperation {
-            path: "/0".to_string(),
+            path: jsonptr::PointerBuf::try_from("/0").unwrap(),
             value: json!("start"),
         };
         let add_operation2 = AddOperation {
-            path: "/-".to_string(),
+            path: jsonptr::PointerBuf::try_from("/-").unwrap(),
             value: json!("end"),
         };
         let operation1 = PatchOperation::Add(add_operation1);
@@ -868,7 +868,7 @@ pub mod tests {
         info!("proxied_topic: {}", proxied_topic.to_url_repr());
 
         let patch = Patch(vec![PatchOperation::Add(AddOperation {
-            path: "/added".to_string(),
+            path: jsonptr::PointerBuf::try_from("/added").unwrap(),
             value: serde_json::Value::String("new".to_string()),
         })]);
 
