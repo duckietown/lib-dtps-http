@@ -31,7 +31,7 @@ from typing import (
 
 import cbor2
 from multidict import CIMultiDict, CIMultiDictProxy
-from pydantic import parse_obj_as
+from pydantic import TypeAdapter
 from typing_extensions import ParamSpec
 
 from . import logger
@@ -217,6 +217,12 @@ def parse_tagged(d: Dict[str, Any], *Ts: Type[X]) -> X:
     raise ValueError(f"parse_tagged: {d!r} does not have any of {Ts!r}")
 
 
+@functools.lru_cache(maxsize=128)
+def _get_type_adapter(T: Type[X]) -> TypeAdapter[X]:
+    """Cache TypeAdapter instances to avoid repeated schema generation."""
+    return TypeAdapter(T)
+
+
 def pydantic_parse(T: Type[X], d: Any) -> X:
     """
     Parses data into either a Pydantic model or a standard dataclass.
@@ -228,9 +234,10 @@ def pydantic_parse(T: Type[X], d: Any) -> X:
     Returns:
         An instance of T.
     """
-    # Try Pydantic parse
+    # Use cached TypeAdapter
     try:
-        return parse_obj_as(T, d)
+        adapter = _get_type_adapter(T)
+        return adapter.validate_python(d)
     except Exception:
         # Fallback for standard dataclasses
         if dataclasses.is_dataclass(T):
