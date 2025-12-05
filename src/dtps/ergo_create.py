@@ -1,6 +1,6 @@
 import asyncio
 import traceback
-from contextlib import asynccontextmanager
+from dtps_http.compat import asynccontextmanager
 from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Sequence, Tuple, Union
 
 from jsonpatch import JsonPatch
@@ -104,7 +104,7 @@ class ContextManagerCreateContextPublisher(PublisherInterface):
     def __init__(self, master: "ContextManagerCreateContext"):
         self.master = master
 
-    async def publish(self, rd: RawData, /) -> None:
+    async def publish(self, rd: RawData) -> None:
         # nothing more to do for this
         await self.master.publish(rd)
 
@@ -143,7 +143,7 @@ class ContextManagerCreateContext(DTPSContext):
         urls = server.available_urls
 
         rurl = self._topic.as_relative_url()
-        res: list[URLString] = []
+        res: List[URLString] = []
         for u in urls:
             u2 = parse_url_unescape(u)
             um = join(u2, rurl)
@@ -175,7 +175,7 @@ class ContextManagerCreateContext(DTPSContext):
         return self / ":meta"  # TODO: actually we can do some error checks here
 
     def navigate(self, *components: str) -> "DTPSContext":
-        c: list[str] = []
+        c: List[str] = []
         for comp in components:
             c.extend([_ for _ in comp.split("/") if _])
         return self.master.get_context_by_components(self.components + tuple(c), self.config)
@@ -183,7 +183,7 @@ class ContextManagerCreateContext(DTPSContext):
     def get_config(self) -> ContextConfig:
         return self.config
 
-    def configure(self, cc: ContextConfig, /) -> "DTPSContext":
+    def configure(self, cc: ContextConfig) -> "DTPSContext":
         merged = self.config.specialize(cc)
         return self.master.get_context_by_components(self.components, merged)
 
@@ -241,7 +241,6 @@ class ContextManagerCreateContext(DTPSContext):
     async def subscribe(
         self,
         on_data: Callable[[RawData], Awaitable[None]],
-        /,
         max_frequency: Optional[float] = None,
         inline: bool = True,
         queue_size: int = DEFAULT_CALLBACK_QUEUE_SIZE,
@@ -294,7 +293,7 @@ class ContextManagerCreateContext(DTPSContext):
         # TODO: DTSW-4794: implement history
         raise NotImplementedError()
 
-    async def publish(self, data: RawData, /) -> None:
+    async def publish(self, data: RawData) -> None:
         server = self._get_server()
         topic = self._topic
         queue = server.get_oq(topic)
@@ -307,7 +306,7 @@ class ContextManagerCreateContext(DTPSContext):
     async def publisher_context(self) -> AsyncIterator["PublisherInterface"]:
         yield self._publisher
 
-    async def patch(self, patch_data: List[Dict[str, Any]], /) -> None:
+    async def patch(self, patch_data: List[Dict[str, Any]]) -> None:
         server = self._get_server()
         topic = self._topic
         url0 = topic.as_relative_url()
@@ -316,7 +315,7 @@ class ContextManagerCreateContext(DTPSContext):
         pdata = JsonPatch(patch_data)  # type: ignore
         await resolve.patch(url0, server, pdata)
 
-    async def call(self, data: RawData, /) -> RawData:
+    async def call(self, data: RawData) -> RawData:
         server = self._get_server()
         topic = self._topic
         url0 = topic.as_relative_url()
@@ -329,7 +328,7 @@ class ContextManagerCreateContext(DTPSContext):
         return res
 
     async def expose(
-        self, p: "Sequence[str] | DTPSContext", /, *, mask_origin: bool = False
+        self, p: "Union[Sequence[str], DTPSContext]",  *, mask_origin: bool = False
     ) -> "DTPSContext":
         if isinstance(p, DTPSContext):
             urls = await p.get_urls()
@@ -409,13 +408,15 @@ class ContextManagerCreateContext(DTPSContext):
     ) -> "DTPSContext":
         return self
 
-    async def connect_to(self, c: "DTPSContext", /) -> "ConnectionInterface":  # type: ignore
+    async def connect_to(self, c: "DTPSContext") -> "ConnectionInterface":  # type: ignore
         msg = 'Cannot use this method for "create" contexts because Python does not support the functionality'
         raise NotImplementedError(msg)
 
     async def subscribe_diff(
-        self, on_data: Callable[[PatchType], Awaitable[None]], /
-    ) -> "SubscriptionInterface":
+        self,
+        on_data,  # type: Callable[[PatchType], Awaitable[None]]
+    ):
+        # type: (...) -> SubscriptionInterface
         differ = Differ()
 
         async def sub_diff(data: RawData) -> None:

@@ -1,7 +1,7 @@
 import asyncio
 import time
 from typing import List
-from unittest import IsolatedAsyncioTestCase
+from .compat import IsolatedAsyncioTestCase
 
 from dtps import DTPSContext
 from dtps_http import (
@@ -49,7 +49,7 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
         when = EveryOnceInAWhile(publish_dt)
         t0 = time.time()
         i = 0
-        logger.info(f"{publish_dt=}")
+        logger.info(f"publish_dt={publish_dt}")
         nsent = 0
         while True:
             i += 1
@@ -73,7 +73,7 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
         logger.info(f"nsent: {nsent}")
         logger.info(f"expected: {expected_n}")
         logger.info(f"nfound: {len(found)}")
-        stats = f" {max_frequency=} {effective_frequency=} {period_s} {nsent=} {nfound=} {expected_n=} expected={period_s * max_frequency}"
+        stats = f" max_frequency={max_frequency} effective_frequency={effective_frequency} {period_s} nsent={nsent} nfound={nfound} expected_n={expected_n} expected={period_s * max_frequency}"
 
         if too_many:
             msg = f"Too many messages found: {len(found)}, expected around {expected_n}"
@@ -98,7 +98,7 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
             async with topic.publisher_context() as publisher:
                 listener_info = await publisher.get_listener_info()
                 assert listener_info is not None
-                logger.info(f"{listener_info=}")
+                logger.info(f"listener_info={listener_info}")
                 self.assertEqual(listener_info.num_listeners, 0)
 
                 self.assertEqual(listener_info.max_frequency, None)
@@ -108,14 +108,14 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
 
                 listener_info = await publisher.get_listener_info()
                 assert listener_info is not None
-                logger.info(f"{listener_info=}")
+                logger.info(f"listener_info={listener_info}")
                 self.assertEqual(listener_info.num_listeners, 2)
                 self.assertEqual(listener_info.max_frequency, max(max_frequency1, max_frequency2))
 
                 await sub2.unsubscribe()
 
                 listener_info = await publisher.get_listener_info()
-                logger.info(f"{listener_info=}")
+                logger.info(f"listener_info={listener_info}")
                 assert listener_info is not None
                 self.assertEqual(listener_info.num_listeners, 1)
                 self.assertEqual(listener_info.max_frequency, max_frequency1)
@@ -124,7 +124,7 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
 
                 listener_info = await publisher.get_listener_info()
                 assert listener_info is not None
-                logger.info(f"{listener_info=}")
+                logger.info(f"listener_info={listener_info}")
                 self.assertEqual(listener_info.num_listeners, 0)
 
                 self.assertEqual(listener_info.max_frequency, None)
@@ -145,7 +145,7 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
             async with topic.publisher_context() as publisher:
                 listener_info = await publisher.get_listener_info()
                 assert listener_info is not None
-                logger.info(f"{listener_info=}")
+                logger.info(f"listener_info={listener_info}")
                 self.assertEqual(listener_info.num_listeners, 0)
 
                 self.assertEqual(listener_info.max_frequency, None)
@@ -155,7 +155,7 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
                 await asyncio.sleep(delay)
                 listener_info = await publisher.get_listener_info()
                 assert listener_info is not None
-                logger.info(f"after sub1, sub2 subscribed: {listener_info=}")
+                logger.info(f"after sub1, sub2 subscribed: listener_info={listener_info}")
                 self.assertEqual(listener_info.num_listeners, 2)
                 self.assertEqual(listener_info.max_frequency, max(max_frequency1, max_frequency2))
 
@@ -164,7 +164,7 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
 
                 listener_info = await publisher.get_listener_info()
                 assert listener_info is not None
-                logger.info(f"after sub2 unsubscribed: {listener_info=}")
+                logger.info(f"after sub2 unsubscribed: listener_info={listener_info}")
                 self.assertEqual(listener_info.num_listeners, 1)
                 self.assertEqual(listener_info.max_frequency, max_frequency1)
 
@@ -173,7 +173,7 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
 
                 listener_info = await publisher.get_listener_info()
                 assert listener_info is not None
-                logger.info(f"after sub2 unsubscribed as well: {listener_info=}")
+                logger.info(f"after sub2 unsubscribed as well: listener_info={listener_info}")
                 self.assertEqual(listener_info.num_listeners, 0)
 
                 self.assertEqual(listener_info.max_frequency, None)

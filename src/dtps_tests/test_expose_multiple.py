@@ -1,7 +1,7 @@
 import asyncio
-from contextlib import AsyncExitStack
+from .compat import AsyncExitStack
 from typing import List
-from unittest import IsolatedAsyncioTestCase
+from .compat import IsolatedAsyncioTestCase
 
 from dtps import DTPSContext
 from dtps_http import (

@@ -79,7 +79,7 @@ class TopicNameV:
             return cls.from_dash_sep(s)
 
     @classmethod
-    def from_components(cls, c: Sequence[str], /) -> "TopicNameV":
+    def from_components(cls, c: Sequence[str]) -> "TopicNameV":
         return cls(tuple(c))
 
     @classmethod

@@ -1,4 +1,4 @@
-from unittest import IsolatedAsyncioTestCase
+from .compat import IsolatedAsyncioTestCase
 
 from dtps import DTPSContext
 from dtps import ContextConfig
@@ -21,17 +21,17 @@ class TestConfig(IsolatedAsyncioTestCase):
                 config1 = ContextConfig(patient=True)
                 config2 = ContextConfig(patient=False)
 
-                logger.info(f"{config0=}")
-                logger.info(f"{config1=}")
-                logger.info(f"{config1=}")
+                logger.info(f"config0={config0}")
+                logger.info(f"config1={config1}")
+                logger.info(f"config1={config1}")
 
                 a: DTPSContext = use / "rpc"
                 a1 = a.configure(config1)
                 a2 = a.configure(config2)
 
-                logger.info(f"{a=}")
-                logger.info(f"{a1=}")
-                logger.info(f"{a2=}")
+                logger.info(f"a={a}")
+                logger.info(f"a1={a1}")
+                logger.info(f"a2={a2}")
 
                 self.assertEqual(a.get_config(), config0)
 

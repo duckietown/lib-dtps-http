@@ -45,16 +45,16 @@ class LinkHeader:
         return cls(url=url, rel=rel, attributes=attributes)
 
 
-def get_link_headers(h: Union[CIMultiDict[str], CIMultiDictProxy[str]]) -> Dict[str, LinkHeader]:
-    res: Dict[str, LinkHeader] = {}
-    default: List[str] = []
+def get_link_headers(h: "Union[CIMultiDict[str], CIMultiDictProxy[str]]") -> "Dict[str, LinkHeader]":
+    res: "Dict[str, LinkHeader]" = {}
+    default: "List[str]" = []
     for l in h.getall("Link", default):
         lh = LinkHeader.parse(l)
         res[lh.rel] = lh
     return res
 
 
-def put_link_header(h: CIMultiDict[str], url: str, rel: str, content_type: Optional[str]):
+def put_link_header(h: "CIMultiDict[str]", url: str, rel: str, content_type: Optional[str]):
     l = LinkHeader(url=url, rel=rel)
     if content_type is not None:
         l.attributes["type"] = content_type

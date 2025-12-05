@@ -12,6 +12,7 @@ from dtps_http import (
     MIME_JSON,
     TopicNameV,
 )
+from dtps_http.compat import time_ns
 from . import logger
 
 __all__ = [
@@ -27,7 +28,7 @@ async def run_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, init
     logger.info(f"Starting clock {topic_name.as_relative_url()} with interval {interval}")
     oq = await s.create_oq(topic_name, content_info=ContentInfo.simple(MIME_JSON), tp=None, bounds=None)
     while True:
-        t = time.time_ns()
+        t = time_ns()
         await oq.publish_json(t)
         await asyncio.sleep(interval)
 

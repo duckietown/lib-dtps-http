@@ -5,7 +5,9 @@ import time
 import traceback
 import uuid
 from asyncio import CancelledError
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import contextmanager
+
+from .compat import asynccontextmanager, time_ns, monotonic_ns
 from dataclasses import asdict, dataclass as original_dataclass, replace
 from typing import (
     Any,
@@ -233,7 +235,7 @@ class DTPSServer:
         self.app = web.Application()
 
         self.node_app_data = {}
-        self.node_started = time.time_ns()
+        self.node_started = time_ns()
 
         routes = web.RouteTableDef()
         self._more_on_startup = on_startup
@@ -286,7 +288,7 @@ class DTPSServer:
     def has_forwarded(self, topic_name: TopicNameV) -> bool:
         return topic_name in self._forwarded
 
-    def get_headers_alternatives(self, request: web.Request) -> CIMultiDict[str]:
+    def get_headers_alternatives(self, request: web.Request) -> "CIMultiDict[str]":
         original_url = str(request.url)
 
         # noinspection PyProtectedMember
@@ -298,7 +300,7 @@ class DTPSServer:
         else:
             use_url = original_url
 
-        res: CIMultiDict[str] = CIMultiDict()
+        res: "CIMultiDict[str]" = CIMultiDict()
         if not self.available_urls:
             res[HEADER_NO_AVAIL] = "No alternative URLs available"
             return res
@@ -602,7 +604,7 @@ class DTPSServer:
             origin_node=self.node_id,
             app_data=app_data,
             reachability=reachability,
-            created=time.time_ns(),
+            created=time_ns(),
             properties=tp,
             content_info=content_info,
             bounds=bounds,
@@ -632,7 +634,7 @@ class DTPSServer:
             reachability=[],
             content_info=content_info,
             properties=TopicProperties.streamable_readonly(),
-            created=time.time_ns(),
+            created=time_ns(),
             bounds=Bounds.max_length(1),
         )
         self._oqs[ROOT] = ObjectQueue(
@@ -651,7 +653,7 @@ class DTPSServer:
             reachability=[],
             content_info=content_info,
             properties=TopicProperties.streamable_readonly(),
-            created=time.time_ns(),
+            created=time_ns(),
             bounds=Bounds.max_length(1),
         )
         self._oqs[TOPIC_LIST] = ObjectQueue(
@@ -798,7 +800,7 @@ class DTPSServer:
                 app_data={},
                 reachability=fd.reachability,
                 properties=fd.properties,
-                created=time.time_ns(),
+                created=time_ns(),
                 content_info=fd.content_info,
                 bounds=fd.bounds,
             )
@@ -821,7 +823,7 @@ class DTPSServer:
                         app_data={},
                         reachability=reachability,
                         properties=TopicProperties.streamable_readonly(),
-                        created=time.time_ns(),
+                        created=time_ns(),
                         content_info=ContentInfo.simple(CONTENT_TYPE_DTPS_INDEX_CBOR),
                         bounds=Bounds.unbounded(),  # XXX
                     )
@@ -837,7 +839,7 @@ class DTPSServer:
         index_internal = self.create_root_index()
         index_wire = index_internal.to_wire()
 
-        headers: CIMultiDict[str] = CIMultiDict()
+        headers: "CIMultiDict[str]" = CIMultiDict()
 
         add_nocache_headers(headers)
         multidict_update(headers, self.get_headers_alternatives(request))
@@ -852,8 +854,8 @@ class DTPSServer:
         headers.add(HEADER_DATA_ORIGIN_NODE_ID, self.node_id)
 
         # get all the accept headers
-        accept: list[str] = []
-        default_empty: list[str] = []
+        accept: List[str] = []
+        default_empty: List[str] = []
         for _ in request.headers.getall("accept", default_empty):
             accept.extend(_.split(","))
 
@@ -910,7 +912,7 @@ class DTPSServer:
 
     @async_error_catcher
     async def serve_history(self, request: web.Request) -> web.StreamResponse:
-        headers: CIMultiDict[str] = CIMultiDict()
+        headers: "CIMultiDict[str]" = CIMultiDict()
         add_nocache_headers(headers)
         multidict_update(headers, self.get_headers_alternatives(request))
         self._add_own_headers(headers)
@@ -940,7 +942,7 @@ class DTPSServer:
 
     @async_error_catcher
     async def serve_meta(self, request: web.Request) -> web.StreamResponse:
-        headers: CIMultiDict[str] = CIMultiDict()
+        headers: "CIMultiDict[str]" = CIMultiDict()
         add_nocache_headers(headers)
         multidict_update(headers, self.get_headers_alternatives(request))
         self._add_own_headers(headers)
@@ -987,11 +989,13 @@ class DTPSServer:
                 else:
                     return source
 
-            if (ispref := k.is_prefix_of(tn)) is not None:
+            ispref = k.is_prefix_of(tn)
+            if ispref is not None:
                 matched, rest = ispref
                 return source.resolve_extra(rest, after)
 
-            if (ispref2 := tn.is_prefix_of(k)) is not None:
+            ispref2 = tn.is_prefix_of(k)
+            if ispref2 is not None:
                 matched, rest = ispref2
                 subtopics.append((k, matched, rest, source))
 
@@ -1021,12 +1025,13 @@ class DTPSServer:
 
         origin_node = self.node_id
         if tn in self._mount_points:
-            if (established := self._mount_points[tn].established) is not None:
+            established = self._mount_points[tn].established
+            if established is not None:
                 origin_node = established.md.answering
                 if origin_node is None:
                     origin_node = self.node_id
             # else:
-            #     raise KeyError(f"Mount point {tn} is not established yet")
+            #     raise KeyError(f"Mount point {tn} is not established yet"))
 
         unique_id = get_unique_id(origin_node, tn)
         subsources: Dict[TopicNameV, Source] = {}
@@ -1059,7 +1064,7 @@ class DTPSServer:
 
     @async_error_catcher
     async def serve_delete(self, request: web.Request) -> web.StreamResponse:
-        headers: CIMultiDict[str] = CIMultiDict()
+        headers: "CIMultiDict[str]" = CIMultiDict()
         self._add_own_headers(headers)
         add_nocache_headers(headers)
 
@@ -1097,7 +1102,7 @@ class DTPSServer:
     @async_error_catcher
     async def serve_get(self, request: web.Request) -> web.StreamResponse:
         with self._log_request(request):
-            headers: CIMultiDict[str] = CIMultiDict()
+            headers: "CIMultiDict[str]" = CIMultiDict()
             self._add_own_headers(headers)
             add_nocache_headers(headers)
 
@@ -1189,7 +1194,7 @@ class DTPSServer:
         initial_push_contenttype: str,
         streamable: bool,
     ) -> web.StreamResponse:
-        headers: CIMultiDict[str] = CIMultiDict()
+        headers: "CIMultiDict[str]" = CIMultiDict()
 
         # language=html
         html_index = f"""\
@@ -1246,7 +1251,7 @@ class DTPSServer:
         request: web.Request,
         title: str,
         rd: Union[RawData, NotAvailableYet],
-        headers: CIMultiDict[str],
+        headers: "CIMultiDict[str]",
         *,
         is_streamable: bool,
         is_pushable: bool,
@@ -1324,9 +1329,9 @@ pre {{
 
                     # Create a response with the proxied request's status and body,
                     # forwarding all the headers
-                    headers: CIMultiDict[str] = CIMultiDict()
+                    headers: "CIMultiDict[str]" = CIMultiDict()
                     multidict_update(headers, resp.headers)
-                    default_empty: list[str] = []
+                    default_empty: List[str] = []
                     headers.popall(HEADER_NO_AVAIL, default_empty)
                     headers.popall(HEADER_CONTENT_LOCATION, default_empty)
 
@@ -1348,7 +1353,7 @@ pre {{
 
                     return response
 
-    def _add_own_headers(self, headers: CIMultiDict[str]) -> None:
+    def _add_own_headers(self, headers: "CIMultiDict[str]") -> None:
         # passed_already = headers.get(HEADER_NODE_PASSED_THROUGH, [])
         default: List[str] = []
         prevnodeids = headers.getall(HEADER_NODE_ID, default)
@@ -1369,8 +1374,8 @@ pre {{
         headers.popall(HEADER_NODE_ID, None)
         headers[HEADER_NODE_ID] = self.node_id
 
-    def _headers(self, request: web.Request) -> CIMultiDict[str]:
-        headers: CIMultiDict[str] = CIMultiDict()
+    def _headers(self, request: web.Request) -> "CIMultiDict[str]":
+        headers: "CIMultiDict[str]" = CIMultiDict()
         add_nocache_headers(headers)
         self._add_own_headers(headers)
         multidict_update(headers, self.get_headers_alternatives(request))
@@ -1537,7 +1542,7 @@ pre {{
 
     @async_error_catcher
     async def serve_blob(self, request: web.Request) -> web.Response:
-        headers: CIMultiDict[str] = CIMultiDict()
+        headers: "CIMultiDict[str]" = CIMultiDict()
         multidict_update(headers, self.get_headers_alternatives(request))
         self._add_own_headers(headers)
 
@@ -1557,7 +1562,7 @@ pre {{
 
     # @async_error_catcher
     # async def serve_data_get(self, request: web.Request) -> web.Response:
-    #     headers: CIMultiDict[str] = CIMultiDict()
+    #     headers: "CIMultiDict[str]" = CIMultiDict()
     #     multidict_update(headers, self.get_headers_alternatives(request))
     #     self._add_own_headers(headers)
     #     if "topic" not in request.match_info:
@@ -1591,14 +1596,14 @@ pre {{
         # logger.info(f"serve_events: {request} topic_name={topic_name_s} send_data={send_data}")
         topic_name = TopicNameV.from_relative_url(topic_name_s)
         if topic_name not in self._oqs and topic_name not in self._forwarded:
-            headers: CIMultiDict[str] = CIMultiDict()
+            headers: "CIMultiDict[str]" = CIMultiDict()
 
             self._add_own_headers(headers)
             msg = f"Cannot resolve topic: {request.url}\ntopic: {topic_name_s!r}"
             raise web.HTTPNotFound(text=msg, headers=headers)
 
         headers = request.headers  # type: ignore
-        # self.logger.debug(f"serve_events: {headers=}")
+        # self.logger.debug(f"serve_events: headers={headers}")
         if HEADER_MAX_FREQUENCY in headers:
             s = headers[HEADER_MAX_FREQUENCY]
             try:
@@ -1608,7 +1613,7 @@ pre {{
                 raise HTTPBadRequest(text=msg)
         else:
             max_frequency = None
-        self.logger.debug(f"serve_events: {max_frequency=}")
+        self.logger.debug(f"serve_events: max_frequency={max_frequency}")
 
         ws = web.WebSocketResponse()
         multidict_update(ws.headers, self.get_headers_alternatives(request))
@@ -1737,7 +1742,7 @@ pre {{
 
     @async_error_catcher
     async def serve_push_stream(self, request: web.Request) -> web.WebSocketResponse:
-        headers: CIMultiDict[str] = CIMultiDict()
+        headers: "CIMultiDict[str]" = CIMultiDict()
         self._add_own_headers(headers)
 
         topic_name_s = request.match_info["topic"]
@@ -1833,28 +1838,34 @@ pre {{
             # noinspection PyBroadException
             try:
                 if inline_data:
-                    if (url := fd.forward_url_events_inline_data) is not None:
+                    url = fd.forward_url_events_inline_data
+                    if url is not None:
                         await self.serve_events_forward_simple(ws, url)
-                    elif (url := fd.forward_url_events) is not None:
-                        await self.serve_events_forwarder_one(
-                            ws,
-                            presented_as,
-                            url,
-                            inline_data_send=inline_data,
-                            inline_data_receive=False,
-                            max_frequency=max_frequency,
-                        )
                     else:
-                        raise ValueError(f"Events not supported")
+                        url = fd.forward_url_events
+                        if url is not None:
+                            await self.serve_events_forwarder_one(
+                                ws,
+                                presented_as,
+                                url,
+                                inline_data_send=inline_data,
+                                inline_data_receive=False,
+                                max_frequency=max_frequency,
+                            )
+                        else:
+                            raise ValueError(f"Events not supported")
 
                         # await self.serve_events_forwarder_one(ws,  True)
                 else:
-                    if (url := fd.forward_url_events_inline_data) is not None:
+                    url = fd.forward_url_events_inline_data
+                    if url is not None:
                         inline_data_receive = True
-                    elif (url := fd.forward_url_events) is not None:
-                        inline_data_receive = False
                     else:
-                        raise ValueError(f"Events not supported")
+                        url = fd.forward_url_events
+                        if url is not None:
+                            inline_data_receive = False
+                        else:
+                            raise ValueError(f"Events not supported")
 
                     await self.serve_events_forwarder_one(
                         ws,
@@ -1913,7 +1924,7 @@ pre {{
     ) -> None:
         available_for = 10.0
         assert isinstance(url, URL)
-        self.logger.debug(f"serve_events_forwarder_one: {url} {inline_data_receive=} {inline_data_send=}")
+        self.logger.debug(f"serve_events_forwarder_one: {url} inline_data_receive={inline_data_receive} inline_data_send={inline_data_send}")
 
         async with self._client() as client:
 
@@ -1990,9 +2001,9 @@ pre {{
             await ld.wait_for_done_or_stop_on_event(self.shutdown_event)
 
 
-def add_nocache_headers(h: CIMultiDict[str]) -> None:
+def add_nocache_headers(h: "CIMultiDict[str]") -> None:
     h.update(HEADER_NO_CACHE)
-    h["Cookie"] = f"help-no-cache={time.monotonic_ns()}"
+    h["Cookie"] = f"help-no-cache={monotonic_ns()}"
 
 
 def get_unique_id(node_id: NodeID, topic_name: TopicNameV) -> SourceID:
@@ -2001,7 +2012,7 @@ def get_unique_id(node_id: NodeID, topic_name: TopicNameV) -> SourceID:
     return cast(SourceID, f"{node_id}:{topic_name.as_relative_url()}")
 
 
-def put_meta_headers(h: CIMultiDict[str], tp: TopicProperties) -> None:
+def put_meta_headers(h: "CIMultiDict[str]", tp: TopicProperties) -> None:
     if tp.streamable:
         put_link_header(h, f"{EVENTS_SUFFIX}/", REL_EVENTS_NODATA, "websocket")
         put_link_header(h, f"{EVENTS_SUFFIX}/?send_data=1", REL_EVENTS_DATA, "websocket")
@@ -2023,7 +2034,7 @@ async def update_clock(s: DTPSServer, topic_name: TopicNameV, interval: float, i
     s.logger.info(f"Starting clock {topic_name.as_relative_url()} with interval {interval}")
     oq = s.get_oq(topic_name)
     while True:
-        t = time.time_ns()
+        t = time_ns()
         data = str(t).encode()
         await oq.publish(RawData(content=data, content_type=MIME_JSON))
         try:

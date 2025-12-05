@@ -1,7 +1,7 @@
 import asyncio.subprocess
 import os
 import tempfile
-from contextlib import asynccontextmanager
+from dtps_http.compat import asynccontextmanager
 from datetime import datetime
 from typing import AsyncIterator, Tuple
 

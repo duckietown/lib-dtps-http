@@ -1,5 +1,5 @@
 import asyncio
-from unittest import IsolatedAsyncioTestCase
+from .compat import IsolatedAsyncioTestCase
 
 from dtps import DTPSContext, process_lowdatasize_last_recent
 from dtps_http import (

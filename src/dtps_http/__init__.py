@@ -5,6 +5,7 @@ from logging import DEBUG, getLogger, INFO, WARNING
 logger = getLogger(__name__)
 logger.setLevel(INFO)
 
+from .compat import *
 from .client import *
 from .constants import *
 from .exceptions import *

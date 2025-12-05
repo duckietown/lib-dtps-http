@@ -1,5 +1,5 @@
 import asyncio
-from unittest import IsolatedAsyncioTestCase
+from .compat import IsolatedAsyncioTestCase
 
 from dtps import DTPSContext
 from dtps_http import MIME_TEXT, RawData
@@ -14,13 +14,13 @@ async def go(base: DTPSContext, inline: bool) -> None:
 
     publisher = await node_output.publisher()
 
-    async def on_input(data: RawData, /) -> None:
+    async def on_input(data: RawData) -> None:
         logger.debug("Got data: " + str(data))
         await publisher.publish(data)
 
     event = asyncio.Event()
 
-    async def on_output(_: RawData, /) -> None:
+    async def on_output(_: RawData) -> None:
         event.set()
 
     sub1 = await node_input.subscribe(on_input, inline=inline)

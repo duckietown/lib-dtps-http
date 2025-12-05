@@ -148,21 +148,21 @@ class ServerWrapped:
 
 
 async def app_start(
-    s: DTPSServer,
-    /,
+    s,  # type: DTPSServer
     *,
-    tcps: Sequence[Tuple[str, int]] = (),
-    unix_paths: Sequence[str] = (),
-    tunnel: Optional[str] = None,
-    no_alternatives: bool = False,
-    extra_advertise: Optional[List[URLString]] = None,
-) -> ServerWrapped:
+    tcps=(),  # type: Sequence[Tuple[str, int]]
+    unix_paths=(),  # type: Sequence[str]
+    tunnel=None,  # type: Optional[str]
+    no_alternatives=False,  # type: bool
+    extra_advertise=None  # type: Optional[List[URLString]]
+):
+    # type: (...) -> ServerWrapped
     runner = web.AppRunner(s.app)
     await runner.setup()
 
     tunnel_process = None
 
-    available_urls: List[URLString] = []
+    available_urls = []  # type: List[URLString]
     for tcp in tcps:
         tcp_host, port = tcp
 

@@ -3,7 +3,8 @@ import json
 import os
 import tempfile
 import unittest
-from typing import cast, List, Literal
+from typing import cast, List
+from typing_extensions import Literal
 
 import cbor2
 import yaml
@@ -33,10 +34,11 @@ from dtps_http import (
 )
 from dtps_http.structures import Bounds
 from . import logger
+from .compat import IsolatedAsyncioTestCase
 from .utils import test_timeout
 
 
-class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
+class TestAsyncServerFunction(IsolatedAsyncioTestCase):
     @test_timeout(10)
     @async_error_catcher
     async def test_push1(self) -> None:

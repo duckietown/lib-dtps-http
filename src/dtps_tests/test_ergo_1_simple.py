@@ -1,5 +1,5 @@
 import asyncio
-from unittest import IsolatedAsyncioTestCase
+from .compat import IsolatedAsyncioTestCase
 
 from dtps import DTPSContext
 from dtps_http import async_error_catcher, MIME_TEXT, RawData
@@ -19,7 +19,7 @@ async def check_ergo_simple(base: DTPSContext, inline: bool, send_before: bool) 
         await node_input.publish(rd)
 
     @async_error_catcher
-    async def on_input(data: RawData, /) -> None:
+    async def on_input(data: RawData) -> None:
         assert data == rd
         event.set()
 

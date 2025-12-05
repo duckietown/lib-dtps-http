@@ -1,5 +1,5 @@
 import os
-from contextlib import asynccontextmanager
+from dtps_http.compat import asynccontextmanager
 from dataclasses import dataclass
 from typing import (
     AsyncContextManager,

@@ -1,6 +1,6 @@
 import json
 import time
-from contextlib import asynccontextmanager
+from .compat import asynccontextmanager, time_ns
 from dataclasses import dataclass, dataclass as original_dataclass
 from typing import AsyncIterator, Awaitable, Callable, cast, Dict, Iterator, NewType, Optional, Union
 
@@ -173,7 +173,7 @@ class ObjectQueue:
         data = yaml.dump(obj)
         return await self.publish(RawData(content=data.encode(), content_type=content_type), get_data=True)
 
-    async def publish(self, obj0: RawData, /, *, get_data: bool = False) -> PostResult:
+    async def publish(self, obj0: RawData,  *, get_data: bool = False) -> PostResult:
         """
         Publish raw bytes.
 
@@ -198,7 +198,7 @@ class ObjectQueue:
             origin_node=self.tr.origin_node,
             unique_id=self.tr.unique_id,
             index=use_seq,
-            time_inserted=time.time_ns(),
+            time_inserted=time_ns(),
             digest=digest,
             content_type=obj.content_type,
             content_length=len(obj.content),
@@ -238,7 +238,7 @@ class ObjectQueue:
         if self._seq > 0:
             based_on = self._seq - 1
             clocks.logical[self.tr.unique_id] = MinMax(min=based_on, max=based_on)
-        now = time.time_ns()
+        now = time_ns()
         clocks.wall[self.tr.unique_id] = MinMax(min=now, max=now)
         return clocks
 

@@ -1,6 +1,6 @@
 import asyncio
 from typing import List
-from unittest import IsolatedAsyncioTestCase
+from .compat import IsolatedAsyncioTestCase
 
 from dtps import DTPSContext
 from dtps_http import async_error_catcher, MIME_TEXT, RawData
@@ -17,7 +17,7 @@ async def check_ergo_unsub(base: DTPSContext, inline: bool) -> None:
     received: List[RawData] = []
 
     @async_error_catcher
-    async def on_input(data: RawData, /) -> None:
+    async def on_input(data: RawData) -> None:
         n = len(received)
         logger.info(f"received #{n}")
         received.append(data)

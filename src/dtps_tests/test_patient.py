@@ -3,7 +3,7 @@ import os
 import tempfile
 from asyncio import Event
 from typing import List
-from unittest import IsolatedAsyncioTestCase
+from .compat import IsolatedAsyncioTestCase
 
 from dtps import ContextConfig, DTPSContext
 from dtps_http import (

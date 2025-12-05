@@ -1,4 +1,4 @@
-from unittest import IsolatedAsyncioTestCase
+from .compat import IsolatedAsyncioTestCase
 
 from dtps_http import (
     async_error_catcher,

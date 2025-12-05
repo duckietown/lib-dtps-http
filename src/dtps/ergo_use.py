@@ -2,7 +2,7 @@ import asyncio
 import time
 import traceback
 from asyncio import CancelledError, Event
-from contextlib import asynccontextmanager
+from dtps_http.compat import asynccontextmanager
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -208,7 +208,7 @@ class ContextManagerUseContextPublisher(PublisherInterface):
             url_topic, queue_in=self.queue_in, queue_out=self.queue_out
         )
 
-    async def publish(self, rd: RawData, /) -> None:
+    async def publish(self, rd: RawData) -> None:
         await self.queue_in.put(rd)
         success = await self.queue_out.get()
         if not success:
@@ -268,7 +268,7 @@ class ContextManagerUseContext(DTPSContext):
     def get_config(self) -> ContextConfig:
         return self.config
 
-    def configure(self, cc: ContextConfig, /) -> "DTPSContext":
+    def configure(self, cc: ContextConfig) -> "DTPSContext":
         merged = self.config.specialize(cc)
         return self.master.get_context_by_components(self.components, merged)
 
@@ -319,10 +319,10 @@ class ContextManagerUseContext(DTPSContext):
             else:
                 raise
 
-    async def patch(self, patch_data: List[Dict[str, Any]], /) -> None:
+    async def patch(self, patch_data: List[Dict[str, Any]]) -> None:
         return await self.patient(self.patch_, patch_data)
 
-    async def patch_(self, patch_data: List[Dict[str, Any]], /) -> None:
+    async def patch_(self, patch_data: List[Dict[str, Any]]) -> None:
         url = await self._get_best_url()
         data = cbor2.dumps(patch_data)
         res = await self.master.client.patch(url, CONTENT_TYPE_PATCH_CBOR, data)
@@ -331,7 +331,7 @@ class ContextManagerUseContext(DTPSContext):
         return TopicNameV.from_components(self.components)
 
     def navigate(self, *components: str) -> "DTPSContext":
-        c: list[str] = []
+        c: List[str] = []
         for comp in components:
             c.extend([_ for _ in comp.split("/") if _])
         return self.master.get_context_by_components(self.components + tuple(c), self.config)
@@ -360,7 +360,6 @@ class ContextManagerUseContext(DTPSContext):
     async def subscribe(
         self,
         on_data: Callable[[RawData], Awaitable[None]],
-        /,
         max_frequency: Optional[float] = None,
         inline: bool = True,
         queue_size: int = DEFAULT_CALLBACK_QUEUE_SIZE,
@@ -382,7 +381,6 @@ class ContextManagerUseContext(DTPSContext):
         self,
         fldi: FakeSubscriptionInterface,
         on_data: Callable[[RawData], Awaitable[None]],
-        /,
         max_frequency: Optional[float] = None,
         inline: bool = True,
         queue_size: int = DEFAULT_CALLBACK_QUEUE_SIZE,
@@ -392,7 +390,7 @@ class ContextManagerUseContext(DTPSContext):
         ntries = 0
         nsuccess = 0
         while True:
-            logger.debug(f"_subscribe_patient_task patient: loop {ntries=} {nsuccess=}")
+            logger.debug(f"_subscribe_patient_task patient: loop ntries={ntries} nsuccess={nsuccess}")
             try:
                 finished_event = Event()
 
@@ -423,7 +421,6 @@ class ContextManagerUseContext(DTPSContext):
     async def subscribe_once(
         self,
         on_data: Callable[[RawData], Awaitable[None]],
-        /,
         max_frequency: Optional[float] = None,
         inline: bool = True,
         on_finished: Optional[Callable[[FinishedMsg], Awaitable[None]]] = None,
@@ -535,12 +532,12 @@ class ContextManagerUseContext(DTPSContext):
         return await client.call(url, data)
 
     async def expose(
-        self, urls: "Sequence[str] | DTPSContext", /, *, mask_origin: bool = False
+        self, urls: "Union[Sequence[str], DTPSContext]",  *, mask_origin: bool = False
     ) -> "DTPSContext":
         return await self.patient(self.expose_, urls, mask_origin=mask_origin)
 
     async def expose_(
-        self, c: "DTPSContext | Sequence[str]", /, *, mask_origin: bool = False
+        self, c: "Union[DTPSContext, Sequence[str]]",  *, mask_origin: bool = False
     ) -> "DTPSContext":
         topic = self._get_components_as_topic()
         url0 = await self.master.get_best_url()
@@ -672,10 +669,10 @@ class ContextManagerUseContext(DTPSContext):
                 raise
         return self
 
-    async def connect_to(self, context: "DTPSContext", /) -> "ConnectionInterface":
+    async def connect_to(self, context: "DTPSContext") -> "ConnectionInterface":
         return await self.patient(self.connect_to_, context)
 
-    async def connect_to_(self, c: "DTPSContext", /) -> "ConnectionInterface":
+    async def connect_to_(self, c: "DTPSContext") -> "ConnectionInterface":
         # TODO: DTSW-4805: [use] implement connect_to
 
         if not isinstance(c, ContextManagerUseContext):
@@ -693,11 +690,13 @@ class ContextManagerUseContext(DTPSContext):
         return ConnectionInterfaceImpl(self.master, url, name)
 
     async def subscribe_diff(
-        self, on_data: Callable[[PatchType], Awaitable[None]], /
-    ) -> "SubscriptionInterface":
+        self,
+        on_data,  # type: Callable[[PatchType], Awaitable[None]]
+    ):
+        # type: (...) -> SubscriptionInterface
         msg = "subscribe_diff is not supported for remote contexts yet"
         raise NotImplementedError(msg)
-        a: SubscriptionInterface
+        a = None  # type: SubscriptionInterface
         return a
 
 

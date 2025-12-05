@@ -90,7 +90,7 @@ class Source(ABC):
     def get_inside_after(self, s: str) -> "Source": ...
 
     @abstractmethod
-    def get_inside(self, s: str, /) -> "Source":
+    def get_inside(self, s: str) -> "Source":
         """source / "a" / "b" """
         ...
 
@@ -177,7 +177,7 @@ def get_inside(
         v: Any = ob[first]
         return get_inside(original_ob, context + (first,), v, rest)
     elif isinstance(ob, (list, tuple)):
-        ob = cast(List[Any] | Tuple[Any, ...], ob)
+        ob = cast(Union[List[Any], Tuple[Any, ...]], ob)
         try:
             i = int(first)
         except ValueError:
@@ -220,7 +220,7 @@ class OurQueue(Source):
     def get_inside_after(self, s: str) -> "Source":
         raise KeyError(f"get_inside_after({s!r}) not implemented for {self!r}")
 
-    def get_inside(self, s: str, /) -> "Source":
+    def get_inside(self, s: str) -> "Source":
         if s == ":meta":
             return MetaInfo(self)
         return Transformed(self, GetInside((s,)))
@@ -304,7 +304,7 @@ class ForwardedQueue(Source):
     def get_inside_after(self, s: str) -> "Source":
         raise KeyError(f"get_inside_after({s!r}) not implemented for {self!r}")  # XXX:
 
-    def get_inside(self, s: str, /) -> "Source":
+    def get_inside(self, s: str) -> "Source":
         raise KeyError(f"get_inside({s!r}) not implemented for {self!r}")  # XXX:
 
     def get_properties(self, server: "DTPSServer") -> TopicProperties:
@@ -484,7 +484,7 @@ class SourceComposition(Source):
     def get_inside_after(self, s: str) -> "Source":
         raise KeyError(f"get_inside_after({s!r}) not implemented for {self!r}")
 
-    def get_inside(self, s: str, /) -> "Source":
+    def get_inside(self, s: str) -> "Source":
         raise KeyError(f"get_inside({s!r}) not implemented for {self!r}")
 
     async def get_resolved_data(
@@ -523,7 +523,7 @@ class Transformed(Source):
     def get_inside_after(self, s: str) -> "Source":
         raise KeyError(f"get_inside_after({s!r}) not implemented for {self!r}")  # XXX
 
-    def get_inside(self, s: str, /) -> "Source":
+    def get_inside(self, s: str) -> "Source":
         return Transformed(self.source, self.transform.get_transform_inside(s))
 
     async def get_resolved_data(
@@ -589,7 +589,7 @@ class MetaInfo(Source):
     def get_inside_after(self, s: str) -> "Source":
         raise KeyError(f"get_inside_after({s!r}) not implemented for {self!r}")
 
-    def get_inside(self, s: str, /) -> "Source":
+    def get_inside(self, s: str) -> "Source":
         raise KeyError(f"get_inside({s!r}) not implemented for {self!r}")
 
     async def get_resolved_data(

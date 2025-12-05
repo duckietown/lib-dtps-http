@@ -3,7 +3,7 @@ import os
 import traceback
 from abc import ABC, abstractmethod
 from asyncio import CancelledError, Event
-from contextlib import asynccontextmanager, AsyncExitStack
+from .compat import asynccontextmanager, AsyncExitStack
 from dataclasses import asdict, dataclass
 from typing import (
     Any,
@@ -147,7 +147,7 @@ class FoundMetadata:
 
     proxied_url: Optional[URL]
 
-    raw_headers: CIMultiDictProxy[str]
+    raw_headers: "CIMultiDictProxy[str]"
 
 
 class ShutdownAsked(Exception):
@@ -283,7 +283,8 @@ class DTPSClient:
                 # answering = resp.headers.get(HEADER_NODE_ID)
 
                 #  logger.debug(f"ask topics {resp.headers}")
-                if (preferred := await self.prefer_alternative(url, resp)) is not None:
+                preferred = await self.prefer_alternative(url, resp)
+                if preferred is not None:
                     self.logger.debug(f"Using preferred alternative to {url} -> {repr(preferred)}")
                     return await self.ask_index(preferred)
                 assert resp.status == 200, resp.status
@@ -347,7 +348,7 @@ class DTPSClient:
 
         if not alternatives0:
             return None
-        alternatives: list[URL] = [current]
+        alternatives: List[URL] = [current]
         for a in alternatives0:
             try:
                 x = parse_url_unescape(a)
@@ -377,7 +378,8 @@ class DTPSClient:
     ) -> Optional[TopicReachability]:
         assert isinstance(connects_to, URL), connects_to
         # assert isinstance(this_partial_url, str), this_partial_url
-        if (benchmark := await self.can_use_url(connects_to, expects_answer_from)) is None:
+        benchmark = await self.can_use_url(connects_to, expects_answer_from)
+        if benchmark is None:
             return None
 
         me = ForwardingStep(
@@ -405,7 +407,8 @@ class DTPSClient:
         possible: List[Tuple[float, float, float, U]] = []
         for a, expects_answer_from in us:
             assert isinstance(a, URL), a
-            if (score := await self.can_use_url(a, expects_answer_from)) is not None:
+            score = await self.can_use_url(a, expects_answer_from)
+            if score is not None:
                 possible.append((score.complexity, score.latency_ns, -score.bandwidth, a))
                 # TODO: 60 is a magic number?
                 results.append(f"✓ {str(a):<60} -> {score}")
@@ -475,7 +478,7 @@ class DTPSClient:
                 who_answers = await self.get_who_answers(url)
 
                 if expects_answer_from is not None and who_answers != expects_answer_from:
-                    msg = f"can_use_url: wrong {who_answers=} header in {url}, expected {expects_answer_from}"
+                    msg = f"can_use_url: wrong who_answers={who_answers} header in {url}, expected {expects_answer_from}"
                     self.logger.error(msg)
 
                     #
@@ -505,12 +508,12 @@ class DTPSClient:
             host = url.host
             self.logger.debug(f"checking {url}...  path={repr(url)}")
             if not os.path.exists(host):
-                self.logger.warning(f" {url}: {host=!r} does not exist")
+                self.logger.warning(f" {url}: host={host!r} does not exist")
                 return None
             who_answers = await self.get_who_answers(url)
 
             if expects_answer_from is not None and who_answers != expects_answer_from:
-                msg = f"wrong {who_answers=} header in {url}, expected {expects_answer_from}"
+                msg = f"wrong who_answers={who_answers} header in {url}, expected {expects_answer_from}"
                 self.logger.error(msg)
 
                 #
@@ -579,14 +582,14 @@ class DTPSClient:
     if TYPE_CHECKING:
 
         def my_session(
-            self, url: URL, /, *, conn_timeout: Optional[float] = None
+            self, url: URL,  *, conn_timeout: Optional[float] = None
         ) -> AsyncContextManager[Tuple[aiohttp.ClientSession, URLString]]: ...
 
     else:
 
         @asynccontextmanager
         async def my_session(
-            self, url: URL, /, *, conn_timeout: Optional[float] = None
+            self, url: URL,  *, conn_timeout: Optional[float] = None
         ) -> AsyncIterator[Tuple[aiohttp.ClientSession, URLString]]:
             assert isinstance(url, URL), url
             if url.scheme == "http+unix":
@@ -693,18 +696,18 @@ class DTPSClient:
                             message = res_bytes.decode("utf-8")
                         except UnicodeDecodeError:
                             message = res_bytes
-                        raise ValueError(f"cannot patch {url0=!r} {use_url=!r} {resp=!r}\n{message}")
+                        raise ValueError(f"cannot patch url0={url0!r} use_url={use_url!r} resp={resp!r}\n{message}")
 
                     return rd
 
         except CancelledError:
             raise
         except:
-            self.logger.error(f"cannot connect to {url=!r} {use_url=!r} \n{traceback.format_exc()}")
+            self.logger.error(f"cannot connect to url={url!r} use_url={use_url!r} \n{traceback.format_exc()}")
             raise
 
     async def get(self, url0: URL, accept: Optional[str]) -> RawData:
-        headers: dict[str, str] = {}
+        headers: Dict[str, str] = {}
         if accept is not None:
             headers["accept"] = accept
 
@@ -724,16 +727,16 @@ class DTPSClient:
                             message = res_bytes
                         resp: ClientResponse = resp
                         if resp.status == 404:
-                            raise NoSuchTopic(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
+                            raise NoSuchTopic(f"cannot GET url0={url0!r}\nuse_url={use_url!r}\nresp={resp!r}\n{message}")
                         if resp.status == 503:
                             raise TopicOriginUnavailable(
-                                f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}"
+                                f"cannot GET url0={url0!r}\nuse_url={use_url!r}\nresp={resp!r}\n{message}"
                             )
-                        raise ValueError(f"cannot GET {url0=!r}\n{use_url=!r}\n{resp=!r}\n{message}")
+                        raise ValueError(f"cannot GET url0={url0!r}\nuse_url={use_url!r}\nresp={resp!r}\n{message}")
 
                     if accept is not None and content_type != accept:
                         raise ValueError(
-                            f"GET gave a different content type ({accept=!r}, {content_type}\n{url0=}"
+                            f"GET gave a different content type (accept={accept!r}, {content_type}\nurl0={url0}"
                             + "\n"
                             + pretty(dict(resp.headers))
                         )
@@ -745,11 +748,11 @@ class DTPSClient:
         except TopicOriginUnavailable:
             raise
         except:
-            self.logger.error(f"cannot connect to {url=!r} {use_url=!r} \n{traceback.format_exc()}")
+            self.logger.error(f"cannot connect to url={url!r} use_url={use_url!r} \n{traceback.format_exc()}")
             raise
 
     async def delete(self, url0: URL) -> None:
-        # headers: dict[str, str] = {}
+        # headers: Dict[str, str] = {}
 
         url = self._look_cache(url0)
         # use_url = None
@@ -820,7 +823,7 @@ class DTPSClient:
 
         except:
             #  (TimeoutError, ClientConnectorError):
-            # logger.error(f"cannot connect to {url0=!r} {use_url=!r} \n{traceback.format_exc()}")
+            # logger.error(f"cannot connect to url0={url0!r} use_url={use_url!r} \n{traceback.format_exc()}")
 
             #  return FoundMetadata([], None, None, None)
             raise
@@ -933,7 +936,7 @@ class DTPSClient:
     ) -> ListenDataInterface:
         url_topic = self._look_cache(url_topic)
         metadata = await self.get_metadata(url_topic)
-        logger.debug(f"listen_url: listening to {metadata.origin_node=} for {url_topic} -")
+        logger.debug(f"listen_url: listening to metadata.origin_node={metadata.origin_node} for {url_topic} -")
 
         if inline_data:
             if metadata.events_data_inline_url is not None:
@@ -941,7 +944,7 @@ class DTPSClient:
             else:
                 msg = (
                     f"cannot find field events_data_inline_url for url\n  {url_to_string(url_topic)}\n  "
-                    f"{metadata=}"
+                    f"metadata={metadata}"
                 )
                 raise EventListeningNotAvailable(msg)
 
@@ -949,7 +952,7 @@ class DTPSClient:
             if metadata.events_url is not None:
                 url_events = metadata.events_url
             else:
-                msg = f"cannot find events_url for\n  {url_to_string(url_topic)}\n  {metadata=}"
+                msg = f"cannot find events_url for\n  {url_to_string(url_topic)}\n  metadata={metadata}"
                 raise EventListeningNotAvailable(msg)
 
         # logger.info(f"listening to  {url_topic} -> {metadata} -> {url_events}")
@@ -1126,7 +1129,7 @@ class DTPSClient:
         try:
             async with self.my_session(url_websockets) as (session, use_url):
                 ws: ClientWebSocketResponse
-                headers: dict[str, str] = {}
+                headers: Dict[str, str] = {}
                 if max_frequency is not None:
                     headers[HEADER_MAX_FREQUENCY] = str(max_frequency)
 
@@ -1221,7 +1224,7 @@ class DTPSClient:
                                             if dr.chunks_arriving == 0:
                                                 s = (
                                                     f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}, "
-                                                    f"{inline_data=}"
+                                                    f"inline_data={inline_data}"
                                                 )
                                                 self.logger.error(s)
                                                 await callback_wrap(ErrorMsg(comment=s))
@@ -1269,7 +1272,7 @@ class DTPSClient:
                                             if dr.chunks_arriving > 0:
                                                 s = (
                                                     f"unexpected chunks_arriving {dr.chunks_arriving} in {dr}, "
-                                                    f"{inline_data=}"
+                                                    f"inline_data={inline_data}"
                                                 )
                                                 self.logger.error(s)
                                                 await callback_wrap(ErrorMsg(comment=s))

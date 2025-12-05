@@ -1,6 +1,6 @@
 [build-system]
-requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning"]
-build-backend = "poetry_dynamic_versioning.backend"
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
 
 
 [tool]
@@ -20,25 +20,28 @@ include = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.8"
-aiohttp = "^3"
-cbor2 = "^5"
+python = "^3.6"
+aiohttp = ">=3.6,<4"
+cbor2 = ">=5.0,<6"
 tcp_latency = "0.0.12"
-typing_extensions = "^4"
-pymdown-extensions = "^10"
-aiopubsub = "^3"
+typing_extensions = ">=3.7"
+pymdown-extensions = ">=8,<10"
+aiopubsub = ">=2,<4"
 methodtools = "^0.4"
-pydantic = "2.10.6"
-psutil = "^7"
-urllib3 = "^2"
-jsonpatch = "^1.33"
+pydantic = ">=1.8,<2"
+psutil = ">=5.6,<6"
+urllib3 = ">=1.25,<2"
+jsonpatch = ">=1.32,<2"
+dataclasses = { version = "^0.8", python = "<3.7" }
+async_generator = { version = "^1.10", python = "<3.7" }
+async_exit_stack = { version = "^1.0", python = "<3.7" }
 
 
 # other dependencies: aiohttp-devtools pre-commit mkdocs mkdocs-material mkdocstrings[python]
 # pip install "mkdocstrings[python]"  mkdocs-material
 timeout-decorator = "^0.5.0"
 prettyprinter = "^0.18.0"
-xxhash = "^3.4.1"
+xxhash = ">=2.0,<4"
 
 [tool.poetry.scripts]
 

@@ -5,7 +5,8 @@ import yaml
 from dataclasses import dataclass, field
 from dataclasses import asdict, is_dataclass
 from pydantic import BaseModel
-from typing import Any, cast, Dict, List, Literal, NewType, Optional, Sequence, Union
+from typing import Any, cast, Dict, List, NewType, Optional, Sequence, Union
+from typing_extensions import Literal
 
 import cbor2
 from multidict import CIMultiDict
@@ -87,7 +88,7 @@ class LinkBenchmark:
             hops=hops,
         )
 
-    def fill_headers(self, headers: CIMultiDict[str]) -> None:
+    def fill_headers(self, headers: "CIMultiDict[str]") -> None:
         # RTT = 2 * latency - in mseconds
         # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/RTT
         rtt_ns = self.latency_ns * 2
@@ -573,8 +574,8 @@ class TopicRefWire:
     content_info: ContentInfo
     bounds: Bounds
 
-    def to_internal(self, where_available: List[URL], /) -> "TopicRef":
-        reachability: list[TopicReachability] = []
+    def to_internal(self, where_available: List[URL]) -> "TopicRef":
+        reachability: List[TopicReachability] = []
         for r in self.reachability:
             for w in where_available:
                 reachability.append(r.to_internal(w))
@@ -602,7 +603,7 @@ class TopicRef:
     bounds: Bounds
 
     def to_wire(self) -> "TopicRefWire":
-        reachability: list[TopicReachabilityWire] = []
+        reachability: List[TopicReachabilityWire] = []
         for r in self.reachability:
             reachability.append(r.to_wire())
         return TopicRefWire(

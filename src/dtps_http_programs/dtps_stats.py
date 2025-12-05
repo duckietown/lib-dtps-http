@@ -15,6 +15,7 @@ from dtps_http import (
     URLString,
     URLTopic,
 )
+from dtps_http.compat import time_ns
 from . import logger
 
 __all__ = [
@@ -30,7 +31,7 @@ async def listen_to_all_topics(urlbase0: URLString, *, inline_data: bool) -> Non
     async def new_observation(topic_name: TopicNameV, data: RawData) -> None:
         nonlocal i
 
-        current = time.time_ns()
+        current = time_ns()
         if "clock" not in topic_name.as_relative_url():
             return
 

@@ -1,6 +1,6 @@
 import asyncio
-from contextlib import AsyncExitStack
-from unittest import IsolatedAsyncioTestCase
+from .compat import AsyncExitStack
+from .compat import IsolatedAsyncioTestCase
 
 from dtps_http import (
     async_error_catcher,
@@ -52,7 +52,7 @@ class TestTPT(IsolatedAsyncioTestCase):
 
             rd_expected = RawData(content=b"this should go to topic2", content_type=MIME_TEXT)
 
-            async def on_topic2(rd_received: RawData, /) -> None:
+            async def on_topic2(rd_received: RawData) -> None:
                 logger.info(f"topic2 received {rd_received}")
                 if rd_received != rd_expected:
                     raise AssertionError(f"{rd_expected} != {rd_received}")
@@ -103,7 +103,7 @@ class TestTPT(IsolatedAsyncioTestCase):
 
             rd_expected = RawData(content=b"this should go to topic2", content_type=MIME_TEXT)
 
-            async def on_topic2(rd_received: RawData, /) -> None:
+            async def on_topic2(rd_received: RawData) -> None:
                 logger.info(f"topic2 received {rd_received}")
                 if rd_received != rd_expected:
                     raise AssertionError(f"{rd_expected} != {rd_received}")

@@ -108,7 +108,7 @@ class DTPSContext(ABC):
         """
 
     @abstractmethod
-    def configure(self, cc: ContextConfig, /) -> "DTPSContext":
+    def configure(self, cc: ContextConfig) -> "DTPSContext":
         """
         Configures the context (recursively).
         Returns a different context (representing the same resource) with the given configuration.
@@ -157,7 +157,6 @@ class DTPSContext(ABC):
     async def subscribe(
         self,
         on_data: Callable[[RawData], Awaitable[None]],
-        /,
         max_frequency: Optional[float] = None,
         inline: bool = True,
         queue_size: int = DEFAULT_CALLBACK_QUEUE_SIZE,
@@ -172,7 +171,6 @@ class DTPSContext(ABC):
     async def subscribe_diff(
         self,
         on_data: Callable[[PatchType], Awaitable[None]],
-        /,
     ) -> "SubscriptionInterface":
         """
         Obtains the stream of data as a series of diffs, as JSON patch.
@@ -189,7 +187,7 @@ class DTPSContext(ABC):
     # pushing
 
     @abstractmethod
-    async def publish(self, data: RawData, /) -> None:
+    async def publish(self, data: RawData) -> None:
         """Publishes data to the resource. Meant to be used for infrequent pushes.
         For frequent pushes, use the publisher interface."""
         ...
@@ -230,12 +228,12 @@ class DTPSContext(ABC):
         """
 
     @abstractmethod
-    async def call(self, data: RawData, /) -> RawData:
+    async def call(self, data: RawData) -> RawData:
         """RPC call (push with response)"""
 
     # patch
     @abstractmethod
-    async def patch(self, patch_data: PatchType, /) -> None:
+    async def patch(self, patch_data: PatchType) -> None:
         """
         Applies a patch to the resource.
         The patch is a list of operations, as defined in RFC 6902.
@@ -246,7 +244,7 @@ class DTPSContext(ABC):
 
     @abstractmethod
     async def expose(
-        self, urls: "Sequence[str] | DTPSContext", /, *, mask_origin: bool = False
+        self, urls: "Union[Sequence[str], DTPSContext]",  *, mask_origin: bool = False
     ) -> "DTPSContext":
         """
         Creates this topic as a proxy to the given urls or to the context..
@@ -311,7 +309,7 @@ class DTPSContext(ABC):
     # connection
 
     @abstractmethod
-    async def connect_to(self, context: "DTPSContext", /) -> "ConnectionInterface":
+    async def connect_to(self, context: "DTPSContext") -> "ConnectionInterface":
         """Add a connection between this resource, and the resource identified by the argument"""
 
     @abstractmethod
@@ -324,11 +322,11 @@ class DTPSContext(ABC):
 
 class HistoryInterface(ABC):
     @abstractmethod
-    async def summary(self, nmax: int, /) -> Dict[int, DataSaved]:
+    async def summary(self, nmax: int) -> Dict[int, DataSaved]:
         """Returns a summary of the history, with at most nmax entries."""
 
     @abstractmethod
-    async def get(self, index: int, /) -> RawData:
+    async def get(self, index: int) -> RawData:
         """Returns the data at the given index."""
         ...
 
@@ -343,7 +341,7 @@ class ConnectionInterface(ABC):
 @dataclass
 class PublisherInterface(ABC):
     @abstractmethod
-    async def publish(self, rd: RawData, /) -> None:
+    async def publish(self, rd: RawData) -> None:
         """Publishes data to the resource"""
         ...
 

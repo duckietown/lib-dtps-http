@@ -1,10 +1,10 @@
 import asyncio
 import os
 import tempfile
-from contextlib import asynccontextmanager
+from dtps_http.compat import asynccontextmanager
 from dataclasses import dataclass
 from typing import AsyncContextManager, AsyncIterator, List, TYPE_CHECKING
-from unittest import IsolatedAsyncioTestCase
+from .compat import IsolatedAsyncioTestCase
 
 from dtps import context_cleanup, DTPSContext
 from dtps_http import (

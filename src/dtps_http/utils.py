@@ -31,7 +31,13 @@ from typing import (
 
 import cbor2
 from multidict import CIMultiDict, CIMultiDictProxy
-from pydantic import TypeAdapter
+try:
+    # pydantic v2
+    from pydantic import TypeAdapter
+    PYDANTIC_V2 = True
+except ImportError:
+    # pydantic v1
+    PYDANTIC_V2 = False
 from typing_extensions import ParamSpec
 
 from . import logger
@@ -61,9 +67,9 @@ FAsync = TypeVar("FAsync", bound=Callable[..., AsyncIterator[Any]])
 
 if TYPE_CHECKING:
 
-    def async_error_catcher(_: FA, /) -> FA: ...
+    def async_error_catcher(_: FA) -> FA: ...
 
-    def async_error_catcher_iterator(_: FAsync, /) -> FAsync: ...
+    def async_error_catcher_iterator(_: FAsync) -> FAsync: ...
 
 else:
 
@@ -111,7 +117,8 @@ else:
 import dataclasses
 
 
-def multidict_update(dest: CIMultiDict[X], src: Union[CIMultiDict[X], CIMultiDictProxy[X]]) -> None:
+def multidict_update(dest, src):
+    # type: (CIMultiDict, Union[CIMultiDict, CIMultiDictProxy]) -> None
     for k, v in src.items():
         dest.add(k, v)
 
@@ -211,41 +218,59 @@ def parse_tagged(d: Dict[str, Any], *Ts: Type[X]) -> X:
         if kn in d:
             vals = d[kn]
             if not isinstance(vals, dict):
-                raise ValueError(f"parse_tagged: {d!r} has {kn!r} but it is not a dict")
+                raise ValueError("parse_tagged: {!r} has {!r} but it is not a dict".format(d, kn))
             return pydantic_parse(T, vals)
 
-    raise ValueError(f"parse_tagged: {d!r} does not have any of {Ts!r}")
+    raise ValueError("parse_tagged: {!r} does not have any of {!r}".format(d, Ts))
 
 
-@functools.lru_cache(maxsize=128)
-def _get_type_adapter(T: Type[X]) -> TypeAdapter[X]:
-    """Cache TypeAdapter instances to avoid repeated schema generation."""
-    return TypeAdapter(T)
+if PYDANTIC_V2:
+    @functools.lru_cache(maxsize=128)
+    def _get_type_adapter(T):  # type: ignore
+        """Cache TypeAdapter instances to avoid repeated schema generation."""
+        return TypeAdapter(T)
 
+    def pydantic_parse(T, d):  # type: (Type[X], Any) -> X
+        """
+        Parses data into either a Pydantic model or a standard dataclass.
 
-def pydantic_parse(T: Type[X], d: Any) -> X:
-    """
-    Parses data into either a Pydantic model or a standard dataclass.
+        Args:
+            T: The target type (Pydantic model or dataclass).
+            d: The data to parse.
 
-    Args:
-        T: The target type (Pydantic model or dataclass).
-        d: The data to parse.
+        Returns:
+            An instance of T.
+        """
+        # Use cached TypeAdapter
+        try:
+            adapter = _get_type_adapter(T)
+            return adapter.validate_python(d)
+        except Exception:
+            # Fallback for standard dataclasses
+            if dataclasses.is_dataclass(T):
+                return T(**d)
+            raise
+else:
+    # Pydantic v1 compatibility
+    def pydantic_parse(T, d):  # type: (Type[X], Any) -> X
+        """
+        Parses data into either a Pydantic model or a standard dataclass.
 
-    Returns:
-        An instance of T.
-    """
-    # Use cached TypeAdapter
-    try:
-        adapter = _get_type_adapter(T)
-        return adapter.validate_python(d)
-    except Exception:
-        # Fallback for standard dataclasses
+        Args:
+            T: The target type (Pydantic model or dataclass).
+            d: The data to parse.
+
+        Returns:
+            An instance of T.
+        """
+        # For dataclasses, just use the constructor
         if dataclasses.is_dataclass(T):
             return T(**d)
-        raise
+        # For other types, try to construct them directly
+        return T(**d)
 
 
-def pretty(d: object, /) -> str:
+def pretty(d: object) -> str:
     io = StringIO()
     pp.pprint(d, stream=io)  # type: ignore
     data = io.getvalue().strip()

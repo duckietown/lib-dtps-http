@@ -1,7 +1,7 @@
 import asyncio
 import copy
 from typing import Any, Dict, List
-from unittest import IsolatedAsyncioTestCase
+from .compat import IsolatedAsyncioTestCase
 
 from jsonpatch import JsonPatch
 
