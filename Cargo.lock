@@ -729,7 +729,7 @@ dependencies = [
 
 [[package]]
 name = "dtps-http"
-version = "1.4.4"
+version = "1.4.6"
 dependencies = [
  "anyhow",
  "async-recursion",
