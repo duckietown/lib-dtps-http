@@ -22,7 +22,7 @@ include = [
 [tool.poetry.dependencies]
 python = "^3.8"
 aiohttp = "^3"
-cbor2 = "^5"
+cbor2 = ">=5.9.0,<6"
 tcp_latency = "0.0.12"
 typing_extensions = "^4"
 pymdown-extensions = "^10"
