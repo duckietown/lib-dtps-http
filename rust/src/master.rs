@@ -6,11 +6,8 @@ use maud::{html, PreEscaped};
 use tokio::sync::{broadcast as tokio_broadcast, mpsc as tokio_mpsc};
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tungstenite::{
-    http::{HeaderMap, StatusCode},
-    protocol::frame::coding::CloseCode,
-};
-use warp::{http::header, hyper::Body, reply::Response, ws::Message as WarpMessage};
+use tungstenite::protocol::frame::coding::CloseCode;
+use warp::{http::header, http::HeaderMap, http::StatusCode, hyper::Body, reply::Response, ws::Message as WarpMessage};
 
 use crate::client_metadata::put_metadata_headers;
 use crate::types::ReaderID;
