@@ -20,7 +20,7 @@ include = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = "^3.9"
 aiohttp = "^3"
 cbor2 = "^5"
 tcp_latency = "0.0.12"
@@ -30,7 +30,7 @@ aiopubsub = "^3"
 methodtools = "^0.4"
 pydantic = "2.10.6"
 psutil = "^7"
-urllib3 = "^2"
+urllib3 = "2.6.0"
 jsonpatch = "^1.33"
 
 
