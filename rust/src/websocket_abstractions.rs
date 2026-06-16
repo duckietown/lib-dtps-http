@@ -235,6 +235,7 @@ async fn read_websocket_stream<S: Debug, T: StreamExt<Item = Result<S, tungsteni
                                 ProtocolError::ResetWithoutClosingHandshake => {
                                     break;
                                 }
+                                ProtocolError::SecWebSocketSubProtocolError(_) => {}
                                 ProtocolError::InvalidOpcode(_) => {}
                                 ProtocolError::InvalidCloseSequence => {}
                             },

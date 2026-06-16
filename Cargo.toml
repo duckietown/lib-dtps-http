@@ -46,7 +46,7 @@ sha256 = "1"
 strum = "0.26.2"
 strum_macros = "0.26.2"
 thiserror = "1.0.43"
-tungstenite = "0.20.0"
+tungstenite = "0.23.0"
 url = "2"
 warp = { version = "0.3.5", features = ["compression"] }
 json-patch = "*"
@@ -65,7 +65,7 @@ jsonptr = "0.7.1"
 [target.'cfg(target_os = "wasi")'.dependencies]
 js-sys = "0.3"
 tokio = { version = "^1.32", features = ["sync", "macros", "io-util", "rt", "time"] }
-tokio-tungstenite = { version = "0.20.1", features = [] }
+tokio-tungstenite = { version = "0.23.1", features = ["url"] }
 wasm-bindgen = "0.2.87"
 
 
@@ -75,7 +75,7 @@ openssl = { version = "*", features = ["vendored"] } #https://docs.rs/openssl/0.
 openssl-sys = "0.9"
 tokio = { version = "^1.32", features = ["full"] }
 tokio-stream = { version = "0.1.14", features = ["full"] }
-tokio-tungstenite = { version = "0.20.0", features = ["rustls", "rustls-native-certs", "rustls-tls-native-roots", "rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.23.1", features = ["url", "rustls", "rustls-native-certs", "rustls-tls-native-roots", "rustls-tls-webpki-roots"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 getaddrs = "0.1.0"
