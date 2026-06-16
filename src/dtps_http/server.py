@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import html
 import pathlib
 import time
 import traceback
@@ -1283,6 +1284,7 @@ class DTPSServer:
                 return web.Response(body=rd.content, content_type=rd.content_type, headers=headers)
         elif isinstance(rd, NotAvailableYet):  # type: ignore
             if accepts_html:
+                safe_title = html.escape(title, quote=True)
                 # language=html
                 html_index = f"""
 <html lang="en">
@@ -1295,10 +1297,10 @@ pre {{
     border-radius: 5px; 
 }}
 </style>
-<title>{title}</title>
+<title>{safe_title}</title>
 </head>
 <body>
-<h1>{title}</h1>
+<h1>{safe_title}</h1>
 
 <p>There is no data yet to visualize.</p>
 
