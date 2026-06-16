@@ -1386,7 +1386,7 @@ pre {{
             return self.resolve(topic_name_s)
         except KeyError as e:
             # self.logger.error(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {e}")
-            raise web.HTTPNotFound(text=f"404\n{e}", headers=self._headers(request)) from e
+            raise web.HTTPNotFound(text="404", headers=self._headers(request)) from e
 
     @async_error_catcher
     async def serve_post(self, request: web.Request) -> web.Response:
