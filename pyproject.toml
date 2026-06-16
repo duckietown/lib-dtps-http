@@ -1,6 +1,6 @@
 [build-system]
-requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning"]
-build-backend = "poetry_dynamic_versioning.backend"
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
 
 
 [tool]
@@ -49,20 +49,3 @@ dtps-http-py-proxy = 'dtps_http_programs:dtps_proxy_main'
 dtps-http-py-send-continuous = 'dtps_http_programs:dtps_send_continuous_main'
 dtps-http-py-listen= 'dtps_http_programs:dtps_listen_main'
 dtps-http-py= 'dtps_http_programs:dtps_main'
-
-
-[tool.poetry-dynamic-versioning]
-enable = true
-dirty = false
-metadata = false
-tagged-metadata = false
-vcs = "git"
-style = "pep440"
-strict = false
-
-
-
-[tool.poetry-dynamic-versioning.substitution]
-folders = [
-    { path = "src" }
-]
