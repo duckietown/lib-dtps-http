@@ -21,11 +21,11 @@ include = [
 
 [tool.poetry.dependencies]
 python = "^3.8"
-aiohttp = "^3"
 cbor2 = ">=5.9.0,<6"
+aiohttp = "3.13.3"
 tcp_latency = "0.0.12"
 typing_extensions = "^4"
-pymdown-extensions = "^10"
+pymdown-extensions = "^10.21.3"
 aiopubsub = "^3"
 methodtools = "^0.4"
 pydantic = "2.10.6"
@@ -39,6 +39,10 @@ jsonpatch = "^1.33"
 timeout-decorator = "^0.5.0"
 prettyprinter = "^0.18.0"
 xxhash = "^3.4.1"
+markdown = [
+    {version = ">=3.8.1,<4", python = ">=3.9"},
+    {version = "<3.7", python = "<3.9"}
+]
 
 [tool.poetry.scripts]
 
