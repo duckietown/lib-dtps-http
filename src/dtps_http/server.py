@@ -1143,7 +1143,7 @@ class DTPSServer:
                 rs = await source.get_resolved_data(url, self, request)
             except KeyError as e:
                 self.logger.error(f"serve_get: {request.url!r} -> {topic_name_s!r} -> {e}")
-                raise web.HTTPNotFound(text=f"404\n{e}", headers=headers) from e
+                raise web.HTTPNotFound(text="404\nNot Found", headers=headers) from e
 
             if isinstance(rs, HTTPResponse):
                 return rs
