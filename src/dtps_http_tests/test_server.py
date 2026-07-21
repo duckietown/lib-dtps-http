@@ -1,12 +1,16 @@
 import asyncio
+import gzip
 import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from typing import cast, List, Literal
 
+import aiohttp
 import cbor2
 import yaml
+from aiohttp import web
 
 from dtps_http import (
     app_start,
@@ -133,6 +137,88 @@ class TestAsyncServerFunction(unittest.IsolatedAsyncioTestCase):
                 pass
             else:
                 raise
+
+    @test_timeout(10)
+    async def test_compressed_request_is_not_decompressed(self) -> None:
+        """Preserve compressed request bodies."""
+        with tempfile.TemporaryDirectory() as td:
+            socket_path = Path(td) / "node"
+            socket_node = str(socket_path)
+            dtps_server = DTPSServer.create(nickname="node")
+            server = await app_start(dtps_server, unix_paths=[socket_node])
+            compressed = gzip.compress(b'{"value": 1}')
+            connector = aiohttp.UnixConnector(path=socket_node)
+            session = aiohttp.ClientSession(connector=connector)
+
+            async with server, session:
+                url0 = make_http_unix_url(socket_node)
+                topic = TopicNameV.from_dash_sep("a/b")
+                parameters = TopicRefAdd(
+                    content_info=ContentInfo.simple(MIME_JSON),
+                    properties=TopicProperties.rw_pushable(),
+                    app_data={},
+                    bounds=Bounds.unbounded(),
+                )
+
+                async with DTPSClient.create() as client:
+                    url_indexer = cast(
+                        "URLIndexer",
+                        url0,
+                    )
+                    await client.add_topic(url_indexer, topic, parameters)
+
+                    async with session.post(
+                        "http://localhost/a/b/",
+                        data=compressed,
+                        headers={
+                            "Content-Encoding": "gzip",
+                            "Content-Type": MIME_JSON,
+                        },
+                    ) as response:
+                        response.raise_for_status()
+
+                async with DTPSClient.create() as client:
+                    topic_path = topic.as_relative_url()
+                    topic_url = join(url0, topic_path)
+                    result = await client.get(topic_url, accept=None)
+
+                if result.content != compressed:
+                    raise AssertionError
+
+    @test_timeout(10)
+    async def test_client_does_not_decompress_response(self) -> None:
+        """Preserve compressed response bodies."""
+        compressed = gzip.compress(b"compressed response")
+
+        async def serve_compressed(_: web.Request) -> web.Response:
+            return web.Response(
+                body=compressed,
+                headers={
+                    "Content-Encoding": "gzip",
+                    "Content-Type": "application/octet-stream",
+                },
+            )
+
+        app = web.Application()
+        app.router.add_get("/", serve_compressed)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        port = 8436
+        site = web.TCPSite(runner, "127.0.0.1", port)
+        await site.start()
+        url = parse_url_unescape(URLString(f"http://127.0.0.1:{port}/"))
+
+        try:
+            client_context = DTPSClient.create()
+            async with client_context as client, client.my_session(url) as (
+                session,
+                use_url,
+            ):
+                async with session.get(use_url) as response:
+                    if await response.read() != compressed:
+                        raise AssertionError
+        finally:
+            await runner.cleanup()
 
     @test_timeout(10)
     async def test_patch1_json_json(self) -> None:
