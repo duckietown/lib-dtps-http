@@ -611,7 +611,11 @@ class DTPSClient:
 
             timeout = aiohttp.ClientTimeout(total=conn_timeout)
             async with connector:
-                async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                async with aiohttp.ClientSession(
+                    connector=connector,
+                    timeout=timeout,
+                    auto_decompress=False,
+                ) as session:
                     # self.logger.debug(f"my_session: {url} -> {use_url}")
                     yield session, use_url
 

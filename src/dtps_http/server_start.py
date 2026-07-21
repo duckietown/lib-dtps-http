@@ -157,7 +157,7 @@ async def app_start(
     no_alternatives: bool = False,
     extra_advertise: Optional[List[URLString]] = None,
 ) -> ServerWrapped:
-    runner = web.AppRunner(s.app)
+    runner = web.AppRunner(s.app, auto_decompress=False)
     await runner.setup()
 
     tunnel_process = None
