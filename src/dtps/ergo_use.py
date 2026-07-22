@@ -65,6 +65,13 @@ from .ergo_ui import (
     ServeFunction,
     SubscriptionInterface,
 )
+from .shm import (
+    ShmWriterPool,
+    create_shm_subscription,
+    should_publish_http,
+    validate_max_frequency,
+    validate_shm_configuration,
+)
 
 PS = ParamSpec("PS")
 
@@ -107,7 +114,9 @@ class ContextManagerUse(ContextManager):
         self.tasks = []
         self._tasks_lock = Lock()
         self._closing = False
+        self._shm_writers = ShmWriterPool()
         self._subscriptions: Set[SubscriptionInterface] = set()
+        self._shm_subscriptions: Set[SubscriptionInterface] = set()
 
     def remember_task(self, task: "asyncio.Task[Any]") -> None:
         """Register a task for manager shutdown."""
@@ -188,6 +197,48 @@ class ContextManagerUse(ContextManager):
             await subscription.unsubscribe()
         except Exception:  # noqa: BLE001
             logger.exception("Failed to stop DTPS subscription.")
+
+    async def remember_shm_subscription(
+        self,
+        subscription: SubscriptionInterface,
+    ) -> None:
+        """Register a shared-memory reader for manager shutdown."""
+        with self._tasks_lock:
+            closing = self._closing
+            if not closing:
+                self._shm_subscriptions.add(subscription)
+        if not closing:
+            return
+        await subscription.unsubscribe()
+        raise RuntimeError(_ERROR_CONTEXT_MANAGER_CLOSING)
+
+    def forget_shm_subscription(
+        self,
+        subscription: SubscriptionInterface,
+    ) -> None:
+        """Release a stopped SHM reader from manager ownership."""
+        with self._tasks_lock:
+            self._shm_subscriptions.discard(subscription)
+
+    async def _unsubscribe_shm_subscriptions(self) -> None:
+        """Stop active shared-memory readers before client shutdown."""
+        with self._tasks_lock:
+            subscriptions = list(self._shm_subscriptions)
+            self._shm_subscriptions.clear()
+        for subscription in subscriptions:
+            await self._unsubscribe_shm_subscription(subscription)
+
+    @staticmethod
+    async def _unsubscribe_shm_subscription(
+        subscription: SubscriptionInterface,
+    ) -> None:
+        """Stop one SHM reader without interrupting shutdown."""
+        try:
+            await subscription.unsubscribe()
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Failed to stop DTPS shared-memory subscription."
+            )
 
     @staticmethod
     def _cancel_task_on_own_loop(task: "asyncio.Task[Any]") -> None:
@@ -296,11 +347,14 @@ class ContextManagerUse(ContextManager):
             self._closing = True
         try:
             await self._unsubscribe_subscriptions()
+            await self._unsubscribe_shm_subscriptions()
             await self._cancel_and_wait_for_tasks()
             await self.client.aclose()
         finally:
             await self._unsubscribe_subscriptions()
+            await self._unsubscribe_shm_subscriptions()
             await self._cancel_and_wait_for_tasks()
+            self._shm_writers.close()
 
     def get_context_by_components(self, components: Tuple[str, ...], config: ContextConfig) -> "DTPSContext":
         key = (components, config)
@@ -337,7 +391,9 @@ class ContextManagerUseContextPublisher(PublisherInterface):
         )
         self._context_manager.remember_task(self.task_push)
 
-    async def publish(self, rd: RawData, /) -> None:
+    async def publish(self, rd: RawData, /, *, shm_path: Optional[str] = None, shm_only: bool = False) -> None:
+        if not should_publish_http(self._context_manager._shm_writers, rd, shm_path=shm_path, shm_only=shm_only):
+            return
         await self.queue_in.put(rd)
         success = await self.queue_out.get()
         if not success:
@@ -554,7 +610,26 @@ class ContextManagerUseContext(DTPSContext):
         max_frequency: Optional[float] = None,
         inline: bool = True,
         queue_size: int = DEFAULT_CALLBACK_QUEUE_SIZE,
+        *,
+        shm_path: Optional[str] = None,
+        shm_only: bool = False,
     ) -> "SubscriptionInterface":
+        validate_shm_configuration(shm_path, shm_only)
+        validate_max_frequency(max_frequency)
+        if shm_only and shm_path:
+            subscription = create_shm_subscription(
+                on_data,
+                shm_path,
+                queue_size,
+                max_frequency=max_frequency,
+                on_unsubscribe=self.master.forget_shm_subscription,
+            )
+            try:
+                await self.master.remember_shm_subscription(subscription)
+            except BaseException:
+                await subscription.unsubscribe()
+                raise
+            return subscription
         if not self.config.patient:
             return await self.subscribe_once(on_data, max_frequency, inline)
 
@@ -711,7 +786,9 @@ class ContextManagerUseContext(DTPSContext):
         url = join(best_url, topic.as_relative_url())
         return url
 
-    async def publish(self, data: RawData) -> None:
+    async def publish(self, data: RawData, /, *, shm_path: Optional[str] = None, shm_only: bool = False) -> None:
+        if not should_publish_http(self.master._shm_writers, data, shm_path=shm_path, shm_only=shm_only):
+            return
         self.last_published.append(time.time())
         freq = self._get_frequency_publishing()
         url = await self._get_best_url()

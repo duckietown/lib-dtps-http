@@ -49,6 +49,13 @@ from .ergo_ui import (
     ServeFunction,
     SubscriptionInterface,
 )
+from .shm import (
+    ShmWriterPool,
+    create_shm_subscription,
+    should_publish_http,
+    validate_max_frequency,
+    validate_shm_configuration,
+)
 
 __all__ = [
     "ContextManagerCreate",
@@ -67,6 +74,7 @@ class ContextManagerCreate(ContextManager):
         self.dtps_server_wrap = None
         self.contexts = {}
         self.base_config = ContextConfig.default()
+        self._shm_writers = ShmWriterPool()
         self._subscriptions: Set[SubscriptionInterface] = set()
         self._closing = False
         assert self.context_info.is_create()
@@ -91,8 +99,11 @@ class ContextManagerCreate(ContextManager):
         try:
             await self._unsubscribe_all()
         finally:
-            if self.dtps_server_wrap is not None:
-                await self.dtps_server_wrap.aclose()
+            try:
+                self._shm_writers.close()
+            finally:
+                if self.dtps_server_wrap is not None:
+                    await self.dtps_server_wrap.aclose()
 
     async def remember_subscription(
         self,
@@ -153,9 +164,9 @@ class ContextManagerCreateContextPublisher(PublisherInterface):
     def __init__(self, master: "ContextManagerCreateContext"):
         self.master = master
 
-    async def publish(self, rd: RawData, /) -> None:
+    async def publish(self, rd: RawData, /, *, shm_path: Optional[str] = None, shm_only: bool = False) -> None:
         # nothing more to do for this
-        await self.master.publish(rd)
+        await self.master.publish(rd, shm_path=shm_path, shm_only=shm_only)
 
     async def terminate(self) -> None:
         # nothing more to do for this
@@ -319,7 +330,27 @@ class ContextManagerCreateContext(DTPSContext):
         max_frequency: Optional[float] = None,
         inline: bool = True,
         queue_size: int = DEFAULT_CALLBACK_QUEUE_SIZE,
+        *,
+        shm_path: Optional[str] = None,
+        shm_only: bool = False,
     ) -> "SubscriptionInterface":
+        validate_shm_configuration(shm_path, shm_only)
+        validate_max_frequency(max_frequency)
+        if shm_only and shm_path:
+            subscription = create_shm_subscription(
+                on_data,
+                shm_path,
+                queue_size,
+                max_frequency=max_frequency,
+                on_unsubscribe=self.master.forget_subscription,
+            )
+            try:
+                await self.master.remember_subscription(subscription)
+            except BaseException:
+                await subscription.unsubscribe()
+                raise
+            return subscription
+
         oq0 = self._get_server().get_oq(self._topic)
 
         when = EveryOnceInAWhile(1.0 / max_frequency if max_frequency is not None else 0)
@@ -388,7 +419,9 @@ class ContextManagerCreateContext(DTPSContext):
         # TODO: DTSW-4794: implement history
         raise NotImplementedError()
 
-    async def publish(self, data: RawData, /) -> None:
+    async def publish(self, data: RawData, /, *, shm_path: Optional[str] = None, shm_only: bool = False) -> None:
+        if not should_publish_http(self.master._shm_writers, data, shm_path=shm_path, shm_only=shm_only):
+            return
         server = self._get_server()
         topic = self._topic
         queue = server.get_oq(topic)
