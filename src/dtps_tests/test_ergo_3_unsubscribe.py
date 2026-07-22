@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from typing import Any, List
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, Mock, patch
@@ -8,6 +9,10 @@ from dtps.ergo_create import (
     ContextManagerCreate,
     ContextManagerCreateContext,
     ContextManagerCreateContextSubscriber,
+)
+from dtps.ergo_use import (
+    ContextManagerUse,
+    ContextManagerUseContextPublisher,
 )
 from dtps_http import async_error_catcher, MIME_TEXT, RawData, SUB_ID
 from dtps_http_tests.utils import test_timeout
@@ -232,3 +237,141 @@ class TestCreateSubscriptionLifecycle(IsolatedAsyncioTestCase):
 
         object_queue.unsubscribe.assert_awaited_once_with(SUB_ID(1))
         self.assertTrue(processors[0].cr_frame is None)
+
+
+class TestUseTaskLifecycle(IsolatedAsyncioTestCase):
+    async def test_remember_task_forgets_completed_task(self) -> None:
+        """Release completed background tasks before manager shutdown."""
+        manager = object.__new__(ContextManagerUse)
+        manager._closing = False
+        manager.tasks = []
+        manager._tasks_lock = threading.Lock()
+
+        async def complete() -> None:
+            return
+
+        task = asyncio.create_task(complete())
+        manager.remember_task(task)
+        await task
+        for _ in range(3):
+            if not manager.tasks:
+                break
+            await asyncio.sleep(0)
+
+        self.assertEqual(manager.tasks, [])
+
+    async def test_remember_task_observes_failures(self) -> None:
+        """Consume a background failure before its task is discarded."""
+        manager = object.__new__(ContextManagerUse)
+        manager._closing = False
+        manager.tasks = []
+        manager._tasks_lock = threading.Lock()
+
+        async def fail() -> None:
+            raise RuntimeError("background task failed")
+
+        with patch("dtps.ergo_use.logger.error") as log_error:
+            task = asyncio.create_task(fail())
+            manager.remember_task(task)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        self.assertEqual(manager.tasks, [])
+        log_error.assert_called_once()
+        self.assertIn(
+            "DTPS background task failed",
+            log_error.call_args.args[0],
+        )
+
+    async def test_task_shutdown_cancels_foreign_loop_task(self) -> None:
+        """Schedule cancellation without awaiting a foreign-loop task."""
+        foreign_loop = Mock()
+        cancel_task = Mock()
+        foreign_task = Mock()
+        foreign_task.cancel = cancel_task
+        foreign_task.get_loop.return_value = foreign_loop
+        manager = object.__new__(ContextManagerUse)
+        manager.tasks = [foreign_task]
+        manager._tasks_lock = threading.Lock()
+
+        await manager._cancel_and_wait_for_tasks()
+
+        foreign_loop.call_soon_threadsafe.assert_called_once_with(cancel_task)
+        cancel_task.assert_not_called()
+        self.assertEqual(manager.tasks, [])
+
+    async def test_remember_task_cancels_late_registration(self) -> None:
+        """Cancel a task registered after use-side shutdown begins."""
+        task_started = asyncio.Event()
+        task_cancelled = asyncio.Event()
+        manager = object.__new__(ContextManagerUse)
+        manager._closing = True
+        manager.tasks = []
+        manager._tasks_lock = threading.Lock()
+
+        async def pending() -> None:
+            task_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                task_cancelled.set()
+                raise
+
+        task = asyncio.create_task(pending())
+        try:
+            await task_started.wait()
+            manager.remember_task(task)
+            await asyncio.wait_for(task_cancelled.wait(), timeout=1)
+            await asyncio.gather(task, return_exceptions=True)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        self.assertTrue(task.done())
+        for _ in range(3):
+            if not manager.tasks:
+                break
+            await asyncio.sleep(0)
+        self.assertEqual(manager.tasks, [])
+
+    async def test_publisher_registers_push_task(self) -> None:
+        """Make the use manager own the persistent publisher task."""
+        client = Mock()
+        manager = Mock()
+        manager.client = client
+        context = Mock()
+        context._get_best_url = AsyncMock(return_value="url")
+
+        async def push() -> None:
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(push())
+        client.push_continuous = AsyncMock(return_value=task)
+        publisher = ContextManagerUseContextPublisher(context, manager)
+        try:
+            await publisher.init()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        manager.remember_task.assert_called_once_with(task)
+
+    async def test_publisher_terminate_waits_for_task(self) -> None:
+        """Complete persistent-publisher cancellation before returning."""
+        task_started = asyncio.Event()
+
+        async def push() -> None:
+            task_started.set()
+            await asyncio.Event().wait()
+
+        publisher = object.__new__(ContextManagerUseContextPublisher)
+        task = asyncio.create_task(push())
+        publisher.task_push = task
+        try:
+            await task_started.wait()
+            await publisher.terminate()
+            self.assertTrue(task.done())
+            self.assertTrue(task.cancelled())
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)

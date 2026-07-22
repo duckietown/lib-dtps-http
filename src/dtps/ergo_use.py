@@ -4,6 +4,7 @@ import traceback
 from asyncio import CancelledError, Event
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from threading import Lock
 from typing import (
     Any,
     AsyncIterator,
@@ -90,6 +91,7 @@ class ContextManagerUse(ContextManager):
     client: DTPSClient
     contexts: "Dict[Tuple[Tuple[str, ...], ContextConfig], ContextManagerUseContext]"
     tasks: List["asyncio.Task[Any]"]
+    _closing: bool
 
     def __init__(self, base_name: str, context_info: "ContextInfo"):
         self.client = DTPSClient(nickname=base_name, shutdown_event=None)
@@ -100,9 +102,83 @@ class ContextManagerUse(ContextManager):
         assert not self.context_info.is_create()
         self.last_connection = None
         self.tasks = []
+        self._tasks_lock = Lock()
+        self._closing = False
 
     def remember_task(self, task: "asyncio.Task[Any]") -> None:
-        self.tasks.append(task)
+        """Register a task for manager shutdown."""
+        with self._tasks_lock:
+            self.tasks.append(task)
+            closing = self._closing
+        self._forget_task_when_done(task)
+        if closing:
+            self._cancel_task_on_own_loop(task)
+
+    def forget_task(self, task: "asyncio.Task[Any]") -> None:
+        """Release a completed task from manager ownership."""
+        with self._tasks_lock:
+            self.tasks = [
+                candidate for candidate in self.tasks if candidate is not task
+            ]
+
+    def _handle_task_completion(self, task: "asyncio.Task[Any]") -> None:
+        """Log a background task failure before releasing it."""
+        try:
+            if not task.cancelled():
+                error = task.exception()
+                if error is not None:
+                    logger.error(
+                        "DTPS background task failed.",
+                        exc_info=(
+                            type(error),
+                            error,
+                            error.__traceback__,
+                        ),
+                    )
+        finally:
+            self.forget_task(task)
+
+    def _forget_task_when_done(self, task: "asyncio.Task[Any]") -> None:
+        """Install task cleanup from the event loop that owns it."""
+        try:
+            task.get_loop().call_soon_threadsafe(
+                task.add_done_callback,
+                self._handle_task_completion,
+            )
+        except RuntimeError:
+            return
+
+    @staticmethod
+    def _cancel_task_on_own_loop(task: "asyncio.Task[Any]") -> None:
+        """Schedule task cancellation on the event loop that owns it."""
+        task_loop = task.get_loop()
+        cancel_task = task.cancel
+        try:
+            task_loop.call_soon_threadsafe(cancel_task)
+        except RuntimeError:
+            return
+
+    async def _cancel_and_wait_for_tasks(self) -> None:
+        """Cancel all tasks registered during shutdown."""
+        current_loop = asyncio.get_running_loop()
+        while True:
+            with self._tasks_lock:
+                if not self.tasks:
+                    return
+                tasks = self.tasks
+                self.tasks = []
+            current_loop_tasks: List["asyncio.Task[Any]"] = []
+            for task in tasks:
+                if task.get_loop() is current_loop:
+                    task.cancel()
+                    current_loop_tasks.append(task)
+                else:
+                    self._cancel_task_on_own_loop(task)
+            if current_loop_tasks:
+                await asyncio.gather(
+                    *current_loop_tasks,
+                    return_exceptions=True,
+                )
 
     async def init(self) -> None:
         await self.client.init()
@@ -175,9 +251,13 @@ class ContextManagerUse(ContextManager):
         # return best_url
 
     async def aclose(self) -> None:
-        await self.client.aclose()
-        for t in self.tasks:
-            t.cancel()
+        with self._tasks_lock:
+            self._closing = True
+        try:
+            await self._cancel_and_wait_for_tasks()
+            await self.client.aclose()
+        finally:
+            await self._cancel_and_wait_for_tasks()
 
     def get_context_by_components(self, components: Tuple[str, ...], config: ContextConfig) -> "DTPSContext":
         key = (components, config)
@@ -196,17 +276,23 @@ class ContextManagerUseContextPublisher(PublisherInterface):
     queue_out: "asyncio.Queue[bool]"
     task_push: "asyncio.Task[Any]"
 
-    def __init__(self, master: "ContextManagerUseContext"):
-        self.master = master
+    def __init__(
+        self,
+        context: "ContextManagerUseContext",
+        context_manager: ContextManagerUse,
+    ):
+        self._context = context
+        self._context_manager = context_manager
 
         self.queue_in = asyncio.Queue()
         self.queue_out = asyncio.Queue()
 
     async def init(self) -> None:
-        url_topic = await self.master._get_best_url()
-        self.task_push = await self.master.master.client.push_continuous(
+        url_topic = await self._context._get_best_url()
+        self.task_push = await self._context_manager.client.push_continuous(
             url_topic, queue_in=self.queue_in, queue_out=self.queue_out
         )
+        self._context_manager.remember_task(self.task_push)
 
     async def publish(self, rd: RawData, /) -> None:
         await self.queue_in.put(rd)
@@ -216,6 +302,10 @@ class ContextManagerUseContextPublisher(PublisherInterface):
 
     async def terminate(self) -> None:
         self.task_push.cancel()
+        await asyncio.gather(
+            self.task_push,
+            return_exceptions=True,
+        )
 
     async def get_listener_info(self) -> Optional[ListenerInfo]:
         # Not available for remote contexts
@@ -495,7 +585,8 @@ class ContextManagerUseContext(DTPSContext):
         await self.master.client.publish(url, data)
 
     async def publisher(self) -> "ContextManagerUseContextPublisher":
-        publisher = ContextManagerUseContextPublisher(self)
+        context_manager = self.master
+        publisher = ContextManagerUseContextPublisher(self, context_manager)
         await publisher.init()
         return publisher
 
