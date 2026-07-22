@@ -397,15 +397,42 @@ WARN_USE_PUBLISH_CONTEXT_N_MIN = 4
 
 class FakeSubscriptionInterface(SubscriptionInterface):
     real: Optional[SubscriptionInterface]
+    _finished_event: Event
 
     def __init__(self, event: Event):
         self.real = None
         self.unsubscribe_event = event
+        self._finished_event = Event()
+        self._real_unsubscribed = False
+
+    async def set_real(
+        self,
+        subscription: SubscriptionInterface,
+        finished_event: Event,
+    ) -> bool:
+        """Set the active subscription and stop it when cancelled."""
+        self.real = subscription
+        self._finished_event = finished_event
+        self._real_unsubscribed = False
+        if not self.unsubscribe_event.is_set():
+            return False
+        finished_event.set()
+        await self._unsubscribe_real()
+        return True
+
+    async def _unsubscribe_real(self) -> None:
+        """Stop the current real subscription at most once."""
+        real = self.real
+        if real is None or self._real_unsubscribed:
+            return
+        self._real_unsubscribed = True
+        await real.unsubscribe()
 
     async def unsubscribe(self) -> None:
         self.unsubscribe_event.set()
-        if self.real is not None:
-            await self.real.unsubscribe()
+        finished_event = self._finished_event
+        finished_event.set()
+        await self._unsubscribe_real()
 
 
 class ContextManagerUseContext(DTPSContext):
@@ -550,7 +577,7 @@ class ContextManagerUseContext(DTPSContext):
         logger.debug(f"subscribe _subscribe_patient_task: starting")
         ntries = 0
         nsuccess = 0
-        while True:
+        while not fldi.unsubscribe_event.is_set():
             logger.debug(f"_subscribe_patient_task patient: loop {ntries=} {nsuccess=}")
             try:
                 finished_event = Event()
@@ -563,14 +590,22 @@ class ContextManagerUseContext(DTPSContext):
                 si = await self.subscribe_once(on_data, max_frequency, inline, on_finished=on_finished,
                                                queue_size=queue_size)
                 nsuccess += 1
-                fldi.real = si
+                unsubscribe_requested = await fldi.set_real(
+                    si,
+                    finished_event,
+                )
+                if unsubscribe_requested:
+                    break
                 logger.debug(f"_subscribe_patient_task: wait for finished_event")
                 await finished_event.wait()
+                if fldi.unsubscribe_event.is_set():
+                    break
                 await asyncio.sleep(1)
                 if fldi.unsubscribe_event.is_set():
                     break
                 # await fldi.unsubscribe_event.wait()
             except asyncio.CancelledError:
+                await fldi.unsubscribe()
                 raise
             except CannotConnectToAnyURL:
                 logger.debug(f"_subscribe_patient_task: cannot connect yet, retrying")
@@ -578,6 +613,8 @@ class ContextManagerUseContext(DTPSContext):
             except Exception as e:  # ok but which error?
                 logger.error(f"_subscribe_patient_task: Error in subscribe: {e}")
                 await asyncio.sleep(1)
+
+        await fldi.unsubscribe()
 
     async def subscribe_once(
         self,
