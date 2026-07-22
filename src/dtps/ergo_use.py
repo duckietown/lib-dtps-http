@@ -18,6 +18,7 @@ from typing import (
     Tuple,
     TypeVar,
     Union,
+    Set,
 )
 
 import cbor2
@@ -73,6 +74,8 @@ __all__ = [
     "ContextManagerUse",
 ]
 
+_ERROR_CONTEXT_MANAGER_CLOSING = "Context manager is closing."
+
 
 class CannotConnectToAnyURL(Exception):
     pass
@@ -104,6 +107,7 @@ class ContextManagerUse(ContextManager):
         self.tasks = []
         self._tasks_lock = Lock()
         self._closing = False
+        self._subscriptions: Set[SubscriptionInterface] = set()
 
     def remember_task(self, task: "asyncio.Task[Any]") -> None:
         """Register a task for manager shutdown."""
@@ -147,6 +151,43 @@ class ContextManagerUse(ContextManager):
             )
         except RuntimeError:
             return
+
+    def remember_subscription(
+        self,
+        subscription: SubscriptionInterface,
+    ) -> bool:
+        """Register a normal subscription unless shutdown has started."""
+        with self._tasks_lock:
+            if self._closing:
+                return False
+            self._subscriptions.add(subscription)
+        return True
+
+    def forget_subscription(
+        self,
+        subscription: SubscriptionInterface,
+    ) -> None:
+        """Release a stopped normal subscription from manager ownership."""
+        with self._tasks_lock:
+            self._subscriptions.discard(subscription)
+
+    async def _unsubscribe_subscriptions(self) -> None:
+        """Stop normal subscriptions before the client closes."""
+        with self._tasks_lock:
+            subscriptions = list(self._subscriptions)
+            self._subscriptions.clear()
+        for subscription in subscriptions:
+            await self._unsubscribe_subscription(subscription)
+
+    @staticmethod
+    async def _unsubscribe_subscription(
+        subscription: SubscriptionInterface,
+    ) -> None:
+        """Stop one normal subscription without interrupting shutdown."""
+        try:
+            await subscription.unsubscribe()
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to stop DTPS subscription.")
 
     @staticmethod
     def _cancel_task_on_own_loop(task: "asyncio.Task[Any]") -> None:
@@ -254,9 +295,11 @@ class ContextManagerUse(ContextManager):
         with self._tasks_lock:
             self._closing = True
         try:
+            await self._unsubscribe_subscriptions()
             await self._cancel_and_wait_for_tasks()
             await self.client.aclose()
         finally:
+            await self._unsubscribe_subscriptions()
             await self._cancel_and_wait_for_tasks()
 
     def get_context_by_components(self, components: Tuple[str, ...], config: ContextConfig) -> "DTPSContext":
@@ -313,11 +356,37 @@ class ContextManagerUseContextPublisher(PublisherInterface):
 
 
 class ContextManagerUseSubscription(SubscriptionInterface):
-    def __init__(self, ldi: ListenDataInterface):
+    def __init__(
+        self,
+        ldi: ListenDataInterface,
+        processor_task: "asyncio.Task[None]",
+        processor_stop_event: Event,
+        on_unsubscribe: Callable[[SubscriptionInterface], None] | None = None,
+    ):
         self.ldi = ldi
+        self._processor_task = processor_task
+        self._processor_stop_event = processor_stop_event
+        self._on_unsubscribe = on_unsubscribe
+        self._closed = False
 
     async def unsubscribe(self) -> None:
-        await self.ldi.stop()
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            await self.ldi.stop()
+        finally:
+            self._processor_stop_event.set()
+            processor_task = self._processor_task
+            if processor_task is not asyncio.current_task():
+                processor_task.cancel()
+                await asyncio.gather(
+                    processor_task,
+                    return_exceptions=True,
+                )
+            on_unsubscribe = self._on_unsubscribe
+            if on_unsubscribe is not None:
+                on_unsubscribe(self)
 
 
 # min frequency to warn for
@@ -523,6 +592,8 @@ class ContextManagerUseContext(DTPSContext):
 
         queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
 
+        processor_stop_event = Event()
+
         async def _processor():
             while True:
                 data: RawData = await queue.get()
@@ -534,30 +605,59 @@ class ContextManagerUseContext(DTPSContext):
                     print(f"Exception in user callback for queue {self}:")
                     traceback.print_exc()
                 # <== this block runs user code, we need to catch exceptions
+                if processor_stop_event.is_set():
+                    return
 
-        # create processor task
-        asyncio.run_coroutine_threadsafe(_processor(), asyncio.get_event_loop())
+        processor = _processor()
+        try:
+            processor_task = asyncio.create_task(processor)
+        except BaseException:
+            processor.close()
+            raise
+        try:
+            self.master.remember_task(processor_task)
 
-        async def _wrapped_on_data(data: RawData):
-            try:
-                queue.put_nowait(data)
-            except asyncio.QueueFull:
+            async def _wrapped_on_data(data: RawData):
                 try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-                queue.put_nowait(data)
+                    queue.put_nowait(data)
+                except asyncio.QueueFull:
+                    try:
+                        queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    queue.put_nowait(data)
 
-        ldi = await self.master.client.listen_url(
-            url,
-            _wrapped_on_data,
-            inline_data=inline,
-            raise_on_error=True,
-            max_frequency=max_frequency,
-            on_finished=on_finished,
-        )
+            ldi = await self.master.client.listen_url(
+                url,
+                _wrapped_on_data,
+                inline_data=inline,
+                raise_on_error=True,
+                max_frequency=max_frequency,
+                on_finished=on_finished,
+            )
+        except BaseException:
+            processor_task.cancel()
+            await asyncio.gather(
+                processor_task,
+                return_exceptions=True,
+            )
+            raise
         # logger.debug(f"subscribed to {url} -> {t}")
-        return ContextManagerUseSubscription(ldi)
+        subscription = ContextManagerUseSubscription(
+            ldi,
+            processor_task,
+            processor_stop_event,
+            self.master.forget_subscription,
+        )
+        try:
+            registered = self.master.remember_subscription(subscription)
+        except BaseException:
+            await subscription.unsubscribe()
+            raise
+        if registered:
+            return subscription
+        await subscription.unsubscribe()
+        raise RuntimeError(_ERROR_CONTEXT_MANAGER_CLOSING)
 
     async def history(self) -> "Optional[HistoryInterface]":
         # TODO: DTSW-4803: [use] implement history
