@@ -1,7 +1,7 @@
 import asyncio
 import traceback
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, AsyncIterator, Awaitable, Callable, cast, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from jsonpatch import JsonPatch
 
@@ -49,10 +49,19 @@ from .ergo_ui import (
     ServeFunction,
     SubscriptionInterface,
 )
+from .shm import (
+    ShmWriterPool,
+    create_shm_subscription,
+    should_publish_http,
+    validate_max_frequency,
+    validate_shm_configuration,
+)
 
 __all__ = [
     "ContextManagerCreate",
 ]
+
+_ERROR_CONTEXT_MANAGER_CLOSING = "Context manager is closing."
 
 
 class ContextManagerCreate(ContextManager):
@@ -65,6 +74,9 @@ class ContextManagerCreate(ContextManager):
         self.dtps_server_wrap = None
         self.contexts = {}
         self.base_config = ContextConfig.default()
+        self._shm_writers = ShmWriterPool()
+        self._subscriptions: Set[SubscriptionInterface] = set()
+        self._closing = False
         assert self.context_info.is_create()
 
     async def init(self) -> None:
@@ -83,8 +95,56 @@ class ContextManagerCreate(ContextManager):
         self.dtps_server_wrap = a
 
     async def aclose(self) -> None:
-        if self.dtps_server_wrap is not None:
-            await self.dtps_server_wrap.aclose()
+        self._closing = True
+        try:
+            await self._unsubscribe_all()
+        finally:
+            try:
+                self._shm_writers.close()
+            finally:
+                if self.dtps_server_wrap is not None:
+                    await self.dtps_server_wrap.aclose()
+
+    async def remember_subscription(
+        self,
+        subscription: SubscriptionInterface,
+    ) -> None:
+        """Keep a subscription alive only until manager shutdown."""
+        if not self._closing:
+            self._subscriptions.add(subscription)
+            return
+        await subscription.unsubscribe()
+        raise RuntimeError(_ERROR_CONTEXT_MANAGER_CLOSING)
+
+    def forget_subscription(
+        self,
+        subscription: SubscriptionInterface,
+    ) -> None:
+        """Release an unsubscribed handle from manager ownership."""
+        self._subscriptions.discard(subscription)
+
+    async def _unsubscribe_all(self) -> None:
+        """Stop every active subscription before the server closes."""
+        subscriptions = list(self._subscriptions)
+        self._subscriptions.clear()
+        first_error: Optional[Exception] = None
+        for subscription in subscriptions:
+            error = await self._unsubscribe_subscription(subscription)
+            if error is not None and first_error is None:
+                first_error = error
+        if first_error is not None:
+            raise first_error
+
+    @staticmethod
+    async def _unsubscribe_subscription(
+        subscription: SubscriptionInterface,
+    ) -> Optional[Exception]:
+        """Stop one subscription and return a cleanup failure."""
+        try:
+            await subscription.unsubscribe()
+        except Exception as error:  # noqa: BLE001
+            return error
+        return None
 
     def get_context_by_components(self, components: Tuple[str, ...], config: ContextConfig) -> "DTPSContext":
         key = components, config
@@ -104,9 +164,9 @@ class ContextManagerCreateContextPublisher(PublisherInterface):
     def __init__(self, master: "ContextManagerCreateContext"):
         self.master = master
 
-    async def publish(self, rd: RawData, /) -> None:
+    async def publish(self, rd: RawData, /, *, shm_path: Optional[str] = None, shm_only: bool = False) -> None:
         # nothing more to do for this
-        await self.master.publish(rd)
+        await self.master.publish(rd, shm_path=shm_path, shm_only=shm_only)
 
     async def terminate(self) -> None:
         # nothing more to do for this
@@ -117,12 +177,37 @@ class ContextManagerCreateContextPublisher(PublisherInterface):
 
 
 class ContextManagerCreateContextSubscriber(SubscriptionInterface):
-    def __init__(self, sub_id: SUB_ID, oq0: ObjectQueue) -> None:
+    def __init__(
+        self,
+        master: ContextManagerCreate,
+        sub_id: SUB_ID,
+        oq0: ObjectQueue,
+        processor_task: "asyncio.Task[None]",
+        processor_stop_event: asyncio.Event,
+    ) -> None:
+        self._master = master
         self.sub_id = sub_id
         self.oq0 = oq0
+        self._processor_task = processor_task
+        self._processor_stop_event = processor_stop_event
+        self._closed = False
 
     async def unsubscribe(self) -> None:
-        await self.oq0.unsubscribe(self.sub_id)
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            await self.oq0.unsubscribe(self.sub_id)
+        finally:
+            self._processor_stop_event.set()
+            processor_task = self._processor_task
+            if processor_task is not asyncio.current_task():
+                processor_task.cancel()
+                await asyncio.gather(
+                    processor_task,
+                    return_exceptions=True,
+                )
+            self._master.forget_subscription(self)
 
 
 class ContextManagerCreateContext(DTPSContext):
@@ -245,12 +330,34 @@ class ContextManagerCreateContext(DTPSContext):
         max_frequency: Optional[float] = None,
         inline: bool = True,
         queue_size: int = DEFAULT_CALLBACK_QUEUE_SIZE,
+        *,
+        shm_path: Optional[str] = None,
+        shm_only: bool = False,
     ) -> "SubscriptionInterface":
+        validate_shm_configuration(shm_path, shm_only)
+        validate_max_frequency(max_frequency)
+        if shm_only and shm_path:
+            subscription = create_shm_subscription(
+                on_data,
+                shm_path,
+                queue_size,
+                max_frequency=max_frequency,
+                on_unsubscribe=self.master.forget_subscription,
+            )
+            try:
+                await self.master.remember_subscription(subscription)
+            except BaseException:
+                await subscription.unsubscribe()
+                raise
+            return subscription
+
         oq0 = self._get_server().get_oq(self._topic)
 
         when = EveryOnceInAWhile(1.0 / max_frequency if max_frequency is not None else 0)
 
         queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
+
+        processor_stop_event = asyncio.Event()
 
         async def _processor():
             while True:
@@ -263,9 +370,8 @@ class ContextManagerCreateContext(DTPSContext):
                     print(f"Exception in user callback for queue {self}:")
                     traceback.print_exc()
                 # <== this block runs user code, we need to catch exceptions
-
-        # create processor task
-        asyncio.run_coroutine_threadsafe(_processor(), asyncio.get_event_loop())
+                if processor_stop_event.is_set():
+                    return
 
         async def _wrapped_on_data(data: RawData):
             try:
@@ -288,13 +394,34 @@ class ContextManagerCreateContext(DTPSContext):
         _ = inline
         sub_id = oq0.subscribe(wrap, max_frequency=max_frequency)
 
-        return ContextManagerCreateContextSubscriber(sub_id, oq0)
+        processor = _processor()
+        try:
+            processor_task = asyncio.create_task(processor)
+        except BaseException:
+            processor.close()
+            await oq0.unsubscribe(sub_id)
+            raise
+        subscription = ContextManagerCreateContextSubscriber(
+            self.master,
+            sub_id,
+            oq0,
+            processor_task,
+            processor_stop_event,
+        )
+        try:
+            await self.master.remember_subscription(subscription)
+        except BaseException:
+            await subscription.unsubscribe()
+            raise
+        return subscription
 
     async def history(self) -> "Optional[HistoryInterface]":
         # TODO: DTSW-4794: implement history
         raise NotImplementedError()
 
-    async def publish(self, data: RawData, /) -> None:
+    async def publish(self, data: RawData, /, *, shm_path: Optional[str] = None, shm_only: bool = False) -> None:
+        if not should_publish_http(self.master._shm_writers, data, shm_path=shm_path, shm_only=shm_only):
+            return
         server = self._get_server()
         topic = self._topic
         queue = server.get_oq(topic)

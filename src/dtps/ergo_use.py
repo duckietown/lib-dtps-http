@@ -4,6 +4,7 @@ import traceback
 from asyncio import CancelledError, Event
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from threading import Lock
 from typing import (
     Any,
     AsyncIterator,
@@ -17,6 +18,7 @@ from typing import (
     Tuple,
     TypeVar,
     Union,
+    Set,
 )
 
 import cbor2
@@ -63,6 +65,13 @@ from .ergo_ui import (
     ServeFunction,
     SubscriptionInterface,
 )
+from .shm import (
+    ShmWriterPool,
+    create_shm_subscription,
+    should_publish_http,
+    validate_max_frequency,
+    validate_shm_configuration,
+)
 
 PS = ParamSpec("PS")
 
@@ -71,6 +80,8 @@ X = TypeVar("X")
 __all__ = [
     "ContextManagerUse",
 ]
+
+_ERROR_CONTEXT_MANAGER_CLOSING = "Context manager is closing."
 
 
 class CannotConnectToAnyURL(Exception):
@@ -90,6 +101,7 @@ class ContextManagerUse(ContextManager):
     client: DTPSClient
     contexts: "Dict[Tuple[Tuple[str, ...], ContextConfig], ContextManagerUseContext]"
     tasks: List["asyncio.Task[Any]"]
+    _closing: bool
 
     def __init__(self, base_name: str, context_info: "ContextInfo"):
         self.client = DTPSClient(nickname=base_name, shutdown_event=None)
@@ -100,9 +112,165 @@ class ContextManagerUse(ContextManager):
         assert not self.context_info.is_create()
         self.last_connection = None
         self.tasks = []
+        self._tasks_lock = Lock()
+        self._closing = False
+        self._shm_writers = ShmWriterPool()
+        self._subscriptions: Set[SubscriptionInterface] = set()
+        self._shm_subscriptions: Set[SubscriptionInterface] = set()
 
     def remember_task(self, task: "asyncio.Task[Any]") -> None:
-        self.tasks.append(task)
+        """Register a task for manager shutdown."""
+        with self._tasks_lock:
+            self.tasks.append(task)
+            closing = self._closing
+        self._forget_task_when_done(task)
+        if closing:
+            self._cancel_task_on_own_loop(task)
+
+    def forget_task(self, task: "asyncio.Task[Any]") -> None:
+        """Release a completed task from manager ownership."""
+        with self._tasks_lock:
+            self.tasks = [
+                candidate for candidate in self.tasks if candidate is not task
+            ]
+
+    def _handle_task_completion(self, task: "asyncio.Task[Any]") -> None:
+        """Log a background task failure before releasing it."""
+        try:
+            if not task.cancelled():
+                error = task.exception()
+                if error is not None:
+                    logger.error(
+                        "DTPS background task failed.",
+                        exc_info=(
+                            type(error),
+                            error,
+                            error.__traceback__,
+                        ),
+                    )
+        finally:
+            self.forget_task(task)
+
+    def _forget_task_when_done(self, task: "asyncio.Task[Any]") -> None:
+        """Install task cleanup from the event loop that owns it."""
+        try:
+            task.get_loop().call_soon_threadsafe(
+                task.add_done_callback,
+                self._handle_task_completion,
+            )
+        except RuntimeError:
+            return
+
+    def remember_subscription(
+        self,
+        subscription: SubscriptionInterface,
+    ) -> bool:
+        """Register a normal subscription unless shutdown has started."""
+        with self._tasks_lock:
+            if self._closing:
+                return False
+            self._subscriptions.add(subscription)
+        return True
+
+    def forget_subscription(
+        self,
+        subscription: SubscriptionInterface,
+    ) -> None:
+        """Release a stopped normal subscription from manager ownership."""
+        with self._tasks_lock:
+            self._subscriptions.discard(subscription)
+
+    async def _unsubscribe_subscriptions(self) -> None:
+        """Stop normal subscriptions before the client closes."""
+        with self._tasks_lock:
+            subscriptions = list(self._subscriptions)
+            self._subscriptions.clear()
+        for subscription in subscriptions:
+            await self._unsubscribe_subscription(subscription)
+
+    @staticmethod
+    async def _unsubscribe_subscription(
+        subscription: SubscriptionInterface,
+    ) -> None:
+        """Stop one normal subscription without interrupting shutdown."""
+        try:
+            await subscription.unsubscribe()
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to stop DTPS subscription.")
+
+    async def remember_shm_subscription(
+        self,
+        subscription: SubscriptionInterface,
+    ) -> None:
+        """Register a shared-memory reader for manager shutdown."""
+        with self._tasks_lock:
+            closing = self._closing
+            if not closing:
+                self._shm_subscriptions.add(subscription)
+        if not closing:
+            return
+        await subscription.unsubscribe()
+        raise RuntimeError(_ERROR_CONTEXT_MANAGER_CLOSING)
+
+    def forget_shm_subscription(
+        self,
+        subscription: SubscriptionInterface,
+    ) -> None:
+        """Release a stopped SHM reader from manager ownership."""
+        with self._tasks_lock:
+            self._shm_subscriptions.discard(subscription)
+
+    async def _unsubscribe_shm_subscriptions(self) -> None:
+        """Stop active shared-memory readers before client shutdown."""
+        with self._tasks_lock:
+            subscriptions = list(self._shm_subscriptions)
+            self._shm_subscriptions.clear()
+        for subscription in subscriptions:
+            await self._unsubscribe_shm_subscription(subscription)
+
+    @staticmethod
+    async def _unsubscribe_shm_subscription(
+        subscription: SubscriptionInterface,
+    ) -> None:
+        """Stop one SHM reader without interrupting shutdown."""
+        try:
+            await subscription.unsubscribe()
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Failed to stop DTPS shared-memory subscription."
+            )
+
+    @staticmethod
+    def _cancel_task_on_own_loop(task: "asyncio.Task[Any]") -> None:
+        """Schedule task cancellation on the event loop that owns it."""
+        task_loop = task.get_loop()
+        cancel_task = task.cancel
+        try:
+            task_loop.call_soon_threadsafe(cancel_task)
+        except RuntimeError:
+            return
+
+    async def _cancel_and_wait_for_tasks(self) -> None:
+        """Cancel all tasks registered during shutdown."""
+        current_loop = asyncio.get_running_loop()
+        while True:
+            with self._tasks_lock:
+                if not self.tasks:
+                    return
+                tasks = self.tasks
+                self.tasks = []
+            current_loop_tasks: List["asyncio.Task[Any]"] = []
+            for task in tasks:
+                if task.get_loop() is current_loop:
+                    task.cancel()
+                    current_loop_tasks.append(task)
+                else:
+                    self._cancel_task_on_own_loop(task)
+            if current_loop_tasks:
+                await asyncio.gather(
+                    *current_loop_tasks,
+                    return_exceptions=True,
+                )
 
     async def init(self) -> None:
         await self.client.init()
@@ -175,9 +343,18 @@ class ContextManagerUse(ContextManager):
         # return best_url
 
     async def aclose(self) -> None:
-        await self.client.aclose()
-        for t in self.tasks:
-            t.cancel()
+        with self._tasks_lock:
+            self._closing = True
+        try:
+            await self._unsubscribe_subscriptions()
+            await self._unsubscribe_shm_subscriptions()
+            await self._cancel_and_wait_for_tasks()
+            await self.client.aclose()
+        finally:
+            await self._unsubscribe_subscriptions()
+            await self._unsubscribe_shm_subscriptions()
+            await self._cancel_and_wait_for_tasks()
+            self._shm_writers.close()
 
     def get_context_by_components(self, components: Tuple[str, ...], config: ContextConfig) -> "DTPSContext":
         key = (components, config)
@@ -196,19 +373,27 @@ class ContextManagerUseContextPublisher(PublisherInterface):
     queue_out: "asyncio.Queue[bool]"
     task_push: "asyncio.Task[Any]"
 
-    def __init__(self, master: "ContextManagerUseContext"):
-        self.master = master
+    def __init__(
+        self,
+        context: "ContextManagerUseContext",
+        context_manager: ContextManagerUse,
+    ):
+        self._context = context
+        self._context_manager = context_manager
 
         self.queue_in = asyncio.Queue()
         self.queue_out = asyncio.Queue()
 
     async def init(self) -> None:
-        url_topic = await self.master._get_best_url()
-        self.task_push = await self.master.master.client.push_continuous(
+        url_topic = await self._context._get_best_url()
+        self.task_push = await self._context_manager.client.push_continuous(
             url_topic, queue_in=self.queue_in, queue_out=self.queue_out
         )
+        self._context_manager.remember_task(self.task_push)
 
-    async def publish(self, rd: RawData, /) -> None:
+    async def publish(self, rd: RawData, /, *, shm_path: Optional[str] = None, shm_only: bool = False) -> None:
+        if not should_publish_http(self._context_manager._shm_writers, rd, shm_path=shm_path, shm_only=shm_only):
+            return
         await self.queue_in.put(rd)
         success = await self.queue_out.get()
         if not success:
@@ -216,6 +401,10 @@ class ContextManagerUseContextPublisher(PublisherInterface):
 
     async def terminate(self) -> None:
         self.task_push.cancel()
+        await asyncio.gather(
+            self.task_push,
+            return_exceptions=True,
+        )
 
     async def get_listener_info(self) -> Optional[ListenerInfo]:
         # Not available for remote contexts
@@ -223,11 +412,37 @@ class ContextManagerUseContextPublisher(PublisherInterface):
 
 
 class ContextManagerUseSubscription(SubscriptionInterface):
-    def __init__(self, ldi: ListenDataInterface):
+    def __init__(
+        self,
+        ldi: ListenDataInterface,
+        processor_task: "asyncio.Task[None]",
+        processor_stop_event: Event,
+        on_unsubscribe: Callable[[SubscriptionInterface], None] | None = None,
+    ):
         self.ldi = ldi
+        self._processor_task = processor_task
+        self._processor_stop_event = processor_stop_event
+        self._on_unsubscribe = on_unsubscribe
+        self._closed = False
 
     async def unsubscribe(self) -> None:
-        await self.ldi.stop()
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            await self.ldi.stop()
+        finally:
+            self._processor_stop_event.set()
+            processor_task = self._processor_task
+            if processor_task is not asyncio.current_task():
+                processor_task.cancel()
+                await asyncio.gather(
+                    processor_task,
+                    return_exceptions=True,
+                )
+            on_unsubscribe = self._on_unsubscribe
+            if on_unsubscribe is not None:
+                on_unsubscribe(self)
 
 
 # min frequency to warn for
@@ -238,15 +453,42 @@ WARN_USE_PUBLISH_CONTEXT_N_MIN = 4
 
 class FakeSubscriptionInterface(SubscriptionInterface):
     real: Optional[SubscriptionInterface]
+    _finished_event: Event
 
     def __init__(self, event: Event):
         self.real = None
         self.unsubscribe_event = event
+        self._finished_event = Event()
+        self._real_unsubscribed = False
+
+    async def set_real(
+        self,
+        subscription: SubscriptionInterface,
+        finished_event: Event,
+    ) -> bool:
+        """Set the active subscription and stop it when cancelled."""
+        self.real = subscription
+        self._finished_event = finished_event
+        self._real_unsubscribed = False
+        if not self.unsubscribe_event.is_set():
+            return False
+        finished_event.set()
+        await self._unsubscribe_real()
+        return True
+
+    async def _unsubscribe_real(self) -> None:
+        """Stop the current real subscription at most once."""
+        real = self.real
+        if real is None or self._real_unsubscribed:
+            return
+        self._real_unsubscribed = True
+        await real.unsubscribe()
 
     async def unsubscribe(self) -> None:
         self.unsubscribe_event.set()
-        if self.real is not None:
-            await self.real.unsubscribe()
+        finished_event = self._finished_event
+        finished_event.set()
+        await self._unsubscribe_real()
 
 
 class ContextManagerUseContext(DTPSContext):
@@ -274,7 +516,11 @@ class ContextManagerUseContext(DTPSContext):
 
     def _get_frequency_publishing(self) -> float:
         now = time.time()
-        while self.last_published[0] < now - WARN_USE_PUBLISH_CONTEXT_HORIZON_S:
+        while (
+            self.last_published
+            and self.last_published[0]
+            < now - WARN_USE_PUBLISH_CONTEXT_HORIZON_S
+        ):
             self.last_published.pop(0)
         if not self.last_published:
             return 0.0
@@ -364,7 +610,26 @@ class ContextManagerUseContext(DTPSContext):
         max_frequency: Optional[float] = None,
         inline: bool = True,
         queue_size: int = DEFAULT_CALLBACK_QUEUE_SIZE,
+        *,
+        shm_path: Optional[str] = None,
+        shm_only: bool = False,
     ) -> "SubscriptionInterface":
+        validate_shm_configuration(shm_path, shm_only)
+        validate_max_frequency(max_frequency)
+        if shm_only and shm_path:
+            subscription = create_shm_subscription(
+                on_data,
+                shm_path,
+                queue_size,
+                max_frequency=max_frequency,
+                on_unsubscribe=self.master.forget_shm_subscription,
+            )
+            try:
+                await self.master.remember_shm_subscription(subscription)
+            except BaseException:
+                await subscription.unsubscribe()
+                raise
+            return subscription
         if not self.config.patient:
             return await self.subscribe_once(on_data, max_frequency, inline)
 
@@ -391,7 +656,7 @@ class ContextManagerUseContext(DTPSContext):
         logger.debug(f"subscribe _subscribe_patient_task: starting")
         ntries = 0
         nsuccess = 0
-        while True:
+        while not fldi.unsubscribe_event.is_set():
             logger.debug(f"_subscribe_patient_task patient: loop {ntries=} {nsuccess=}")
             try:
                 finished_event = Event()
@@ -404,14 +669,22 @@ class ContextManagerUseContext(DTPSContext):
                 si = await self.subscribe_once(on_data, max_frequency, inline, on_finished=on_finished,
                                                queue_size=queue_size)
                 nsuccess += 1
-                fldi.real = si
+                unsubscribe_requested = await fldi.set_real(
+                    si,
+                    finished_event,
+                )
+                if unsubscribe_requested:
+                    break
                 logger.debug(f"_subscribe_patient_task: wait for finished_event")
                 await finished_event.wait()
+                if fldi.unsubscribe_event.is_set():
+                    break
                 await asyncio.sleep(1)
                 if fldi.unsubscribe_event.is_set():
                     break
                 # await fldi.unsubscribe_event.wait()
             except asyncio.CancelledError:
+                await fldi.unsubscribe()
                 raise
             except CannotConnectToAnyURL:
                 logger.debug(f"_subscribe_patient_task: cannot connect yet, retrying")
@@ -419,6 +692,8 @@ class ContextManagerUseContext(DTPSContext):
             except Exception as e:  # ok but which error?
                 logger.error(f"_subscribe_patient_task: Error in subscribe: {e}")
                 await asyncio.sleep(1)
+
+        await fldi.unsubscribe()
 
     async def subscribe_once(
         self,
@@ -433,6 +708,8 @@ class ContextManagerUseContext(DTPSContext):
 
         queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
 
+        processor_stop_event = Event()
+
         async def _processor():
             while True:
                 data: RawData = await queue.get()
@@ -444,30 +721,59 @@ class ContextManagerUseContext(DTPSContext):
                     print(f"Exception in user callback for queue {self}:")
                     traceback.print_exc()
                 # <== this block runs user code, we need to catch exceptions
+                if processor_stop_event.is_set():
+                    return
 
-        # create processor task
-        asyncio.run_coroutine_threadsafe(_processor(), asyncio.get_event_loop())
+        processor = _processor()
+        try:
+            processor_task = asyncio.create_task(processor)
+        except BaseException:
+            processor.close()
+            raise
+        try:
+            self.master.remember_task(processor_task)
 
-        async def _wrapped_on_data(data: RawData):
-            try:
-                queue.put_nowait(data)
-            except asyncio.QueueFull:
+            async def _wrapped_on_data(data: RawData):
                 try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-                queue.put_nowait(data)
+                    queue.put_nowait(data)
+                except asyncio.QueueFull:
+                    try:
+                        queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    queue.put_nowait(data)
 
-        ldi = await self.master.client.listen_url(
-            url,
-            _wrapped_on_data,
-            inline_data=inline,
-            raise_on_error=True,
-            max_frequency=max_frequency,
-            on_finished=on_finished,
-        )
+            ldi = await self.master.client.listen_url(
+                url,
+                _wrapped_on_data,
+                inline_data=inline,
+                raise_on_error=True,
+                max_frequency=max_frequency,
+                on_finished=on_finished,
+            )
+        except BaseException:
+            processor_task.cancel()
+            await asyncio.gather(
+                processor_task,
+                return_exceptions=True,
+            )
+            raise
         # logger.debug(f"subscribed to {url} -> {t}")
-        return ContextManagerUseSubscription(ldi)
+        subscription = ContextManagerUseSubscription(
+            ldi,
+            processor_task,
+            processor_stop_event,
+            self.master.forget_subscription,
+        )
+        try:
+            registered = self.master.remember_subscription(subscription)
+        except BaseException:
+            await subscription.unsubscribe()
+            raise
+        if registered:
+            return subscription
+        await subscription.unsubscribe()
+        raise RuntimeError(_ERROR_CONTEXT_MANAGER_CLOSING)
 
     async def history(self) -> "Optional[HistoryInterface]":
         # TODO: DTSW-4803: [use] implement history
@@ -480,7 +786,9 @@ class ContextManagerUseContext(DTPSContext):
         url = join(best_url, topic.as_relative_url())
         return url
 
-    async def publish(self, data: RawData) -> None:
+    async def publish(self, data: RawData, /, *, shm_path: Optional[str] = None, shm_only: bool = False) -> None:
+        if not should_publish_http(self.master._shm_writers, data, shm_path=shm_path, shm_only=shm_only):
+            return
         self.last_published.append(time.time())
         freq = self._get_frequency_publishing()
         url = await self._get_best_url()
@@ -495,7 +803,8 @@ class ContextManagerUseContext(DTPSContext):
         await self.master.client.publish(url, data)
 
     async def publisher(self) -> "ContextManagerUseContextPublisher":
-        publisher = ContextManagerUseContextPublisher(self)
+        context_manager = self.master
+        publisher = ContextManagerUseContextPublisher(self, context_manager)
         await publisher.init()
         return publisher
 
