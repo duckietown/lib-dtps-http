@@ -460,7 +460,11 @@ class ContextManagerUseContext(DTPSContext):
 
     def _get_frequency_publishing(self) -> float:
         now = time.time()
-        while self.last_published[0] < now - WARN_USE_PUBLISH_CONTEXT_HORIZON_S:
+        while (
+            self.last_published
+            and self.last_published[0]
+            < now - WARN_USE_PUBLISH_CONTEXT_HORIZON_S
+        ):
             self.last_published.pop(0)
         if not self.last_published:
             return 0.0

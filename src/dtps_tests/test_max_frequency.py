@@ -4,6 +4,10 @@ from typing import List
 from unittest import IsolatedAsyncioTestCase
 
 from dtps import DTPSContext
+from dtps.ergo_use import (
+    ContextManagerUseContext,
+    WARN_USE_PUBLISH_CONTEXT_HORIZON_S,
+)
 from dtps_http import (
     async_error_catcher,
     RawData,
@@ -128,6 +132,15 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
                 self.assertEqual(listener_info.num_listeners, 0)
 
                 self.assertEqual(listener_info.max_frequency, None)
+
+    def test_publishing_frequency_handles_only_stale_history(self) -> None:
+        """Return zero after pruning the last stale publication timestamp."""
+        context = object.__new__(ContextManagerUseContext)
+        context.last_published = [
+            time.time() - WARN_USE_PUBLISH_CONTEXT_HORIZON_S - 1,
+        ]
+
+        self.assertEqual(context._get_frequency_publishing(), 0.0)
 
     @test_timeout(20)
     @async_error_catcher
