@@ -1192,11 +1192,15 @@ class DTPSServer:
     ) -> web.StreamResponse:
         headers: CIMultiDict[str] = CIMultiDict()
 
+        escaped_title = html.escape(title)
+        escaped_content_type = html.escape(content_type)
+        escaped_initial_data_html = html.escape(initial_data_html)
+
         # language=html
         html_index = f"""\
 <html lang="en">
 <head>
-    <title>{title}</title>
+    <title>{escaped_title}</title>
     <link rel="stylesheet" href="/static/style.css">
     <script src="/static/send.js"></script>
 
@@ -1205,23 +1209,23 @@ class DTPSServer:
 
 </head>
 <body>
-<h1>{title}</h1>
+<h1>{escaped_title}</h1>
 
 <p>This response coming to you in HTML format because you requested it in HTML format.</p>
 
-<p>Content type: <code>{content_type}</code></p>
+<p>Content type: <code>{escaped_content_type}</code></p>
 
         """
         if is_image_content:
             # language=html
             html_index += f"""
-                <img id="data_field_image" src="data:{content_type};base64,{initial_data_html}" alt="image"/>
+                <img id="data_field_image" src="data:{escaped_content_type};base64,{escaped_initial_data_html}" alt="image"/>
             
             """
         else:
             # language=html
             html_index += f"""
-                <pre id="data_field"><code>{initial_data_html}</code></pre>
+                <pre id="data_field"><code>{escaped_initial_data_html}</code></pre>
             """
         if pushable:
             # language=html
