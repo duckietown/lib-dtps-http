@@ -177,7 +177,7 @@ def get_inside(
         v: Any = ob[first]
         return get_inside(original_ob, context + (first,), v, rest)
     elif isinstance(ob, (list, tuple)):
-        ob = cast(List[Any] | Tuple[Any, ...], ob)
+        ob = cast(Union[List[Any], Tuple[Any, ...]], ob)
         try:
             i = int(first)
         except ValueError:
