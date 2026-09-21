@@ -15,6 +15,7 @@ parts:
   numbered: False
   chapters:
   - file: impl/environment
+  - file: impl/shm
 
 
 - caption: Examples low-level API

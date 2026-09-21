@@ -4,8 +4,10 @@ import tempfile
 from asyncio import Event
 from typing import List
 from unittest import IsolatedAsyncioTestCase
+from unittest.mock import AsyncMock, Mock
 
 from dtps import ContextConfig, DTPSContext
+from dtps.ergo_use import ContextManagerUseContext, FakeSubscriptionInterface
 from dtps_http import (
     async_error_catcher,
     RawData,
@@ -115,3 +117,110 @@ class TestPatient1(IsolatedAsyncioTestCase):
                 await t
                 logger.info(f"found: {found}")
                 # self.assertEqual(len(found), 2)
+
+
+class TestPatientSubscriptionCleanup(IsolatedAsyncioTestCase):
+    async def test_unsubscribe_closes_late_subscription(self) -> None:
+        """Close a real subscription assigned after the caller unsubscribes."""
+        subscribe_started = asyncio.Event()
+        release_subscription = asyncio.Event()
+        real_subscription = Mock()
+        real_subscription.unsubscribe = AsyncMock()
+        fldi = FakeSubscriptionInterface(asyncio.Event())
+        context = object.__new__(ContextManagerUseContext)
+
+        async def subscribe_once(
+            *_args: object,
+            **_kwargs: object,
+        ) -> object:
+            subscribe_started.set()
+            await release_subscription.wait()
+            return real_subscription
+
+        setattr(context, "subscribe_once", subscribe_once)
+
+        async def on_data(_raw_data: RawData) -> None:
+            return
+
+        patient_task = asyncio.create_task(
+            context._subscribe_patient_task(fldi, on_data),
+        )
+        try:
+            await subscribe_started.wait()
+            await fldi.unsubscribe()
+            release_subscription.set()
+            await asyncio.wait_for(patient_task, timeout=1)
+        finally:
+            patient_task.cancel()
+            await asyncio.gather(patient_task, return_exceptions=True)
+
+        real_subscription.unsubscribe.assert_awaited_once()
+
+    async def test_task_cancellation_closes_subscription(self) -> None:
+        """Release the active real subscription during manager shutdown."""
+        subscription_assigned = asyncio.Event()
+        real_subscription = Mock()
+        real_subscription.unsubscribe = AsyncMock()
+        fldi = FakeSubscriptionInterface(asyncio.Event())
+        context = object.__new__(ContextManagerUseContext)
+
+        async def subscribe_once(
+            *_args: object,
+            **_kwargs: object,
+        ) -> object:
+            subscription_assigned.set()
+            return real_subscription
+
+        setattr(context, "subscribe_once", subscribe_once)
+
+        async def on_data(_raw_data: RawData) -> None:
+            return
+
+        patient_task = asyncio.create_task(
+            context._subscribe_patient_task(fldi, on_data),
+        )
+        try:
+            await subscription_assigned.wait()
+            await asyncio.sleep(0)
+            patient_task.cancel()
+            await asyncio.gather(patient_task, return_exceptions=True)
+        finally:
+            patient_task.cancel()
+            await asyncio.gather(patient_task, return_exceptions=True)
+
+        real_subscription.unsubscribe.assert_awaited_once()
+
+    async def test_unsubscribe_wakes_active_subscription(self) -> None:
+        """Wake a patient retry worker when its active subscription stops."""
+        subscription_assigned = asyncio.Event()
+        real_subscription = Mock()
+        real_subscription.unsubscribe = AsyncMock()
+        fldi = FakeSubscriptionInterface(asyncio.Event())
+        context = object.__new__(ContextManagerUseContext)
+
+        async def subscribe_once(
+            *_args: object,
+            **_kwargs: object,
+        ) -> object:
+            subscription_assigned.set()
+            return real_subscription
+
+        setattr(context, "subscribe_once", subscribe_once)
+
+        async def on_data(_raw_data: RawData) -> None:
+            return
+
+        patient_task = asyncio.create_task(
+            context._subscribe_patient_task(fldi, on_data),
+        )
+        try:
+            await subscription_assigned.wait()
+            await asyncio.sleep(0)
+            self.assertIs(fldi.real, real_subscription)
+            await fldi.unsubscribe()
+            await asyncio.wait_for(patient_task, timeout=1)
+        finally:
+            patient_task.cancel()
+            await asyncio.gather(patient_task, return_exceptions=True)
+
+        real_subscription.unsubscribe.assert_awaited_once()

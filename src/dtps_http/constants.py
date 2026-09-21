@@ -1,4 +1,5 @@
 import os
+import struct
 
 from .types import ContentType, TopicNameV
 
@@ -43,6 +44,55 @@ __all__ = [
     "REL_STREAM_PUSH_SUFFIX",
     "REL_URL_HISTORY",
     "REL_URL_META",
+    "SHM_CHANNEL_DIRECTORY_MODE",
+    "SHM_CHANNEL_FILE_MODE",
+    "SHM_DEFAULT_CAPACITY",
+    "SHM_ERROR_CAPACITY",
+    "SHM_ERROR_CAPACITY_EXCEEDS_MAXIMUM",
+    "SHM_ERROR_CHANNEL_DIRECTORY_NOT_DIRECTORY",
+    "SHM_ERROR_CHANNEL_DIRECTORY_NOT_OWNER",
+    "SHM_ERROR_CHANNEL_DIRECTORY_SYMLINK",
+    "SHM_ERROR_CHANNEL_DIRECTORY_WORLD_WRITABLE",
+    "SHM_ERROR_CHANNEL_PATH_HAS_MULTIPLE_LINKS",
+    "SHM_ERROR_CHANNEL_PATH_NOT_REGULAR_FILE",
+    "SHM_ERROR_CLOSE_LOCK_FILE",
+    "SHM_ERROR_CLOSE_MAP",
+    "SHM_ERROR_CLOSE_SIGNAL_FIFO",
+    "SHM_ERROR_HANDLE_PAYLOAD",
+    "SHM_ERROR_HEADER_MAGIC",
+    "SHM_ERROR_HEADER_SIZE",
+    "SHM_ERROR_HEADER_UNPACK",
+    "SHM_ERROR_PAYLOAD_LENGTH",
+    "SHM_ERROR_READ_PAYLOAD",
+    "SHM_ERROR_READER_LOCK_NOT_OPEN",
+    "SHM_ERROR_READER_NOT_OPEN",
+    "SHM_ERROR_READER_REMAP_FAILED",
+    "SHM_ERROR_READER_STOPPING",
+    "SHM_ERROR_SIGNAL_FIFO_ACCESSIBLE_BY_OTHERS",
+    "SHM_ERROR_SIGNAL_FIFO_NOT_OWNER",
+    "SHM_ERROR_SIGNAL_PATH_NOT_FIFO",
+    "SHM_ERROR_SIGNAL_POLL_FAILED",
+    "SHM_ERROR_SIGNAL_READ_FAILED",
+    "SHM_ERROR_UNSUPPORTED_VERSION",
+    "SHM_ERROR_UNSUPPORTED_PLATFORM",
+    "SHM_ERROR_WRITER_LOCK_NOT_OPEN",
+    "SHM_ERROR_WRITER_MAP_NOT_OPEN",
+    "SHM_ERROR_WRITER_NOT_OPEN",
+    "SHM_FIFO_FULL_WARNING",
+    "SHM_HEADER_FORMAT",
+    "SHM_HEADER_SIZE",
+    "SHM_LOCK_SUFFIX",
+    "SHM_MAGIC",
+    "SHM_MAX_CAPACITY",
+    "SHM_SIGNAL_DRAIN_READS",
+    "SHM_SIGNAL_DRAIN_READ_SIZE",
+    "SHM_SIGNAL_FORMAT",
+    "SHM_SIGNAL_POLL_TIMEOUT_SECONDS",
+    "SHM_SIGNAL_SUFFIX",
+    "SHM_STOP_JOIN_TIMEOUT_SECONDS",
+    "SHM_VERSION",
+    "SHM_WARNING_READER_STILL_STOPPING",
+    "SHM_WARNING_RESET_HEADER",
     "TOPIC_AVAILABILITY",
     "TOPIC_CLOCK",
     "TOPIC_CONNECTIONS",
@@ -115,3 +165,77 @@ DEFAULT_MAX_HISTORY: int = 10
 DEFAULT_DATA_AVAILABILITY_TIMEOUT: float = float(os.environ.get("DTPS_DATA_AVAILABILITY_TIMEOUT", "60"))
 
 DEFAULT_CALLBACK_QUEUE_SIZE: int = 10
+
+SHM_CHANNEL_DIRECTORY_MODE = 0o700
+SHM_CHANNEL_FILE_MODE = 0o600
+SHM_DEFAULT_CAPACITY = 1024 * 1024
+SHM_MAX_CAPACITY = 64 * 1024 * 1024
+SHM_HEADER_FORMAT = "<4sIII"
+SHM_HEADER_SIZE = struct.calcsize(SHM_HEADER_FORMAT)
+SHM_LOCK_SUFFIX = ".lock"
+SHM_MAGIC = b"DTCM"
+SHM_SIGNAL_FORMAT = "<Q"
+SHM_SIGNAL_DRAIN_READ_SIZE = 4096
+SHM_SIGNAL_DRAIN_READS = 16
+SHM_SIGNAL_SUFFIX = ".p2c"
+SHM_SIGNAL_POLL_TIMEOUT_SECONDS = 0.1
+SHM_STOP_JOIN_TIMEOUT_SECONDS = 1
+SHM_VERSION = 1
+
+SHM_ERROR_HEADER_SIZE = "Shared-memory header has an unexpected size."
+SHM_ERROR_HEADER_UNPACK = "Shared-memory header could not be unpacked."
+SHM_ERROR_HEADER_MAGIC = "Unexpected shared-memory magic."
+SHM_ERROR_UNSUPPORTED_VERSION = "Unsupported shared-memory version"
+SHM_ERROR_UNSUPPORTED_PLATFORM = (
+    "Shared-memory transport requires POSIX platform capabilities"
+)
+SHM_ERROR_CAPACITY = "Shared-memory capacity must be positive."
+SHM_ERROR_CAPACITY_EXCEEDS_MAXIMUM = (
+    "Shared-memory capacity exceeds configured maximum"
+)
+SHM_ERROR_CHANNEL_DIRECTORY_NOT_DIRECTORY = (
+    "Shared-memory channel directory is not a directory"
+)
+SHM_ERROR_CHANNEL_DIRECTORY_NOT_OWNER = (
+    "Shared-memory channel directory is not owned by the current user or root"
+)
+SHM_ERROR_CHANNEL_DIRECTORY_SYMLINK = (
+    "Shared-memory channel directory is a symlink"
+)
+SHM_ERROR_CHANNEL_DIRECTORY_WORLD_WRITABLE = (
+    "Shared-memory channel directory is writable by other users"
+)
+SHM_ERROR_CHANNEL_PATH_HAS_MULTIPLE_LINKS = (
+    "Shared-memory channel path has multiple hard links"
+)
+SHM_ERROR_CHANNEL_PATH_NOT_REGULAR_FILE = (
+    "Shared-memory channel path is not a regular file"
+)
+SHM_ERROR_CLOSE_LOCK_FILE = "Failed to close shared-memory lock file"
+SHM_ERROR_CLOSE_MAP = "Failed to close shared-memory map"
+SHM_ERROR_CLOSE_SIGNAL_FIFO = "Failed to close shared-memory signal FIFO"
+SHM_ERROR_HANDLE_PAYLOAD = "Failed to handle shared-memory payload"
+SHM_ERROR_PAYLOAD_LENGTH = "Shared-memory payload length exceeds configured capacity."
+SHM_ERROR_READ_PAYLOAD = "Failed to read shared-memory payload"
+SHM_ERROR_READER_LOCK_NOT_OPEN = "Shared-memory reader lock is not open."
+SHM_ERROR_READER_NOT_OPEN = "Shared-memory reader is not open."
+SHM_ERROR_READER_REMAP_FAILED = "Shared-memory reader remap failed."
+SHM_ERROR_READER_STOPPING = "Shared-memory reader is still stopping."
+SHM_ERROR_SIGNAL_FIFO_ACCESSIBLE_BY_OTHERS = (
+    "Shared-memory signal FIFO is accessible by other users"
+)
+SHM_ERROR_SIGNAL_FIFO_NOT_OWNER = (
+    "Shared-memory signal FIFO is not owned by the current user or root"
+)
+SHM_ERROR_SIGNAL_PATH_NOT_FIFO = "Shared-memory signal path is not a FIFO"
+SHM_ERROR_SIGNAL_POLL_FAILED = "Shared-memory signal poll failed"
+SHM_ERROR_SIGNAL_READ_FAILED = "Shared-memory signal read failed"
+SHM_ERROR_WRITER_LOCK_NOT_OPEN = "Shared-memory writer lock is not open."
+SHM_ERROR_WRITER_MAP_NOT_OPEN = "Shared-memory writer map is not open."
+SHM_ERROR_WRITER_NOT_OPEN = "Shared-memory writer is not open."
+SHM_FIFO_FULL_WARNING = "Shared-memory signal FIFO is full; coalescing wake-ups."
+SHM_WARNING_READER_STILL_STOPPING = (
+    "Shared-memory reader is still stopping; "
+    "resources will close after its callback returns."
+)
+SHM_WARNING_RESET_HEADER = "Resetting shared-memory header at"

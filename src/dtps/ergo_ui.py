@@ -161,10 +161,17 @@ class DTPSContext(ABC):
         max_frequency: Optional[float] = None,
         inline: bool = True,
         queue_size: int = DEFAULT_CALLBACK_QUEUE_SIZE,
+        *,
+        shm_path: Optional[str] = None,
+        shm_only: bool = False,
     ) -> "SubscriptionInterface":
         """
         The subscription is persistent: if the topic is not available, we wait until
         it is (up to a timeout).
+
+        When ``shm_path`` is provided with ``shm_only=True``, the callback
+        receives the local latest-value shared-memory channel instead of the
+        normal DTPS delivery path.
         """
         ...
 
@@ -189,9 +196,14 @@ class DTPSContext(ABC):
     # pushing
 
     @abstractmethod
-    async def publish(self, data: RawData, /) -> None:
-        """Publishes data to the resource. Meant to be used for infrequent pushes.
-        For frequent pushes, use the publisher interface."""
+    async def publish(self, data: RawData, /, *, shm_path: Optional[str] = None, shm_only: bool = False) -> None:
+        """Publish data through the normal DTPS path and optionally SHM.
+
+        When ``shm_path`` is set, the message is also attempted on that
+        latest-value shared-memory channel. With ``shm_only=True``, a
+        successful SHM write suppresses normal delivery; a failed SHM write
+        uses normal delivery as a fallback.
+        """
         ...
 
     @abstractmethod
@@ -343,8 +355,13 @@ class ConnectionInterface(ABC):
 @dataclass
 class PublisherInterface(ABC):
     @abstractmethod
-    async def publish(self, rd: RawData, /) -> None:
-        """Publishes data to the resource"""
+    async def publish(self, rd: RawData, /, *, shm_path: Optional[str] = None, shm_only: bool = False) -> None:
+        """Publish data through the normal path and optionally SHM.
+
+        With ``shm_only=True``, a successful SHM write suppresses this
+        publisher's normal path; a failed SHM write uses that path as a
+        fallback.
+        """
         ...
 
     @abstractmethod
