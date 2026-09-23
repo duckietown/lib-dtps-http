@@ -44,7 +44,7 @@ from multidict import CIMultiDict
 from pydantic.dataclasses import dataclass
 
 from . import __version__, logger as logger0
-from .blob_manager import BlobManager
+from .blob_manager import BlobManager, decode_content_type_segment
 from .client import DTPSClient, FoundMetadata, unescape_json_pointer
 from .constants import (
     CONTENT_TYPE_DTPS_DATAREADY_CBOR,
@@ -1544,8 +1544,8 @@ pre {{
         self._add_own_headers(headers)
 
         digest = request.match_info["digest"]
-        content_type_base64 = request.match_info["content_type_base64"]
-        content_type = base64.urlsafe_b64decode(content_type_base64.encode()).decode("ascii")
+        # "{b64}" or "{b64}/{token}" (see encode_url2); only the first part is base64
+        content_type = decode_content_type_segment(request.match_info["content_type_base64"])
 
         if digest in self.blob_manager.blobs:
             blob = self.blob_manager.blobs[digest]
