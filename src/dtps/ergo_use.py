@@ -417,7 +417,7 @@ class ContextManagerUseSubscription(SubscriptionInterface):
         ldi: ListenDataInterface,
         processor_task: "asyncio.Task[None]",
         processor_stop_event: Event,
-        on_unsubscribe: Callable[[SubscriptionInterface], None] | None = None,
+        on_unsubscribe: Optional[Callable[[SubscriptionInterface], None]] = None,
     ):
         self.ldi = ldi
         self._processor_task = processor_task
