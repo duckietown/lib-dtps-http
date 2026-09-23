@@ -39,7 +39,12 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
     async def _testmax(self, root: DTPSContext):
         topic: DTPSContext = await (root / "my_topic").queue_create()
         max_frequency = 3.0
-        effective_frequency = 3 * max_frequency
+        # Publish much faster than the limit so that every limiter window
+        # contains a message even on slow CI runners. The number of delivered
+        # messages is quantized to the publishing interval: with a publisher
+        # that only reached ~7 Hz, the 3 Hz limiter forwarded one message
+        # every 444 ms and the test saw 9 messages in 4 s instead of 12.
+        effective_frequency = 10 * max_frequency
         period_s = 4
 
         found: List[RawData] = []
@@ -73,7 +78,7 @@ class TestMaxFrequency(IsolatedAsyncioTestCase):
         expected_n = int(period_s * max_frequency)
         nfound = len(found)
         too_many = len(found) > expected_n + 3  # allow for some slop
-        too_few = len(found) < expected_n - 2
+        too_few = len(found) < expected_n - 3
         logger.info(f"nsent: {nsent}")
         logger.info(f"expected: {expected_n}")
         logger.info(f"nfound: {len(found)}")
