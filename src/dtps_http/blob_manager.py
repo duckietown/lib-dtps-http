@@ -152,3 +152,16 @@ def encode_url2(digest: Digest, content_type: str, token: str) -> URLString:
 
     url = URLString(f"./:blobs/{digest}/{b64}/{token}")
     return url
+
+
+def decode_content_type_segment(segment: str) -> str:
+    """Inverse of the content-type part of :func:`encode_url2`.
+
+    The server route captures everything after ``:blobs/{digest}/`` as one
+    segment, so ``segment`` is either ``"{b64}"`` or ``"{b64}/{token}"``.
+    Only the first path component is base64. Python <= 3.12 silently
+    discarded the trailing ``/{token}`` when decoding; Python 3.13 raises
+    ``binascii.Error: Incorrect padding`` instead, so split it off explicitly.
+    """
+    b64 = segment.split("/", 1)[0]
+    return base64.urlsafe_b64decode(b64.encode()).decode("ascii")
