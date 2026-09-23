@@ -624,7 +624,7 @@ dependencies = [
 
 [[package]]
 name = "dtps-http"
-version = "1.4.6"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "async-recursion",
